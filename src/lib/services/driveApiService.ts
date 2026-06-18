@@ -1,4 +1,4 @@
-const RELAY_BASE = 'http://130.245.173.73:8080';
+import { getDriveRelayBaseUrl, getDriveRelayBaseUrlAsync } from '$lib/services/networkEndpointConfig';
 
 /** Local Drive server URL — set when Tauri app starts */
 let localBase: string | null = null;
@@ -10,7 +10,11 @@ export function setLocalDriveServer(url: string) {
 
 /** Get the base URL for CRUD operations (local server if available, relay as fallback) */
 function getCrudBase(): string {
-  return localBase || RELAY_BASE;
+  return localBase || getDriveRelayBaseUrl();
+}
+
+async function getCrudBaseAsync(): Promise<string> {
+  return localBase || await getDriveRelayBaseUrlAsync();
 }
 
 /** Current owner wallet address — set via setDriveOwner() */
@@ -145,7 +149,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
           }
         }
       }
-      const res = await fetch(`${getCrudBase()}${path}`, {
+      const baseUrl = await getCrudBaseAsync();
+      const res = await fetch(`${baseUrl}${path}`, {
         ...init,
         signal: controller.signal,
         headers: {
@@ -351,6 +356,6 @@ export const driveApi = {
 
   /** Get public share URL */
   getShareUrl(token: string): string {
-    return `${RELAY_BASE}/drive/${token}`;
+    return `${getDriveRelayBaseUrl()}/drive/${token}`;
   },
 };

@@ -1,4 +1,4 @@
-const RELAY_BASE = 'http://130.245.173.73:8080';
+import { getRatingBaseUrlAsync } from '$lib/services/networkEndpointConfig';
 
 /** Current owner wallet address */
 let currentOwner = '';
@@ -119,7 +119,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
     }
   }
-  const res = await fetch(`${RELAY_BASE}${path}`, {
+  const baseUrl = await getRatingBaseUrlAsync();
+  const res = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -726,31 +726,54 @@ fn signed_file_info_response(
     private_key: &str,
 ) -> ChunkResponse {
     let price_str = access.price_wei.to_string();
+    if private_key.is_empty() || access.wallet_address.is_empty() {
+        return file_info_error_response(
+            request_id,
+            file_hash,
+            "Seeder cannot sign FileInfo (wallet not unlocked)",
+            access.folder_hash,
+        );
+    }
+
+    let total_chunks = chunk_hashes.len() as u32;
     let payload = file_info_sign_payload(
         &file_hash,
         &file_name,
         file_size,
         CHUNK_SIZE as u32,
-        chunk_hashes.len() as u32,
+        total_chunks,
         &chunk_hashes,
         &price_str,
         &access.wallet_address,
         access.folder_hash.as_deref(),
     );
-    let signature = crate::wallet::sign_message(private_key, &payload).unwrap_or_default();
-    ChunkResponse::FileInfo {
-        request_id,
-        file_hash,
-        file_name,
-        file_size,
-        chunk_size: CHUNK_SIZE as u32,
-        total_chunks: chunk_hashes.len() as u32,
-        chunk_hashes,
-        price_wei: price_str,
-        wallet_address: access.wallet_address,
-        folder_hash: access.folder_hash,
-        signature,
-        error: None,
+    match crate::wallet::sign_message(private_key, &payload) {
+        Ok(signature) if !signature.is_empty() => ChunkResponse::FileInfo {
+            request_id,
+            file_hash,
+            file_name,
+            file_size,
+            chunk_size: CHUNK_SIZE as u32,
+            total_chunks,
+            chunk_hashes,
+            price_wei: price_str,
+            wallet_address: access.wallet_address,
+            folder_hash: access.folder_hash,
+            signature,
+            error: None,
+        },
+        Ok(_) => file_info_error_response(
+            request_id,
+            file_hash,
+            "Seeder cannot sign FileInfo: empty signature",
+            access.folder_hash,
+        ),
+        Err(err) => file_info_error_response(
+            request_id,
+            file_hash,
+            format!("Seeder cannot sign FileInfo: {}", err),
+            access.folder_hash,
+        ),
     }
 }
 
@@ -1554,14 +1577,15 @@ async fn verify_payment_proof(
             // Atomically claim this tx so concurrent replays can't slip
             // through between the peek above and this point.
             match claim_payment_tx(payment_tx, &scope, payer_address, &peer_id).await {
-                PaymentClaimStatus::Available => {}
-                PaymentClaimStatus::ClaimedSameFolder => {
+                Ok(PaymentClaimStatus::Available) => {}
+                Ok(PaymentClaimStatus::ClaimedSameFolder) => {
                     println!(
                         "✅ Concurrent folder payment tx {} already claimed for this folder",
                         payment_tx
                     );
                 }
-                PaymentClaimStatus::ClaimedDirectFile | PaymentClaimStatus::ClaimedOtherScope => {
+                Ok(PaymentClaimStatus::ClaimedDirectFile)
+                | Ok(PaymentClaimStatus::ClaimedOtherScope) => {
                     println!(
                         "❌ Race: tx {} redeemed by a concurrent request",
                         payment_tx
@@ -1572,6 +1596,20 @@ async fn verify_payment_proof(
                         accepted: false,
                         error: Some(
                             "Payment tx already redeemed by a concurrent request".to_string(),
+                        ),
+                    };
+                }
+                Err(e) => {
+                    println!(
+                        "❌ Payment tx {} verified but replay-protection ledger could not be persisted: {}",
+                        payment_tx, e
+                    );
+                    return ChunkResponse::PaymentAck {
+                        request_id,
+                        file_hash: file_hash.to_string(),
+                        accepted: false,
+                        error: Some(
+                            "Payment verified but replay-protection could not be persisted; please retry later".to_string(),
                         ),
                     };
                 }
@@ -1706,16 +1744,26 @@ async fn spent_tx_store() -> &'static Mutex<HashSet<String>> {
         .await
 }
 
-async fn persist_spent_tx_set(set: &HashSet<String>) {
-    let path = spent_tx_path();
+async fn persist_spent_tx_set(set: &HashSet<String>) -> Result<(), String> {
+    persist_spent_tx_set_to_path(&spent_tx_path(), set).await
+}
+
+async fn persist_spent_tx_set_to_path(path: &Path, set: &HashSet<String>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            format!(
+                "create seeder spent-tx ledger directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    let list: Vec<&String> = set.iter().collect();
+    let mut list: Vec<&String> = set.iter().collect();
+    list.sort();
     let json = serde_json::json!({ "spent": list }).to_string();
-    // Best-effort write. A crash mid-write could truncate the file, falling
-    // back to an empty set on next load — acceptable given the tradeoff above.
-    let _ = tokio::fs::write(&path, json).await;
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write seeder spent-tx ledger {}: {}", path.display(), e))
 }
 
 fn payment_scope_key(
@@ -1814,22 +1862,65 @@ async fn claim_payment_tx(
     scope: &PaymentScope,
     payer_address: &str,
     peer_id: &PeerId,
-) -> PaymentClaimStatus {
+) -> Result<PaymentClaimStatus, String> {
     let store = spent_tx_store().await;
+    claim_payment_tx_in_store(
+        store,
+        &spent_tx_path(),
+        tx_hash,
+        scope,
+        payer_address,
+        peer_id,
+    )
+    .await
+}
+
+async fn claim_payment_tx_in_store(
+    store: &Mutex<HashSet<String>>,
+    path: &Path,
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> Result<PaymentClaimStatus, String> {
     let mut guard = store.lock().await;
     let status = classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id);
     if status != PaymentClaimStatus::Available {
-        return status;
+        return Ok(status);
     }
     let key = payment_scope_key(tx_hash, scope, payer_address, peer_id);
-    guard.insert(key);
-    let snapshot = guard.clone();
-    drop(guard);
-    persist_spent_tx_set(&snapshot).await;
-    PaymentClaimStatus::Available
+    let mut snapshot = guard.clone();
+    snapshot.insert(key);
+    persist_spent_tx_set_to_path(path, &snapshot).await?;
+    *guard = snapshot;
+    Ok(PaymentClaimStatus::Available)
 }
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
+
+const P2P_PORT_ENV: &str = "CHIRAL_P2P_PORT";
+
+fn parse_configured_p2p_port(raw_port: Option<&str>) -> Result<u16, String> {
+    let Some(raw_port) = raw_port else {
+        return Ok(0);
+    };
+    raw_port.parse::<u16>().map_err(|_| {
+        format!(
+            "{} requires a valid port number from 0 to 65535, got '{}'",
+            P2P_PORT_ENV, raw_port
+        )
+    })
+}
+
+fn configured_p2p_port_from_env() -> Result<u16, String> {
+    match std::env::var(P2P_PORT_ENV) {
+        Ok(raw_port) => parse_configured_p2p_port(Some(&raw_port)),
+        Err(std::env::VarError::NotPresent) => parse_configured_p2p_port(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(format!("{} must be valid UTF-8", P2P_PORT_ENV))
+        }
+    }
+}
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
     let local_key = load_or_generate_keypair();
@@ -1954,10 +2045,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // (k3s/Docker) so the bound port matches the externally exposed NodePort.
     // Without it, the OS picks a random ephemeral port that won't be reachable
     // from outside the pod and will leave stale unreachable multiaddrs in the DHT.
-    let p2p_port: u16 = std::env::var("CHIRAL_P2P_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    let p2p_port = configured_p2p_port_from_env()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?)?;
     swarm.listen_on(format!("/ip6/::/tcp/{}", p2p_port).parse()?)?;
 
@@ -2007,6 +2096,59 @@ fn failed_peers_path() -> Option<PathBuf> {
 /// Path to the persisted libp2p identity keypair.
 fn identity_key_path() -> Option<PathBuf> {
     Some(crate::network::data_dir().join("peer_identity.key"))
+}
+
+fn hosting_agreement_path(agreement_id: &str) -> PathBuf {
+    crate::network::data_dir()
+        .join("agreements")
+        .join(format!("{}.json", agreement_id))
+}
+
+fn save_hosting_agreement_to_path(
+    path: &Path,
+    agreement: &serde_json::Value,
+    action: &str,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "{action}: create hosting agreement directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    let json = serde_json::to_string(agreement)
+        .map_err(|e| format!("{action}: serialize hosting agreement JSON: {e}"))?;
+    std::fs::write(path, json)
+        .map_err(|e| format!("{action}: write hosting agreement {}: {e}", path.display()))
+}
+
+fn save_hosting_agreement(
+    agreement_id: &str,
+    agreement: &serde_json::Value,
+    action: &str,
+) -> Result<(), String> {
+    save_hosting_agreement_to_path(&hosting_agreement_path(agreement_id), agreement, action)
+}
+
+fn emit_hosting_agreement_persistence_error(
+    events: &EventSink,
+    agreement_id: &str,
+    action: &str,
+    err: String,
+) {
+    println!(
+        "⚠️ Failed to persist hosting agreement {} while {}: {}",
+        agreement_id, action, err
+    );
+    let _ = events.emit(
+        "hosting_agreement_persistence_error",
+        serde_json::json!({
+            "agreementId": agreement_id,
+            "action": action,
+            "error": err,
+        }),
+    );
 }
 
 /// Load or generate the libp2p Ed25519 keypair.
@@ -2076,23 +2218,47 @@ fn load_failed_peers() -> HashSet<PeerId> {
 }
 
 /// Save the current failed peers set to disk.
-fn save_failed_peers(failed: &HashSet<PeerId>) {
-    let Some(path) = failed_peers_path() else {
-        return;
-    };
+fn save_failed_peers(failed: &HashSet<PeerId>) -> Result<(), String> {
+    let path =
+        failed_peers_path().ok_or_else(|| "failed-peer cache path is unavailable".to_string())?;
+    save_failed_peers_to_path_at(&path, failed, SystemTime::now())
+}
+
+fn save_failed_peers_to_path_at(
+    path: &Path,
+    failed: &HashSet<PeerId>,
+    now: SystemTime,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create failed-peer cache directory {}: {e}",
+                parent.display()
+            )
+        })?;
     }
-    let now = SystemTime::now()
+    let now = now
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|e| {
+            format!("resolve failed-peer cache timestamp: system clock before UNIX_EPOCH: {e}")
+        })?
         .as_secs();
-    let contents: String = failed
+    let mut lines: Vec<String> = failed
         .iter()
         .map(|pid| format!("{}\t{}", pid, now))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(&path, contents);
+        .collect();
+    lines.sort();
+    std::fs::write(path, lines.join("\n"))
+        .map_err(|e| format!("write failed-peer cache {}: {e}", path.display()))
+}
+
+fn log_failed_peer_cache_save(failed: &HashSet<PeerId>, context: &str) {
+    if let Err(err) = save_failed_peers(failed) {
+        println!(
+            "⚠️ Failed to persist failed-peer cache while {}: {}",
+            context, err
+        );
+    }
 }
 
 fn peer_timestamp_secs_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
@@ -2114,6 +2280,25 @@ fn current_peer_timestamp_secs(context: &str) -> i64 {
                 context, err
             );
             0
+        }
+    }
+}
+
+fn kademlia_peer_sync_timestamp_secs_at(
+    now: SystemTime,
+) -> Result<i64, std::time::SystemTimeError> {
+    peer_timestamp_secs_at(now)
+}
+
+fn current_kademlia_peer_sync_timestamp_secs(context: &str) -> Option<i64> {
+    match kademlia_peer_sync_timestamp_secs_at(SystemTime::now()) {
+        Ok(timestamp) => Some(timestamp),
+        Err(err) => {
+            println!(
+                "System clock is before UNIX_EPOCH while {}; skipping visible Kademlia peer sync: {}",
+                context, err
+            );
+            None
         }
     }
 }
@@ -2769,10 +2954,11 @@ async fn event_loop(
                 // Active discovery: random walk to find new peers on the network
                 let _ = swarm.behaviour_mut().kad.bootstrap();
 
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
+                let Some(now) = current_kademlia_peer_sync_timestamp_secs(
+                    "syncing Kademlia routing table into visible peer list",
+                ) else {
+                    continue;
+                };
                 let mut changed = false;
                 let mut kad_entries: Vec<(String, Vec<String>)> = Vec::new();
                 for bucket in swarm.behaviour_mut().kad.kbuckets() {
@@ -2893,7 +3079,10 @@ async fn event_loop(
 
                         // Peer is reachable — remove from failed set
                         if failed_peers.remove(&peer_id) {
-                            save_failed_peers(&failed_peers);
+                            log_failed_peer_cache_save(
+                                &failed_peers,
+                                "removing a reconnected peer",
+                            );
                         }
                         auto_peer_dial_attempts.remove(&peer_id);
 
@@ -3623,13 +3812,16 @@ async fn handle_behaviour_event(
                                                     .get("agreementId")
                                                     .and_then(|v| v.as_str())
                                                 {
-                                                    {
-                                                        let dir = crate::network::data_dir()
-                                                            .join("agreements");
-                                                        let _ = std::fs::create_dir_all(&dir);
-                                                        let _ = std::fs::write(
-                                                            dir.join(format!("{}.json", id)),
-                                                            agreement.to_string(),
+                                                    if let Err(err) = save_hosting_agreement(
+                                                        id,
+                                                        agreement,
+                                                        "saving received hosting proposal",
+                                                    ) {
+                                                        emit_hosting_agreement_persistence_error(
+                                                            events,
+                                                            id,
+                                                            "saving received hosting proposal",
+                                                            err,
                                                         );
                                                     }
                                                 }
@@ -3659,10 +3851,7 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3678,11 +3867,20 @@ async fn handle_behaviour_event(
                                                                         status.to_string(),
                                                                     ),
                                                                 );
-                                                                let _ = std::fs::write(
-                                                                    &path,
-                                                                    serde_json::to_string(&ag)
-                                                                        .unwrap_or_default(),
-                                                                );
+                                                                if let Err(err) =
+                                                                    save_hosting_agreement_to_path(
+                                                                        &path,
+                                                                        &ag,
+                                                                        "saving hosting response status",
+                                                                    )
+                                                                {
+                                                                    emit_hosting_agreement_persistence_error(
+                                                                        events,
+                                                                        agreement_id,
+                                                                        "saving hosting response status",
+                                                                        err,
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -3706,10 +3904,7 @@ async fn handle_behaviour_event(
 
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3732,11 +3927,20 @@ async fn handle_behaviour_event(
                                                                             "cancelled".to_string(),
                                                                         ),
                                                                     );
-                                                                    let _ = std::fs::write(
-                                                                        &path,
-                                                                        serde_json::to_string(&ag)
-                                                                            .unwrap_or_default(),
-                                                                    );
+                                                                    if let Err(err) =
+                                                                        save_hosting_agreement_to_path(
+                                                                            &path,
+                                                                            &ag,
+                                                                            "saving proposed hosting cancellation",
+                                                                        )
+                                                                    {
+                                                                        emit_hosting_agreement_persistence_error(
+                                                                            events,
+                                                                            agreement_id,
+                                                                            "saving proposed hosting cancellation",
+                                                                            err,
+                                                                        );
+                                                                    }
                                                                     let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                         "agreementId": agreement_id,
                                                                         "fromPeer": peer.to_string(),
@@ -3756,13 +3960,20 @@ async fn handle_behaviour_event(
                                                                         obj.remove(
                                                                             "cancelRequestedBy",
                                                                         );
-                                                                        let _ = std::fs::write(
-                                                                            &path,
-                                                                            serde_json::to_string(
+                                                                        if let Err(err) =
+                                                                            save_hosting_agreement_to_path(
+                                                                                &path,
                                                                                 &ag,
+                                                                                "saving mutual hosting cancellation",
                                                                             )
-                                                                            .unwrap_or_default(),
-                                                                        );
+                                                                        {
+                                                                            emit_hosting_agreement_persistence_error(
+                                                                                events,
+                                                                                agreement_id,
+                                                                                "saving mutual hosting cancellation",
+                                                                                err,
+                                                                            );
+                                                                        }
                                                                         let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
@@ -3771,13 +3982,20 @@ async fn handle_behaviour_event(
                                                                     } else {
                                                                         // Only other party wants to cancel — needs our consent
                                                                         obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                        let _ = std::fs::write(
-                                                                            &path,
-                                                                            serde_json::to_string(
+                                                                        if let Err(err) =
+                                                                            save_hosting_agreement_to_path(
+                                                                                &path,
                                                                                 &ag,
+                                                                                "saving hosting cancellation request",
                                                                             )
-                                                                            .unwrap_or_default(),
-                                                                        );
+                                                                        {
+                                                                            emit_hosting_agreement_persistence_error(
+                                                                                events,
+                                                                                agreement_id,
+                                                                                "saving hosting cancellation request",
+                                                                                err,
+                                                                            );
+                                                                        }
                                                                         let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
@@ -3805,10 +4023,7 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3827,11 +4042,20 @@ async fn handle_behaviour_event(
                                                                     );
                                                                 }
                                                                 obj.remove("cancelRequestedBy");
-                                                                let _ = std::fs::write(
-                                                                    &path,
-                                                                    serde_json::to_string(&ag)
-                                                                        .unwrap_or_default(),
-                                                                );
+                                                                if let Err(err) =
+                                                                    save_hosting_agreement_to_path(
+                                                                        &path,
+                                                                        &ag,
+                                                                        "saving hosting cancellation response",
+                                                                    )
+                                                                {
+                                                                    emit_hosting_agreement_persistence_error(
+                                                                        events,
+                                                                        agreement_id,
+                                                                        "saving hosting cancellation response",
+                                                                        err,
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -4045,36 +4269,36 @@ async fn handle_behaviour_event(
 
                         // Populate peers list with all Kademlia routing table entries
                         // so the Network page and ChiralDrop can see discovered peers.
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
-                        for bucket in swarm.behaviour_mut().kad.kbuckets() {
-                            for entry in bucket.iter() {
-                                let pid = entry.node.key.preimage().to_string();
-                                let addrs: Vec<String> =
-                                    entry.node.value.iter().map(|a| a.to_string()).collect();
-                                kad_discovered.push((pid, addrs));
-                            }
-                        }
-                        if !kad_discovered.is_empty() {
-                            let mut peers_guard = peers.lock().await;
-                            for (pid, addrs) in &kad_discovered {
-                                if !peers_guard.iter().any(|p| &p.id == pid) {
-                                    peers_guard.push(PeerInfo {
-                                        id: pid.clone(),
-                                        address: pid.clone(),
-                                        multiaddrs: addrs.clone(),
-                                        last_seen: now,
-                                    });
+                        if let Some(now) = current_kademlia_peer_sync_timestamp_secs(
+                            "populating visible peers after Kademlia bootstrap",
+                        ) {
+                            let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
+                            for bucket in swarm.behaviour_mut().kad.kbuckets() {
+                                for entry in bucket.iter() {
+                                    let pid = entry.node.key.preimage().to_string();
+                                    let addrs: Vec<String> =
+                                        entry.node.value.iter().map(|a| a.to_string()).collect();
+                                    kad_discovered.push((pid, addrs));
                                 }
                             }
-                            println!(
-                                "📡 Added {} Kademlia peers to visible peer list",
-                                kad_discovered.len()
-                            );
-                            let _ = events.emit("peer-discovered", peers_guard.clone());
+                            if !kad_discovered.is_empty() {
+                                let mut peers_guard = peers.lock().await;
+                                for (pid, addrs) in &kad_discovered {
+                                    if !peers_guard.iter().any(|p| &p.id == pid) {
+                                        peers_guard.push(PeerInfo {
+                                            id: pid.clone(),
+                                            address: pid.clone(),
+                                            multiaddrs: addrs.clone(),
+                                            last_seen: now,
+                                        });
+                                    }
+                                }
+                                println!(
+                                    "📡 Added {} Kademlia peers to visible peer list",
+                                    kad_discovered.len()
+                                );
+                                let _ = events.emit("peer-discovered", peers_guard.clone());
+                            }
                         }
 
                         bootstrap_gate.mark_ready();
@@ -4116,7 +4340,12 @@ async fn handle_behaviour_event(
                         peer_id, info.agent_version, policy.min_required
                     );
                     let _ = swarm.disconnect_peer_id(peer_id);
-                    failed_peers.insert(peer_id);
+                    if failed_peers.insert(peer_id) {
+                        log_failed_peer_cache_save(
+                            failed_peers,
+                            "recording a peer below the required version",
+                        );
+                    }
                     return;
                 }
                 Ok(false) => {}
@@ -4126,7 +4355,12 @@ async fn handle_behaviour_event(
                         peer_id, e
                     );
                     let _ = swarm.disconnect_peer_id(peer_id);
-                    failed_peers.insert(peer_id);
+                    if failed_peers.insert(peer_id) {
+                        log_failed_peer_cache_save(
+                            failed_peers,
+                            "recording a peer with malformed version metadata",
+                        );
+                    }
                     return;
                 }
             }
@@ -4393,38 +4627,41 @@ async fn handle_behaviour_event(
                                                             }
                                                         }
                                                         drop(shared);
-                                                        if private_key.is_empty()
-                                                            || access.wallet_address.is_empty()
-                                                        {
-                                                            file_info_error_response(
-                                                                request_id,
-                                                                file_hash_owned,
-                                                                "Seeder cannot sign FileInfo (wallet not unlocked)",
-                                                                access.folder_hash,
-                                                            )
+                                                        let free_scope = if access.price_wei == 0 {
+                                                            Some(payment_scope_for_access(
+                                                                &file_hash_owned,
+                                                                &access,
+                                                            ))
                                                         } else {
-                                                            if access.price_wei == 0 {
+                                                            None
+                                                        };
+                                                        let response = signed_file_info_response(
+                                                            request_id.clone(),
+                                                            file_hash_owned,
+                                                            file_name,
+                                                            file_size,
+                                                            hashes,
+                                                            access,
+                                                            &private_key,
+                                                        );
+                                                        if matches!(
+                                                            &response,
+                                                            ChunkResponse::FileInfo {
+                                                                error: None,
+                                                                ..
+                                                            }
+                                                        ) {
+                                                            if let Some(scope) = free_scope {
                                                                 remember_authorized_chunk_access(
                                                                     &authorized_chunks,
-                                                                    request_id.clone(),
+                                                                    request_id,
                                                                     peer_id_for_auth,
-                                                                    payment_scope_for_access(
-                                                                        &file_hash_owned,
-                                                                        &access,
-                                                                    ),
+                                                                    scope,
                                                                 )
                                                                 .await;
                                                             }
-                                                            signed_file_info_response(
-                                                                request_id,
-                                                                file_hash_owned,
-                                                                file_name,
-                                                                file_size,
-                                                                hashes,
-                                                                access,
-                                                                &private_key,
-                                                            )
                                                         }
+                                                        response
                                                     }
                                                     Err(msg) => {
                                                         println!(
@@ -4467,41 +4704,37 @@ async fn handle_behaviour_event(
                                                 println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
                                                          file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
 
-                                                // Sign the FileInfo envelope with the seeder's
-                                                // wallet key so the downloader can verify the
-                                                // wallet_address claim and, for folder downloads,
-                                                // the folder hash this child file is scoped to.
-                                                if private_key.is_empty()
-                                                    || access.wallet_address.is_empty()
-                                                {
-                                                    file_info_error_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        "Seeder cannot sign FileInfo (wallet not unlocked)",
-                                                        access.folder_hash,
-                                                    )
+                                                let free_scope = if access.price_wei == 0 {
+                                                    Some(payment_scope_for_access(
+                                                        &file_hash, &access,
+                                                    ))
                                                 } else {
-                                                    if access.price_wei == 0 {
+                                                    None
+                                                };
+                                                let response = signed_file_info_response(
+                                                    request_id.clone(),
+                                                    file_hash,
+                                                    file_name_owned,
+                                                    file_size_owned,
+                                                    chunk_hashes.clone(),
+                                                    access,
+                                                    &private_key,
+                                                );
+                                                if matches!(
+                                                    &response,
+                                                    ChunkResponse::FileInfo { error: None, .. }
+                                                ) {
+                                                    if let Some(scope) = free_scope {
                                                         remember_authorized_chunk_access(
                                                             seeder_authorized_chunks,
-                                                            request_id.clone(),
+                                                            request_id,
                                                             peer,
-                                                            payment_scope_for_access(
-                                                                &file_hash, &access,
-                                                            ),
+                                                            scope,
                                                         )
                                                         .await;
                                                     }
-                                                    signed_file_info_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        file_name_owned,
-                                                        file_size_owned,
-                                                        chunk_hashes.clone(),
-                                                        access,
-                                                        &private_key,
-                                                    )
                                                 }
+                                                response
                                             }
                                             Err(err) => file_info_error_response(
                                                 request_id,
@@ -5990,11 +6223,169 @@ mod tests {
     }
 
     #[test]
+    fn kademlia_peer_sync_timestamp_secs_at_returns_epoch_seconds() {
+        let timestamp = kademlia_peer_sync_timestamp_secs_at(UNIX_EPOCH + Duration::from_secs(99))
+            .expect("post-epoch Kademlia peer-sync timestamp should be valid");
+
+        assert_eq!(timestamp, 99);
+    }
+
+    #[test]
+    fn kademlia_peer_sync_timestamp_secs_at_rejects_pre_epoch_clock() {
+        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+        assert!(kademlia_peer_sync_timestamp_secs_at(pre_epoch).is_err());
+    }
+
+    #[test]
     fn peer_timestamp_helpers_reject_pre_epoch_clock() {
         let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
 
         assert!(peer_timestamp_secs_at(pre_epoch).is_err());
         assert!(peer_timestamp_millis_at(pre_epoch).is_err());
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_persists_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreements").join("agreement-1.json");
+        let agreement = serde_json::json!({
+            "agreementId": "agreement-1",
+            "status": "accepted",
+        });
+
+        save_hosting_agreement_to_path(&path, &agreement, "test save").unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, agreement);
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let path = blocked_parent.join("agreement-1.json");
+        let agreement = serde_json::json!({"agreementId": "agreement-1"});
+
+        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
+            .expect_err("directory creation should fail");
+
+        assert!(err.contains("test save"));
+        assert!(err.contains("create hosting agreement directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement-1.json");
+        std::fs::create_dir(&path).unwrap();
+        let agreement = serde_json::json!({"agreementId": "agreement-1"});
+
+        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
+            .expect_err("writing over a directory should fail");
+
+        assert!(err.contains("test save"));
+        assert!(err.contains("write hosting agreement"));
+        assert!(err.contains("agreement-1.json"));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_persists_current_peers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache").join("failed_peers.txt");
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let mut failed = HashSet::new();
+        failed.insert(peer_a);
+        failed.insert(peer_b);
+
+        save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+            .unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        let mut sorted = lines.clone();
+        sorted.sort_unstable();
+        assert_eq!(lines, sorted);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.ends_with("\t123")));
+        assert!(contents.contains(&peer_a.to_string()));
+        assert!(contents.contains(&peer_b.to_string()));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let path = blocked_parent.join("failed_peers.txt");
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err =
+            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+                .expect_err("directory creation should fail");
+
+        assert!(err.contains("create failed-peer cache directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed_peers.txt");
+        std::fs::create_dir(&path).unwrap();
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err =
+            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+                .expect_err("writing over a directory should fail");
+
+        assert!(err.contains("write failed-peer cache"));
+        assert!(err.contains("failed_peers.txt"));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_rejects_pre_epoch_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed_peers.txt");
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err = save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH - Duration::from_secs(1))
+            .expect_err("pre-epoch timestamps should fail");
+
+        assert!(err.contains("system clock before UNIX_EPOCH"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn p2p_port_config_uses_random_port_when_absent() {
+        assert_eq!(parse_configured_p2p_port(None).unwrap(), 0);
+    }
+
+    #[test]
+    fn p2p_port_config_accepts_valid_port() {
+        assert_eq!(parse_configured_p2p_port(Some("4100")).unwrap(), 4100);
+    }
+
+    #[test]
+    fn p2p_port_config_rejects_malformed_port() {
+        let err = parse_configured_p2p_port(Some("not-a-port"))
+            .expect_err("malformed port should be rejected");
+
+        assert!(err.contains(P2P_PORT_ENV));
+        assert!(err.contains("not-a-port"));
+    }
+
+    #[test]
+    fn p2p_port_config_rejects_out_of_range_port() {
+        let err = parse_configured_p2p_port(Some("70000"))
+            .expect_err("out-of-range port should be rejected");
+
+        assert!(err.contains(P2P_PORT_ENV));
+        assert!(err.contains("70000"));
     }
 
     #[test]
@@ -6663,6 +7054,126 @@ mod tests {
         assert_eq!(p1, p2);
     }
 
+    fn test_wallet_for_private_key(private_key: &str) -> String {
+        let probe = b"derive-test-wallet";
+        let sig = crate::wallet::sign_message(private_key, probe).unwrap();
+        crate::wallet::recover_signer(probe, &sig).unwrap()
+    }
+
+    #[test]
+    fn signed_file_info_response_signs_free_and_paid_payloads() {
+        let private_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let wallet = test_wallet_for_private_key(private_key);
+
+        for price_wei in ["0", "1000000000000000000"] {
+            let chunk_hashes = vec!["chunk-a".to_string(), "chunk-b".to_string()];
+            let access = ResolvedFileAccess {
+                price_wei: price_wei.parse::<u128>().unwrap(),
+                wallet_address: wallet.clone(),
+                folder_hash: None,
+            };
+            let response = signed_file_info_response(
+                format!("req-{}", price_wei),
+                "file-hash".to_string(),
+                "document.pdf".to_string(),
+                1024,
+                chunk_hashes.clone(),
+                access,
+                private_key,
+            );
+
+            if let ChunkResponse::FileInfo {
+                file_hash,
+                file_name,
+                file_size,
+                total_chunks,
+                chunk_hashes: response_hashes,
+                price_wei: response_price,
+                wallet_address,
+                folder_hash,
+                signature,
+                error,
+                ..
+            } = response
+            {
+                assert_eq!(file_hash, "file-hash");
+                assert_eq!(file_name, "document.pdf");
+                assert_eq!(file_size, 1024);
+                assert_eq!(total_chunks, 2);
+                assert_eq!(response_hashes, chunk_hashes);
+                assert_eq!(response_price, price_wei);
+                assert_eq!(wallet_address, wallet);
+                assert!(folder_hash.is_none());
+                assert!(!signature.is_empty());
+                assert!(error.is_none());
+
+                let payload = file_info_sign_payload(
+                    &file_hash,
+                    &file_name,
+                    file_size,
+                    CHUNK_SIZE as u32,
+                    total_chunks,
+                    &response_hashes,
+                    &response_price,
+                    &wallet_address,
+                    folder_hash.as_deref(),
+                );
+                assert!(crate::wallet::verify_signature(
+                    &payload,
+                    &signature,
+                    &wallet_address
+                ));
+            } else {
+                panic!("Expected FileInfo variant");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_file_info_response_returns_error_for_invalid_private_key() {
+        let access = ResolvedFileAccess {
+            price_wei: 100,
+            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
+            folder_hash: Some("folder-hash".to_string()),
+        };
+        let response = signed_file_info_response(
+            "req-invalid".to_string(),
+            "file-hash".to_string(),
+            "document.pdf".to_string(),
+            1024,
+            vec!["chunk-a".to_string()],
+            access,
+            "not-a-private-key",
+        );
+
+        if let ChunkResponse::FileInfo {
+            file_size,
+            total_chunks,
+            chunk_hashes,
+            price_wei,
+            wallet_address,
+            folder_hash,
+            signature,
+            error,
+            ..
+        } = response
+        {
+            assert_eq!(file_size, 0);
+            assert_eq!(total_chunks, 0);
+            assert!(chunk_hashes.is_empty());
+            assert_eq!(price_wei, "0");
+            assert!(wallet_address.is_empty());
+            assert_eq!(folder_hash.as_deref(), Some("folder-hash"));
+            assert!(signature.is_empty());
+            assert!(error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Seeder cannot sign FileInfo"));
+        } else {
+            panic!("Expected FileInfo variant");
+        }
+    }
+
     #[test]
     fn file_info_sign_payload_binds_folder_hash_when_present() {
         let direct = file_info_sign_payload(
@@ -6775,6 +7286,86 @@ mod tests {
             classify_payment_claim(&spent, tx, &file, payer, &peer),
             PaymentClaimStatus::ClaimedOtherScope
         );
+    }
+
+    #[tokio::test]
+    async fn persist_spent_tx_set_to_path_persists_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("seeder_spent_tx.json");
+        let mut spent = HashSet::new();
+        spent.insert("file:0xabc:file-a".to_string());
+
+        persist_spent_tx_set_to_path(&path, &spent)
+            .await
+            .expect("spent-tx ledger should persist");
+
+        let data = tokio::fs::read_to_string(&path).await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let persisted: Vec<String> =
+            serde_json::from_value(value.get("spent").cloned().unwrap()).unwrap();
+        assert_eq!(persisted, vec!["file:0xabc:file-a"]);
+    }
+
+    #[tokio::test]
+    async fn claim_payment_tx_persists_first_use_and_rejects_reused_direct_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seeder_spent_tx.json");
+        let store = Mutex::new(HashSet::new());
+        let peer = PeerId::random();
+        let scope = PaymentScope::DirectFile {
+            file_hash: "file-a".to_string(),
+        };
+
+        let first = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect("first claim should persist");
+        let reused = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect("reused claim should classify without rewriting");
+
+        assert_eq!(first, PaymentClaimStatus::Available);
+        assert_eq!(reused, PaymentClaimStatus::ClaimedDirectFile);
+        assert_eq!(store.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn claim_payment_tx_fails_closed_when_persistence_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seeder_spent_tx.json");
+        tokio::fs::create_dir(&path).await.unwrap();
+        let store = Mutex::new(HashSet::new());
+        let peer = PeerId::random();
+        let scope = PaymentScope::DirectFile {
+            file_hash: "file-a".to_string(),
+        };
+
+        let err = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect_err("write failure should fail closed");
+
+        assert!(err.contains("write seeder spent-tx ledger"));
+        assert!(store.lock().await.is_empty());
     }
 
     #[test]
