@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +23,47 @@ use crate::wallet_backup_api;
 
 /// Maximum total upload size per site (50 MB).
 const MAX_SITE_BYTES: usize = 50 * 1024 * 1024;
+const MAX_SITE_FILE_COUNT: usize = 1_000;
+const MAX_SITE_FILE_PATH_BYTES: usize = 512;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UploadSiteError {
+    status: StatusCode,
+    message: &'static str,
+}
+
+impl UploadSiteError {
+    fn bad_request(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message,
+        }
+    }
+
+    fn payload_too_large(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            message,
+        }
+    }
+
+    fn into_response(self) -> Response {
+        (self.status, self.message).into_response()
+    }
+}
+
+fn unix_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| {
+            "System clock is before UNIX_EPOCH; refusing to timestamp hosted site upload"
+                .to_string()
+        })
+}
+
+fn unix_timestamp_secs() -> Result<u64, String> {
+    unix_timestamp_secs_at(std::time::SystemTime::now())
+}
 
 /// Shared state for the hosting HTTP server.
 #[derive(Clone)]
@@ -284,6 +325,70 @@ struct UploadFile {
     data: String,
 }
 
+fn validate_upload_site_manifest(files: &[UploadFile]) -> Result<(), UploadSiteError> {
+    if files.is_empty() {
+        return Err(UploadSiteError::bad_request("No files provided"));
+    }
+    if files.len() > MAX_SITE_FILE_COUNT {
+        return Err(UploadSiteError::bad_request(
+            "Too many files in site upload",
+        ));
+    }
+
+    let mut seen_paths = HashSet::with_capacity(files.len());
+    for upload_file in files {
+        let has_invalid_segment = upload_file
+            .path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == ".");
+        if upload_file.path.is_empty()
+            || upload_file.path.len() > MAX_SITE_FILE_PATH_BYTES
+            || upload_file.path.contains('\0')
+            || upload_file.path.starts_with('/')
+            || upload_file.path.starts_with('\\')
+            || upload_file.path.contains("..")
+            || has_invalid_segment
+        {
+            return Err(UploadSiteError::bad_request("Invalid file path"));
+        }
+        if !seen_paths.insert(upload_file.path.as_str()) {
+            return Err(UploadSiteError::bad_request("Duplicate file path"));
+        }
+    }
+
+    Ok(())
+}
+
+fn decode_upload_site_files(
+    files: &[UploadFile],
+    max_site_bytes: usize,
+) -> Result<Vec<(String, Vec<u8>)>, UploadSiteError> {
+    validate_upload_site_manifest(files)?;
+
+    let mut decoded_files = Vec::with_capacity(files.len());
+    let mut total_bytes: usize = 0;
+    for upload_file in files {
+        let data = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &upload_file.data,
+        )
+        .map_err(|_| UploadSiteError::bad_request("Invalid base64 data"))?;
+
+        total_bytes = total_bytes
+            .checked_add(data.len())
+            .ok_or_else(|| UploadSiteError::payload_too_large("Site exceeds 50 MB size limit"))?;
+        if total_bytes > max_site_bytes {
+            return Err(UploadSiteError::payload_too_large(
+                "Site exceeds 50 MB size limit",
+            ));
+        }
+
+        decoded_files.push((upload_file.path.clone(), data));
+    }
+
+    Ok(decoded_files)
+}
+
 #[derive(Serialize)]
 struct UploadSiteResponse {
     url: String,
@@ -301,46 +406,19 @@ async fn upload_site(
     if req.name.is_empty() || req.name.len() > 200 {
         return (StatusCode::BAD_REQUEST, "Invalid site name").into_response();
     }
-    if req.files.is_empty() {
-        return (StatusCode::BAD_REQUEST, "No files provided").into_response();
-    }
 
     // Decode all files first, checking total size
-    let mut decoded_files: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut total_bytes: usize = 0;
+    let decoded_files = match decode_upload_site_files(&req.files, MAX_SITE_BYTES) {
+        Ok(files) => files,
+        Err(e) => return e.into_response(),
+    };
 
-    for upload_file in &req.files {
-        // Validate file path
-        if upload_file.path.is_empty()
-            || upload_file.path.contains('\0')
-            || upload_file.path.starts_with('/')
-            || upload_file.path.starts_with('\\')
-            || upload_file.path.contains("..")
-        {
-            return (StatusCode::BAD_REQUEST, "Invalid file path").into_response();
+    let now = match unix_timestamp_secs() {
+        Ok(timestamp) => timestamp,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
-
-        let data = match base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &upload_file.data,
-        ) {
-            Ok(d) => d,
-            Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid base64 data").into_response();
-            }
-        };
-
-        total_bytes += data.len();
-        if total_bytes > MAX_SITE_BYTES {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "Site exceeds 50 MB size limit",
-            )
-                .into_response();
-        }
-
-        decoded_files.push((upload_file.path.clone(), data));
-    }
+    };
 
     // Create site directory
     let base_dir = match hosting::sites_base_dir() {
@@ -384,11 +462,6 @@ async fn upload_site(
             size: data.len() as u64,
         });
     }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
 
     let site = HostedSite {
         id: req.id.clone(),
@@ -576,11 +649,11 @@ pub fn create_gateway_router(
     };
 
     app.layer(cors)
-    // Outermost: version-gate every /api/* request. Layers run
-    // last-applied-first on incoming requests, so this runs *before*
-    // the CORS layer and the route handlers. Static site / drive /
-    // health / version-policy paths are exempted inside the function.
-    .layer(axum::middleware::from_fn(version_gate_middleware))
+        // Outermost: version-gate every /api/* request. Layers run
+        // last-applied-first on incoming requests, so this runs *before*
+        // the CORS layer and the route handlers. Static site / drive /
+        // health / version-policy paths are exempted inside the function.
+        .layer(axum::middleware::from_fn(version_gate_middleware))
 }
 
 /// Start the hosting HTTP server. Returns the bound address.
@@ -659,6 +732,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use base64::Engine;
     use tower::util::ServiceExt;
 
     fn make_site(id: &str, name: &str, dir: &str) -> HostedSite {
@@ -671,6 +745,129 @@ mod tests {
             relay_url: None,
             cdn_url: None,
         }
+    }
+
+    fn upload_file(path: &str, data: &[u8]) -> UploadFile {
+        UploadFile {
+            path: path.into(),
+            data: base64::engine::general_purpose::STANDARD.encode(data),
+        }
+    }
+
+    #[test]
+    fn upload_timestamp_accepts_post_epoch_clock() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(42);
+
+        assert_eq!(unix_timestamp_secs_at(now).unwrap(), 42);
+    }
+
+    #[test]
+    fn upload_timestamp_rejects_pre_epoch_clock() {
+        let now = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let err = unix_timestamp_secs_at(now)
+            .expect_err("pre-epoch clock should reject upload timestamp");
+
+        assert!(err.contains("System clock is before UNIX_EPOCH"));
+        assert!(err.contains("hosted site upload"));
+    }
+
+    #[test]
+    fn upload_site_manifest_accepts_valid_multi_file_manifest() {
+        let files = vec![
+            upload_file("index.html", b"<h1>ok</h1>"),
+            upload_file("assets/app.js", b"console.log('ok');"),
+        ];
+
+        validate_upload_site_manifest(&files).expect("valid manifest should pass");
+        let decoded =
+            decode_upload_site_files(&files, MAX_SITE_BYTES).expect("valid files should decode");
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].0, "index.html");
+        assert_eq!(decoded[0].1.as_slice(), b"<h1>ok</h1>");
+        assert_eq!(decoded[1].0, "assets/app.js");
+        assert_eq!(decoded[1].1.as_slice(), b"console.log('ok');");
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_too_many_files() {
+        let files = (0..=MAX_SITE_FILE_COUNT)
+            .map(|i| UploadFile {
+                path: format!("file-{i}.txt"),
+                data: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let err =
+            validate_upload_site_manifest(&files).expect_err("too many files should be rejected");
+
+        assert_eq!(
+            err,
+            UploadSiteError::bad_request("Too many files in site upload")
+        );
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_overlong_paths() {
+        let path = "a".repeat(MAX_SITE_FILE_PATH_BYTES + 1);
+        let files = vec![upload_file(&path, b"ok")];
+
+        let err =
+            validate_upload_site_manifest(&files).expect_err("overlong path should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Invalid file path"));
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_duplicate_paths() {
+        let files = vec![
+            upload_file("index.html", b"first"),
+            upload_file("index.html", b"second"),
+        ];
+
+        let err =
+            validate_upload_site_manifest(&files).expect_err("duplicate paths should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Duplicate file path"));
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_dot_segment_duplicate_bypass() {
+        let files = vec![
+            upload_file("index.html", b"first"),
+            upload_file("./index.html", b"second"),
+        ];
+
+        let err =
+            validate_upload_site_manifest(&files).expect_err("dot segment path should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Invalid file path"));
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_repeated_separator_duplicate_bypass() {
+        let files = vec![
+            upload_file("assets/app.js", b"first"),
+            upload_file("assets//app.js", b"second"),
+        ];
+
+        let err = validate_upload_site_manifest(&files)
+            .expect_err("repeated separator path should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Invalid file path"));
+    }
+
+    #[test]
+    fn upload_site_decode_rejects_oversized_bytes() {
+        let files = vec![upload_file("index.html", b"hello")];
+
+        let err = decode_upload_site_files(&files, 4)
+            .expect_err("decoded bytes above the cap should be rejected");
+
+        assert_eq!(
+            err,
+            UploadSiteError::payload_too_large("Site exceeds 50 MB size limit")
+        );
     }
 
     #[tokio::test]
@@ -835,6 +1032,7 @@ mod tests {
         assert!(sites.contains_key("gw12test"));
         let site = &sites["gw12test"];
         assert_eq!(site.name, "Gateway Test");
+        assert!(site.created_at > 0);
         assert_eq!(site.files.len(), 1);
         drop(sites);
 
