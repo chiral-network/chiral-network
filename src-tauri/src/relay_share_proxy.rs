@@ -937,6 +937,7 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     });
 
     // Task: forward requests from proxy handlers to the WebSocket client
+    let write_key = key.clone();
     let write_task = tokio::spawn(async move {
         // Periodic pings to keep the connection alive + cleanup stale pending entries
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -961,7 +962,14 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                         let mut map = pending.write().await;
                         map.retain(|_, tx| !tx.is_closed());
                     }
-                    if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
+                    let send_result = ws_tx
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|err| err.to_string());
+                    if let Err(message) =
+                        relay_tunnel_keepalive_ping_result(&write_key, send_result)
+                    {
+                        eprintln!("{}", message);
                         break;
                     }
                 }
@@ -977,6 +985,18 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
 
     tunnel_reg.unregister(&key).await;
     println!("[TUNNEL] Disconnected: {}", key);
+}
+
+fn relay_tunnel_keepalive_ping_result(
+    key: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send keepalive ping for key={}: {}",
+            key, err
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1921,6 +1941,26 @@ mod tests {
             "timestamp {} is too far in the future",
             ts
         );
+    }
+
+    #[test]
+    fn relay_tunnel_keepalive_ping_result_accepts_success() {
+        let result = relay_tunnel_keepalive_ping_result("site:site-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_keepalive_ping_result_reports_failure_with_key() {
+        let err = relay_tunnel_keepalive_ping_result(
+            "share:token-1",
+            Err("websocket closed".to_string()),
+        )
+        .expect_err("failed keepalive pings should produce a controlled log message");
+
+        assert!(err.contains("Failed to send keepalive ping"));
+        assert!(err.contains("key=share:token-1"));
+        assert!(err.contains("websocket closed"));
     }
 
     // -----------------------------------------------------------------------
