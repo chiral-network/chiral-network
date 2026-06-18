@@ -407,6 +407,50 @@ struct SiteRegisterRequest {
 }
 
 const REGISTER_TAG: &[u8] = b"chiral-relay-register-v1";
+const RELAY_IDENTIFIER_MAX_BYTES: usize = 128;
+
+fn validate_relay_identifier(kind: &str, id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err(format!("{kind} is required"));
+    }
+    if id.len() > RELAY_IDENTIFIER_MAX_BYTES {
+        return Err(format!(
+            "{kind} must be at most {} bytes",
+            RELAY_IDENTIFIER_MAX_BYTES
+        ));
+    }
+    if id.bytes().any(|b| b == b'/' || b == b'\\') {
+        return Err(format!("{kind} must not contain path separators"));
+    }
+    if id.chars().any(char::is_control) {
+        return Err(format!("{kind} must not contain control characters"));
+    }
+    if !id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(format!(
+            "{kind} may only contain ASCII letters, digits, '.', '_', or '-'"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_share_token(token: &str) -> Result<(), String> {
+    validate_relay_identifier("token", token)
+}
+
+fn validate_site_id(site_id: &str) -> Result<(), String> {
+    validate_relay_identifier("site_id", site_id)
+}
+
+fn validate_tunnel_query(q: &TunnelQuery) -> Result<(), String> {
+    match q.resource_type.as_str() {
+        "share" => validate_share_token(&q.id),
+        "site" => validate_site_id(&q.id),
+        _ => Err("type must be 'share' or 'site'".to_string()),
+    }
+}
 
 /// Length-prefixed canonical bytes that the registrant must sign.
 /// Binds operation kind, the resource id, the owner wallet, and the
@@ -804,8 +848,11 @@ async fn register_share(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Response {
-    if req.token.is_empty() || req.origin_url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "token and origin_url required").into_response();
+    if let Err(e) = validate_share_token(&req.token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.origin_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, "origin_url required").into_response();
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
@@ -872,6 +919,9 @@ async fn unregister_share(
     Path(token): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let path_for_proof = format!("/api/drive/relay-register/{}", token);
     let claimant = match crate::auth::verify_owner_proof(
         &headers,
@@ -909,6 +959,9 @@ async fn tunnel_ws_handler(
     Query(q): Query<TunnelQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if let Err(e) = validate_tunnel_query(&q) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let key = format!("{}:{}", q.resource_type, q.id);
     println!("[TUNNEL] WebSocket upgrade for key={}", key);
     ws.on_upgrade(move |socket| handle_tunnel_ws(socket, key, tunnel_reg))
@@ -1271,6 +1324,9 @@ async fn proxy_share_root(
     Path(token): Path<String>,
     Query(q): Query<ProxyQuery>,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup(&token).await {
         Some(r) => r,
         None => {
@@ -1296,6 +1352,9 @@ async fn proxy_share_path(
     Path((token, subpath)): Path<(String, String)>,
     Query(q): Query<ProxyQuery>,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup(&token).await {
         Some(r) => r,
         None => {
@@ -1324,8 +1383,11 @@ async fn register_site(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SiteRegisterRequest>,
 ) -> Response {
-    if req.site_id.is_empty() || req.origin_url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "site_id and origin_url required").into_response();
+    if let Err(e) = validate_site_id(&req.site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.origin_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, "origin_url required").into_response();
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
@@ -1390,6 +1452,9 @@ async fn unregister_site(
     Path(site_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let path_for_proof = format!("/api/sites/relay-register/{}", site_id);
     let claimant = match crate::auth::verify_owner_proof(
         &headers,
@@ -1427,6 +1492,9 @@ async fn proxy_site_redirect(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     if state.lookup_site(&site_id).await.is_none() {
         return (StatusCode::NOT_FOUND, Html(offline_page("Site not found"))).into_response();
     }
@@ -1444,6 +1512,9 @@ async fn proxy_site_root(
     Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
@@ -1462,6 +1533,9 @@ async fn proxy_site_path(
     Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path((site_id, subpath)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
@@ -1645,6 +1719,66 @@ mod tests {
         let a = register_payload("share", "abc:def", "0xowner", "http://x/");
         let b = register_payload("share", "abc", "def:0xowner", "http://x/");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn relay_identifier_validation_accepts_current_id_shapes() {
+        for id in ["abc123", "share-token_1", "site.id-2", "550e8400-e29b"] {
+            validate_share_token(id).expect("valid share token should pass");
+            validate_site_id(id).expect("valid site id should pass");
+        }
+
+        validate_tunnel_query(&TunnelQuery {
+            resource_type: "share".to_string(),
+            id: "share-token_1".to_string(),
+        })
+        .expect("valid share tunnel query should pass");
+        validate_tunnel_query(&TunnelQuery {
+            resource_type: "site".to_string(),
+            id: "site.id-2".to_string(),
+        })
+        .expect("valid site tunnel query should pass");
+    }
+
+    #[test]
+    fn relay_identifier_validation_rejects_bad_shapes() {
+        let overlong = "a".repeat(RELAY_IDENTIFIER_MAX_BYTES + 1);
+        for (id, expected) in [
+            ("", "required"),
+            (overlong.as_str(), "at most"),
+            ("nested/path", "path separators"),
+            ("nested\\path", "path separators"),
+            ("line\nbreak", "control characters"),
+            ("has space", "may only contain"),
+        ] {
+            let token_err = validate_share_token(id).expect_err("token should be rejected");
+            assert!(
+                token_err.contains(expected),
+                "expected {token_err:?} to contain {expected:?}"
+            );
+            let site_err = validate_site_id(id).expect_err("site id should be rejected");
+            assert!(
+                site_err.contains(expected),
+                "expected {site_err:?} to contain {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_query_validation_rejects_invalid_type_and_id() {
+        let type_err = validate_tunnel_query(&TunnelQuery {
+            resource_type: "drive".to_string(),
+            id: "valid-id".to_string(),
+        })
+        .expect_err("unknown tunnel resource type should fail");
+        assert!(type_err.contains("type must be"));
+
+        let id_err = validate_tunnel_query(&TunnelQuery {
+            resource_type: "share".to_string(),
+            id: "bad/token".to_string(),
+        })
+        .expect_err("malformed tunnel id should fail");
+        assert!(id_err.contains("path separators"));
     }
 
     // -----------------------------------------------------------------------
