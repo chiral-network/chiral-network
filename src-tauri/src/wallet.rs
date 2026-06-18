@@ -578,36 +578,55 @@ fn malformed_tx_metadata_quarantine_path(path: &Path) -> Result<PathBuf, String>
 
 pub fn save_tx_metadata(metadata: &HashMap<String, TransactionMeta>) {
     let path = tx_metadata_path();
-    save_tx_metadata_to_path(metadata, &path);
+    if let Err(e) = save_tx_metadata_to_path(metadata, &path) {
+        eprintln!(
+            "[Wallet] Failed to save transaction metadata {}: {}",
+            path.display(),
+            e
+        );
+    }
 }
 
-fn save_tx_metadata_to_path(metadata: &HashMap<String, TransactionMeta>, path: &Path) {
+fn save_tx_metadata_to_path(
+    metadata: &HashMap<String, TransactionMeta>,
+    path: &Path,
+) -> Result<(), String> {
     match std::fs::read(path) {
         Ok(data) => {
             if serde_json::from_slice::<HashMap<String, TransactionMeta>>(&data).is_err() {
-                eprintln!(
-                    "[Wallet] Refusing to overwrite malformed transaction metadata at {}; fix or remove it manually",
+                return Err(format!(
+                    "refusing to overwrite malformed transaction metadata at {}; fix or remove it manually",
                     path.display()
-                );
-                return;
+                ));
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
         Err(e) => {
-            eprintln!(
-                "[Wallet] Refusing to overwrite unreadable transaction metadata at {}: {}; fix or remove it manually",
+            return Err(format!(
+                "refusing to overwrite unreadable transaction metadata at {}: {}; fix or remove it manually",
                 path.display(),
                 e
-            );
-            return;
+            ));
         }
     }
+    let json = serde_json::to_string(metadata)
+        .map_err(|e| format!("serialize transaction metadata: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create transaction metadata directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string(metadata) {
-        let _ = std::fs::write(path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write transaction metadata {}: {}", path.display(), e))
 }
 
 pub fn record_meta(metadata: &mut HashMap<String, TransactionMeta>, meta: TransactionMeta) {
@@ -1019,8 +1038,10 @@ mod tests {
         let original = b"{not valid json";
         fs::write(&path, original).unwrap();
 
-        save_tx_metadata_to_path(&metadata_fixture(), &path);
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("malformed transaction metadata should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed transaction metadata"));
         assert_eq!(fs::read(&path).unwrap(), &original[..]);
         assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
     }
@@ -1032,10 +1053,50 @@ mod tests {
         let original = vec![0xff, 0xfe, b'{', b'}'];
         fs::write(&path, &original).unwrap();
 
-        save_tx_metadata_to_path(&metadata_fixture(), &path);
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("invalid UTF-8 transaction metadata should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed transaction metadata"));
         assert_eq!(fs::read(&path).unwrap(), original);
         assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_persists_valid_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("tx_metadata.json");
+
+        save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect("transaction metadata should save");
+
+        let loaded = load_tx_metadata_from_path(&path);
+        let meta = loaded.get("0xabc123").unwrap();
+        assert_eq!(meta.description, "Sent to 0xabc");
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("tx_metadata.json");
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create transaction metadata directory"));
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        fs::create_dir(&path).unwrap();
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write transaction metadata"));
     }
 
     #[test] fn test_whole() { assert_eq!(parse_chi_to_wei("1").unwrap(), 1_000_000_000_000_000_000); }

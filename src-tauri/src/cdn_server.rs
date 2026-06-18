@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -225,12 +225,34 @@ async fn load_registry(path: &PathBuf) -> Vec<CdnEntry> {
 }
 
 async fn save_registry(path: &PathBuf, entries: &[CdnEntry]) {
+    if let Err(e) = save_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN file registry {}: {}",
+            path.display(),
+            e
+        );
+    }
+}
+
+async fn save_registry_to_path(path: &Path, entries: &[CdnEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN file registry").await
+}
+
+async fn save_json_registry_to_path<T: Serialize>(
+    path: &Path,
+    entries: &[T],
+    label: &str,
+) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(entries).map_err(|e| format!("serialize {}: {}", label, e))?;
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create {} directory {}: {}", label, parent.display(), e))?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write {} {}: {}", label, path.display(), e))
 }
 
 async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
@@ -241,12 +263,17 @@ async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
 }
 
 async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+    if let Err(e) = save_sites_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN sites registry {}: {}",
+            path.display(),
+            e
+        );
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+}
+
+async fn save_sites_registry_to_path(path: &Path, entries: &[CdnSiteEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN sites registry").await
 }
 
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
@@ -354,7 +381,10 @@ async fn status(State(s): State<Arc<CdnState>>) -> Response {
         Some(d) => d.get_peer_id().await.unwrap_or_default(),
         None => String::new(),
     };
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let active: Vec<CdnEntry> = s.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     Json(json!({
         "status": "online",
@@ -446,7 +476,10 @@ async fn list(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let files: Vec<CdnEntry> = s
         .snapshot()
         .await
@@ -595,7 +628,13 @@ async fn upload(
     }
 
     // Register in DHT so clients searching by hash find the CDN as a seeder.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&file_path).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
     if let Some(dht) = s.dht.lock().await.as_ref() {
         register_in_dht(
@@ -791,7 +830,13 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
         println!("[CDN] Startup reseed skipped: DHT bootstrap did not complete within 180s");
         return;
     }
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            println!("[CDN] Startup reseed skipped: {e}");
+            return;
+        }
+    };
     let active: Vec<CdnEntry> = state.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     for entry in &active {
         let file_path = state.storage_dir.join(&entry.file_hash);
@@ -831,7 +876,13 @@ pub async fn expiration_loop(state: Arc<CdnState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     loop {
         interval.tick().await;
-        let now = now_secs();
+        let now = match now_secs() {
+            Ok(now) => now,
+            Err(e) => {
+                println!("[CDN] Expiration cleanup skipped: {e}");
+                continue;
+            }
+        };
         let expired = state
             .with_registry(|r| {
                 let expired: Vec<CdnEntry> = r.iter().filter(|e| e.expires_at <= now).cloned().collect();
@@ -1288,7 +1339,14 @@ async fn upload_site(
         let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     }
 
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&site_root).await;
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
     let entry = CdnSiteEntry {
         site_id: site_id.clone(),
@@ -1332,7 +1390,10 @@ async fn list_sites(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let sites: Vec<CdnSiteEntry> = s
         .sites_snapshot()
         .await
@@ -1420,7 +1481,10 @@ async fn serve_site_path_inner(s: &CdnState, site_id: &str, requested_path: &str
         return err(StatusCode::BAD_REQUEST, e);
     }
     // Verify the site is in the registry and not expired.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let known = s
         .sites_snapshot()
         .await
@@ -1473,11 +1537,14 @@ fn err(code: StatusCode, msg: &str) -> Response {
     (code, Json(json!({ "error": msg }))).into_response()
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn system_time_secs(now: SystemTime) -> Result<u64, String> {
+    now.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_err(|e| format!("System clock is before UNIX_EPOCH; CDN timestamps unavailable: {e}"))
+}
+
+fn now_secs() -> Result<u64, String> {
+    system_time_secs(SystemTime::now())
 }
 
 fn cdn_provider_peer_id(peer_id: Option<String>) -> Result<String, String> {
@@ -1554,6 +1621,89 @@ fn download_price_from_update_body(body: &serde_json::Value) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cdn_entry_fixture() -> CdnEntry {
+        CdnEntry {
+            file_hash: "hash-1".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 42,
+            owner_wallet: "0xowner".to_string(),
+            price_chi_per_month: "0.001".to_string(),
+            download_price_chi: "0".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    fn cdn_site_entry_fixture() -> CdnSiteEntry {
+        CdnSiteEntry {
+            site_id: "site-1".to_string(),
+            name: "Example Site".to_string(),
+            owner_wallet: "0xowner".to_string(),
+            total_size_bytes: 2048,
+            file_count: 3,
+            price_chi_per_month: "0.001".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_persists_file_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_registry.json");
+
+        save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect("file registry should save");
+
+        let loaded = load_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].file_hash, "hash-1");
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_persists_site_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_sites_registry.json");
+
+        save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect("sites registry should save");
+
+        let loaded = load_sites_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].site_id, "site-1");
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("cdn_registry.json");
+
+        let err = save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create CDN file registry directory"));
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let err = save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write CDN sites registry"));
+    }
 
     #[test]
     fn pricing_arithmetic_one_mb_one_month() {
@@ -1739,6 +1889,23 @@ mod tests {
         let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
 
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn system_time_secs_accepts_normal_clock() {
+        let ts = system_time_secs(UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("normal post-epoch clocks should produce timestamps");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn system_time_secs_rejects_pre_epoch_clock() {
+        let err = system_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clocks should fail closed");
+
+        assert!(err.contains("before UNIX_EPOCH"));
+        assert!(err.contains("CDN timestamps unavailable"));
     }
 
     #[test]

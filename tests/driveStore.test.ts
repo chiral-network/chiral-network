@@ -587,4 +587,33 @@ describe('driveStore', () => {
       expect(url).toBe('http://relay/drive/token-123');
     });
   });
+
+  describe('relay endpoint config', () => {
+    it('should publish Drive shares to the configured relay base', async () => {
+      const { setNetworkEndpointConfig } = await import('$lib/services/networkEndpointConfig');
+      const { driveApi } = await import('$lib/services/driveApiService');
+      const { driveStore } = await import('$lib/stores/driveStore');
+
+      setNetworkEndpointConfig({ driveRelayBaseUrl: 'https://drive-relay.example/' });
+      vi.mocked(driveApi.createShareLink).mockResolvedValueOnce({
+        id: 'share-1',
+        itemId: 'item-1',
+        url: '',
+        isPublic: true,
+        priceChi: '0',
+        recipientWallet: '',
+        createdAt: 1700000000,
+        downloadCount: 0,
+      });
+      mockedInvoke.mockResolvedValueOnce(undefined);
+
+      await driveStore.createShareLink('item-1', '0', true);
+
+      expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_share', expect.objectContaining({
+        shareToken: 'share-1',
+        relayUrl: 'https://drive-relay.example',
+        ownerWallet: '0xTestWallet123',
+      }));
+    });
+  });
 });
