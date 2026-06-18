@@ -4,6 +4,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use lettre::message::{header::ContentType, Mailbox};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
@@ -12,13 +13,26 @@ use std::env;
 
 const DEFAULT_SMTP_PORT: u16 = 587;
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct WalletBackupEmailRequest {
     email: String,
-    recovery_phrase: String,
     wallet_address: String,
-    private_key: String,
+    encrypted_backup: EncryptedWalletBackupPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct EncryptedWalletBackupPayload {
+    version: String,
+    algorithm: String,
+    kdf: String,
+    iterations: u32,
+    salt: String,
+    iv: String,
+    ciphertext: String,
 }
 
 #[derive(Serialize)]
@@ -43,15 +57,18 @@ fn is_valid_wallet_address(value: &str) -> bool {
         && value[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn is_valid_private_key(value: &str) -> bool {
-    let trimmed = value.trim();
-    let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())
+fn base64_decoded_len(value: &str) -> Option<usize> {
+    STANDARD.decode(value.trim()).ok().map(|bytes| bytes.len())
 }
 
-fn is_valid_recovery_phrase(value: &str) -> bool {
-    let words: Vec<&str> = value.split_whitespace().collect();
-    words.len() == 12
+fn is_valid_encrypted_backup_payload(value: &EncryptedWalletBackupPayload) -> bool {
+    value.version == "chiral-wallet-backup-v1"
+        && value.algorithm == "AES-256-GCM"
+        && value.kdf == "PBKDF2-SHA256"
+        && value.iterations >= 100_000
+        && base64_decoded_len(&value.salt) == Some(16)
+        && base64_decoded_len(&value.iv) == Some(12)
+        && base64_decoded_len(&value.ciphertext).is_some_and(|len| len > 0)
 }
 
 fn parse_smtp_settings() -> Result<SmtpSettings, String> {
@@ -86,10 +103,15 @@ fn parse_smtp_settings() -> Result<SmtpSettings, String> {
 
 fn build_email_body(req: &WalletBackupEmailRequest) -> String {
     format!(
-        "This is your one-time Chiral wallet backup email.\n\nRecovery Phrase (12 words):\n{}\n\nWallet Address:\n{}\n\nPrivate Key:\n{}\n\nSecurity reminders:\n- Keep this email private and secure.\n- Delete this email after saving these credentials in a secure password manager.\n- Anyone with this information can fully control your wallet.",
-        req.recovery_phrase.trim(),
+        "This is your encrypted one-time Chiral wallet backup email.\n\nWallet Address:\n{}\n\nEncrypted Backup:\nversion={}\nalgorithm={}\nkdf={}\niterations={}\nsalt={}\niv={}\nciphertext={}\n\nSecurity reminders:\n- Keep this email private and secure.\n- Keep your backup key separate from this email.\n- The relay did not receive your recovery phrase or private key.",
         req.wallet_address.trim(),
-        req.private_key.trim(),
+        req.encrypted_backup.version.trim(),
+        req.encrypted_backup.algorithm.trim(),
+        req.encrypted_backup.kdf.trim(),
+        req.encrypted_backup.iterations,
+        req.encrypted_backup.salt.trim(),
+        req.encrypted_backup.iv.trim(),
+        req.encrypted_backup.ciphertext.trim(),
     )
 }
 
@@ -98,18 +120,15 @@ async fn send_wallet_backup_email(Json(req): Json<WalletBackupEmailRequest>) -> 
     if email.is_empty() {
         return (StatusCode::BAD_REQUEST, "Email is required").into_response();
     }
-    if !is_valid_recovery_phrase(&req.recovery_phrase) {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Recovery phrase must contain exactly 12 words",
-        )
-            .into_response();
-    }
     if !is_valid_wallet_address(req.wallet_address.trim()) {
         return (StatusCode::BAD_REQUEST, "Invalid wallet address").into_response();
     }
-    if !is_valid_private_key(req.private_key.trim()) {
-        return (StatusCode::BAD_REQUEST, "Invalid private key").into_response();
+    if !is_valid_encrypted_backup_payload(&req.encrypted_backup) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid encrypted wallet backup payload",
+        )
+            .into_response();
     }
 
     let to_mailbox: Mailbox = match email.parse() {
@@ -189,7 +208,10 @@ pub fn wallet_backup_routes() -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_valid_private_key, is_valid_recovery_phrase, is_valid_wallet_address};
+    use super::{
+        build_email_body, is_valid_encrypted_backup_payload, is_valid_wallet_address,
+        EncryptedWalletBackupPayload, WalletBackupEmailRequest,
+    };
 
     #[test]
     fn validates_wallet_address_format() {
@@ -200,21 +222,80 @@ mod tests {
         assert!(!is_valid_wallet_address("xyz"));
     }
 
-    #[test]
-    fn validates_private_key_format() {
-        assert!(is_valid_private_key(
-            "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        ));
-        assert!(is_valid_private_key(
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        ));
-        assert!(!is_valid_private_key("not-a-key"));
+    fn encrypted_payload() -> EncryptedWalletBackupPayload {
+        EncryptedWalletBackupPayload {
+            version: "chiral-wallet-backup-v1".to_string(),
+            algorithm: "AES-256-GCM".to_string(),
+            kdf: "PBKDF2-SHA256".to_string(),
+            iterations: 210_000,
+            salt: "MDEyMzQ1Njc4OWFiY2RlZg==".to_string(),
+            iv: "MTIzNDU2Nzg5MDEy".to_string(),
+            ciphertext: "ZW5jcnlwdGVkLXdhbGxldC1iYWNrdXA=".to_string(),
+        }
     }
 
     #[test]
-    fn validates_recovery_phrase_word_count() {
-        let phrase = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
-        assert!(is_valid_recovery_phrase(phrase));
-        assert!(!is_valid_recovery_phrase("too short"));
+    fn validates_encrypted_backup_payload() {
+        let valid = encrypted_payload();
+        assert!(is_valid_encrypted_backup_payload(&valid));
+
+        let too_weak = EncryptedWalletBackupPayload {
+            iterations: 1,
+            ..encrypted_payload()
+        };
+        assert!(!is_valid_encrypted_backup_payload(&too_weak));
+
+        let bad_base64 = EncryptedWalletBackupPayload {
+            ciphertext: "not base64".to_string(),
+            ..encrypted_payload()
+        };
+        assert!(!is_valid_encrypted_backup_payload(&bad_base64));
+
+        let wrong_iv_length = EncryptedWalletBackupPayload {
+            iv: "c2hvcnQ=".to_string(),
+            ..encrypted_payload()
+        };
+        assert!(!is_valid_encrypted_backup_payload(&wrong_iv_length));
+    }
+
+    #[test]
+    fn email_body_never_contains_raw_wallet_secrets() {
+        let raw_phrase = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        let raw_private_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let req = WalletBackupEmailRequest {
+            email: "user@example.com".to_string(),
+            wallet_address: "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            encrypted_backup: encrypted_payload(),
+        };
+
+        let body = build_email_body(&req);
+
+        assert!(body.contains("ZW5jcnlwdGVkLXdhbGxldC1iYWNrdXA="));
+        assert!(!body.contains(raw_phrase));
+        assert!(!body.contains(raw_private_key));
+    }
+
+    #[test]
+    fn plaintext_wallet_secret_fields_are_rejected() {
+        let raw = serde_json::json!({
+            "email": "user@example.com",
+            "walletAddress": "0x1234567890abcdef1234567890abcdef12345678",
+            "recoveryPhrase": "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+            "privateKey": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "encryptedBackup": {
+                "version": "chiral-wallet-backup-v1",
+                "algorithm": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 210000,
+                "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+                "iv": "MTIzNDU2Nzg5MDEy",
+                "ciphertext": "ZW5jcnlwdGVkLXdhbGxldC1iYWNrdXA="
+            }
+        });
+
+        let err = serde_json::from_value::<WalletBackupEmailRequest>(raw)
+            .expect_err("plaintext-era wallet secrets should be unknown fields");
+
+        assert!(err.to_string().contains("unknown field"));
     }
 }

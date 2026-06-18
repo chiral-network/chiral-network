@@ -31,16 +31,47 @@ describe('walletBackupService', () => {
       const result = await walletBackupService.sendBackupEmail(payload);
 
       expect(mockInvoke).toHaveBeenCalledOnce();
+      const [, invokePayload] = mockInvoke.mock.calls[0] as [
+        string,
+        {
+          email: string;
+          walletAddress: string;
+          encryptedBackup: {
+            version: string;
+            algorithm: string;
+            kdf: string;
+            iterations: number;
+            salt: string;
+            iv: string;
+            ciphertext: string;
+          };
+          recoveryPhrase?: string;
+          privateKey?: string;
+        },
+      ];
+
       expect(mockInvoke).toHaveBeenCalledWith('send_wallet_backup_email', {
         email: 'test@example.com',
-        recoveryPhrase: payload.recoveryPhrase,
         walletAddress: payload.walletAddress,
-        privateKey: payload.privateKey,
+        encryptedBackup: invokePayload.encryptedBackup,
       });
-      expect(result).toBe(true);
+      expect(invokePayload).not.toHaveProperty('recoveryPhrase');
+      expect(invokePayload).not.toHaveProperty('privateKey');
+      expect(invokePayload.encryptedBackup).toMatchObject({
+        version: 'chiral-wallet-backup-v1',
+        algorithm: 'AES-256-GCM',
+        kdf: 'PBKDF2-SHA256',
+        iterations: 210_000,
+      });
+      expect(invokePayload.encryptedBackup.salt).toEqual(expect.any(String));
+      expect(invokePayload.encryptedBackup.iv).toEqual(expect.any(String));
+      expect(invokePayload.encryptedBackup.ciphertext).toEqual(expect.any(String));
+      expect(invokePayload.encryptedBackup.ciphertext).not.toContain(payload.recoveryPhrase);
+      expect(invokePayload.encryptedBackup.ciphertext).not.toContain(payload.privateKey);
+      expect(result.backupKey).toEqual(expect.any(String));
     });
 
-    it('should return true on success', async () => {
+    it('should return backup key on success', async () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
 
       mockInvoke.mockResolvedValueOnce(undefined);
@@ -52,7 +83,7 @@ describe('walletBackupService', () => {
         privateKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
       });
 
-      expect(result).toBe(true);
+      expect(result).toEqual({ backupKey: expect.any(String) });
     });
 
     it('should throw when invoke rejects with error message', async () => {
