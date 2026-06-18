@@ -2165,23 +2165,47 @@ fn load_failed_peers() -> HashSet<PeerId> {
 }
 
 /// Save the current failed peers set to disk.
-fn save_failed_peers(failed: &HashSet<PeerId>) {
-    let Some(path) = failed_peers_path() else {
-        return;
-    };
+fn save_failed_peers(failed: &HashSet<PeerId>) -> Result<(), String> {
+    let path =
+        failed_peers_path().ok_or_else(|| "failed-peer cache path is unavailable".to_string())?;
+    save_failed_peers_to_path_at(&path, failed, SystemTime::now())
+}
+
+fn save_failed_peers_to_path_at(
+    path: &Path,
+    failed: &HashSet<PeerId>,
+    now: SystemTime,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create failed-peer cache directory {}: {e}",
+                parent.display()
+            )
+        })?;
     }
-    let now = SystemTime::now()
+    let now = now
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|e| {
+            format!("resolve failed-peer cache timestamp: system clock before UNIX_EPOCH: {e}")
+        })?
         .as_secs();
-    let contents: String = failed
+    let mut lines: Vec<String> = failed
         .iter()
         .map(|pid| format!("{}\t{}", pid, now))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let _ = std::fs::write(&path, contents);
+        .collect();
+    lines.sort();
+    std::fs::write(path, lines.join("\n"))
+        .map_err(|e| format!("write failed-peer cache {}: {e}", path.display()))
+}
+
+fn log_failed_peer_cache_save(failed: &HashSet<PeerId>, context: &str) {
+    if let Err(err) = save_failed_peers(failed) {
+        println!(
+            "⚠️ Failed to persist failed-peer cache while {}: {}",
+            context, err
+        );
+    }
 }
 
 fn peer_timestamp_secs_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
@@ -3002,7 +3026,10 @@ async fn event_loop(
 
                         // Peer is reachable — remove from failed set
                         if failed_peers.remove(&peer_id) {
-                            save_failed_peers(&failed_peers);
+                            log_failed_peer_cache_save(
+                                &failed_peers,
+                                "removing a reconnected peer",
+                            );
                         }
                         auto_peer_dial_attempts.remove(&peer_id);
 
@@ -4225,7 +4252,12 @@ async fn handle_behaviour_event(
                         peer_id, info.agent_version, policy.min_required
                     );
                     let _ = swarm.disconnect_peer_id(peer_id);
-                    failed_peers.insert(peer_id);
+                    if failed_peers.insert(peer_id) {
+                        log_failed_peer_cache_save(
+                            failed_peers,
+                            "recording a peer below the required version",
+                        );
+                    }
                     return;
                 }
                 Ok(false) => {}
@@ -4235,7 +4267,12 @@ async fn handle_behaviour_event(
                         peer_id, e
                     );
                     let _ = swarm.disconnect_peer_id(peer_id);
-                    failed_peers.insert(peer_id);
+                    if failed_peers.insert(peer_id) {
+                        log_failed_peer_cache_save(
+                            failed_peers,
+                            "recording a peer with malformed version metadata",
+                        );
+                    }
                     return;
                 }
             }
@@ -6118,6 +6155,74 @@ mod tests {
 
         assert!(peer_timestamp_secs_at(pre_epoch).is_err());
         assert!(peer_timestamp_millis_at(pre_epoch).is_err());
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_persists_current_peers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache").join("failed_peers.txt");
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let mut failed = HashSet::new();
+        failed.insert(peer_a);
+        failed.insert(peer_b);
+
+        save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+            .unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        let mut sorted = lines.clone();
+        sorted.sort_unstable();
+        assert_eq!(lines, sorted);
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.ends_with("\t123")));
+        assert!(contents.contains(&peer_a.to_string()));
+        assert!(contents.contains(&peer_b.to_string()));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let path = blocked_parent.join("failed_peers.txt");
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err =
+            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+                .expect_err("directory creation should fail");
+
+        assert!(err.contains("create failed-peer cache directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed_peers.txt");
+        std::fs::create_dir(&path).unwrap();
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err =
+            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
+                .expect_err("writing over a directory should fail");
+
+        assert!(err.contains("write failed-peer cache"));
+        assert!(err.contains("failed_peers.txt"));
+    }
+
+    #[test]
+    fn save_failed_peers_to_path_at_rejects_pre_epoch_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed_peers.txt");
+        let failed = HashSet::from([PeerId::random()]);
+
+        let err = save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH - Duration::from_secs(1))
+            .expect_err("pre-epoch timestamps should fail");
+
+        assert!(err.contains("system clock before UNIX_EPOCH"));
+        assert!(!path.exists());
     }
 
     #[test]
