@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cn, formatBytes, formatPriceWei } from '$lib/utils';
+import { cn, formatBytes, formatPriceWei, parseChiPriceToWei } from '$lib/utils';
 
 describe('cn (class name utility)', () => {
   it('should merge simple class names', () => {
@@ -126,5 +126,49 @@ describe('formatPriceWei', () => {
 
   it('should return "Free" for invalid input', () => {
     expect(formatPriceWei('not_a_number')).toBe('Free');
+  });
+});
+
+describe('parseChiPriceToWei', () => {
+  it('treats blank prices as free', () => {
+    expect(parseChiPriceToWei('')).toBe('0');
+    expect(parseChiPriceToWei('   ')).toBe('0');
+    expect(parseChiPriceToWei(null)).toBe('0');
+    expect(parseChiPriceToWei(undefined)).toBe('0');
+  });
+
+  it('parses whole and fractional CHI prices', () => {
+    expect(parseChiPriceToWei('1')).toBe('1000000000000000000');
+    expect(parseChiPriceToWei('0.001')).toBe('1000000000000000');
+    expect(parseChiPriceToWei('.5')).toBe('500000000000000000');
+    expect(parseChiPriceToWei('1.000000000000000001')).toBe('1000000000000000001');
+  });
+
+  it('accepts the maximum Rust u128 wei value', () => {
+    expect(parseChiPriceToWei('340282366920938463463.374607431768211455')).toBe(
+      '340282366920938463463374607431768211455'
+    );
+  });
+
+  it('rejects malformed decimal prices', () => {
+    expect(() => parseChiPriceToWei('abc')).toThrow('decimal CHI amount');
+    expect(() => parseChiPriceToWei('1.2.3')).toThrow('decimal CHI amount');
+    expect(() => parseChiPriceToWei('1e3')).toThrow('decimal CHI amount');
+    expect(() => parseChiPriceToWei('-1')).toThrow('decimal CHI amount');
+  });
+
+  it('rejects prices beyond wei precision', () => {
+    expect(() => parseChiPriceToWei('0.0000000000000000001')).toThrow(
+      'at most 18 decimal places'
+    );
+  });
+
+  it('rejects prices above the Rust u128 wei limit', () => {
+    expect(() => parseChiPriceToWei('340282366920938463463.374607431768211456')).toThrow(
+      'maximum supported amount'
+    );
+    expect(() => parseChiPriceToWei('1000000000000000000000')).toThrow(
+      'maximum supported amount'
+    );
   });
 });
