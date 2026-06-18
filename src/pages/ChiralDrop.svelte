@@ -24,7 +24,7 @@
     type FileTransfer
   } from '$lib/chiralDropStore';
   import { aliasFromPeerId } from '$lib/aliasService';
-  import { formatBytes as formatFileSize, formatPriceWei } from '$lib/utils';
+  import { formatBytes as formatFileSize, formatPriceWei, parseChiPriceToWei } from '$lib/utils';
   import { peers, walletAccount } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
@@ -45,6 +45,15 @@
 
   let showHistory = $state(false);
   let sendPrice = $state('');
+  let sendPriceWei = $derived.by(() => {
+    try {
+      return parseChiPriceToWei(sendPrice);
+    } catch {
+      return null;
+    }
+  });
+  let sendPriceInvalid = $derived(String(sendPrice ?? '').trim() !== '' && sendPriceWei === null);
+  let sendPriceIsPaid = $derived(sendPriceWei !== null && BigInt(sendPriceWei) > 0n);
   let peerSearchQuery = $state('');
   let filteredNearbyPeers = $derived(
     peerSearchQuery.trim()
@@ -381,6 +390,14 @@
 
   async function handleSendClick() {
     if (!$selectedPeer) return;
+    if (sendPriceInvalid) {
+      toasts.detail('Invalid price', 'Enter a decimal CHI amount with up to 18 decimals', 'warning');
+      return;
+    }
+    if (sendPriceIsPaid && !$walletAccount) {
+      toasts.show('Connect your wallet to set a price', 'warning');
+      return;
+    }
 
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
@@ -410,7 +427,14 @@
     const fromAlias = $userAlias;
     const toAlias = peer.alias;
     const price = String(sendPrice ?? '').trim();
-    const isPaid = price !== '' && parseFloat(price) > 0;
+    let priceWei: string;
+    try {
+      priceWei = parseChiPriceToWei(price);
+    } catch {
+      toasts.detail('Invalid price', 'Enter a decimal CHI amount with up to 18 decimals', 'warning');
+      return;
+    }
+    const isPaid = BigInt(priceWei) > 0n;
 
     // Validate wallet for paid transfers
     if (isPaid && !$walletAccount) {
@@ -439,13 +463,6 @@
         // Paid transfer flow:
         // 1. Publish file from path (hashes, stores in memory, registers for chunked serving)
         // 2. Send metadata-only request via file_transfer protocol with pricing info
-
-        // Convert CHI to wei
-        const priceParts = price.split('.');
-        const whole = BigInt(priceParts[0] || '0');
-        const fracStr = (priceParts[1] || '').padEnd(18, '0').slice(0, 18);
-        const frac = BigInt(fracStr);
-        const priceWei = (whole * BigInt(1e18) + frac).toString();
 
         // Publish file to get hash and register for chunked serving
         const publishResult = await invoke<{ merkleRoot: string }>('publish_file', {
@@ -810,24 +827,28 @@
               <input
                 id="chiraldrop-price"
                 type="number"
-                step="0.001"
+                step="0.000000000000000001"
                 min="0"
+                inputmode="decimal"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
                 class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-900/50"
               />
             </div>
-            {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
+            {#if sendPriceInvalid}
+              <p class="mt-1 text-xs text-red-500">Enter a decimal CHI amount with up to 18 decimals</p>
+            {:else if sendPriceIsPaid && !$walletAccount}
               <p class="mt-1 text-xs text-amber-500">Connect wallet to set a price</p>
             {/if}
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            disabled={sendPriceInvalid}
+            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30 disabled:cursor-not-allowed disabled:bg-gray-400"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />
-              {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHI` : 'Select File to Send'}
+              {sendPriceInvalid ? 'Fix price to send' : sendPriceIsPaid ? `Send for ${String(sendPrice).trim()} CHI` : 'Select File to Send'}
             </span>
           </button>
         </div>

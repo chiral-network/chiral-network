@@ -9,6 +9,11 @@
   import { hostingService } from '$lib/services/hostingService';
   import { ratingApi } from '$lib/services/ratingApiService';
   import {
+    DEFAULT_NETWORK_ENDPOINT_CONFIG,
+    loadNetworkEndpointConfig,
+    type CdnEndpointConfig,
+  } from '$lib/services/networkEndpointConfig';
+  import {
     buildHostedSiteUrl,
     resolveHostingPort,
   } from '$lib/utils/hostingPageUtils';
@@ -23,7 +28,10 @@
   import HostingDrivePicker from '$lib/components/hosting/HostingDrivePicker.svelte';
 
   const log = logger('Hosting');
-  const RELAY_GATEWAY = 'http://130.245.173.73:8080';
+  let relayGateway = $state(DEFAULT_NETWORK_ENDPOINT_CONFIG.relayBaseUrl);
+  let cdnServerConfigs = $state<CdnEndpointConfig[]>(
+    DEFAULT_NETWORK_ENDPOINT_CONFIG.cdnServers.map((server) => ({ ...server })),
+  );
 
   // ---------------------------------------------------------------------------
   // Tauri check
@@ -83,7 +91,7 @@
   // CDN site hosting state
   // ─ Per-site upload form: which site is being uploaded, which CDN, for
   //   how long, plus the in-flight quote we got back from the CDN. The
-  //   default URL is filled in inside `openCdnUpload` since CDN_SERVERS is
+  //   default URL is filled in inside `openCdnUpload` from network config
   //   declared later in the file.
   let cdnUploadSiteId = $state<string | null>(null);
   let cdnUploadServerUrl = $state('');
@@ -123,11 +131,6 @@
   // ---------------------------------------------------------------------------
   // CDN state
   // ---------------------------------------------------------------------------
-  const CDN_SERVERS = [
-    { url: 'http://130.245.173.73:9420', name: 'CDN Primary (US East)', region: 'New York' },
-    { url: 'http://130.245.173.231:9420', name: 'CDN Secondary (US East)', region: 'Stony Brook' },
-  ];
-
   interface CdnServerInfo {
     url: string;
     name: string;
@@ -163,15 +166,22 @@
   let loadingCdn = $state(false);
   let copiedCdnHash = $state<string | null>(null);
 
+  async function loadEndpointConfig() {
+    const config = await loadNetworkEndpointConfig();
+    relayGateway = config.relayBaseUrl;
+    cdnServerConfigs = config.cdnServers;
+  }
+
   async function loadCdnServers() {
     loadingCdn = true;
     const myWallet = $walletAccount?.address || '';
+    const configuredServers = cdnServerConfigs;
 
     // Query every CDN server in parallel, and within each server query
     // status + my-files in parallel too. Previously this was a serial
     // double-loop, so two CDN servers at 500ms each meant a 2s page load.
     cdnServers = await Promise.all(
-      CDN_SERVERS.map(async (server): Promise<CdnServerInfo> => {
+      configuredServers.map(async (server): Promise<CdnServerInfo> => {
         try {
           const [statusResp, filesResp] = await Promise.all([
             fetchWithVersion(`${server.url}/api/cdn/status`),
@@ -686,7 +696,7 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const relayUrl = await invoke<string>('publish_site_to_relay', {
         siteId,
-        relayUrl: RELAY_GATEWAY,
+        relayUrl: relayGateway,
         ownerWallet,
         privateKey,
       });
@@ -728,7 +738,7 @@
 
   async function openCdnUpload(site: HostedSite) {
     cdnUploadSiteId = site.id;
-    cdnUploadServerUrl = CDN_SERVERS[0]?.url ?? '';
+    cdnUploadServerUrl = cdnServerConfigs[0]?.url ?? '';
     cdnUploadDurationDays = 30;
     cdnUploadQuote = null;
     await refreshCdnUploadQuote(site);
@@ -1204,6 +1214,7 @@
   onMount(async () => {
     isTauri = checkTauriAvailability();
     port = resolveHostingPort(localStorage.getItem('chiral-hosting-port'));
+    await loadEndpointConfig();
 
     // Load site hosting data
     await loadServerStatus();
@@ -1572,7 +1583,7 @@
                     onchange={() => refreshCdnUploadQuote(site)}
                     class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    {#each CDN_SERVERS as cdn}
+                    {#each cdnServerConfigs as cdn}
                       <option value={cdn.url}>{cdn.name}</option>
                     {/each}
                   </select>
@@ -1891,7 +1902,8 @@
               <p class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(file.size)}</p>
             </div>
             <button
-              onclick={() => confirmCdnUpload(CDN_SERVERS[0].url, file)}
+              onclick={() => confirmCdnUpload(cdnServerConfigs[0]?.url ?? '', file)}
+              disabled={!cdnServerConfigs[0]}
               class="ml-3 px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-1.5"
             >
               <Upload class="w-3 h-3" />

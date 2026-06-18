@@ -15,6 +15,8 @@ use crate::rating_storage::{
 };
 use crate::reputation::{self, ReputationIssuerKeyRecord, ReputationVerdictPayload};
 
+const MAX_REPUTATION_BATCH_WALLETS: usize = 100;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmitTransferRequest {
@@ -85,6 +87,34 @@ fn get_owner(headers: &HeaderMap) -> Option<String> {
 
 fn is_valid_wallet(addr: &str) -> bool {
     addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_reputation_wallet(wallet: &str) -> Result<String, String> {
+    let wallet = wallet.trim();
+    if !is_valid_wallet(wallet) {
+        return Err("Invalid wallet address".to_string());
+    }
+    Ok(wallet.to_string())
+}
+
+fn validate_reputation_batch_wallets(wallets: &[String]) -> Result<Vec<String>, String> {
+    if wallets.is_empty() {
+        return Err("wallets must contain at least one wallet address".to_string());
+    }
+    if wallets.len() > MAX_REPUTATION_BATCH_WALLETS {
+        return Err(format!(
+            "wallets cannot contain more than {} addresses",
+            MAX_REPUTATION_BATCH_WALLETS
+        ));
+    }
+
+    wallets
+        .iter()
+        .enumerate()
+        .map(|(index, wallet)| {
+            validate_reputation_wallet(wallet).map_err(|err| format!("wallets[{index}]: {err}"))
+        })
+        .collect()
 }
 
 fn parse_wei(value: &str) -> Result<u128, String> {
@@ -179,11 +209,18 @@ async fn publish_issuer_key(
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
     };
 
+    let updated_at = match req.updated_at {
+        Some(value) => value,
+        None => match rating_storage::now_secs() {
+            Ok(value) => value,
+            Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+        },
+    };
     let record = ReputationIssuerKeyRecord {
         issuer_wallet,
         verifying_key: req.verifying_key,
         owner_signature: req.owner_signature,
-        updated_at: req.updated_at.unwrap_or_else(rating_storage::now_secs),
+        updated_at,
     };
 
     if let Err(err) = reputation::validate_issuer_key_record(&record) {
@@ -374,7 +411,10 @@ async fn submit_transfer(
         .filter(|v| !v.is_empty())
         .map(str::to_string);
 
-    let now = rating_storage::now_secs();
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let event_id = rating_storage::generate_event_id(
         &req.transfer_id,
         &req.seeder_wallet,
@@ -424,7 +464,14 @@ async fn get_reputation(
     Extension(state): Extension<Arc<RatingState>>,
     Path(wallet): Path<String>,
 ) -> Response {
-    let now = rating_storage::now_secs();
+    let wallet = match validate_reputation_wallet(&wallet) {
+        Ok(wallet) => wallet,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let m = state.manifest.read().await;
     let snapshot = compute_reputation_for_wallet(&m.events, &wallet, now);
 
@@ -458,11 +505,18 @@ async fn batch_reputation(
     Extension(state): Extension<Arc<RatingState>>,
     Json(req): Json<BatchRequest>,
 ) -> Response {
-    let now = rating_storage::now_secs();
+    let wallets = match validate_reputation_batch_wallets(&req.wallets) {
+        Ok(wallets) => wallets,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let m = state.manifest.read().await;
     let mut out = HashMap::new();
 
-    for wallet in &req.wallets {
+    for wallet in &wallets {
         let snap = compute_reputation_for_wallet(&m.events, wallet, now);
         out.insert(
             wallet.clone(),
@@ -487,7 +541,9 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
     let protected = Router::new()
         .route("/api/ratings/issuer-key", post(publish_issuer_key))
         .route("/api/ratings/transfer", post(submit_transfer))
-        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+        .layer(axum::middleware::from_fn(
+            crate::auth::owner_proof_middleware,
+        ));
 
     // Read-only routes don't need authentication — Elo scores are
     // public anyway.
@@ -497,4 +553,121 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
         .route("/api/ratings/:wallet", get(get_reputation));
 
     protected.merge(public).layer(Extension(state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WALLET_A: &str = "0x1111111111111111111111111111111111111111";
+    const WALLET_B: &str = "0x2222222222222222222222222222222222222222";
+
+    fn test_state() -> (tempfile::TempDir, Arc<RatingState>) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(RatingState::new(dir.path().to_path_buf()));
+        (dir, state)
+    }
+
+    #[test]
+    fn reputation_wallet_validation_accepts_valid_wallet() {
+        assert_eq!(
+            validate_reputation_wallet(&format!("  {WALLET_A}  ")).unwrap(),
+            WALLET_A
+        );
+    }
+
+    #[test]
+    fn reputation_wallet_validation_rejects_invalid_wallet() {
+        let err =
+            validate_reputation_wallet("0x123").expect_err("short wallet address must be rejected");
+
+        assert_eq!(err, "Invalid wallet address");
+    }
+
+    #[test]
+    fn reputation_batch_validation_accepts_valid_wallets() {
+        let wallets = vec![WALLET_A.to_string(), WALLET_B.to_string()];
+
+        let validated =
+            validate_reputation_batch_wallets(&wallets).expect("valid batch should be accepted");
+
+        assert_eq!(validated, wallets);
+    }
+
+    #[test]
+    fn reputation_batch_validation_rejects_empty_batch() {
+        let err =
+            validate_reputation_batch_wallets(&[]).expect_err("empty batches should be rejected");
+
+        assert!(err.contains("at least one wallet address"));
+    }
+
+    #[test]
+    fn reputation_batch_validation_rejects_over_limit_batch() {
+        let wallets = vec![WALLET_A.to_string(); MAX_REPUTATION_BATCH_WALLETS + 1];
+
+        let err = validate_reputation_batch_wallets(&wallets)
+            .expect_err("over-limit batches should be rejected");
+
+        assert!(err.contains("cannot contain more than"));
+        assert!(err.contains(&MAX_REPUTATION_BATCH_WALLETS.to_string()));
+    }
+
+    #[tokio::test]
+    async fn get_reputation_accepts_valid_wallet() {
+        let (_dir, state) = test_state();
+        let response = get_reputation(Extension(state), Path(WALLET_A.to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_reputation_rejects_invalid_wallet() {
+        let (_dir, state) = test_state();
+        let response = get_reputation(Extension(state), Path("not-a-wallet".to_string())).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_reputation_accepts_valid_batch() {
+        let (_dir, state) = test_state();
+        let response = batch_reputation(
+            Extension(state),
+            Json(BatchRequest {
+                wallets: vec![WALLET_A.to_string(), WALLET_B.to_string()],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn batch_reputation_rejects_empty_batch() {
+        let (_dir, state) = test_state();
+        let response = batch_reputation(
+            Extension(state),
+            Json(BatchRequest {
+                wallets: Vec::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_reputation_rejects_over_limit_batch() {
+        let (_dir, state) = test_state();
+        let response = batch_reputation(
+            Extension(state),
+            Json(BatchRequest {
+                wallets: vec![WALLET_A.to_string(); MAX_REPUTATION_BATCH_WALLETS + 1],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
