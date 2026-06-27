@@ -177,6 +177,37 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const MAX_HEADLESS_ECHO_PAYLOAD_BYTES: usize = 64 * 1024;
+
+fn validate_headless_peer_id(field: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{} required", field));
+    }
+    value
+        .parse::<libp2p::PeerId>()
+        .map_err(|e| format!("{} must be a valid libp2p peer ID: {}", field, e))?;
+    Ok(value.to_string())
+}
+
+fn decode_headless_echo_payload(value: &str) -> Result<Vec<u8>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("payloadBase64 required".to_string());
+    }
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map_err(|e| format!("Invalid base64 payload: {}", e))?;
+    if payload.len() > MAX_HEADLESS_ECHO_PAYLOAD_BYTES {
+        return Err(format!(
+            "payloadBase64 decodes to {} bytes, maximum is {}",
+            payload.len(),
+            MAX_HEADLESS_ECHO_PAYLOAD_BYTES
+        ));
+    }
+    Ok(payload)
+}
+
 fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
     value.len() == 2 + bytes * 2
         && value.starts_with("0x")
@@ -339,13 +370,16 @@ struct KeyRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PeerRequest {
+    #[serde(default)]
     peer_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EchoRequest {
+    #[serde(default)]
     peer_id: String,
+    #[serde(default)]
     payload_base64: String,
 }
 
@@ -423,7 +457,7 @@ fn signed_file_metadata_json_for_register(
         protocol,
         &req.wallet_address,
         Some(&req.private_key),
-    )
+    )?
     .ok_or_else(|| "Failed to sign file metadata".to_string())?;
     serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize file metadata: {}", e))
@@ -664,11 +698,16 @@ async fn dht_ping(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<PeerRequest>,
 ) -> Response {
+    let peer_id = match validate_headless_peer_id("peerId", &req.peer_id) {
+        Ok(peer_id) => peer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
-    match svc.ping_peer_headless(req.peer_id).await {
+    match svc.ping_peer_headless(peer_id).await {
         Ok(message) => Json(json!({ "status": "ok", "message": message })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -678,21 +717,20 @@ async fn dht_echo(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<EchoRequest>,
 ) -> Response {
-    let payload = match base64::engine::general_purpose::STANDARD.decode(req.payload_base64) {
-        Ok(v) => v,
-        Err(e) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("Invalid base64 payload: {}", e),
-            )
-        }
+    let peer_id = match validate_headless_peer_id("peerId", &req.peer_id) {
+        Ok(peer_id) => peer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let payload = match decode_headless_echo_payload(&req.payload_base64) {
+        Ok(payload) => payload,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
 
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
-    match svc.echo(req.peer_id, payload).await {
+    match svc.echo(peer_id, payload).await {
         Ok(resp) => Json(json!({
             "payloadBase64": base64::engine::general_purpose::STANDARD.encode(resp)
         }))
@@ -2495,6 +2533,22 @@ async fn main() {
 mod tests {
     use super::*;
 
+    fn valid_peer_id() -> String {
+        libp2p::PeerId::random().to_string()
+    }
+
+    async fn response_error(response: Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+        value["error"]
+            .as_str()
+            .expect("error response should include message")
+            .to_string()
+    }
+
     #[test]
     fn headless_wallet_address_validation_rejects_missing_value() {
         let err =
@@ -2765,6 +2819,140 @@ mod tests {
             require_headless_peer_id(Some("  peer-123  ".to_string())).unwrap(),
             "peer-123"
         );
+    }
+
+    #[test]
+    fn headless_ping_echo_peer_validation_accepts_valid_peer() {
+        let peer_id = valid_peer_id();
+
+        assert_eq!(
+            validate_headless_peer_id("peerId", &peer_id).unwrap(),
+            peer_id
+        );
+    }
+
+    #[test]
+    fn headless_ping_echo_peer_validation_rejects_missing_or_malformed_peer() {
+        assert_eq!(
+            validate_headless_peer_id("peerId", "").unwrap_err(),
+            "peerId required"
+        );
+        assert!(validate_headless_peer_id("peerId", "not-a-peer")
+            .unwrap_err()
+            .contains("valid libp2p peer ID"));
+    }
+
+    #[test]
+    fn headless_echo_payload_validation_accepts_valid_base64() {
+        let payload = decode_headless_echo_payload("aGVsbG8=").unwrap();
+
+        assert_eq!(payload, b"hello");
+    }
+
+    #[test]
+    fn headless_echo_payload_validation_rejects_missing_invalid_and_oversized() {
+        assert_eq!(
+            decode_headless_echo_payload("").unwrap_err(),
+            "payloadBase64 required"
+        );
+        assert!(decode_headless_echo_payload("not base64")
+            .unwrap_err()
+            .contains("Invalid base64"));
+
+        let oversized = vec![b'x'; MAX_HEADLESS_ECHO_PAYLOAD_BYTES + 1];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(oversized);
+        assert!(decode_headless_echo_payload(&encoded)
+            .unwrap_err()
+            .contains("maximum"));
+    }
+
+    #[tokio::test]
+    async fn dht_ping_rejects_malformed_peer_before_dht_access() {
+        let response = dht_ping(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(PeerRequest {
+                peer_id: "not-a-peer".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("peerId"));
+    }
+
+    #[tokio::test]
+    async fn dht_ping_accepts_valid_peer_before_requiring_dht() {
+        let response = dht_ping(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(PeerRequest {
+                peer_id: valid_peer_id(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "DHT not running");
+    }
+
+    #[tokio::test]
+    async fn dht_echo_rejects_malformed_peer_before_payload_decode() {
+        let response = dht_echo(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(EchoRequest {
+                peer_id: "not-a-peer".to_string(),
+                payload_base64: "not base64".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("peerId"));
+    }
+
+    #[tokio::test]
+    async fn dht_echo_rejects_invalid_base64_before_dht_access() {
+        let response = dht_echo(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(EchoRequest {
+                peer_id: valid_peer_id(),
+                payload_base64: "not base64".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("Invalid base64"));
+    }
+
+    #[tokio::test]
+    async fn dht_echo_rejects_oversized_payload_before_dht_access() {
+        let oversized = vec![b'x'; MAX_HEADLESS_ECHO_PAYLOAD_BYTES + 1];
+        let response = dht_echo(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(EchoRequest {
+                peer_id: valid_peer_id(),
+                payload_base64: base64::engine::general_purpose::STANDARD.encode(oversized),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("maximum"));
+    }
+
+    #[tokio::test]
+    async fn dht_echo_accepts_valid_payload_before_requiring_dht() {
+        let response = dht_echo(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(EchoRequest {
+                peer_id: valid_peer_id(),
+                payload_base64: "aGVsbG8=".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "DHT not running");
     }
 
     #[test]
