@@ -1045,11 +1045,10 @@ fn address_from_private_key(priv_bytes: &[u8; 32]) -> Result<String, String> {
 /// require 32-byte hex. Returns `WalletInfo` populated with both
 /// address (derived) and the canonical `0x`-prefixed private key.
 fn load_wallet_from_file(path: &PathBuf) -> Result<WalletInfo, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
     let cleaned = raw.trim().trim_start_matches("0x");
-    let bytes = hex::decode(cleaned)
-        .map_err(|e| format!("wallet-key file is not hex: {}", e))?;
+    let bytes = hex::decode(cleaned).map_err(|e| format!("wallet-key file is not hex: {}", e))?;
     if bytes.len() != 32 {
         return Err(format!(
             "wallet-key file decoded to {} bytes, expected 32",
@@ -1266,7 +1265,10 @@ async fn wallet_send(
     let private_key = body["privateKey"].as_str().unwrap_or("").to_string();
 
     if from.is_empty() || to.is_empty() || amount.is_empty() || private_key.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "from, to, amount, privateKey required");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "from, to, amount, privateKey required",
+        );
     }
 
     // Headless daemon uses its own local geth when available
@@ -1275,7 +1277,9 @@ async fn wallet_send(
     // list — no second endpoint to fall back to from the daemon's
     // perspective.
     let endpoints = [chiral_network::geth::effective_rpc_endpoint()];
-    match chiral_network::wallet::send_transaction(&endpoints, &from, &to, &amount, &private_key).await {
+    match chiral_network::wallet::send_transaction(&endpoints, &from, &to, &amount, &private_key)
+        .await
+    {
         Ok(result) => Json(json!(result)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
@@ -1313,9 +1317,7 @@ async fn wallet_history(
     }
 }
 
-async fn wallet_faucet(
-    Json(body): Json<serde_json::Value>,
-) -> Response {
+async fn wallet_faucet(Json(body): Json<serde_json::Value>) -> Response {
     let address = body["address"].as_str().unwrap_or("").to_string();
     if address.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "address required");
@@ -1556,16 +1558,15 @@ async fn folder_search(
     // with a forged priceWei / walletAddress and divert payment. Drop
     // unsigned / signature-invalid manifests instead of returning them
     // — buyers MUST be able to trust the headless response shape.
-    let manifest_typed: chiral_network::FolderManifest =
-        match serde_json::from_str(&blob) {
-            Ok(m) => m,
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Invalid folder manifest: {}", e),
-                )
-            }
-        };
+    let manifest_typed: chiral_network::FolderManifest = match serde_json::from_str(&blob) {
+        Ok(m) => m,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Invalid folder manifest: {}", e),
+            )
+        }
+    };
     if !manifest_typed.verify() {
         let reason = if manifest_typed.publisher_signature.is_empty() {
             "unsigned"
@@ -1652,9 +1653,7 @@ async fn hosting_publish_ad(
     }
 }
 
-async fn hosting_get_registry(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-) -> Response {
+async fn hosting_get_registry(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
@@ -1669,26 +1668,29 @@ async fn hosting_get_registry(
     }
 }
 
-async fn bootstrap_health(
-    State(_state): State<Arc<HeadlessRuntimeState>>,
-) -> Response {
+fn headless_bootstrap_health_payload_at(
+    now: std::time::SystemTime,
+) -> Result<serde_json::Value, String> {
     // Bootstrap discovery was removed with the geth rewrite. Report the
     // active network's configured enode (if any) as a single static entry.
     let cfg = chiral_network::network::active();
     let has_enode = !cfg.geth_bootstrap_enode.is_empty();
-    Json(json!({
+    Ok(json!({
         "totalNodes": if has_enode { 1 } else { 0 },
         "healthyNodes": if has_enode { 1 } else { 0 },
         "nodes": [],
         "isHealthy": true,
         "healthyEnodeString": cfg.geth_bootstrap_enode,
-        "timestamp": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    })).into_response()
+        "timestamp": chiral_network::bootstrap_health_timestamp_secs_at(now)?,
+    }))
 }
 
+async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Response {
+    match headless_bootstrap_health_payload_at(std::time::SystemTime::now()) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
 
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
@@ -1965,7 +1967,6 @@ async fn main() {
                         Err(e) => eprintln!("[AUTO] Wallet advertisement publish failed: {}", e),
                     }
                 }
-
             }
 
             // Start Geth
@@ -2166,6 +2167,28 @@ mod tests {
             .expect("peer-a should be replaced");
         assert_eq!(updated.wallet_address, "0xnew");
         assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn headless_bootstrap_health_payload_at_preserves_timestamp() {
+        let payload = headless_bootstrap_health_payload_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(789),
+        )
+        .expect("post-epoch bootstrap health payload should be valid");
+
+        assert_eq!(payload["timestamp"].as_u64(), Some(789));
+        assert_eq!(payload["isHealthy"].as_bool(), Some(true));
+        assert!(payload["healthyEnodeString"].is_string());
+    }
+
+    #[test]
+    fn headless_bootstrap_health_payload_at_rejects_pre_epoch_clock() {
+        let err = headless_bootstrap_health_payload_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch bootstrap health payload should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     #[test]
