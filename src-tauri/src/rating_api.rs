@@ -77,6 +77,8 @@ struct BatchResponse {
     reputations: HashMap<String, BatchEntry>,
 }
 
+const MAX_TRANSFER_ID_LEN: usize = 128;
+
 fn get_owner(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-owner")
@@ -87,6 +89,38 @@ fn get_owner(headers: &HeaderMap) -> Option<String> {
 
 fn is_valid_wallet(addr: &str) -> bool {
     addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_transfer_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("transferId is required".to_string());
+    }
+    if trimmed.len() > MAX_TRANSFER_ID_LEN {
+        return Err(format!(
+            "transferId must be at most {MAX_TRANSFER_ID_LEN} bytes"
+        ));
+    }
+    if !trimmed
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err(
+            "transferId may contain only ASCII letters, digits, '.', '_', '-', or ':'".to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_file_hash(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("fileHash is required".to_string());
+    }
+    if trimmed.len() != 64 || !trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("fileHash must be a 64-character hex content hash".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
 }
 
 fn validate_reputation_wallet(wallet: &str) -> Result<String, String> {
@@ -154,13 +188,15 @@ fn transfer_verdict_payload(
     req: &SubmitTransferRequest,
     downloader_wallet: &str,
     amount_wei: u128,
+    transfer_id: &str,
+    file_hash: &str,
     tx_hash: Option<&str>,
 ) -> ReputationVerdictPayload {
     ReputationVerdictPayload {
-        transfer_id: req.transfer_id.trim().to_string(),
+        transfer_id: transfer_id.to_string(),
         seeder_wallet: req.seeder_wallet.trim().to_string(),
         downloader_wallet: downloader_wallet.trim().to_string(),
-        file_hash: req.file_hash.trim().to_string(),
+        file_hash: file_hash.to_string(),
         amount_wei: amount_wei.to_string(),
         outcome: outcome_label(req.outcome).to_string(),
         tx_hash: tx_hash.map(str::to_string),
@@ -172,6 +208,8 @@ async fn verify_transfer_verdict(
     req: &SubmitTransferRequest,
     downloader_wallet: &str,
     amount_wei: u128,
+    transfer_id: &str,
+    file_hash: &str,
     tx_hash: Option<&str>,
 ) -> Result<(String, String), String> {
     let issuer_wallet = req
@@ -196,7 +234,14 @@ async fn verify_transfer_verdict(
         .fetch_issuer_key(&issuer_wallet)
         .await?
         .ok_or_else(|| format!("No reputation issuer key published for {issuer_wallet}"))?;
-    let verdict = transfer_verdict_payload(req, downloader_wallet, amount_wei, tx_hash);
+    let verdict = transfer_verdict_payload(
+        req,
+        downloader_wallet,
+        amount_wei,
+        transfer_id,
+        file_hash,
+        tx_hash,
+    );
     reputation::verify_reputation_verdict_for_wallet(
         &issuer_record,
         &issuer_wallet,
@@ -356,12 +401,14 @@ async fn submit_transfer(
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
     };
 
-    if req.transfer_id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "transferId is required").into_response();
-    }
-    if req.file_hash.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "fileHash is required").into_response();
-    }
+    let transfer_id = match validate_transfer_id(&req.transfer_id) {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
+    let file_hash = match normalize_file_hash(&req.file_hash) {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+    };
     if req.seeder_wallet.trim().is_empty() {
         return (StatusCode::BAD_REQUEST, "seederWallet is required").into_response();
     }
@@ -428,6 +475,8 @@ async fn submit_transfer(
         &req,
         &downloader_wallet,
         amount_wei,
+        &transfer_id,
+        &file_hash,
         tx_hash.as_deref(),
     )
     .await
@@ -435,16 +484,15 @@ async fn submit_transfer(
         Ok(v) => v,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
-
     let now = match rating_storage::now_secs() {
         Ok(value) => value,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
     };
     let event_id = rating_storage::generate_event_id(
-        &req.transfer_id,
+        &transfer_id,
         &req.seeder_wallet,
         &downloader_wallet,
-        &req.file_hash,
+        &file_hash,
     );
 
     let mut m = state.manifest.write().await;
@@ -463,10 +511,10 @@ async fn submit_transfer(
 
     let event = ReputationEvent {
         id: event_id,
-        transfer_id: req.transfer_id.trim().to_string(),
+        transfer_id,
         seeder_wallet: req.seeder_wallet.trim().to_string(),
         downloader_wallet,
-        file_hash: req.file_hash.trim().to_string(),
+        file_hash,
         amount_wei: amount_wei.to_string(),
         outcome: req.outcome,
         tx_hash,
@@ -612,6 +660,57 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = Arc::new(RatingState::new(dir.path().to_path_buf()));
         (dir, state)
+    }
+
+    #[test]
+    fn validate_transfer_id_accepts_common_event_ids() {
+        assert_eq!(validate_transfer_id("transfer-1").unwrap(), "transfer-1");
+        assert_eq!(
+            validate_transfer_id(" t_1.2:seeder-3 ").unwrap(),
+            "t_1.2:seeder-3"
+        );
+    }
+
+    #[test]
+    fn validate_transfer_id_rejects_empty_and_overlong_values() {
+        assert_eq!(
+            validate_transfer_id(" ").unwrap_err(),
+            "transferId is required"
+        );
+        assert!(validate_transfer_id(&"a".repeat(MAX_TRANSFER_ID_LEN + 1))
+            .unwrap_err()
+            .contains("at most"));
+    }
+
+    #[test]
+    fn validate_transfer_id_rejects_ambiguous_characters() {
+        assert!(validate_transfer_id("transfer/1").is_err());
+        assert!(validate_transfer_id("transfer 1").is_err());
+        assert!(validate_transfer_id("transfer\n1").is_err());
+        assert!(validate_transfer_id("transfer\u{00e9}").is_err());
+    }
+
+    #[test]
+    fn normalize_file_hash_accepts_canonical_hex_hashes() {
+        let lower = "a".repeat(64);
+        assert_eq!(normalize_file_hash(&lower).unwrap(), lower);
+
+        let upper = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789";
+        assert_eq!(
+            normalize_file_hash(upper).unwrap(),
+            upper.to_ascii_lowercase()
+        );
+    }
+
+    #[test]
+    fn normalize_file_hash_rejects_empty_short_and_non_hex_values() {
+        assert_eq!(
+            normalize_file_hash(" ").unwrap_err(),
+            "fileHash is required"
+        );
+        assert!(normalize_file_hash("abc123").is_err());
+        assert!(normalize_file_hash(&format!("{}g", "a".repeat(63))).is_err());
+        assert!(normalize_file_hash(&format!("0x{}", "a".repeat(64))).is_err());
     }
 
     #[test]
