@@ -423,7 +423,7 @@ fn signed_file_metadata_json_for_register(
         protocol,
         &req.wallet_address,
         Some(&req.private_key),
-    )
+    )?
     .ok_or_else(|| "Failed to sign file metadata".to_string())?;
     serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize file metadata: {}", e))
@@ -1597,10 +1597,10 @@ async fn wallet_history(
     State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let address = body["address"].as_str().unwrap_or("").to_string();
-    if address.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "address required");
-    }
+    let address = match validate_headless_wallet_address(body["address"].as_str()) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let endpoint = chiral_network::geth::effective_rpc_endpoint();
     let metadata = chiral_network::wallet::load_tx_metadata();
     match chiral_network::wallet::get_transaction_history(&endpoint, &address, &metadata).await {
@@ -1610,10 +1610,10 @@ async fn wallet_history(
 }
 
 async fn wallet_faucet(Json(body): Json<serde_json::Value>) -> Response {
-    let address = body["address"].as_str().unwrap_or("").to_string();
-    if address.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "address required");
-    }
+    let address = match validate_headless_wallet_address(body["address"].as_str()) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     match chiral_network::wallet::request_faucet(&address).await {
         Ok(result) => Json(json!(result)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
@@ -2519,6 +2519,27 @@ mod tests {
             validate_headless_wallet_address(Some(address)).unwrap(),
             address
         );
+    }
+
+    #[tokio::test]
+    async fn wallet_history_rejects_missing_address_before_rpc() {
+        let response = wallet_history(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({})),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wallet_faucet_rejects_malformed_address_before_request() {
+        let response = wallet_faucet(Json(json!({
+            "address": "0x1234",
+        })))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]
