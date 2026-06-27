@@ -1674,25 +1674,29 @@ async fn hosting_get_registry(State(state): State<Arc<HeadlessRuntimeState>>) ->
     }
 }
 
-async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Response {
+fn headless_bootstrap_health_payload_at(
+    now: std::time::SystemTime,
+) -> Result<serde_json::Value, String> {
     // Bootstrap discovery was removed with the geth rewrite. Report the
     // active network's configured enode (if any) as a single static entry.
     let cfg = chiral_network::network::active();
     let has_enode = !cfg.geth_bootstrap_enode.is_empty();
-    Json(json!({
+    Ok(json!({
         "totalNodes": if has_enode { 1 } else { 0 },
         "healthyNodes": if has_enode { 1 } else { 0 },
         "nodes": [],
         "isHealthy": true,
         "healthyEnodeString": cfg.geth_bootstrap_enode,
-        "timestamp": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        "timestamp": chiral_network::bootstrap_health_timestamp_secs_at(now)?,
     }))
-    .into_response()
 }
 
+async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Response {
+    match headless_bootstrap_health_payload_at(std::time::SystemTime::now()) {
+        Ok(payload) => Json(payload).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
         // Health/readiness probes
@@ -2185,6 +2189,28 @@ mod tests {
             .expect("peer-a should be replaced");
         assert_eq!(updated.wallet_address, "0xnew");
         assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn headless_bootstrap_health_payload_at_preserves_timestamp() {
+        let payload = headless_bootstrap_health_payload_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(789),
+        )
+        .expect("post-epoch bootstrap health payload should be valid");
+
+        assert_eq!(payload["timestamp"].as_u64(), Some(789));
+        assert_eq!(payload["isHealthy"].as_bool(), Some(true));
+        assert!(payload["healthyEnodeString"].is_string());
+    }
+
+    #[test]
+    fn headless_bootstrap_health_payload_at_rejects_pre_epoch_clock() {
+        let err = headless_bootstrap_health_payload_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch bootstrap health payload should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     #[test]
