@@ -166,6 +166,17 @@ fn parse_hex_u128(hex: &str) -> Result<u128, String> {
     u128::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
 }
 
+fn validate_reputation_tx_hash(tx_hash: &str) -> Result<String, String> {
+    let tx_hash = tx_hash.trim();
+    if tx_hash.len() != 66
+        || !tx_hash.starts_with("0x")
+        || !tx_hash[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("txHash must be a 0x-prefixed 32-byte hex string".to_string());
+    }
+    Ok(tx_hash.to_ascii_lowercase())
+}
+
 fn outcome_label(outcome: TransferOutcome) -> &'static str {
     match outcome {
         TransferOutcome::Completed => "completed",
@@ -179,6 +190,7 @@ fn transfer_verdict_payload(
     amount_wei: u128,
     transfer_id: &str,
     file_hash: &str,
+    tx_hash: Option<&str>,
 ) -> ReputationVerdictPayload {
     ReputationVerdictPayload {
         transfer_id: transfer_id.to_string(),
@@ -187,12 +199,7 @@ fn transfer_verdict_payload(
         file_hash: file_hash.to_string(),
         amount_wei: amount_wei.to_string(),
         outcome: outcome_label(req.outcome).to_string(),
-        tx_hash: req
-            .tx_hash
-            .as_deref()
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(str::to_string),
+        tx_hash: tx_hash.map(str::to_string),
     }
 }
 
@@ -203,6 +210,7 @@ async fn verify_transfer_verdict(
     amount_wei: u128,
     transfer_id: &str,
     file_hash: &str,
+    tx_hash: Option<&str>,
 ) -> Result<(String, String), String> {
     let issuer_wallet = req
         .issuer_wallet
@@ -226,8 +234,14 @@ async fn verify_transfer_verdict(
         .fetch_issuer_key(&issuer_wallet)
         .await?
         .ok_or_else(|| format!("No reputation issuer key published for {issuer_wallet}"))?;
-    let verdict =
-        transfer_verdict_payload(req, downloader_wallet, amount_wei, transfer_id, file_hash);
+    let verdict = transfer_verdict_payload(
+        req,
+        downloader_wallet,
+        amount_wei,
+        transfer_id,
+        file_hash,
+        tx_hash,
+    );
     reputation::verify_reputation_verdict_for_wallet(
         &issuer_record,
         &issuer_wallet,
@@ -410,9 +424,15 @@ async fn submit_transfer(
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
+    let mut tx_hash = req
+        .tx_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
     if amount_wei > 0 {
-        let tx_hash = match req.tx_hash.as_deref() {
-            Some(v) if !v.trim().is_empty() => v.trim(),
+        let raw_tx_hash = match tx_hash.as_deref() {
+            Some(v) => v,
             _ => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -421,8 +441,17 @@ async fn submit_transfer(
                     .into_response()
             }
         };
-        if let Err(err) =
-            verify_payment_tx(tx_hash, &downloader_wallet, &req.seeder_wallet, amount_wei).await
+        let validated_tx_hash = match validate_reputation_tx_hash(raw_tx_hash) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        };
+        if let Err(err) = verify_payment_tx(
+            &validated_tx_hash,
+            &downloader_wallet,
+            &req.seeder_wallet,
+            amount_wei,
+        )
+        .await
         {
             return (
                 StatusCode::BAD_REQUEST,
@@ -430,6 +459,7 @@ async fn submit_transfer(
             )
                 .into_response();
         }
+        tx_hash = Some(validated_tx_hash);
     }
 
     if !state.issuer_key_store_configured() {
@@ -447,19 +477,13 @@ async fn submit_transfer(
         amount_wei,
         &transfer_id,
         &file_hash,
+        tx_hash.as_deref(),
     )
     .await
     {
         Ok(v) => v,
         Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
     };
-    let tx_hash = req
-        .tx_hash
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-
     let now = match rating_storage::now_secs() {
         Ok(value) => value,
         Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
@@ -607,9 +631,30 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     const WALLET_A: &str = "0x1111111111111111111111111111111111111111";
     const WALLET_B: &str = "0x2222222222222222222222222222222222222222";
+    const FILE_HASH: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+    fn request(amount_wei: &str, tx_hash: Option<&str>) -> SubmitTransferRequest {
+        SubmitTransferRequest {
+            transfer_id: "transfer-1".to_string(),
+            seeder_wallet: WALLET_B.to_string(),
+            file_hash: FILE_HASH.to_string(),
+            outcome: TransferOutcome::Completed,
+            amount_wei: amount_wei.to_string(),
+            tx_hash: tx_hash.map(str::to_string),
+            issuer_wallet: None,
+            verdict_signature: None,
+        }
+    }
+
+    fn headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-owner", HeaderValue::from_static(WALLET_A));
+        headers
+    }
 
     fn test_state() -> (tempfile::TempDir, Arc<RatingState>) {
         let dir = tempfile::tempdir().unwrap();
@@ -666,6 +711,27 @@ mod tests {
         assert!(normalize_file_hash("abc123").is_err());
         assert!(normalize_file_hash(&format!("{}g", "a".repeat(63))).is_err());
         assert!(normalize_file_hash(&format!("0x{}", "a".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn validate_reputation_tx_hash_requires_canonical_shape() {
+        let valid = format!("0x{}", "A".repeat(64));
+        assert_eq!(
+            validate_reputation_tx_hash(&valid).unwrap(),
+            format!("0x{}", "a".repeat(64))
+        );
+
+        let invalid = vec![
+            String::new(),
+            "0x1234".to_string(),
+            "a".repeat(64),
+            format!("0x{}", "g".repeat(64)),
+            format!("0x{}", "a".repeat(63)),
+            format!("0x{}", "a".repeat(65)),
+        ];
+        for tx_hash in invalid {
+            assert!(validate_reputation_tx_hash(&tx_hash).is_err());
+        }
     }
 
     #[test]
@@ -769,5 +835,33 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_rejects_paid_missing_tx_hash_before_persisting() {
+        let (_dir, state) = test_state();
+        let response = submit_transfer(
+            Extension(state.clone()),
+            headers(),
+            Json(request("1", None)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.manifest.read().await.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_rejects_paid_malformed_tx_hash_before_rpc() {
+        let (_dir, state) = test_state();
+        let response = submit_transfer(
+            Extension(state.clone()),
+            headers(),
+            Json(request("1", Some("0x1234"))),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.manifest.read().await.events.is_empty());
     }
 }
