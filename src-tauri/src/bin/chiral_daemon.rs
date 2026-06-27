@@ -201,11 +201,14 @@ fn tail_log_lines(contents: &str, max_lines: usize) -> String {
     all_lines[start..].join("\n")
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+fn now_secs_at(time: std::time::SystemTime) -> Result<u64, String> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| format!("system clock is before UNIX_EPOCH: {}", e))
 }
 
 #[cfg(unix)]
@@ -240,7 +243,7 @@ async fn auto_publish_wallet_advertisement(
     }
     let peer_id = peer_id.ok_or("Peer ID not available".to_string())?;
 
-    let now = now_secs();
+    let now = now_secs()?;
     // Match marketplace advertisement shape so existing browse/discovery code can consume it.
     let ad = json!({
         "peerId": peer_id,
@@ -1621,6 +1624,10 @@ async fn hosting_publish_ad(
         }
     };
     let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
+    let now = match now_secs() {
+        Ok(value) => value,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
 
     // Update registry
     let registry_key = "chiral_host_registry".to_string();
@@ -1629,7 +1636,6 @@ async fn hosting_publish_ad(
             Ok(registry) => registry,
             Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
         };
-    let now = now_secs();
     let registry = host_registry_after_publish(registry, peer_id.clone(), wallet_address, now);
     let registry_json = match serde_json::to_string(&registry) {
         Ok(json) => json,
@@ -1691,7 +1697,6 @@ async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Re
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
-
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
         // Health/readiness probes
@@ -2081,6 +2086,23 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_secs_at_accepts_post_epoch_clock() {
+        let now =
+            now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .expect("post-epoch clock should be valid");
+
+        assert_eq!(now, 1_700_000_000);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clock should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
 
     fn host_registry_entry(
         peer_id: &str,
