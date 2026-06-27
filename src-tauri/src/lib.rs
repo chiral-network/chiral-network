@@ -2292,7 +2292,7 @@ async fn try_repair_local_drive_seed(
             Ok(now) => now,
             Err(err) => {
                 eprintln!("[DRIVE] Skipping repaired seed manifest timestamp: {}", err);
-                return None;
+                return Ok(None);
             }
         };
         let mut manifest = state.drive_state.manifest.write().await;
