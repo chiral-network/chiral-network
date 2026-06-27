@@ -1427,6 +1427,21 @@ async fn wallet_chain_id() -> Response {
 
 // ---- File search endpoint ----
 
+fn parse_headless_file_metadata_record(
+    file_hash: &str,
+    key: &str,
+    json_str: &str,
+) -> Result<serde_json::Value, serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(json_str).map_err(|e| {
+        json!({
+            "type": "malformedFileMetadataRecord",
+            "fileHash": file_hash,
+            "key": key,
+            "error": format!("Malformed file metadata JSON: {}", e),
+        })
+    })
+}
+
 fn parse_headless_seeder_record(
     peer_id: &str,
     key: &str,
@@ -1445,6 +1460,107 @@ fn parse_headless_seeder_record(
 fn append_file_search_warnings(response: &mut serde_json::Value, warnings: Vec<serde_json::Value>) {
     if !warnings.is_empty() {
         response["warnings"] = serde_json::Value::Array(warnings);
+    }
+}
+
+fn file_search_response_payload(
+    metadata: Option<serde_json::Value>,
+    providers: Vec<String>,
+    seeders: Vec<serde_json::Value>,
+    warnings: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    let mut response = if let Some(metadata) = metadata {
+        json!({
+            "found": true,
+            "metadata": metadata,
+            "providers": providers,
+            "seeders": seeders,
+        })
+    } else if !seeders.is_empty() {
+        json!({
+            "found": true,
+            "metadata": null,
+            "providers": providers,
+            "seeders": seeders,
+        })
+    } else {
+        json!({"found": false, "providers": providers})
+    };
+    append_file_search_warnings(&mut response, warnings);
+    response
+}
+
+#[cfg(test)]
+mod file_search_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn parse_headless_file_metadata_record_accepts_valid_json() {
+        let metadata = parse_headless_file_metadata_record(
+            "hash-a",
+            "chiral_file_hash-a",
+            r#"{"hash":"hash-a","fileName":"file.bin"}"#,
+        )
+        .expect("valid metadata JSON should parse");
+
+        assert_eq!(metadata["hash"], "hash-a");
+        assert_eq!(metadata["fileName"], "file.bin");
+    }
+
+    #[test]
+    fn parse_headless_file_metadata_record_returns_warning_for_malformed_json() {
+        let warning =
+            parse_headless_file_metadata_record("hash-a", "chiral_file_hash-a", "{not json")
+                .expect_err("malformed metadata JSON should return a warning");
+
+        assert_eq!(warning["type"], "malformedFileMetadataRecord");
+        assert_eq!(warning["fileHash"], "hash-a");
+        assert_eq!(warning["key"], "chiral_file_hash-a");
+        assert!(warning["error"]
+            .as_str()
+            .expect("warning should include an error")
+            .contains("Malformed file metadata JSON"));
+    }
+
+    #[test]
+    fn file_search_response_preserves_valid_metadata() {
+        let response = file_search_response_payload(
+            Some(json!({"hash": "hash-a"})),
+            vec!["peer-a".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(response["found"], true);
+        assert_eq!(response["metadata"]["hash"], "hash-a");
+        assert!(response.get("warnings").is_none());
+    }
+
+    #[test]
+    fn file_search_response_surfaces_malformed_metadata_warning() {
+        let warning =
+            parse_headless_file_metadata_record("hash-a", "chiral_file_hash-a", "{not json")
+                .expect_err("malformed metadata JSON should return a warning");
+        let response = file_search_response_payload(
+            None,
+            vec!["peer-a".to_string()],
+            Vec::new(),
+            vec![warning],
+        );
+
+        assert_eq!(response["found"], false);
+        assert_eq!(response["providers"][0], "peer-a");
+        assert_eq!(
+            response["warnings"][0]["type"],
+            "malformedFileMetadataRecord"
+        );
+    }
+
+    #[test]
+    fn file_search_response_preserves_missing_metadata_not_found_behavior() {
+        let response = file_search_response_payload(None, Vec::new(), Vec::new(), Vec::new());
+
+        assert_eq!(response, json!({"found": false, "providers": []}));
     }
 }
 
@@ -1531,6 +1647,7 @@ async fn file_search(
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
     };
     let dht_key = format!("chiral_file_{}", file_hash);
+    let metadata_key = dht_key.clone();
     // Run the blob + providers lookups in parallel and bound them; libp2p
     // Kademlia otherwise waits for the full query convergence (often
     // 10-20s) even when the record is in the local store. Without
@@ -1588,36 +1705,32 @@ async fn file_search(
             }
         }
     }
-    match blob {
+    let mut warnings = seeder_warnings;
+    let metadata = match blob {
         Ok(Some(json_str)) => {
-            let metadata = serde_json::from_str::<serde_json::Value>(&json_str)
-                .unwrap_or_else(|_| json!({"raw": json_str}));
-            let mut response = json!({
-                "found": true,
-                "metadata": metadata,
-                "providers": providers,
-                "seeders": seeders,
-            });
-            append_file_search_warnings(&mut response, seeder_warnings);
-            Json(response).into_response()
+            match parse_headless_file_metadata_record(&file_hash, &metadata_key, &json_str) {
+                Ok(metadata) => Some(metadata),
+                Err(warning) => {
+                    let error = warning
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Malformed file metadata JSON");
+                    eprintln!(
+                        "[DAEMON] malformed file metadata for file {} key {}: {}",
+                        file_hash, metadata_key, error
+                    );
+                    warnings.push(warning);
+                    None
+                }
+            }
         }
-        Ok(None) if !seeders.is_empty() => {
-            let mut response = json!({
-                "found": true,
-                "metadata": null,
-                "providers": providers,
-                "seeders": seeders,
-            });
-            append_file_search_warnings(&mut response, seeder_warnings);
-            Json(response).into_response()
-        }
-        Ok(None) => {
-            let mut response = json!({"found": false, "providers": providers});
-            append_file_search_warnings(&mut response, seeder_warnings);
-            Json(response).into_response()
-        }
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
-    }
+        Ok(None) => None,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    Json(file_search_response_payload(
+        metadata, providers, seeders, warnings,
+    ))
+    .into_response()
 }
 
 // ---- Folder bundle search endpoint ----
