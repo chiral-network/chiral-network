@@ -177,6 +177,34 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
+    value.len() == 2 + bytes * 2
+        && value.starts_with("0x")
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_headless_wallet_address(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("address required".to_string());
+    }
+    if !is_hex_prefixed(value, 20) {
+        return Err("address must be a 0x-prefixed 20-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn validate_headless_tx_hash(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("txHash required".to_string());
+    }
+    if !is_hex_prefixed(value, 32) {
+        return Err("txHash must be a 0x-prefixed 32-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
 fn require_headless_peer_id(peer_id: Option<String>) -> Result<String, String> {
     let peer_id = peer_id.unwrap_or_default().trim().to_string();
     if peer_id.is_empty() {
@@ -1304,10 +1332,10 @@ async fn wallet_balance(
     State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let address = body["address"].as_str().unwrap_or("").to_string();
-    if address.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "address required");
-    }
+    let address = match validate_headless_wallet_address(body["address"].as_str()) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     // Use the canonical-RPC fallback list so a firewall-blocked or
     // momentarily-down direct RPC port falls through to the relay's
     // /api/chain/rpc proxy on 8080 instead of returning a misleading
@@ -1382,10 +1410,10 @@ async fn wallet_receipt(
     State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let tx_hash = body["txHash"].as_str().unwrap_or("").to_string();
-    if tx_hash.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "txHash required");
-    }
+    let tx_hash = match validate_headless_tx_hash(body["txHash"].as_str()) {
+        Ok(tx_hash) => tx_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let endpoint = chiral_network::geth::effective_rpc_endpoint();
     match chiral_network::wallet::get_receipt(&endpoint, &tx_hash).await {
         Ok(Some(receipt)) => Json(json!({"receipt": receipt})).into_response(),
@@ -2295,6 +2323,54 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_missing_value() {
+        let err =
+            validate_headless_wallet_address(None).expect_err("missing address should be rejected");
+
+        assert_eq!(err, "address required");
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_malformed_value() {
+        let err = validate_headless_wallet_address(Some("0x1234"))
+            .expect_err("short address should be rejected");
+
+        assert!(err.contains("20-byte"));
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_accepts_valid_value() {
+        let address = "0x1111111111111111111111111111111111111111";
+
+        assert_eq!(
+            validate_headless_wallet_address(Some(address)).unwrap(),
+            address
+        );
+    }
+
+    #[test]
+    fn headless_tx_hash_validation_rejects_missing_value() {
+        let err = validate_headless_tx_hash(None).expect_err("missing txHash should be rejected");
+
+        assert_eq!(err, "txHash required");
+    }
+
+    #[test]
+    fn headless_tx_hash_validation_rejects_malformed_value() {
+        let err = validate_headless_tx_hash(Some("0xnothex"))
+            .expect_err("malformed txHash should be rejected");
+
+        assert!(err.contains("32-byte"));
+    }
+
+    #[test]
+    fn headless_tx_hash_validation_accepts_valid_value() {
+        let tx_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        assert_eq!(validate_headless_tx_hash(Some(tx_hash)).unwrap(), tx_hash);
+    }
 
     #[test]
     fn now_secs_at_accepts_post_epoch_clock() {
