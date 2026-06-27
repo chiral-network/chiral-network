@@ -26,6 +26,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// so they route to the local node when it's up.
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
 
+pub const DEFAULT_MINING_THREADS: u32 = 1;
+pub const MAX_MINING_THREADS: u32 = 256;
+
+pub fn validate_mining_threads(threads: Option<u32>) -> Result<u32, String> {
+    let threads = threads.unwrap_or(DEFAULT_MINING_THREADS);
+    if threads == 0 {
+        return Err("mining threads must be at least 1".to_string());
+    }
+    if threads > MAX_MINING_THREADS {
+        return Err(format!(
+            "mining threads must be at most {}",
+            MAX_MINING_THREADS
+        ));
+    }
+    Ok(threads)
+}
+
 const GETH_HTTP_DEFAULT_ADDR: &str = "127.0.0.1";
 const GETH_HTTP_PORT: &str = "8545";
 // Keep miner for local CPU/GPU mining controls. Exclude admin, personal,
@@ -281,7 +298,9 @@ pub use crate::geth_gpu::{GpuDevice, GpuMiningCapabilities, GpuMiningStatus};
 // Downloader
 // ============================================================================
 
-pub struct GethDownloader { base_dir: PathBuf }
+pub struct GethDownloader {
+    base_dir: PathBuf,
+}
 
 impl GethDownloader {
     pub fn new() -> Self {
@@ -292,20 +311,25 @@ impl GethDownloader {
         Self { base_dir }
     }
 
-    pub fn bin_dir(&self) -> PathBuf { self.base_dir.join("bin") }
-
-    pub fn geth_path(&self) -> PathBuf {
-        self.bin_dir().join(if cfg!(windows) { "geth.exe" } else { "geth" })
+    pub fn bin_dir(&self) -> PathBuf {
+        self.base_dir.join("bin")
     }
 
-    pub fn is_geth_installed(&self) -> bool { self.geth_path().exists() }
+    pub fn geth_path(&self) -> PathBuf {
+        self.bin_dir()
+            .join(if cfg!(windows) { "geth.exe" } else { "geth" })
+    }
+
+    pub fn is_geth_installed(&self) -> bool {
+        self.geth_path().exists()
+    }
 
     fn download_url() -> Result<String, String> {
         const BASE: &str = "https://github.com/etclabscore/core-geth/releases/download/v1.12.20";
         let file = match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("macos", _)          => "core-geth-osx-v1.12.20.zip",
-            ("linux", "x86_64")   => "core-geth-linux-v1.12.20.zip",
-            ("linux", "aarch64")  => "core-geth-arm64-v1.12.20.zip",
+            ("macos", _) => "core-geth-osx-v1.12.20.zip",
+            ("linux", "x86_64") => "core-geth-linux-v1.12.20.zip",
+            ("linux", "aarch64") => "core-geth-arm64-v1.12.20.zip",
             ("windows", "x86_64") => "core-geth-win64-v1.12.20.zip",
             (os, arch) => return Err(format!("Unsupported platform: {os} {arch}")),
         };
@@ -313,10 +337,16 @@ impl GethDownloader {
     }
 
     pub async fn download_geth<F>(&self, on_progress: F) -> Result<(), String>
-    where F: Fn(DownloadProgress) + Send + 'static,
+    where
+        F: Fn(DownloadProgress) + Send + 'static,
     {
         if self.is_geth_installed() {
-            on_progress(DownloadProgress { downloaded: 0, total: 0, percentage: 100.0, status: "Geth already installed".into() });
+            on_progress(DownloadProgress {
+                downloaded: 0,
+                total: 0,
+                percentage: 100.0,
+                status: "Geth already installed".into(),
+            });
             return Ok(());
         }
         let url = Self::download_url()?;
@@ -326,7 +356,11 @@ impl GethDownloader {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| format!("http client: {e}"))?;
-        let resp = client.get(&url).send().await.map_err(|e| format!("GET {url}: {e}"))?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("GET {url}: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("download failed: HTTP {}", resp.status()));
         }
@@ -339,14 +373,25 @@ impl GethDownloader {
             let chunk = chunk.map_err(|e| format!("read chunk: {e}"))?;
             downloaded += chunk.len() as u64;
             bytes.extend_from_slice(&chunk);
-            let percentage = if total > 0 { (downloaded as f32 / total as f32) * 100.0 } else { 0.0 };
+            let percentage = if total > 0 {
+                (downloaded as f32 / total as f32) * 100.0
+            } else {
+                0.0
+            };
             on_progress(DownloadProgress {
-                downloaded, total, percentage,
+                downloaded,
+                total,
+                percentage,
                 status: format!("Downloading... {:.1} MB", downloaded as f32 / 1_048_576.0),
             });
         }
 
-        on_progress(DownloadProgress { downloaded, total, percentage: 100.0, status: "Extracting...".into() });
+        on_progress(DownloadProgress {
+            downloaded,
+            total,
+            percentage: 100.0,
+            status: "Extracting...".into(),
+        });
         Self::extract_geth_binary(&bytes, &self.bin_dir())?;
 
         #[cfg(unix)]
@@ -354,13 +399,20 @@ impl GethDownloader {
             use std::os::unix::fs::PermissionsExt;
             let p = self.geth_path();
             if p.exists() {
-                let mut perms = fs::metadata(&p).map_err(|e| format!("metadata: {e}"))?.permissions();
+                let mut perms = fs::metadata(&p)
+                    .map_err(|e| format!("metadata: {e}"))?
+                    .permissions();
                 perms.set_mode(0o755);
                 fs::set_permissions(&p, perms).map_err(|e| format!("chmod: {e}"))?;
             }
         }
 
-        on_progress(DownloadProgress { downloaded: total, total, percentage: 100.0, status: "Installation complete".into() });
+        on_progress(DownloadProgress {
+            downloaded: total,
+            total,
+            percentage: 100.0,
+            status: "Installation complete".into(),
+        });
         Ok(())
     }
 
@@ -369,7 +421,9 @@ impl GethDownloader {
         // core-geth releases ship as .zip for every platform as of v1.12.x.
         if let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(data)) {
             for i in 0..archive.len() {
-                let mut entry = archive.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
+                let mut entry = archive
+                    .by_index(i)
+                    .map_err(|e| format!("zip entry {i}: {e}"))?;
                 if entry.name().rsplit('/').next() == Some(target) {
                     let mut out = fs::File::create(out_dir.join(target))
                         .map_err(|e| format!("create {target}: {e}"))?;
@@ -385,7 +439,9 @@ impl GethDownloader {
             let mut entry = entry.map_err(|e| format!("tar entry: {e}"))?;
             let path = entry.path().map_err(|e| format!("tar path: {e}"))?;
             if path.file_name().and_then(|s| s.to_str()) == Some(target) {
-                entry.unpack(out_dir.join(target)).map_err(|e| format!("unpack: {e}"))?;
+                entry
+                    .unpack(out_dir.join(target))
+                    .map_err(|e| format!("unpack: {e}"))?;
                 return Ok(());
             }
         }
@@ -394,7 +450,9 @@ impl GethDownloader {
 }
 
 impl Default for GethDownloader {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn open_geth_log_files(log_path: &Path) -> Result<(fs::File, fs::File), String> {
@@ -448,10 +506,18 @@ impl GethProcess {
         p
     }
 
-    pub fn is_installed(&self) -> bool { self.downloader.is_geth_installed() }
-    pub fn is_running(&self) -> bool { self.child.is_some() }
-    pub fn geth_path(&self) -> PathBuf { self.downloader.geth_path() }
-    pub fn effective_rpc_endpoint(&self) -> String { effective_rpc_endpoint() }
+    pub fn is_installed(&self) -> bool {
+        self.downloader.is_geth_installed()
+    }
+    pub fn is_running(&self) -> bool {
+        self.child.is_some()
+    }
+    pub fn geth_path(&self) -> PathBuf {
+        self.downloader.geth_path()
+    }
+    pub fn effective_rpc_endpoint(&self) -> String {
+        effective_rpc_endpoint()
+    }
 
     /// Kill any orphan geth from a crashed previous session and wipe stale
     /// lock files. No `fuser` racing — the PID file plus /proc comm check
@@ -471,14 +537,20 @@ impl GethProcess {
                     let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
                 }
                 #[cfg(windows)]
-                { let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).status(); }
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .status();
+                }
             }
         }
         Self::wipe_lock_files(&self.data_dir);
     }
 
     fn wipe_lock_files(dir: &Path) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -502,12 +574,17 @@ impl GethProcess {
         fs::write(&genesis_path, network::genesis_json(network::active()))
             .map_err(|e| format!("write genesis: {e}"))?;
         let out = Command::new(self.geth_path())
-            .args(["--datadir"]).arg(&self.data_dir)
-            .args(["init"]).arg(&genesis_path)
+            .args(["--datadir"])
+            .arg(&self.data_dir)
+            .args(["init"])
+            .arg(&genesis_path)
             .output()
             .map_err(|e| format!("geth init: {e}"))?;
         if !out.status.success() {
-            return Err(format!("geth init failed: {}", String::from_utf8_lossy(&out.stderr)));
+            return Err(format!(
+                "geth init failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
         }
         Ok(())
     }
@@ -539,8 +616,8 @@ impl GethProcess {
             cfg.geth_bootstrap_enode,
             miner_address,
         ))
-            .stdout(Stdio::from(log_clone))
-            .stderr(Stdio::from(log_file));
+        .stdout(Stdio::from(log_clone))
+        .stderr(Stdio::from(log_file));
 
         let child = cmd.spawn().map_err(|e| format!("spawn geth: {e}"))?;
         let mut child = child;
@@ -559,9 +636,16 @@ impl GethProcess {
             if let Ok(Some(status)) = child.try_wait() {
                 self.child = None;
                 LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
-                let tail = fs::read_to_string(&log_path).unwrap_or_default()
-                    .lines().rev().take(20).collect::<Vec<_>>()
-                    .into_iter().rev().collect::<Vec<_>>().join("\n");
+                let tail = fs::read_to_string(&log_path)
+                    .unwrap_or_default()
+                    .lines()
+                    .rev()
+                    .take(20)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 return Err(format!("Geth exited on startup ({status}).\n{tail}"));
             }
         }
@@ -569,11 +653,17 @@ impl GethProcess {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        let Some(mut child) = self.child.take() else { return Ok(()) };
+        let Some(mut child) = self.child.take() else {
+            return Ok(());
+        };
         LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
         let pid = child.id();
-        #[cfg(unix)]   let _ = Command::new("kill").arg(pid.to_string()).status();
-        #[cfg(windows)] let _ = Command::new("taskkill").args(["/PID", &pid.to_string()]).status();
+        #[cfg(unix)]
+        let _ = Command::new("kill").arg(pid.to_string()).status();
+        #[cfg(windows)]
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .status();
         for _ in 0..6 {
             std::thread::sleep(std::time::Duration::from_millis(500));
             if let Ok(Some(_)) = child.try_wait() {
@@ -582,8 +672,12 @@ impl GethProcess {
             }
         }
         // SIGTERM ignored for 3s → force kill.
-        #[cfg(unix)]    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
-        #[cfg(windows)] let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).status();
+        #[cfg(unix)]
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        #[cfg(windows)]
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .status();
         let _ = child.wait();
         let _ = fs::remove_file(self.data_dir.join("geth.pid"));
         Ok(())
@@ -608,8 +702,7 @@ impl GethProcess {
         for sub in ["chaindata", "lightchaindata", "triecache", "ethash"] {
             let p = geth_dir.join(sub);
             if p.exists() {
-                fs::remove_dir_all(&p)
-                    .map_err(|e| format!("remove {}: {}", p.display(), e))?;
+                fs::remove_dir_all(&p).map_err(|e| format!("remove {}: {}", p.display(), e))?;
             }
         }
         // The genesis.json file at the datadir root is regenerated on
@@ -640,15 +733,21 @@ impl GethProcess {
         let installed = self.is_installed();
         if !self.is_running() {
             return Ok(GethStatus {
-                installed, running: false, local_running: false, syncing: false,
-                current_block: 0, highest_block: 0, peer_count: 0, chain_id: chain_id(),
+                installed,
+                running: false,
+                local_running: false,
+                syncing: false,
+                current_block: 0,
+                highest_block: 0,
+                peer_count: 0,
+                chain_id: chain_id(),
             });
         }
         let endpoint = self.effective_rpc_endpoint();
         let mut batch = rpc_client::batch();
         batch.add("eth_blockNumber", serde_json::json!([]));
-        batch.add("net_peerCount",   serde_json::json!([]));
-        batch.add("eth_syncing",     serde_json::json!([]));
+        batch.add("net_peerCount", serde_json::json!([]));
+        batch.add("eth_syncing", serde_json::json!([]));
         let results = batch.execute(&endpoint).await?;
 
         let current_block = batch_hex_u64(results.first(), "eth_blockNumber")?;
@@ -656,21 +755,42 @@ impl GethProcess {
         let (syncing, highest_block) = parse_syncing(results.get(2), current_block)?;
 
         Ok(GethStatus {
-            installed, running: true, local_running: true,
-            syncing, current_block, highest_block, peer_count, chain_id: chain_id(),
+            installed,
+            running: true,
+            local_running: true,
+            syncing,
+            current_block,
+            highest_block,
+            peer_count,
+            chain_id: chain_id(),
         })
     }
 
     pub async fn start_mining(&self, threads: u32) -> Result<(), String> {
-        if !self.is_running() { return Err("Geth is not running".into()); }
-        rpc_client::call(&self.effective_rpc_endpoint(), "miner_start",
-            serde_json::json!([threads.max(1) as u64])).await.map(|_| ())
+        let threads = validate_mining_threads(Some(threads))?;
+        if !self.is_running() {
+            return Err("Geth is not running".into());
+        }
+        rpc_client::call(
+            &self.effective_rpc_endpoint(),
+            "miner_start",
+            serde_json::json!([threads as u64]),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn stop_mining(&self) -> Result<(), String> {
-        if !self.is_running() { return Err("Geth is not running".into()); }
-        rpc_client::call(&self.effective_rpc_endpoint(), "miner_stop", serde_json::json!([]))
-            .await.map(|_| ())
+        if !self.is_running() {
+            return Err("Geth is not running".into());
+        }
+        rpc_client::call(
+            &self.effective_rpc_endpoint(),
+            "miner_stop",
+            serde_json::json!([]),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Batched mining-status RPC — mining flag, hashrate, coinbase, and
@@ -678,22 +798,28 @@ impl GethProcess {
     pub async fn get_mining_status(&self) -> Result<MiningStatus, String> {
         if !self.is_running() {
             return Ok(MiningStatus {
-                mining: false, hash_rate: 0,
+                mining: false,
+                hash_rate: 0,
                 miner_address: self.miner_address.clone(),
-                total_mined_wei: "0".into(), total_mined_chi: 0.0,
+                total_mined_wei: "0".into(),
+                total_mined_chi: 0.0,
             });
         }
         let endpoint = self.effective_rpc_endpoint();
         let mut batch = rpc_client::batch();
-        batch.add("eth_mining",   serde_json::json!([]));
+        batch.add("eth_mining", serde_json::json!([]));
         batch.add("eth_hashrate", serde_json::json!([]));
         batch.add("eth_coinbase", serde_json::json!([]));
         let results = batch.execute(&endpoint).await?;
 
-        let mining = results.first()
-            .and_then(|r| r.as_ref().ok()).and_then(|v| v.as_bool()).unwrap_or(false);
+        let mining = results
+            .first()
+            .and_then(|r| r.as_ref().ok())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let hash_rate = batch_hex_u64(results.get(1), "eth_hashrate")?;
-        let coinbase = results.get(2)
+        let coinbase = results
+            .get(2)
             .and_then(|r| r.as_ref().ok())
             .and_then(|v| v.as_str().map(str::to_owned))
             .or_else(|| self.miner_address.clone());
@@ -701,8 +827,12 @@ impl GethProcess {
         // Coinbase balance = approximate total-mined display. Cheap and
         // close enough for the UI; doesn't account for gas/transfers out.
         let (total_mined_wei, total_mined_chi) = if let Some(ref addr) = coinbase {
-            match rpc_client::call(&endpoint, "eth_getBalance",
-                serde_json::json!([addr, "latest"])).await
+            match rpc_client::call(
+                &endpoint,
+                "eth_getBalance",
+                serde_json::json!([addr, "latest"]),
+            )
+            .await
             {
                 Ok(v) => {
                     let wei = value_hex_u128(&v, "eth_getBalance")?;
@@ -710,40 +840,77 @@ impl GethProcess {
                 }
                 Err(_) => ("0".into(), 0.0),
             }
-        } else { ("0".into(), 0.0) };
+        } else {
+            ("0".into(), 0.0)
+        };
 
-        Ok(MiningStatus { mining, hash_rate, miner_address: coinbase, total_mined_wei, total_mined_chi })
+        Ok(MiningStatus {
+            mining,
+            hash_rate,
+            miner_address: coinbase,
+            total_mined_wei,
+            total_mined_chi,
+        })
     }
 
     pub async fn set_miner_address(&mut self, address: &str) -> Result<(), String> {
         self.miner_address = Some(address.to_owned());
-        if !self.is_running() { return Ok(()); }
-        rpc_client::call(&self.effective_rpc_endpoint(), "miner_setEtherbase",
-            serde_json::json!([address])).await.map(|_| ())
+        if !self.is_running() {
+            return Ok(());
+        }
+        rpc_client::call(
+            &self.effective_rpc_endpoint(),
+            "miner_setEtherbase",
+            serde_json::json!([address]),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Blocks mined by our coinbase in the last `max_blocks` heights,
     /// newest first. One eth_getBlockByNumber per height. Capped at 500
     /// so this doesn't become a thundering herd on long-lived chains.
     pub async fn get_mined_blocks(&self, max_blocks: u64) -> Result<Vec<MinedBlock>, String> {
-        if !self.is_running() { return Ok(Vec::new()); }
+        if !self.is_running() {
+            return Ok(Vec::new());
+        }
         let coinbase = self.miner_address.as_deref().unwrap_or("").to_lowercase();
-        if coinbase.is_empty() { return Ok(Vec::new()); }
+        if coinbase.is_empty() {
+            return Ok(Vec::new());
+        }
         let endpoint = self.effective_rpc_endpoint();
-        let head = match rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([])).await {
+        let head = match rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([])).await
+        {
             Ok(v) => value_hex_u64(&v, "eth_blockNumber")?,
             Err(_) => 0,
         };
-        if head == 0 { return Ok(Vec::new()); }
+        if head == 0 {
+            return Ok(Vec::new());
+        }
 
         let scan = max_blocks.min(500);
         let mut out = Vec::new();
         for offset in 0..scan {
-            let Some(n) = head.checked_sub(offset) else { break };
-            let block = rpc_client::call(&endpoint, "eth_getBlockByNumber",
-                serde_json::json!([format!("0x{n:x}"), false])).await.ok();
-            let Some(block) = block.filter(|v| !v.is_null()) else { continue };
-            if block.get("miner").and_then(|v| v.as_str()).unwrap_or("").to_lowercase() != coinbase {
+            let Some(n) = head.checked_sub(offset) else {
+                break;
+            };
+            let block = rpc_client::call(
+                &endpoint,
+                "eth_getBlockByNumber",
+                serde_json::json!([format!("0x{n:x}"), false]),
+            )
+            .await
+            .ok();
+            let Some(block) = block.filter(|v| !v.is_null()) else {
+                continue;
+            };
+            if block
+                .get("miner")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase()
+                != coinbase
+            {
                 continue;
             }
             out.push(MinedBlock {
@@ -753,7 +920,9 @@ impl GethProcess {
                 reward_chi: 5.0,
                 difficulty: field_hex_u64(&block, "difficulty", "eth_getBlockByNumber")?,
             });
-            if out.len() as u64 >= max_blocks { break; }
+            if out.len() as u64 >= max_blocks {
+                break;
+            }
         }
         Ok(out)
     }
@@ -763,7 +932,9 @@ impl GethProcess {
 }
 
 impl Default for GethProcess {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ============================================================================
@@ -793,7 +964,10 @@ fn field_hex_u64(value: &serde_json::Value, field: &str, context: &str) -> Resul
 }
 
 /// Extract a hex-encoded u64 from the Nth result of a batch call.
-fn batch_hex_u64(r: Option<&Result<serde_json::Value, String>>, context: &str) -> Result<u64, String> {
+fn batch_hex_u64(
+    r: Option<&Result<serde_json::Value, String>>,
+    context: &str,
+) -> Result<u64, String> {
     let value = r
         .ok_or_else(|| format!("{context} missing batch result"))?
         .as_ref()
@@ -806,9 +980,15 @@ fn parse_syncing(
     r: Option<&Result<serde_json::Value, String>>,
     current_block: u64,
 ) -> Result<(bool, u64), String> {
-    let Some(Ok(v)) = r else { return Ok((false, current_block)); };
-    if let Some(b) = v.as_bool() { return Ok((b, current_block)); }
-    let Some(obj) = v.as_object() else { return Ok((false, current_block)); };
+    let Some(Ok(v)) = r else {
+        return Ok((false, current_block));
+    };
+    if let Some(b) = v.as_bool() {
+        return Ok((b, current_block));
+    }
+    let Some(obj) = v.as_object() else {
+        return Ok((false, current_block));
+    };
     let current = match obj.get("currentBlock") {
         Some(value) => value_hex_u64(value, "eth_syncing currentBlock")?,
         None => current_block,
@@ -837,13 +1017,47 @@ mod tests {
     #[test]
     fn freshnet_is_first_preset_and_has_unique_chain_id() {
         assert_eq!(crate::network::FRESHNET.chain_id, 98763);
-        assert_ne!(crate::network::FRESHNET.chain_id, crate::network::TESTNET.chain_id);
-        assert_eq!(crate::network::ALL[0].chain_id, crate::network::FRESHNET.chain_id);
+        assert_ne!(
+            crate::network::FRESHNET.chain_id,
+            crate::network::TESTNET.chain_id
+        );
+        assert_eq!(
+            crate::network::ALL[0].chain_id,
+            crate::network::FRESHNET.chain_id
+        );
     }
 
     #[test]
     fn network_id_matches_chain_id() {
         assert_eq!(network_id(), chain_id());
+    }
+
+    #[test]
+    fn mining_thread_validation_defaults_absent_to_one() {
+        assert_eq!(
+            validate_mining_threads(None).unwrap(),
+            DEFAULT_MINING_THREADS
+        );
+    }
+
+    #[test]
+    fn mining_thread_validation_accepts_valid_count() {
+        assert_eq!(validate_mining_threads(Some(4)).unwrap(), 4);
+    }
+
+    #[test]
+    fn mining_thread_validation_rejects_zero() {
+        let err = validate_mining_threads(Some(0)).expect_err("zero threads should be rejected");
+
+        assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn mining_thread_validation_rejects_over_limit_count() {
+        let err = validate_mining_threads(Some(MAX_MINING_THREADS + 1))
+            .expect_err("over-limit threads should be rejected");
+
+        assert!(err.contains(&MAX_MINING_THREADS.to_string()));
     }
 
     #[test]
@@ -863,13 +1077,15 @@ mod tests {
         assert_eq!(parse_syncing(Some(&false_), 100).unwrap(), (false, 100));
         assert_eq!(parse_syncing(Some(&true_), 100).unwrap(), (true, 100));
         assert_eq!(parse_syncing(Some(&obj_behind), 5).unwrap(), (true, 10));
-        assert_eq!(parse_syncing(Some(&obj_caught_up), 10).unwrap(), (false, 10));
+        assert_eq!(
+            parse_syncing(Some(&obj_caught_up), 10).unwrap(),
+            (false, 10)
+        );
     }
 
     #[test]
     fn parse_syncing_rejects_malformed_hex() {
-        let malformed =
-            Ok(serde_json::json!({"currentBlock": "0xnot-hex", "highestBlock": "0xa"}));
+        let malformed = Ok(serde_json::json!({"currentBlock": "0xnot-hex", "highestBlock": "0xa"}));
 
         assert!(parse_syncing(Some(&malformed), 5).is_err());
     }
@@ -896,7 +1112,10 @@ mod tests {
             Some("0xabc"),
         );
 
-        assert_eq!(arg_value(&args, "--http.addr"), Some(GETH_HTTP_DEFAULT_ADDR));
+        assert_eq!(
+            arg_value(&args, "--http.addr"),
+            Some(GETH_HTTP_DEFAULT_ADDR)
+        );
         assert_eq!(arg_value(&args, "--http.port"), Some(GETH_HTTP_PORT));
         assert_eq!(arg_value(&args, "--http.api"), Some(GETH_HTTP_API_MODULES));
         assert!(args.iter().any(|arg| arg == "--nodiscover"));
@@ -933,9 +1152,13 @@ mod tests {
     #[test]
     fn mining_status_serializes_camel_case() {
         let s = serde_json::to_string(&MiningStatus {
-            mining: true, hash_rate: 42, miner_address: Some("0xabc".into()),
-            total_mined_wei: "5".into(), total_mined_chi: 5.0,
-        }).unwrap();
+            mining: true,
+            hash_rate: 42,
+            miner_address: Some("0xabc".into()),
+            total_mined_wei: "5".into(),
+            total_mined_chi: 5.0,
+        })
+        .unwrap();
         assert!(s.contains("\"hashRate\":42"));
         assert!(s.contains("\"minerAddress\""));
         assert!(s.contains("\"totalMinedWei\""));
