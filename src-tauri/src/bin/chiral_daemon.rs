@@ -382,9 +382,12 @@ struct SendFileRequest {
 struct RegisterSharedFileRequest {
     #[serde(default)]
     file_hash: String,
+    #[serde(default)]
     file_path: String,
+    #[serde(default)]
     file_name: String,
-    file_size: u64,
+    #[serde(default)]
+    file_size: Option<u64>,
     #[serde(default)]
     protocol: Option<String>,
     #[serde(default)]
@@ -410,10 +413,13 @@ fn signed_file_metadata_json_for_register(
     req: &RegisterSharedFileRequest,
     protocol: &str,
 ) -> Result<String, String> {
+    let file_size = req
+        .file_size
+        .ok_or_else(|| "fileSize required".to_string())?;
     let metadata = chiral_network::try_make_signed_file_metadata(
         &req.file_hash,
         &req.file_name,
-        req.file_size,
+        file_size,
         protocol,
         &req.wallet_address,
         Some(&req.private_key),
@@ -763,6 +769,174 @@ async fn dht_listening_addresses(State(state): State<Arc<HeadlessRuntimeState>>)
     Json(json!({ "addresses": svc.get_listening_addresses().await })).into_response()
 }
 
+async fn validate_headless_register_metadata(
+    file_path: &str,
+    file_name: &str,
+    file_size: Option<u64>,
+) -> Result<(String, String, u64), String> {
+    let file_path = file_path.trim();
+    if file_path.is_empty() {
+        return Err("filePath required".to_string());
+    }
+
+    let file_name = file_name.trim();
+    if file_name.is_empty() {
+        return Err("fileName required".to_string());
+    }
+
+    let Some(file_size) = file_size else {
+        return Err("fileSize required".to_string());
+    };
+
+    let metadata = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|e| format!("filePath does not exist or cannot be read: {}", e))?;
+    if !metadata.is_file() {
+        return Err("filePath must point to a regular file".to_string());
+    }
+    let actual_size = metadata.len();
+    if actual_size != file_size {
+        return Err(format!(
+            "fileSize mismatch: request declared {} bytes but file is {} bytes",
+            file_size, actual_size
+        ));
+    }
+
+    Ok((file_path.to_string(), file_name.to_string(), file_size))
+}
+
+#[cfg(test)]
+mod register_metadata_tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "chiral-daemon-register-metadata-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test directory should be created");
+        dir
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_path() {
+        let err = validate_headless_register_metadata("", "file.bin", Some(1))
+            .await
+            .expect_err("missing filePath should be rejected");
+
+        assert!(err.contains("filePath required"));
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_blank_name() {
+        let dir = test_dir("blank-name");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            " ",
+            Some(3),
+        )
+        .await
+        .expect_err("blank fileName should be rejected");
+
+        assert!(err.contains("fileName required"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_size() {
+        let dir = test_dir("missing-size");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            None,
+        )
+        .await
+        .expect_err("missing fileSize should be rejected");
+
+        assert!(err.contains("fileSize required"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_file() {
+        let dir = test_dir("missing-file");
+        let file_path = dir.join("missing.bin");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(3),
+        )
+        .await
+        .expect_err("nonexistent filePath should be rejected");
+
+        assert!(err.contains("filePath does not exist"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_directory_path() {
+        let dir = test_dir("directory-path");
+
+        let err = validate_headless_register_metadata(
+            dir.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(3),
+        )
+        .await
+        .expect_err("directory filePath should be rejected");
+
+        assert!(err.contains("regular file"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_size_mismatch() {
+        let dir = test_dir("size-mismatch");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(4),
+        )
+        .await
+        .expect_err("fileSize mismatch should be rejected");
+
+        assert!(err.contains("fileSize mismatch"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_accepts_valid_metadata() {
+        let dir = test_dir("valid");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+        let padded_path = format!(
+            " {} ",
+            file_path.to_str().expect("test path should be utf-8")
+        );
+
+        let metadata = validate_headless_register_metadata(&padded_path, " file.bin ", Some(3))
+            .await
+            .expect("valid metadata should pass");
+
+        assert_eq!(metadata.0, file_path.to_string_lossy().as_ref());
+        assert_eq!(metadata.1, "file.bin");
+        assert_eq!(metadata.2, 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 fn validate_headless_register_file_hash(file_hash: &str) -> Result<String, String> {
     let trimmed = file_hash.trim();
     if trimmed.is_empty() {
@@ -816,6 +990,13 @@ async fn dht_register_shared_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<RegisterSharedFileRequest>,
 ) -> Response {
+    let (file_path, file_name, file_size) =
+        match validate_headless_register_metadata(&req.file_path, &req.file_name, req.file_size)
+            .await
+        {
+            Ok(metadata) => metadata,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
     let file_hash = match validate_headless_register_file_hash(&req.file_hash) {
         Ok(file_hash) => file_hash,
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
@@ -839,9 +1020,9 @@ async fn dht_register_shared_file(
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
         file_hash.clone(),
-        req.file_path.clone(),
-        req.file_name.clone(),
-        req.file_size,
+        file_path.clone(),
+        file_name.clone(),
+        file_size,
         price_wei,
         req.wallet_address.clone(),
         req.private_key.clone(),
@@ -880,30 +1061,20 @@ async fn dht_register_shared_file(
     // verify_publisher accepts whichever the reader sees.
     let blob_key = format!("chiral_file_{}", file_hash);
     let protocol = register_shared_file_protocol(req.protocol.as_deref());
-    let metadata = match chiral_network::try_make_signed_file_metadata(
-        &file_hash,
-        &req.file_name,
-        req.file_size,
-        &protocol,
-        &req.wallet_address,
-        Some(&req.private_key),
-    ) {
-        Some(metadata) => metadata,
-        None => {
-            return Json(register_shared_file_unpublished_payload(
-                "Failed to sign file metadata",
-            ))
-            .into_response();
-        }
+    let metadata_req = RegisterSharedFileRequest {
+        file_hash: file_hash.clone(),
+        file_path: file_path.clone(),
+        file_name: file_name.clone(),
+        file_size: Some(file_size),
+        protocol: req.protocol.clone(),
+        price_wei: req.price_wei.clone(),
+        wallet_address: req.wallet_address.clone(),
+        private_key: req.private_key.clone(),
     };
-    let blob = match serde_json::to_string(&metadata) {
+    let blob = match signed_file_metadata_json_for_register(&metadata_req, &protocol) {
         Ok(blob) => blob,
         Err(e) => {
-            return Json(register_shared_file_unpublished_payload(format!(
-                "Failed to serialize file metadata: {}",
-                e
-            )))
-            .into_response();
+            return Json(register_shared_file_unpublished_payload(e)).into_response();
         }
     };
     if let Err(e) = svc.put_dht_value(blob_key, blob).await {
@@ -2415,7 +2586,7 @@ mod tests {
             file_hash: "abcdef0123456789".to_string(),
             file_path: "/tmp/example.txt".to_string(),
             file_name: "example.txt".to_string(),
-            file_size: 123,
+            file_size: Some(123),
             protocol,
             price_wei: "1000".to_string(),
             wallet_address: wallet_address_from_private_key(private_key),
