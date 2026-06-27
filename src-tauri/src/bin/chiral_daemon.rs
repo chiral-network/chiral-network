@@ -352,6 +352,7 @@ struct SendFileRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisterSharedFileRequest {
+    #[serde(default)]
     file_hash: String,
     file_path: String,
     file_name: String,
@@ -734,10 +735,64 @@ async fn dht_listening_addresses(State(state): State<Arc<HeadlessRuntimeState>>)
     Json(json!({ "addresses": svc.get_listening_addresses().await })).into_response()
 }
 
+fn validate_headless_register_file_hash(file_hash: &str) -> Result<String, String> {
+    let trimmed = file_hash.trim();
+    if trimmed.is_empty() {
+        return Err("fileHash required".to_string());
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("fileHash must be a 64-character hex content hash".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod register_hash_tests {
+    use super::*;
+
+    #[test]
+    fn validate_headless_register_file_hash_rejects_missing_hash() {
+        let err = validate_headless_register_file_hash("")
+            .expect_err("missing register hash should be rejected");
+
+        assert!(err.contains("fileHash"));
+        assert!(err.contains("required"));
+    }
+
+    #[test]
+    fn validate_headless_register_file_hash_rejects_malformed_hash() {
+        let err = validate_headless_register_file_hash("not-a-hash")
+            .expect_err("malformed register hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_register_file_hash_rejects_non_hex_hash() {
+        let err = validate_headless_register_file_hash(&"z".repeat(64))
+            .expect_err("non-hex register hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_register_file_hash_normalizes_valid_hash() {
+        let hash = validate_headless_register_file_hash(&"B".repeat(64))
+            .expect("valid register hash should be accepted");
+
+        assert_eq!(hash, "b".repeat(64));
+    }
+}
+
 async fn dht_register_shared_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<RegisterSharedFileRequest>,
 ) -> Response {
+    let file_hash = match validate_headless_register_file_hash(&req.file_hash) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
@@ -755,7 +810,7 @@ async fn dht_register_shared_file(
 
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
-        req.file_hash.clone(),
+        file_hash.clone(),
         req.file_path.clone(),
         req.file_name.clone(),
         req.file_size,
@@ -778,7 +833,7 @@ async fn dht_register_shared_file(
     let multiaddrs = svc.get_listening_addresses().await;
     let Some(seeder) = chiral_network::try_make_signed_seeder(
         &peer_id,
-        &req.file_hash,
+        &file_hash,
         &price_wei.to_string(),
         &req.wallet_address,
         multiaddrs,
@@ -795,12 +850,32 @@ async fn dht_register_shared_file(
     // expire from the store, and the file becomes unreachable. Multiple
     // signed blobs at the same chiral_file_<hash> key are harmless —
     // verify_publisher accepts whichever the reader sees.
-    let blob_key = format!("chiral_file_{}", req.file_hash);
+    let blob_key = format!("chiral_file_{}", file_hash);
     let protocol = register_shared_file_protocol(req.protocol.as_deref());
-    let blob = match signed_file_metadata_json_for_register(&req, &protocol) {
+    let metadata = match chiral_network::try_make_signed_file_metadata(
+        &file_hash,
+        &req.file_name,
+        req.file_size,
+        &protocol,
+        &req.wallet_address,
+        Some(&req.private_key),
+    ) {
+        Some(metadata) => metadata,
+        None => {
+            return Json(register_shared_file_unpublished_payload(
+                "Failed to sign file metadata",
+            ))
+            .into_response();
+        }
+    };
+    let blob = match serde_json::to_string(&metadata) {
         Ok(blob) => blob,
         Err(e) => {
-            return Json(register_shared_file_unpublished_payload(e)).into_response();
+            return Json(register_shared_file_unpublished_payload(format!(
+                "Failed to serialize file metadata: {}",
+                e
+            )))
+            .into_response();
         }
     };
     if let Err(e) = svc.put_dht_value(blob_key, blob).await {
@@ -811,7 +886,7 @@ async fn dht_register_shared_file(
         .into_response();
     }
 
-    if let Err(e) = chiral_network::publish_seeder_entry(&svc, &req.file_hash, &seeder).await {
+    if let Err(e) = chiral_network::publish_seeder_entry(&svc, &file_hash, &seeder).await {
         return Json(register_shared_file_unpublished_payload(format!(
             "Seeder entry publish failed: {}",
             e
