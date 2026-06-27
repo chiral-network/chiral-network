@@ -992,7 +992,7 @@ async fn register_in_dht(
         cdn_wallet,
         Some(cdn_private_key),
     ) {
-        Some(metadata) => match serde_json::to_string(&metadata) {
+        Ok(Some(metadata)) => match serde_json::to_string(&metadata) {
             Ok(json_str) => {
                 if let Err(e) = dht.put_dht_value(key, json_str).await {
                     println!(
@@ -1003,9 +1003,13 @@ async fn register_in_dht(
             }
             Err(e) => println!("[CDN] Failed to serialize FileMetadata for {}: {}", file_hash, e),
         },
-        None => println!(
+        Ok(None) => println!(
             "[CDN] Failed to sign FileMetadata for {} — record not published",
             file_hash
+        ),
+        Err(e) => println!(
+            "[CDN] Failed to create FileMetadata for {}: {}",
+            file_hash, e
         ),
     }
     let _ = created_at;

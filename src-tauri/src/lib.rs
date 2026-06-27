@@ -484,19 +484,29 @@ async fn auto_reseed_drive_files(
         };
         let seeder_price_str = price_wei.to_string();
         // Sign + publish chiral_file_<hash> metadata blob.
-        let Some(metadata) = try_make_signed_file_metadata(
+        let metadata = match try_make_signed_file_metadata(
             &file_hash,
             &file_name,
             file_size,
             "WebRTC",
             owner_wallet,
             Some(pk),
-        ) else {
-            println!(
-                "[DRIVE] Auto-reseed for {} skipped signed metadata publish — sign_message failed",
-                file_hash
-            );
-            continue;
+        ) {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => {
+                println!(
+                    "[DRIVE] Auto-reseed for {} skipped signed metadata publish — sign_message failed",
+                    file_hash
+                );
+                continue;
+            }
+            Err(err) => {
+                println!(
+                    "[DRIVE] Auto-reseed for {} skipped signed metadata publish: {}",
+                    file_hash, err
+                );
+                continue;
+            }
         };
         let metadata_json = match serde_json::to_string(&metadata) {
             Ok(s) => s,
@@ -1756,11 +1766,12 @@ pub fn try_make_signed_seeder(
     Some(entry)
 }
 
-/// Build a signed FileMetadata blob. Returns `None` if the wallet
+/// Build a signed FileMetadata blob. Returns `Ok(None)` if the wallet
 /// address or private key are missing — readers reject unsigned
 /// FileMetadata, so publishing one is worse than not publishing at
 /// all (the reader's not-found path lets the user retry from a
-/// signed publisher).
+/// signed publisher). Returns `Err` when the local metadata timestamp
+/// cannot be generated.
 pub fn try_make_signed_file_metadata(
     hash: &str,
     file_name: &str,
@@ -1768,38 +1779,66 @@ pub fn try_make_signed_file_metadata(
     protocol: &str,
     wallet_address: &str,
     private_key: Option<&str>,
-) -> Option<FileMetadata> {
+) -> Result<Option<FileMetadata>, String> {
+    try_make_signed_file_metadata_at(
+        hash,
+        file_name,
+        file_size,
+        protocol,
+        wallet_address,
+        private_key,
+        std::time::SystemTime::now(),
+    )
+}
+
+fn desktop_file_metadata_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot build desktop file metadata because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn try_make_signed_file_metadata_at(
+    hash: &str,
+    file_name: &str,
+    file_size: u64,
+    protocol: &str,
+    wallet_address: &str,
+    private_key: Option<&str>,
+    now: std::time::SystemTime,
+) -> Result<Option<FileMetadata>, String> {
     let key = match private_key {
         Some(k) if !k.is_empty() => k,
-        _ => return None,
+        _ => return Ok(None),
     };
     if wallet_address.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut metadata = FileMetadata {
         hash: hash.to_string(),
         file_name: file_name.to_string(),
         file_size,
         protocol: protocol.to_string(),
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default(),
+        created_at: desktop_file_metadata_timestamp_secs_at(now)?,
         wallet_address: wallet_address.to_string(),
         publisher_signature: String::new(),
     };
     if let Err(e) = metadata.sign(key) {
         println!("[DHT] Failed to sign FileMetadata for {}: {}", hash, e);
-        return None;
+        return Ok(None);
     }
     if !metadata.verify_publisher() {
         println!(
             "[DHT] Signed FileMetadata for {} failed publisher verification",
             hash
         );
-        return None;
+        return Ok(None);
     }
-    Some(metadata)
+    Ok(Some(metadata))
 }
 
 #[tauri::command]
@@ -1894,7 +1933,7 @@ async fn publish_file(
             &proto,
             &wallet_addr,
             private_key.as_deref(),
-        )
+        )?
         .ok_or_else(|| {
             "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
@@ -2000,7 +2039,7 @@ async fn publish_file_data(
             "WebRTC",
             &wallet_addr,
             private_key.as_deref(),
-        )
+        )?
         .ok_or_else(|| {
             "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
@@ -2042,12 +2081,26 @@ fn search_result_with_warnings(
     result
 }
 
-async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Option<SearchResult> {
+async fn build_local_search_result(
+    dht: &Arc<DhtService>,
+    file_hash: &str,
+) -> Result<Option<SearchResult>, String> {
+    build_local_search_result_at(dht, file_hash, std::time::SystemTime::now()).await
+}
+
+async fn build_local_search_result_at(
+    dht: &Arc<DhtService>,
+    file_hash: &str,
+    now: std::time::SystemTime,
+) -> Result<Option<SearchResult>, String> {
     let shared_files = dht.get_shared_files();
     let local_info = {
         let shared = shared_files.lock().await;
         shared.get(file_hash).cloned()
-    }?;
+    };
+    let Some(local_info) = local_info else {
+        return Ok(None);
+    };
 
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     // Local-first search should never block on address discovery.
@@ -2065,19 +2118,16 @@ async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Op
         }]
     };
 
-    Some(SearchResult {
+    Ok(Some(SearchResult {
         hash: file_hash.to_string(),
         file_name: local_info.file_name,
         file_size: local_info.file_size,
         seeders,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        created_at: desktop_file_metadata_timestamp_secs_at(now)?,
         price_wei: local_info.price_wei.to_string(),
         wallet_address: local_info.wallet_address,
         warnings: Vec::new(),
-    })
+    }))
 }
 
 #[derive(Clone)]
@@ -2112,7 +2162,7 @@ async fn try_repair_local_drive_seed(
     state: &AppState,
     dht: &Arc<DhtService>,
     file_hash: &str,
-) -> Option<SearchResult> {
+) -> Result<Option<SearchResult>, String> {
     let candidate = {
         let manifest = state.drive_state.manifest.read().await;
         manifest
@@ -2142,17 +2192,25 @@ async fn try_repair_local_drive_seed(
                     }
                 })
             })
-    }?;
+    };
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
 
-    let files_dir = ds::drive_files_dir()?;
+    let Some(files_dir) = ds::drive_files_dir() else {
+        return Ok(None);
+    };
     let full_path = files_dir.join(&candidate.storage_path);
     if !full_path.exists() {
-        return None;
+        return Ok(None);
     }
 
     let file_size = match candidate.file_size_hint {
         Some(size) if size > 0 => size,
-        _ => std::fs::metadata(&full_path).ok()?.len(),
+        _ => match std::fs::metadata(&full_path) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => return Ok(None),
+        },
     };
 
     let price_wei = match drive_reseed_price_wei(candidate.price_chi.as_deref()) {
@@ -2162,12 +2220,12 @@ async fn try_repair_local_drive_seed(
                 "[DRIVE] Skipping auto-reseed repair for item {}: {}",
                 candidate.item_id, err
             );
-            return None;
+            return Ok(None);
         }
     };
     let wallet_addr = candidate.owner.trim().to_string();
     if price_wei > 0 && wallet_addr.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     dht.register_shared_file_with_folder_access(
@@ -2234,7 +2292,7 @@ async fn try_repair_local_drive_seed(
             Ok(now) => now,
             Err(err) => {
                 eprintln!("[DRIVE] Skipping repaired seed manifest timestamp: {}", err);
-                return None;
+                return Ok(None);
             }
         };
         let mut manifest = state.drive_state.manifest.write().await;
@@ -2276,13 +2334,13 @@ async fn search_file(
         state.drive_state.load_from_disk_async().await;
 
         // Check if we are locally seeding this hash (used to merge with DHT results later)
-        let local_result = build_local_search_result(dht, &file_hash).await;
+        let local_result = build_local_search_result(dht, &file_hash).await?;
 
         // Self-heal path: if manifest says this file should be seeded but runtime
         // shared-files map is missing it (restart race/crash), repair it.
         if local_result.is_none() {
             if let Some(_repaired) =
-                try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                try_repair_local_drive_seed(state.inner(), dht, &file_hash).await?
             {
                 println!(
                     "Repaired missing local seed registration for {} from Drive manifest",
@@ -2351,7 +2409,7 @@ async fn search_file(
                     );
                     Ok(Some(search_result_with_warnings(local, provider_warnings)))
                 } else if let Some(repaired) =
-                    try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                    try_repair_local_drive_seed(state.inner(), dht, &file_hash).await?
                 {
                     Ok(Some(search_result_with_warnings(
                         repaired,
@@ -2490,7 +2548,7 @@ async fn search_file(
                     // DHT can lag behind local intent right after restart. Attempt
                     // local repair before returning not-found.
                     if let Some(repaired) =
-                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await?
                     {
                         println!(
                             "Recovered local seed registration for {} after DHT miss",
@@ -2509,14 +2567,14 @@ async fn search_file(
 
                     // Even if DHT GET fails (e.g. bootstrap race), this node may still
                     // be actively seeding the file from local state.
-                    if let Some(local) = build_local_search_result(dht, &file_hash).await {
+                    if let Some(local) = build_local_search_result(dht, &file_hash).await? {
                         println!(
                             "Returning local fallback for {} despite DHT lookup error",
                             file_hash
                         );
                         Ok(Some(search_result_with_warnings(local, provider_warnings)))
                     } else if let Some(repaired) =
-                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await?
                     {
                         println!(
                             "Returning repaired local fallback for {} despite DHT lookup error",
@@ -3095,7 +3153,7 @@ async fn republish_shared_file(
             };
 
             // Always publish; see publish_file for rationale.
-            if let Some(metadata) = try_make_signed_file_metadata(
+            match try_make_signed_file_metadata(
                 &file_hash,
                 &file_name,
                 file_size,
@@ -3103,8 +3161,17 @@ async fn republish_shared_file(
                 &wallet_addr,
                 signing_key,
             ) {
-                if let Ok(metadata_json) = serde_json::to_string(&metadata) {
-                    let _ = dht.put_dht_value(dht_key, metadata_json).await;
+                Ok(Some(metadata)) => {
+                    if let Ok(metadata_json) = serde_json::to_string(&metadata) {
+                        let _ = dht.put_dht_value(dht_key, metadata_json).await;
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    println!(
+                        "Re-publish for {} skipped signed metadata publish: {}",
+                        file_hash, err
+                    );
                 }
             }
 
@@ -6334,7 +6401,7 @@ async fn publish_drive_file_inner(
         &proto,
         &wallet_addr,
         private_key.as_deref(),
-    )
+    )?
     .ok_or_else(|| {
         "Cannot publish file metadata: wallet must be unlocked (private key + address required)"
             .to_string()
@@ -6473,7 +6540,7 @@ async fn seed_hosted_file(
         "WebRTC",
         &wallet_address,
         private_key.as_deref(),
-    )
+    )?
     .ok_or_else(|| {
         "Wallet must be unlocked (private key + address required) to publish file metadata"
             .to_string()
@@ -9420,7 +9487,7 @@ mod multi_seeder_tests {
         )
         .await;
 
-        let result = build_local_search_result(&dht, &file_hash).await;
+        let result = build_local_search_result(&dht, &file_hash).await.unwrap();
         assert!(result.is_some());
         let result = result.unwrap();
         assert_eq!(result.hash, file_hash);
@@ -9436,8 +9503,111 @@ mod multi_seeder_tests {
             Arc::new(Mutex::new(HashMap::new())),
         ));
 
-        let result = build_local_search_result(&dht, "does-not-exist").await;
+        let result = build_local_search_result(&dht, "does-not-exist")
+            .await
+            .unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn desktop_file_metadata_timestamp_secs_at_preserves_seconds() {
+        let ts = desktop_file_metadata_timestamp_secs_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(42),
+        )
+        .expect("post-epoch desktop metadata timestamp should be valid");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn desktop_file_metadata_timestamp_rejects_pre_epoch_clock() {
+        let err = desktop_file_metadata_timestamp_secs_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch desktop metadata timestamp should be rejected");
+
+        assert!(err.contains("desktop file metadata"));
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn try_make_signed_file_metadata_at_preserves_created_at_and_signature() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let metadata = try_make_signed_file_metadata_at(
+            "abcdef0123456789",
+            "hello.bin",
+            5,
+            "WebRTC",
+            &wallet_address,
+            Some(private_key),
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(99),
+        )
+        .expect("post-epoch signed metadata should be valid")
+        .expect("valid key and wallet should produce signed metadata");
+
+        assert_eq!(metadata.created_at, 99);
+        assert_eq!(metadata.wallet_address, wallet_address);
+        assert!(!metadata.publisher_signature.is_empty());
+        assert!(metadata.verify_publisher());
+    }
+
+    #[test]
+    fn try_make_signed_file_metadata_at_rejects_pre_epoch_clock() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+        let err = match try_make_signed_file_metadata_at(
+            "abcdef0123456789",
+            "hello.bin",
+            5,
+            "WebRTC",
+            &wallet_address,
+            Some(private_key),
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        ) {
+            Ok(_) => panic!("pre-epoch signed metadata should fail closed"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[tokio::test]
+    async fn build_local_search_result_at_rejects_pre_epoch_clock() {
+        let dht = Arc::new(DhtService::new(
+            Arc::new(Mutex::new(FileTransferService::new())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(HashMap::new())),
+        ));
+
+        let tmp_path = std::env::temp_dir().join("chiral-local-search-pre-epoch-test.bin");
+        std::fs::write(&tmp_path, b"hello").unwrap();
+
+        let file_hash = "localhash-pre-epoch".to_string();
+        dht.register_shared_file(
+            file_hash.clone(),
+            tmp_path.to_string_lossy().to_string(),
+            "hello.bin".to_string(),
+            5,
+            0,
+            String::new(),
+            String::new(),
+        )
+        .await;
+
+        let err = match build_local_search_result_at(
+            &dht,
+            &file_hash,
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .await
+        {
+            Ok(_) => panic!("pre-epoch local search metadata should fail closed"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     // In the provider-records model, FileMetadata is the immutable

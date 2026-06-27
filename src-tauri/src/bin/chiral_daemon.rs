@@ -423,7 +423,7 @@ fn signed_file_metadata_json_for_register(
         protocol,
         &req.wallet_address,
         Some(&req.private_key),
-    )
+    )?
     .ok_or_else(|| "Failed to sign file metadata".to_string())?;
     serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize file metadata: {}", e))
