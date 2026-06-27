@@ -177,6 +177,39 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const MAX_HEADLESS_RAW_DHT_KEY_BYTES: usize = 512;
+const MAX_HEADLESS_RAW_DHT_VALUE_BYTES: usize = 64 * 1024;
+
+fn validate_headless_raw_dht_key(key: &str) -> Result<String, String> {
+    if key.trim().is_empty() {
+        return Err("key required".to_string());
+    }
+
+    if key.len() > MAX_HEADLESS_RAW_DHT_KEY_BYTES {
+        return Err(format!(
+            "key must be at most {} bytes",
+            MAX_HEADLESS_RAW_DHT_KEY_BYTES
+        ));
+    }
+
+    if key.contains('\0') {
+        return Err("key must not contain NUL bytes".to_string());
+    }
+
+    Ok(key.to_string())
+}
+
+fn validate_headless_raw_dht_value(value: &str) -> Result<(), String> {
+    if value.len() > MAX_HEADLESS_RAW_DHT_VALUE_BYTES {
+        return Err(format!(
+            "value must be at most {} bytes",
+            MAX_HEADLESS_RAW_DHT_VALUE_BYTES
+        ));
+    }
+
+    Ok(())
+}
+
 fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
     value.len() == 2 + bytes * 2
         && value.starts_with("0x")
@@ -326,6 +359,7 @@ fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyValueRequest {
+    #[serde(default)]
     key: String,
     value: String,
 }
@@ -333,6 +367,7 @@ struct KeyValueRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyRequest {
+    #[serde(default)]
     key: String,
 }
 
@@ -423,7 +458,7 @@ fn signed_file_metadata_json_for_register(
         protocol,
         &req.wallet_address,
         Some(&req.private_key),
-    )
+    )?
     .ok_or_else(|| "Failed to sign file metadata".to_string())?;
     serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize file metadata: {}", e))
@@ -614,6 +649,14 @@ async fn dht_put(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<KeyValueRequest>,
 ) -> Response {
+    let key = match validate_headless_raw_dht_key(&req.key) {
+        Ok(key) => key,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    if let Err(err) = validate_headless_raw_dht_value(&req.value) {
+        return json_error(StatusCode::BAD_REQUEST, err);
+    }
+
     // Reserved namespaces are interpreted by every other peer as
     // authoritative metadata (file metadata, seeder records, folder
     // manifests, site directory, etc). Each namespace has its own
@@ -627,12 +670,12 @@ async fn dht_put(
         "chiral_drive_share_",
         "chiral_host_ad_",
     ];
-    if RESERVED_PREFIXES.iter().any(|p| req.key.starts_with(p)) {
+    if RESERVED_PREFIXES.iter().any(|p| key.starts_with(p)) {
         return json_error(
             StatusCode::FORBIDDEN,
             format!(
                 "Key '{}' is in a reserved namespace; use the dedicated signed-publication command",
-                req.key
+                key
             ),
         );
     }
@@ -640,7 +683,7 @@ async fn dht_put(
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
-    match svc.put_dht_value(req.key, req.value).await {
+    match svc.put_dht_value(key, req.value).await {
         Ok(()) => Json(json!({ "status": "ok" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -650,11 +693,16 @@ async fn dht_get(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<KeyRequest>,
 ) -> Response {
+    let key = match validate_headless_raw_dht_key(&req.key) {
+        Ok(key) => key,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
-    match svc.get_dht_value(req.key).await {
+    match svc.get_dht_value(key).await {
         Ok(value) => Json(json!({ "value": value })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -2735,6 +2783,203 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    async fn response_error(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+
+        (
+            status,
+            value
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn headless_raw_dht_key_validation_accepts_operator_keys() {
+        let special_key = "special/key:with.dots";
+        assert_eq!(
+            validate_headless_raw_dht_key(special_key).expect("special key should be valid"),
+            special_key
+        );
+
+        let long_key = "k".repeat(200);
+        assert_eq!(
+            validate_headless_raw_dht_key(&long_key).expect("200 byte key should be valid"),
+            long_key
+        );
+
+        let max_key = "k".repeat(MAX_HEADLESS_RAW_DHT_KEY_BYTES);
+        assert_eq!(
+            validate_headless_raw_dht_key(&max_key).expect("max byte key should be valid"),
+            max_key
+        );
+    }
+
+    #[test]
+    fn headless_raw_dht_key_validation_rejects_empty_overlong_and_nul() {
+        assert_eq!(
+            validate_headless_raw_dht_key("").expect_err("empty key should fail"),
+            "key required"
+        );
+        assert_eq!(
+            validate_headless_raw_dht_key("   ").expect_err("blank key should fail"),
+            "key required"
+        );
+
+        let overlong_key = "k".repeat(MAX_HEADLESS_RAW_DHT_KEY_BYTES + 1);
+        assert_eq!(
+            validate_headless_raw_dht_key(&overlong_key).expect_err("overlong key should fail"),
+            format!(
+                "key must be at most {} bytes",
+                MAX_HEADLESS_RAW_DHT_KEY_BYTES
+            )
+        );
+
+        assert_eq!(
+            validate_headless_raw_dht_key("operator\0key").expect_err("NUL key should fail"),
+            "key must not contain NUL bytes"
+        );
+    }
+
+    #[test]
+    fn headless_raw_dht_value_validation_bounds_put_values() {
+        let allowed_value = "v".repeat(10 * 1024);
+        validate_headless_raw_dht_value(&allowed_value)
+            .expect("10 KiB fixture value should be valid");
+
+        let max_value = "v".repeat(MAX_HEADLESS_RAW_DHT_VALUE_BYTES);
+        validate_headless_raw_dht_value(&max_value).expect("max byte value should be valid");
+
+        let overlarge_value = "v".repeat(MAX_HEADLESS_RAW_DHT_VALUE_BYTES + 1);
+        assert_eq!(
+            validate_headless_raw_dht_value(&overlarge_value)
+                .expect_err("overlarge value should fail"),
+            format!(
+                "value must be at most {} bytes",
+                MAX_HEADLESS_RAW_DHT_VALUE_BYTES
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn dht_put_rejects_missing_and_empty_key_before_dht() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let missing_key: KeyValueRequest =
+            serde_json::from_value(json!({ "value": "value" })).expect("request should parse");
+        let (status, error) =
+            response_error(dht_put(State(Arc::clone(&state)), Json(missing_key)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "key required");
+
+        let empty_key = KeyValueRequest {
+            key: String::new(),
+            value: "value".to_string(),
+        };
+        let (status, error) = response_error(dht_put(State(state), Json(empty_key)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "key required");
+    }
+
+    #[tokio::test]
+    async fn dht_get_rejects_missing_and_empty_key_before_dht() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let missing_key: KeyRequest =
+            serde_json::from_value(json!({})).expect("request should parse");
+        let (status, error) =
+            response_error(dht_get(State(Arc::clone(&state)), Json(missing_key)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "key required");
+
+        let empty_key = KeyRequest { key: String::new() };
+        let (status, error) = response_error(dht_get(State(state), Json(empty_key)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "key required");
+    }
+
+    #[tokio::test]
+    async fn dht_put_rejects_overlong_key_before_dht() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let request = KeyValueRequest {
+            key: "k".repeat(MAX_HEADLESS_RAW_DHT_KEY_BYTES + 1),
+            value: "value".to_string(),
+        };
+        let (status, error) = response_error(dht_put(State(state), Json(request)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error,
+            format!(
+                "key must be at most {} bytes",
+                MAX_HEADLESS_RAW_DHT_KEY_BYTES
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn dht_put_rejects_overlarge_value_before_dht() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let request = KeyValueRequest {
+            key: "operator/raw:key.1".to_string(),
+            value: "v".repeat(MAX_HEADLESS_RAW_DHT_VALUE_BYTES + 1),
+        };
+        let (status, error) = response_error(dht_put(State(state), Json(request)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error,
+            format!(
+                "value must be at most {} bytes",
+                MAX_HEADLESS_RAW_DHT_VALUE_BYTES
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn dht_put_preserves_reserved_prefix_rejection() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let request = KeyValueRequest {
+            key: "chiral_file_0123456789abcdef".to_string(),
+            value: "value".to_string(),
+        };
+        let (status, error) = response_error(dht_put(State(state), Json(request)).await).await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(error.contains("reserved namespace"));
+    }
+
+    #[tokio::test]
+    async fn valid_raw_dht_put_and_get_reach_dht_requirement() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let put_request = KeyValueRequest {
+            key: "operator/raw:key.1".to_string(),
+            value: "value".to_string(),
+        };
+        let (status, error) =
+            response_error(dht_put(State(Arc::clone(&state)), Json(put_request)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "DHT not running");
+
+        let get_request = KeyRequest {
+            key: "operator/raw:key.1".to_string(),
+        };
+        let (status, error) = response_error(dht_get(State(state), Json(get_request)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error, "DHT not running");
     }
 
     #[tokio::test]
