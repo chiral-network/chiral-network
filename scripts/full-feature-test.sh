@@ -537,7 +537,7 @@ RECEIVER_PEER="${PEER_IDS[4]}"
 dd if=/dev/urandom of=/tmp/chiral-drop-test.bin bs=512 count=1 2>/dev/null
 TRANSFER_ID="feat-test-drop-$(date +%s)"
 api_post "http://localhost:$SENDER_PORT/api/headless/dht/send-file" \
-    "{\"peerId\":\"$RECEIVER_PEER\",\"transferId\":\"$TRANSFER_ID\",\"fileName\":\"drop-test.bin\",\"filePath\":\"/tmp/chiral-drop-test.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"drop123\",\"fileSize\":512}"
+    "{\"peerId\":\"$RECEIVER_PEER\",\"transferId\":\"$TRANSFER_ID\",\"fileName\":\"drop-test.bin\",\"filePath\":\"/tmp/chiral-drop-test.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"\",\"fileSize\":512}"
 if [[ "$STATUS" == "200" ]]; then
     pass "ChiralDrop send file"
 else
@@ -577,7 +577,7 @@ for i in 2 3 4; do
     TID="multi-drop-$i-$(date +%s)"
     (curl -sf -X POST "http://localhost:$(port_for $i)/api/headless/dht/send-file" \
         -H 'Content-Type: application/json' \
-        -d "{\"peerId\":\"$TARGET\",\"transferId\":\"$TID\",\"fileName\":\"multi-$i.bin\",\"filePath\":\"/tmp/chiral-drop-test.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"multi$i\",\"fileSize\":512}" > /dev/null 2>&1 && touch "$DROP_DIR/ok_$i") &
+        -d "{\"peerId\":\"$TARGET\",\"transferId\":\"$TID\",\"fileName\":\"multi-$i.bin\",\"filePath\":\"/tmp/chiral-drop-test.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"\",\"fileSize\":512}" > /dev/null 2>&1 && touch "$DROP_DIR/ok_$i") &
 done
 wait
 DROP_OK=$(ls "$DROP_DIR"/ok_* 2>/dev/null | wc -l)
