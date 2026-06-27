@@ -5089,10 +5089,7 @@ async fn unpublish_site_from_relay(
     // Owner-proof header: server checks the recovered wallet matches
     // the site's stored `owner_wallet` (FM-A04/A05).
     let owner_lower = owner_wallet.to_lowercase();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let ts = current_owner_proof_timestamp_secs()?;
     let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
     let signature = wallet::sign_message(&private_key, &proof_payload)
         .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
@@ -5610,10 +5607,7 @@ async fn unpublish_site_from_cdn(
     // the signature and verify it matches the registry's stored owner.
     let owner_lower = owner_wallet.to_lowercase();
     let path = format!("/api/cdn/sites/{}?owner={}", site_id, owner_lower);
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let ts = current_owner_proof_timestamp_secs()?;
     let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
     let signature = wallet::sign_message(&private_key, &proof_payload)
         .map_err(|e| format!("Failed to sign unpublish proof: {}", e))?;
@@ -7714,10 +7708,7 @@ async fn unpublish_drive_share(
     // Owner-proof: server checks `X-Owner-Sig` and verifies the
     // recovered wallet matches the share's stored `owner_wallet`.
     let owner_lower = owner_wallet.to_lowercase();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let ts = current_owner_proof_timestamp_secs()?;
     let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
     let signature = wallet::sign_message(&private_key, &proof_payload)
         .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
@@ -7795,6 +7786,26 @@ fn compute_relay_register_signature(
 /// `X-Owner-Sig: <ts>:<sig>` header to HTTP requests against the
 /// daemon's authenticated routes. Stateless — `ts` is taken from the
 /// system clock; the resulting proof is good for ±5 min.
+fn owner_proof_timestamp_secs_at(now: std::time::SystemTime) -> Result<i64, String> {
+    let secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| {
+            format!(
+                "Cannot compute owner proof because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })?
+        .as_secs();
+    if secs > i64::MAX as u64 {
+        return Err("Cannot compute owner proof because the timestamp exceeds i64".to_string());
+    }
+    Ok(secs as i64)
+}
+
+fn current_owner_proof_timestamp_secs() -> Result<i64, String> {
+    owner_proof_timestamp_secs_at(std::time::SystemTime::now())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OwnerProof {
@@ -7822,15 +7833,28 @@ fn compute_owner_proof(
     wallet_address: String,
     private_key: String,
 ) -> Result<OwnerProof, String> {
+    compute_owner_proof_at(
+        &method,
+        &path,
+        &wallet_address,
+        &private_key,
+        std::time::SystemTime::now(),
+    )
+}
+
+fn compute_owner_proof_at(
+    method: &str,
+    path: &str,
+    wallet_address: &str,
+    private_key: &str,
+    now: std::time::SystemTime,
+) -> Result<OwnerProof, String> {
     if wallet_address.is_empty() || private_key.is_empty() {
         return Err("wallet_address and private_key required".to_string());
     }
     let owner = wallet_address.to_lowercase();
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let payload = auth::owner_proof_payload(&owner, ts, &method, &path);
+    let ts = owner_proof_timestamp_secs_at(now)?;
+    let payload = auth::owner_proof_payload(&owner, ts, method, path);
     let signature = wallet::sign_message(&private_key, &payload)
         .map_err(|e| format!("sign_message failed: {}", e))?;
     Ok(OwnerProof {
@@ -8562,6 +8586,63 @@ mod multi_seeder_tests {
             std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
         )
         .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn owner_proof_timestamp_secs_at_preserves_seconds() {
+        let ts = owner_proof_timestamp_secs_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(42),
+        )
+        .expect("post-epoch owner proof timestamp should be valid");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn owner_proof_timestamp_rejects_pre_epoch_clock() {
+        let err = owner_proof_timestamp_secs_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch owner proof timestamp should be rejected");
+
+        assert!(err.contains("owner proof"));
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn compute_owner_proof_at_preserves_header_and_signature() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let owner = wallet_address_from_private_key(private_key);
+        let path = "/api/cdn/sites/site-1?owner=test";
+        let proof = compute_owner_proof_at(
+            "DELETE",
+            path,
+            &owner,
+            private_key,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(99),
+        )
+        .expect("post-epoch owner proof should be signed");
+
+        assert_eq!(proof.timestamp, 99);
+        assert_eq!(proof.header, format!("99:{}", proof.signature));
+        let payload = auth::owner_proof_payload(&owner.to_lowercase(), 99, "DELETE", path);
+        assert!(wallet::verify_signature(&payload, &proof.signature, &owner));
+    }
+
+    #[test]
+    fn compute_owner_proof_at_rejects_pre_epoch_clock() {
+        let err = match compute_owner_proof_at(
+            "DELETE",
+            "/api/cdn/sites/site-1",
+            "0x1111111111111111111111111111111111111111",
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f",
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        ) {
+            Ok(_) => panic!("pre-epoch owner proof should fail closed"),
+            Err(err) => err,
+        };
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
