@@ -4356,61 +4356,58 @@ async fn handle_behaviour_event(
                                     let response = if let Some(file_info) = shared.get(&file_hash) {
                                         match resolve_file_access(file_info, folder_hash.as_deref())
                                         {
-                                            Ok(access) => {
-                                                let chunk_hashes =
-                                                    match file_info_chunk_hashes(file_info) {
-                                                        Ok(chunk_hashes) => chunk_hashes,
-                                                        Err(err) => {
-                                                            return file_info_error_response(
-                                                                request_id,
-                                                                file_hash,
-                                                                err,
-                                                                access.folder_hash,
-                                                            );
-                                                        }
-                                                    };
-                                                let private_key = file_info.private_key.clone();
-                                                let file_name_owned = file_info.file_name.clone();
-                                                let file_size_owned = file_info.file_size;
-                                                println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
-                                                         file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
+                                            Ok(access) => match file_info_chunk_hashes(file_info) {
+                                                Ok(chunk_hashes) => {
+                                                    let private_key = file_info.private_key.clone();
+                                                    let file_name_owned =
+                                                        file_info.file_name.clone();
+                                                    let file_size_owned = file_info.file_size;
+                                                    println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
+                                                             file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
 
-                                                // Sign the FileInfo envelope with the seeder's
-                                                // wallet key so the downloader can verify the
-                                                // wallet_address claim and, for folder downloads,
-                                                // the folder hash this child file is scoped to.
-                                                if private_key.is_empty()
-                                                    || access.wallet_address.is_empty()
-                                                {
-                                                    file_info_error_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        "Seeder cannot sign FileInfo (wallet not unlocked)",
-                                                        access.folder_hash,
-                                                    )
-                                                } else {
-                                                    if access.price_wei == 0 {
-                                                        remember_authorized_chunk_access(
-                                                            seeder_authorized_chunks,
-                                                            request_id.clone(),
-                                                            peer,
-                                                            payment_scope_for_access(
-                                                                &file_hash, &access,
-                                                            ),
+                                                    // Sign the FileInfo envelope with the seeder's
+                                                    // wallet key so the downloader can verify the
+                                                    // wallet_address claim and, for folder downloads,
+                                                    // the folder hash this child file is scoped to.
+                                                    if private_key.is_empty()
+                                                        || access.wallet_address.is_empty()
+                                                    {
+                                                        file_info_error_response(
+                                                            request_id,
+                                                            file_hash,
+                                                            "Seeder cannot sign FileInfo (wallet not unlocked)",
+                                                            access.folder_hash,
                                                         )
-                                                        .await;
+                                                    } else {
+                                                        if access.price_wei == 0 {
+                                                            remember_authorized_chunk_access(
+                                                                seeder_authorized_chunks,
+                                                                request_id.clone(),
+                                                                peer,
+                                                                payment_scope_for_access(
+                                                                    &file_hash, &access,
+                                                                ),
+                                                            )
+                                                            .await;
+                                                        }
+                                                        signed_file_info_response(
+                                                            request_id,
+                                                            file_hash,
+                                                            file_name_owned,
+                                                            file_size_owned,
+                                                            chunk_hashes.to_vec(),
+                                                            access,
+                                                            &private_key,
+                                                        )
                                                     }
-                                                    signed_file_info_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        file_name_owned,
-                                                        file_size_owned,
-                                                        chunk_hashes.to_vec(),
-                                                        access,
-                                                        &private_key,
-                                                    )
                                                 }
-                                            }
+                                                Err(err) => file_info_error_response(
+                                                    request_id,
+                                                    file_hash,
+                                                    err,
+                                                    access.folder_hash,
+                                                ),
+                                            },
                                             Err(err) => file_info_error_response(
                                                 request_id,
                                                 file_hash,
