@@ -1,211 +1,167 @@
 # Chiral Network
 
-Chiral Network is a decentralized file sharing application built on peer-to-peer networking with a native blockchain for payments and reputation tracking. It runs as a desktop application (Tauri 2 + Svelte 5 + Rust) and as a headless daemon for server deployments and automated testing.
+Chiral Network is a decentralized marketplace for cloud resources. Independent providers sell **storage**, **containerized compute**, and **LLM inference**; consumers discover providers without a central operator, use them over standard HTTP APIs, and pay in a native proof-of-work currency. It runs as a desktop application (Tauri 2 + Svelte 5 + Rust) and as a headless daemon for running providers and for automated testing.
 
 This book is in two parts:
 
 - **[Part I: White Paper](#part-i-white-paper)** — the conceptual design: what the system guarantees and why, at the level of mechanisms rather than code, with no implementation detail.
-- **[Part II: Design and Implementation](#part-ii-design-and-implementation)** — the concrete realization: architecture, modules, wire protocols, parameters, APIs, deployment, and operations.
+- **[Part II: Design and Implementation](#part-ii-design-and-implementation)** — the concrete realization: architecture, the offer record, the resource interfaces, settlement, reputation, APIs, deployment, and operations.
 
 ---
 
 # Part I: White Paper
 
-*Chiral Network: A Peer-to-Peer Market for File Storage and Retrieval*
+*Chiral Network: A Peer-to-Peer Market for Cloud Resources*
 
-**Abstract.** A purely peer-to-peer file sharing network allows content to be published, discovered, and retrieved without a central operator. Existing peer-to-peer systems solve discovery and transfer but not persistence: a file remains available only as long as volunteers choose to serve it, and no mechanism compensates them for doing so. Chiral Network treats storage and bandwidth as goods in a market. Files are named by their content hash and discovered through a distributed hash table; transfers are settled in a native proof-of-work currency; and every record a peer acts on — file metadata, seeder advertisements, folder manifests, price quotes — is signed by the publisher's wallet key, so authenticity is verified cryptographically rather than assumed from whichever node served the record. A reputation function derived solely from verified transfer outcomes, rather than subjective ratings, gives buyers a forgery-resistant signal of seller reliability. The result is a network where availability is purchased rather than donated, and where no intermediary can forge, reprice, or redirect what peers publish.
+**Abstract.** Cloud computing is delivered almost entirely by central operators who set prices, hold the data, and constitute a single point of failure and censorship. Decentralized alternatives exist for narrow slices — a network for storage here, a market for GPU time there — but each is a silo with its own token and its own trust assumptions. Chiral Network is a single market in which heterogeneous resources — bytes at rest, running containers, model inference — are advertised, discovered, and paid for under one identity and one currency. Providers advertise offers signed by their wallet keys, so a listing's capacity, price, and payment address cannot be forged or redirected by whichever node relays it. Consumers reach providers directly over standard interfaces — an S3-compatible API for storage, an OpenAI-compatible API for inference, a submission API for containers — and pay by funding a prepaid balance that the provider draws down as it meters usage. The network verifies cryptographically that money moved and to whom, but deliberately does not try to prove that a meter was fair; instead it makes dishonesty expensive, because only a consumer with an on-chain-verified payment to a provider may rate it, and that rating is weighted by what was spent. The result is a market where pricing is left to providers, honesty is disciplined by reputation rather than by a referee, and no intermediary can forge, reprice, or redirect what providers publish.
 
 ## 1. Introduction
 
-Distribution of digital content today relies almost entirely on central services. The model works well until it doesn't: the operator is a single point of failure and censorship, extracts rent from both sides of every exchange, and accumulates a complete record of who stores and retrieves what. Peer-to-peer file sharing networks were built to remove the central operator, and at the level of mechanics they succeeded — distributed hash tables solve discovery, and swarming protocols solve transfer.
+The economics of the cloud are the economics of a landlord. A handful of operators own the storage, the compute, and the accelerators; they set the prices, meter the usage, keep the logs, and can revoke access at will. Tenants accept this because the alternative — assembling reliable infrastructure from strangers — has historically been impossible to make safe. Decentralized projects have chipped at individual pieces (distributed storage, volunteer compute, GPU spot markets), but each solves one resource in isolation, under its own currency and its own assumptions, and none offers the thing a tenant actually wants: one place to rent whatever it needs, from whoever will sell it cheapest, without trusting a central operator to be fair.
 
-What they did not solve is the economics. In volunteer networks, serving a file costs bandwidth and storage and earns nothing, so availability decays with interest: popular content is over-replicated while everything else quietly disappears when its last altruistic seeder departs. Reciprocity schemes (tit-for-tat) only reward peers during a shared download and create no incentive to keep older content alive.
+What makes a single, operator-free market hard is not discovery or payment — public-key identity and a mined currency solve those — but *metering*. An atomic file download can be escrowed: pay the exact price, receive the exact bytes, verify the hash. A month of storage, an hour of a running container, or a million tokens of inference cannot be escrowed per unit without a machinery of proofs that does not yet exist in practice. Chiral Network makes this trade explicit rather than pretending otherwise. It keeps everything that public-key cryptography can guarantee — that a listing is authentic, that a payment reached the right wallet, that a record cannot be hijacked — and for the part that cryptography cannot cheaply guarantee, fair metering and honest service, it substitutes an incentive: bind every payment to an identity, let only paying customers rate a provider, and weight their verdicts by what they spent. A provider that over-meters or under-delivers then loses future revenue faster than it can defraud its present customers.
 
-What is needed is a way to pay for retrieval and persistence directly, peer to peer, with payment and delivery bound tightly enough that neither side must trust the other, and without reintroducing an intermediary who can forge listings, substitute payees, or manufacture reputation. This paper describes such a system. Chiral Network combines four mechanisms:
+The system combines four mechanisms:
 
-1. a **content-addressed discovery layer** in which every published record is signed by its owner's key;
-2. a **chunked transfer protocol** with per-chunk integrity verification;
-3. a **native currency** on a proof-of-work blockchain, with payment verified on-chain before service is rendered; and
-4. an **outcome-based reputation function** computed from verified transfers rather than from ratings.
+1. a **content-addressed discovery layer** in which every resource offer is signed by its provider's key;
+2. **direct provider interfaces** over standard HTTP APIs, so a consumer's existing tools work unchanged;
+3. a **native proof-of-work currency** with prepaid, provider-drawn settlement; and
+4. a **payment-gated reputation function** that admits subjective judgment without admitting forgery.
 
 ## 2. System Overview
 
 The network is organized as three planes that share one identity system.
 
-**Discovery plane.** A Kademlia distributed hash table stores small signed records: file metadata, seeder advertisements, and folder manifests. Any peer may store and serve these records; none is trusted to have authored them.
+**Discovery plane.** A Kademlia distributed hash table stores small signed records — *resource offers*: a provider announcing that it sells a given class of resource, at a given price, reachable at a given endpoint. Any peer may store and serve these records; none is trusted to have authored them.
 
-**Transfer plane.** File content moves directly between peers over a chunked request–response protocol. Chunks are verified individually as they arrive and the assembled file is verified against its content hash.
+**Interaction plane.** Once a consumer has chosen a provider, it talks to that provider's public endpoint **directly**, over a standard HTTP API appropriate to the resource. There is no protocol-level intermediary between consumer and provider on the data path. In v1 a provider must be publicly reachable — a real IP address, ideally a domain name with TLS — so this plane requires no relayed reachability or NAT traversal.
 
-**Settlement plane.** A proof-of-work blockchain (Ethash, account-based) carries the native currency, CHI. Miners issue currency and order transactions; sellers verify payment on-chain before serving content.
+**Settlement plane.** A proof-of-work blockchain (Ethash, account-based) carries the native currency, CHI. A consumer funds a prepaid balance by paying a provider on-chain; the provider verifies the payment against the chain and draws the balance down as it meters usage. Miners issue currency and order transactions.
 
-**Identity.** A participant's identity is a single ECDSA keypair — the same key that controls their currency balance signs their published records. This unification is deliberate: it means the entity that *gets paid* for a file is cryptographically the entity that *published* it, and it lets reputation attach to the address that actually receives money. A peer's network-transport identity (its DHT node ID) is distinct, but every record binds the two by signature, so a transport identity cannot impersonate a wallet.
+**Identity.** A participant's identity is a single ECDSA keypair — the same key that controls its currency balance signs its published offers. The entity that *gets paid* for a resource is cryptographically the entity that *advertised* it, and reputation attaches to the address that actually receives money. A peer's network-transport identity (its DHT node ID) is distinct, but every offer binds the two by signature.
 
-Participants play five roles, in any combination: **publishers** announce files and set prices; **consumers** pay for and retrieve them; **miners** secure settlement and earn block rewards; **relay operators** provide reachability to peers behind NAT; and **persistent hosts** sell always-on storage so that availability survives the publisher going offline.
+Participants play four roles, in any combination: **providers** advertise resources and set prices; **consumers** discover, use, and pay for them; **miners** secure settlement and earn block rewards; and **bootstrap/relay operators** provide the DHT entry points and host shared services such as the reputation registry.
 
-## 3. Signed Records as the Trust Primitive
+## 3. Signed Offers as the Trust Primitive
 
-The foundational rule of the network is that *data is trusted because of who signed it, never because of where it came from*. A DHT is an adversarial place: any node can claim to hold any key and answer with anything. Chiral Network therefore treats the DHT purely as an untrusted bulletin board.
+The foundational rule is unchanged from a content network and applies just as well to a resource market: *data is trusted because of who signed it, never because of where it came from.* A DHT is an adversarial place — any node can claim to hold any key and answer with anything — so Chiral Network treats it purely as an untrusted bulletin board.
 
-Every long-lived record carries an ECDSA signature by the wallet that owns it:
+Every long-lived record carries an ECDSA signature by the wallet that owns it. The central record is the **resource offer** — "wallet *W* sells resource class *C*, with capacity/spec *S*, at price schedule *P*, reachable at endpoint *E*" — signed by *W*. Because the endpoint and the price live *inside* the signed payload, a relaying node cannot substitute its own endpoint to intercept traffic, nor its own price or wallet to divert payment.
 
-- **File metadata** — name, size, price, and payment address for a content hash, signed by the publisher.
-- **Seeder advertisements** — "peer *P* serves file *F* for wallet *W*", signed by *W*, binding the transport identity to the paid identity.
-- **Folder manifests** — a file list with a bundle price and payee, signed by the folder's owner (Section 7).
-- **Transfer envelopes** — the price and payee quoted at the moment of transfer, signed by the seeder (Section 5).
+Two symmetric rules enforce the contract. *Writers refuse to publish unsigned:* a client that cannot sign (its key locked or absent) declines to write rather than emit an unverifiable record. *Readers drop invalid:* a record whose signature is missing or wrong is treated as nonexistent, however plausible its contents.
 
-Two symmetric rules enforce the contract. *Writers refuse to publish unsigned:* a client that cannot sign (because its key is locked or absent) declines to write rather than emit an unverifiable record. *Readers drop invalid:* a record whose signature is missing or wrong is treated as nonexistent, however plausible its contents.
+Signatures are computed over a canonical, length-prefixed, domain-tagged encoding of the record's fields. Length prefixing makes the serialization injective, and the domain tag prevents a signature produced for one record type from being replayed as another. Records under a given key are owned by first claim: only the wallet that first wrote a key can overwrite it. And because authenticity lives in the record, a reader may act on the *first* replica whose signature verifies rather than waiting for a replication quorum — collapsing lookup latency without weakening integrity.
 
-Signatures are computed over a canonical, length-prefixed, domain-tagged encoding of the record's fields. Length prefixing makes the serialization injective — no two distinct field tuples produce the same signed bytes — and the domain tag prevents a signature produced for one record type or protocol from being replayed as another.
+## 4. Resources and Discovery
 
-Records under a given key are owned by first claim: once a key has been written by a wallet, only that wallet's signature can overwrite it. An adversary can neither hijack an existing name nor re-publish an existing record with altered contents, because alteration breaks the signature and replacement requires the original signer's key.
+A resource offer names, at minimum: the provider's wallet, the resource **class** (storage, container, or inference), a capacity or capability descriptor, a price schedule in CHI per metered unit, a public endpoint, and a validity window. It is signed by the provider's wallet.
 
-A useful consequence of pushing authenticity into the records themselves is that *replication quorums become unnecessary for reads*. A conventional DHT read waits for several replicas to converge before trusting a value; here, the first replica whose signature verifies is as good as any majority, so a reader may act on the first arrival. This collapses lookup latency without weakening integrity — a property quorum systems cannot offer, since they derive trust from agreement among storage nodes rather than from the data.
+To publish, a provider writes its signed offer under a key derived from the resource class and its own identity, and refreshes it periodically. To discover, a consumer queries by class, collects the offers, discards any whose signatures fail, and ranks the survivors by price and by the provider's reputation (Section 7). Offers expire if not refreshed, so the catalog self-cleans: a provider that goes offline simply stops refreshing and drops out, rather than lingering as a dead listing.
 
-## 4. Content Addressing and Discovery
+Discovery is deliberately thin. It tells a consumer *who* is selling *what*, at *what price*, *where* — and nothing that must be trusted, because everything a consumer acts on is either signed by the provider or verified directly against the provider's endpoint once contact is made.
 
-A file's identifier is the SHA-256 hash of its content. Content addressing makes the name self-certifying: whatever a consumer receives can be checked against the name it asked for, so a correct file cannot be substituted regardless of who served it.
+## 5. The Three Resource Classes
 
-To publish, a peer writes the signed metadata record under the file's hash, writes a signed seeder advertisement binding its own transport identity to that hash, and registers as a provider in the DHT's provider index. To search, a consumer looks up the hash and assembles the metadata, the set of seeder advertisements, and the provider list.
+The planes above — identity, discovery, settlement, reputation — are shared. The classes differ only in the interface a consumer speaks and the unit a provider meters.
 
-Verification is per-record, so a search degrades gracefully under partial forgery: if the metadata record fails verification but seeder advertisements verify, the consumer discards only the untrusted fields (the display name, the claimed payment address) and still surfaces the honest seeders. A single forged or corrupted record therefore cannot make a well-seeded file unfindable — an attack that would succeed in systems where one metadata object vouches for everything beneath it.
+**Storage.** A provider exposes an **S3-compatible object interface**: buckets and objects, `PUT`/`GET`/`DELETE`, listing, and presigned URLs. Usage is metered as capacity stored over time (GB-month) plus egress (GB transferred). An object may be addressed by the hash of its content, which makes storage self-certifying — a consumer checks what it retrieves against the name it asked for — and subsumes the older use case of sharing a file by its hash: a shared file is simply a public-read object. (The bespoke peer-to-peer file transports of earlier designs — a custom chunked protocol, BitTorrent, magnet links — are retired in favor of the standard S3 interface.)
 
-Seeder advertisements are refreshed periodically and expire otherwise, so the seeder set self-cleans as peers depart; a peer that stops sharing a file affirmatively withdraws its advertisement rather than lingering as a ghost.
+**Containerized compute.** A provider advertises CPU, memory, and optional GPU capacity at a per-hour price. A consumer submits a container specification — an image reference, a resource request, ports, and environment — and receives an endpoint at which the running container is reachable. Usage is metered as runtime; the consumer tears the container down to stop billing.
 
-## 5. File Transfer
+**LLM serving.** A provider advertises the models it hosts and a price per thousand input and output tokens, and exposes an **OpenAI-compatible HTTP API**. A consumer sends inference requests with existing tooling; the provider meters tokens consumed.
 
-Content is transferred directly between consumer and seeder in fixed-size chunks over a request–response protocol.
+Each class admits its own honesty checks (Section 9): storage can in principle be challenged for retrievability, compute for liveness, inference for latency — but the quality of what is served (was the model good? was the container stable?) is a subjective judgment, which the reputation system is designed to carry.
 
-The exchange begins with a metadata envelope in which the seeder states the file's size, chunk count, price, and payment address, *signed by the seeder's wallet key*. This signature closes the most direct theft in a payment-bearing transfer protocol: an unauthenticated quote would let any peer that can answer a request — or any intermediary — substitute its own payment address and collect the price of a file it does not own. A consumer that receives an invalid envelope simply fails over to the next seeder.
+## 6. Settlement
 
-Chunks are then requested in sequence. Each chunk carries its own hash and is verified on receipt; out-of-sequence chunks are rejected before they consume bandwidth; failed chunks are retried a bounded number of times and then the transfer fails over to another seeder. When all chunks have arrived, the assembled file is hashed and compared with the content address — the per-chunk checks localize errors cheaply, and the full-file check is the backstop that makes the transfer end-to-end self-certifying.
+Payment precedes service, as before — but for a metered resource "service" is continuous rather than a single delivery, so payment takes the form of a **prepaid balance** rather than a per-transfer transaction.
 
-## 6. Payments
+A consumer funds a balance by paying the provider's advertised address on-chain and presenting the transaction. The provider verifies the payment directly against the chain — that it is mined, that the recipient is its own address, that the amount is what it credits, and that the transaction was made on this network's chain (the chain-identifier check rejects cross-chain replays) — and credits the balance. As the consumer uses the resource, the provider meters usage and draws the balance down at its published rates. When the balance is exhausted, service pauses until the consumer tops it up.
 
-Payment precedes service. For a priced file the consumer first pays the seeder's advertised address on-chain, then presents the transaction hash with its chunk requests; the seeder serves no content until it has verified the payment itself.
+Balances are **non-refundable**: a consumer funds what it intends to spend and tops up incrementally, rather than parking a large deposit it must later reclaim. This keeps settlement to a single primitive — an on-chain payment the provider verifies — with no escrow, no refund path, and no withdrawal protocol. From each funded payment a small platform fee (0.5% by default, adjustable down to a 0.1% floor) is split off with exact integer arithmetic, so the provider's credit and the fee sum precisely to the amount paid; there is no floating-point rounding anywhere in the settlement path.
 
-Verification is done against the chain directly, never against the consumer's claims. The seeder checks that the transaction is mined, that the recipient is its own address, that the amount covers the price, and that the transaction was made on this network's chain — the chain identifier check rejects replays of signed transactions captured from other chains. The two failure modes are deliberately distinguished: *not yet mined* is a transient verdict inviting retry, while *wrong recipient or amount* is permanent, so honest consumers are not punished for settlement latency and dishonest ones cannot retry their way past arithmetic.
+This is the deliberate trade of Section 1 made concrete. The network proves that money moved and to whom; it does not prove that the meter was fair. What disciplines the meter is that the consumer watches its balance drain against *observable* usage — objects it can list, tokens returned in responses, container uptime it can measure — and that any discrepancy feeds a reputation score the provider cannot afford to lose. Resources offered at a rate of zero skip settlement entirely.
 
-A payment authorizes exactly one delivery. Each seeder keeps a ledger of spent transactions keyed by the *(transaction, file)* pair: the same transaction presented twice for the same file is refused, and a payment for one file cannot be redeemed for a different one — necessary because one wallet may sell many files at many prices. The ledger records a transaction only on successful verification, so a transiently-failed presentation can be retried safely.
+## 7. Reputation
 
-A file's price is set by its seller; the consumer pays exactly the price quoted in the seeder's signed envelope. (What a seller *should* ask is anchored by the network-computed reference fee of Section 8, which informs defaults and estimates but never enters verification.) From each payment a small platform fee is split off, computed with exact integer arithmetic such that the seller's share and the fee sum precisely to the total — there is no floating-point rounding anywhere in the payment path, because rounding tolerances in payment verification are exploitable margins. Free files (price zero) skip payment entirely.
+Consumers choosing among providers need a signal of reliability, and for a resource market that signal is unavoidably subjective — was the storage durable, the model useful, the container stable? An earlier, content-only version of this network computed reputation *only* from objective transfer outcomes and deliberately **rejected** subjective ratings, on the grounds that ratings are free to fabricate. A resource market cannot do without subjective judgment, so Chiral Network admits user feedback but **gates** it: only a wallet with an on-chain-verified payment to a provider may rate that provider, and each rating is weighted by the amount paid and by how recently.
 
-## 7. Folder Bundles
+This preserves exactly the property the old rejection was protecting. Fabricating a favorable history still costs real, fee-bearing payments — a provider that wants to buy itself a reputation must pay itself through wallets whose payments are enumerable on-chain, losing the platform fee on every wash and moving the score only in proportion to money actually spent. The single change is that the admitted signal is now a *judgment* (a score) rather than a *completion bit*; its resistance to forgery is identical, because it rests on the same verified-payment gate.
 
-A folder can be sold as a single product at a single price, rather than as the sum of its files.
+Each wallet carries a score on a 0–100 scale, initialized to 50, updated per event in the style of the Elo rating system. For an event with score-outcome $S \in [0,1]$ (the normalized user rating) against a provider whose current score is $r$:
 
-A folder's identifier is content-derived, like a file's: the hash of the owner's address together with the sorted list of *(relative path, file hash)* pairs it contains. The construction is deterministic and order-independent — the same owner publishing the same file set always produces the same folder identity — and owner-bound, so two sellers offering identical contents have distinct folder identities and neither can claim the other's.
+$$E = \frac{1}{1 + 10^{(50 - r)/12}}, \qquad r \leftarrow \mathrm{clamp}\big(r + K\,(S - E),\ 0,\ 100\big), \qquad K = 4\,w_t\,w_a$$
 
-The owner publishes a signed manifest under this identifier carrying the file list, the bundle price, and the payment address. Price and payee live *inside* the signed payload; a hostile peer cannot take a popular folder's manifest and republish it with its own wallet substituted, because the substitution breaks the owner's signature. Buyers pay once to the manifest's address and then retrieve each member file at price zero. Search reports the *common-seeder intersection* — the peers that hold every file in the bundle — so a buyer can judge whether the whole bundle, not merely its pieces, is retrievable.
-
-In the current design, member files published at price zero are individually retrievable by anyone holding their bare content hashes; binding member retrieval to proof of bundle purchase is future work (Section 13).
+The expected-outcome term $E$ gives the update curvature: a high-scored provider gains little from another good review but loses sharply from a bad one. The time weight $w_t$ decays linearly to zero over a 180-day lookback, so reputation reflects recent conduct. The amount weight $w_a = 1 + \min(1, \ln(1+a)/\ln 51)$, where $a$ is the CHI paid, lets larger verified payments move the score up to twice as much as trivial ones, growing only logarithmically so reputation cannot be bought in one large transaction. Scores are displayed alongside offers in discovery, so reliability directly affects a provider's ability to win business.
 
 ## 8. Incentives
 
 Every behavior the network needs is paid for; none relies on altruism.
 
-**Seeding.** Sellers earn their asking price on every download. Storage of other people's content is compensated through the hosting marketplace, where peers advertise offers and form agreements with publishers; agreed files are then seeded like the host's own.
+**Providing.** Providers earn their published metered rates on every unit of resource sold. Pricing is theirs to set; the market and the reputation score, not a central schedule, discipline it.
 
-**Mining.** Proof-of-work miners earn a fixed block reward of 5 CHI, which is also the currency's issuance mechanism. New participants thus have a path to acquiring currency by contributing computation, rather than only by selling content. Transactions carry no gas price — settlement is free to users, and the chain's security budget is the block reward alone.
+**Mining.** Proof-of-work miners earn a fixed block reward of 5 CHI, which is also the currency's issuance mechanism, giving new participants a path to acquiring CHI by contributing computation rather than only by selling resources. Transactions carry no gas price — settlement is free to users, and the chain's security budget is the block reward alone.
 
-**Persistent hosting.** Always-on hosts sell durability: a publisher pays for a hosting duration, the host keeps the file discoverable and served while the lease runs, and the lease expires automatically — paid persistence rather than indefinite donation. So that infrastructure neither undercuts the peer market nor gouges where peers are scarce, a host's asking price is indexed to it: the price is the greater of a floor and 1.2× the median of current peer asks for comparable service. Hosts thereby track the market upward and downward but always sit slightly above it — they are the convenience option, not a subsidized monopolist.
+The loop closes: consumers obtain CHI by mining or by themselves providing; they spend it renting resources; providers earn it for supplying them; miners earn it for ordering everyone's settlement.
 
-**Price discovery.** Sellers set prices freely, but a young market gives them little to set prices against. The network therefore computes a **reference download fee** — a rate in CHI per megabyte used as the default ask for new listings, the cost estimate shown to buyers, and the floor in the persistent-host pricing rule above. The reference fee is advisory by construction: it never enters payment verification, so peers need not agree on it bit-for-bit and no fee oracle has to be trusted. Each node derives it from data it already holds:
-
-$$f \;=\; \mathrm{clamp}\!\Big(M \cdot \big(H_0/H\big)^{1/2},\; f_{\min},\; f_{\max}\Big)$$
-
-The market term $M$ is the median per-megabyte price of the fee-bearing transfers settled in the trailing two weeks. The sample is verifiable: fee-bearing transfers are enumerable from the chain itself, since each pays the platform split to a known address, and the corresponding file sizes are bound by seller-signed metadata. Using the median means the term moves only when more than half of paid volume moves, and the platform fee prices every transaction an attacker would have to spend steering it. The supply term $(H_0/H)^{1/2}$ tracks the network's hash power $H$, estimated from recent block headers as accumulated difficulty over elapsed time ($H_0$ is a fixed calibration reference). Hash power measures the real resource cost of producing a unit of CHI: as it rises, each CHI embodies more expended work, so the CHI-denominated fee falls — holding the *real* price of a megabyte roughly steady as the network grows — and the square root damps the response to mining volatility. The two terms are complementary estimators of the same quantity: $M$ reads the price level off realized demand, the hash-power term off the currency's production cost, and the latter carries the index while the former is thin. Finally, the clamp bounds the index to a fixed band around a bootstrap anchor $f_0$, the published value moves by at most a fixed fraction per day, and when too few transfers exist in the window $M$ falls back to $f_0$ — which is also the network's launch value. Because the index is advisory, sellers deviate from it freely, which keeps the index-to-market feedback loop loose; the clamp, the daily rate limit, and the median's robustness bound what remains.
-
-The loop closes: consumers obtain CHI by mining or by selling; they spend it on retrieval; sellers and hosts earn it for availability; miners earn it for ordering everyone's settlement.
-
-## 9. Reputation
-
-Buyers choosing among seeders need a signal of reliability. Subjective star ratings are the obvious mechanism and were deliberately rejected: ratings are free to fabricate, so any identity can manufacture a history of praise. Chiral Network computes reputation only from *transfer outcomes* — completions and failures of actual transfers, with paid transfers verified against the chain (sender, recipient, amount) before the event is admitted. Fabricating a positive history therefore costs real payments, and the platform fee on each makes wash-trading reputation a strictly losing proposition rather than a free one.
-
-Each wallet carries a score on a 0–100 scale, initialized to 50, updated per event in the style of the Elo rating system. For an event with outcome $S$ (1 for a completed transfer, 0 for a failed one) against a wallet whose current score is $r$:
-
-$$E = \frac{1}{1 + 10^{(50 - r)/12}}, \qquad r \leftarrow \mathrm{clamp}\big(r + K\,(S - E),\ 0,\ 100\big), \qquad K = 4\,w_t\,w_a$$
-
-The expected-outcome term $E$ gives the update its useful curvature: a high-scored wallet gains little from yet another success but loses sharply on a failure, while a low-scored wallet can climb quickly by performing well. The weight $w_t$ decays linearly from 1 to 0 over a 180-day lookback, so reputation reflects recent conduct and both old sins and old glories expire. The weight $w_a = 1 + \min(1, \ln(1+a)/\ln 51)$, where $a$ is the CHI amount, lets larger verified payments move the score up to twice as much as trivial ones — weight grows logarithmically, so reputation cannot simply be bought in one large transaction.
-
-Scores are displayed alongside search results, so reliability directly affects a seller's ability to win business.
-
-## 10. Trust Model
+## 9. Trust Model
 
 It is as important to state what the network does *not* protect as what it does.
 
-**Out of scope: anonymity.** Chiral Network is not an anonymity network. Wallet addresses, transport identities, IP addresses, and which files a peer publishes or requests are observable by network participants, as in any unencrypted peer-to-peer system. The guarantees below are guarantees of *integrity and authenticity*, not of unlinkability.
+**Out of scope: anonymity.** Chiral Network is not an anonymity network. Wallet addresses, provider endpoints, IP addresses, and which resources a peer offers or consumes are observable, as in any unencrypted system. The guarantees below are of *integrity and authenticity*, not of unlinkability.
 
-**In scope.** The signed-record discipline of Section 3, applied end to end, yields the following properties:
+**In scope (cryptographic).** The signed-record discipline of Section 3, applied end to end, yields:
 
-- **No forged listings.** A record not signed by its owner is dropped by every reader. The discovery layer can lie about availability but not about content, price, or payee.
-- **No payment redirection.** Every quote a consumer pays against — metadata, manifest, transfer envelope — has the payee inside a signed payload. Redirecting payment requires the seller's private key.
-- **No replay, in any direction.** Cross-chain replay of signed transactions is rejected by the chain-identifier check; cross-file and double-spend replay by the *(transaction, file)* ledger; signature malleability is eliminated by accepting only canonical (low-*s*) signatures, so a signature cannot be mutated into a "different" one for the same message. Requests to authenticated services are signed over the method, path, and a timestamp, valid for a few minutes — a captured proof cannot be replayed against a different endpoint or later in time.
-- **No name hijacking.** First-claim-wins ownership (Section 3) means an existing record is replaceable only by its original signer. Reserved record namespaces refuse raw writes entirely; they are writable only through the signed publication paths.
-- **No infrastructure-relayed reach into private networks.** Services that register publisher-supplied URLs validate them against a public-address policy, rejecting private, link-local, and cloud-metadata address ranges in all their encodings — a registration cannot be used to aim infrastructure at targets inside someone's network perimeter.
+- **No forged listings.** A record not signed by its owner is dropped by every reader. Discovery can lie about *availability* but not about a provider's price, endpoint, or payee.
+- **No payment redirection.** The payee lives inside the signed offer; diverting payment requires the provider's private key.
+- **No replay.** Cross-chain replay of a funding transaction is rejected by the chain-identifier check; double-crediting of the same transaction is prevented by a spent-transaction ledger; signature malleability is eliminated by accepting only canonical (low-*s*) signatures.
+- **No name hijacking.** First-claim-wins ownership means an existing offer is replaceable only by its original signer.
 
-**Residual trust.** Proof-of-work settlement is as strong as the honest share of hash power, which on a young network is modest in absolute terms (Section 13). The reputation registry is currently an aggregation service that clients trust to tally verified outcomes honestly (Section 13). And a seller who takes payment and refuses service can still do so once per victim — what the system guarantees is that such conduct is recorded against the wallet that got paid, and prices its future business accordingly.
+**Rests on reputation (the honest-provider assumption).** The network does *not* cryptographically guarantee that a provider meters fairly, that stored bytes remain retrievable, that a container keeps running, or that inference is what was advertised. These rest on the incentive of Section 7: a provider that takes a balance and cheats can do so once per victim, the loss bounded by what that victim pre-funded, and the conduct is recorded against the wallet that got paid, pricing its future business accordingly.
 
-## 11. Network Infrastructure
+**v1 constraints.** Providers must be publicly reachable — there is no NAT traversal for providers in v1, so a would-be storage or compute seller needs its own public IP (ideally a domain with TLS). Prepaid balances are non-refundable.
 
-Two classes of infrastructure improve availability. Neither is a trust root: every record they serve is verified by its signature regardless of origin, so compromising them degrades reachability, not authenticity.
+## 10. Limitations and Future Work
 
-**Relays.** Most consumer peers sit behind NAT and cannot accept inbound connections. Relay nodes provide circuit relay — forwarding traffic between peers that cannot connect directly — plus a stable entry point for bootstrapping into the DHT. Relays practice routing hygiene: only publicly reachable addresses enter the routing tables they propagate, so the tables are not polluted with dial targets that can never succeed. Relays also host registry services — the reputation tally, the version-policy endpoint (Section 12), and a registry mapping published shares and sites to their origins, where registrations are signed by their owners and governed by the same first-claim-wins rule as DHT records.
+- **Trustless metering.** The honest-provider assumption is the largest gap. Future work: proofs of retrievability for storage, verifiable or attested compute, signed token-count receipts for inference, and escrow contracts that release funds only against consumer-signed usage receipts.
+- **Refunds and escrow.** Non-refundable prepaid is the v1 simplification; a withdrawal/escrow protocol would let consumers reclaim unused balance and reduce the trust placed in providers.
+- **NAT'd providers.** Requiring public reachability excludes home providers; a relay/circuit path for providers is deferred.
+- **Dispute resolution.** Beyond the reputation penalty, there is no arbitration of a contested charge.
+- **Currency and registry.** Proof-of-work settlement is only as strong as the honest hash-power share, modest on a young chain; and the reputation registry is currently a trusted aggregator that tallies verified events (Part II).
 
-**Persistent hosts.** The always-on hosts of Section 8 are economically distinguished peers, not protocol-privileged ones. They speak the same publication and transfer protocols, sign records with their own wallets, verify payments like any seller, and their leases expire by the same clock they charge by.
+## 11. Conclusion
 
-## 12. Protocol Governance
-
-A peer-to-peer network has no operator who can force an upgrade, yet a client build with a known payment or signature flaw endangers its counterparties, not just itself. Chiral Network handles this with a signed **version policy**: a small document stating the minimum tolerated client version, the currently recommended one, and the time it was issued.
-
-The policy is distributed by the network itself — any node serves its current view — and authenticated independently of its carrier: policies are signed by an offline project key, and a fetched policy replaces the current one only if it verifies and is no older than what the client already holds. The freshness rule prevents rollback: a hostile or stale node cannot revive an obsolete policy to re-admit vulnerable builds. (During initial deployment, before the signing key is in service, unsigned policies are accepted only if they do not raise the minimum above what the client's own build shipped with — a hostile relay can nudge peers to upgrade but can never lock honest clients out.)
-
-Enforcement is deliberately layered, so no single bypass disables it: the user interface warns below the recommended version and blocks below the minimum; the client refuses to join the network or begin downloads when unsupported; services reject requests from outdated clients; and peers check each other's advertised versions on connection and disconnect those below the minimum. An old client is thus squeezed out of the network from four directions at once.
-
-## 13. Limitations and Future Work
-
-Stated plainly, in roughly decreasing order of consequence:
-
-- **Settlement security is proportional to honest hash power.** A private proof-of-work chain with a small mining population is cheaply attackable by a determined adversary with rented computation. The economic design (Section 8) is sound at any scale, but the finality of payments is only as strong as the mining base; growing it — or anchoring settlement to a stronger chain — is the most important open item.
-- **The reputation registry is centralized.** Outcome events are verified against the chain, but a single service tallies them; it could censor or misreport. Because events are on-chain-verifiable, the natural evolution is federation or client-side recomputation from attested events, removing the trusted tally.
-- **Folder purchases do not yet gate member files.** Bundle members are published at price zero and are individually retrievable by anyone with their bare hashes. Closing the gap requires carrying proof-of-bundle-purchase in the transfer protocol's payment presentation.
-- **One on-chain transaction per purchase.** Per-download settlement is acceptable at file scale but wrong for micro-purchases; payment channels or batched settlement are the standard remedies.
-- **No anonymity** (Section 10). Confidential retrieval — private information retrieval, onion routing of transfers — is an explicit non-goal at present.
-- **Relays are an availability concentration.** Discovery and transfer are fully decentralized, but bootstrap, NAT traversal, and the registries lean on few nodes today. The protocols themselves are relay-agnostic; diversifying operators is deployment work rather than design work.
-
-## 14. Conclusion
-
-We have described a peer-to-peer file sharing network organized as a market. Content addressing makes names self-certifying; a DHT provides discovery without privileged servers; and a native proof-of-work currency lets retrieval and persistence be bought and sold rather than donated. The system's distinguishing commitment is that *every record a peer acts on is signed by the wallet that profits from it* — discovery infrastructure is thereby reduced to an untrusted bulletin board, payment redirection and record forgery are excluded by construction rather than by policy, and reputation can be computed from verified economic events instead of fabricable ratings. Availability becomes a priced good: files persist not while someone remembers to be generous, but while someone finds it worth paying for.
-
----
-
-*This paper describes the design at the level of mechanisms and guarantees. For the concrete realization — module layout, wire protocols, parameters, deployment, and operations — see [Part II: Design and Implementation](#part-ii-design-and-implementation).*
+Chiral Network treats cloud resources the way a content network treated files: as goods in a market, named and priced by their owners, discovered without an operator, and paid for in a mined currency. Where cryptography can enforce a guarantee — authenticity of a listing, destination of a payment, ownership of a name — it does. Where it cannot cheaply do so — the fairness of a meter, the quality of a service — the network does not pretend, and instead makes dishonesty a losing trade by binding reputation to verified payment. What remains is a market in which anyone with spare storage, compute, or a served model can sell it, anyone can buy it, and neither side has to trust an intermediary that could forge, reprice, or redirect what the other publishes.
 
 ---
 
 # Part II: Design and Implementation
 
-This part covers the concrete realization of Chiral Network — architecture, modules, wire protocols, parameters, APIs, deployment, and operations. For the conceptual design (what the system guarantees and why), read [Part I](#part-i-white-paper) first.
+This part covers the concrete realization of Chiral Network — architecture, the offer record, the resource interfaces, settlement, reputation, APIs, deployment, and operations. For the conceptual design (what the system guarantees and why), read [Part I](#part-i-white-paper) first.
 
+> **Current scope (v1).** Three resource classes — **S3-compatible storage**, **container compute**, **LLM serving**. Discovery is via signed DHT **resource offers**; the blockchain is the **settlement** layer only. Payment is a **prepaid, non-refundable balance** the provider draws down as it meters. Providers must be **publicly reachable** (own IP, ideally a domain + TLS); there is **no NAT traversal** for providers in v1. Reputation is **payment-gated user feedback** running on the existing Elo engine.
+>
+> **Superseded.** The earlier file-sharing transports — the bespoke chunked libp2p protocol, BitTorrent, magnet/`.torrent` — are retired; storage now speaks S3 over HTTP. Several primitives are **reused and generalized** rather than rebuilt: the signed-record discovery discipline, the wallet and on-chain payment verification, the platform-fee split, the Elo reputation engine, version enforcement, and the headless daemon / CLI / relay. This section flags forward-looking (not-yet-built) mechanics with a **Status** note.
 
 ---
 
 ## Table of Contents
 
 - [Architecture](#architecture)
-- [Feature Reference](#feature-reference)
-- [Security Implementation](#security-implementation)
-- [Getting Started](#getting-started)
-- [Application Pages](#application-pages)
-- [Backend Modules](#backend-modules)
-- [Blockchain and Mining](#blockchain-and-mining)
+- [Resource Offers (Discovery)](#resource-offers-discovery)
+- [Resource Interfaces](#resource-interfaces)
+- [Settlement and Balances](#settlement-and-balances)
 - [Reputation System](#reputation-system)
-- [Dynamic Fee Index](#dynamic-fee-index)
+- [Identity and Wallet](#identity-and-wallet)
+- [Blockchain and Mining](#blockchain-and-mining)
 - [Version Enforcement](#version-enforcement)
-- [File Transfer Protocol](#file-transfer-protocol)
+- [Application Surface](#application-surface)
+- [Backend Modules](#backend-modules)
 - [Headless Mode and CLI](#headless-mode-and-cli)
-- [Docker and Scaled Testing](#docker-and-scaled-testing)
+- [Security Implementation](#security-implementation)
+- [Deployment](#deployment)
+- [Getting Started](#getting-started)
 - [Testing](#testing)
-- [Project Structure](#project-structure)
 - [Configuration](#configuration)
 
 ---
@@ -214,9 +170,9 @@ This part covers the concrete realization of Chiral Network — architecture, mo
 
 The application consists of three layers:
 
-1. **Frontend** -- Svelte 5 with TypeScript, rendered in a Tauri webview or browser.
-2. **Backend** -- Rust, handling P2P networking (libp2p), blockchain interaction (Geth), file transfer, and local storage.
-3. **Blockchain** -- A private Ethash proof-of-work chain (chain ID 98765) where users mine CHI tokens and pay for file downloads.
+1. **Frontend** — Svelte 5 with TypeScript, rendered in a Tauri webview or browser: the marketplace UI, a provider dashboard, wallet, and mining controls.
+2. **Backend** — Rust, handling P2P discovery (libp2p Kademlia), blockchain interaction (Geth), the provider-side resource interfaces, settlement accounting, and local storage.
+3. **Blockchain** — a private Ethash proof-of-work chain (chain ID 98765) where users mine CHI and fund provider balances.
 
 ### Tech Stack
 
@@ -228,346 +184,124 @@ The application consists of three layers:
 | Build tool | Vite | 7.1 |
 | Styling | TailwindCSS | 3.4 |
 | Backend language | Rust | 2021 edition |
-| P2P networking | libp2p | 0.53 |
+| P2P discovery | libp2p | 0.53 |
 | HTTP server | Axum | 0.7 |
 | Blockchain client | Core-Geth | 1.12.20 |
 | Crypto | ethers.js (frontend), secp256k1 + ed25519-dalek (backend) |
 
-### Component Diagram
+### Planes
 
 ```
-+-----------------------------------------------------------+
-|                     Desktop Application                    |
-|  +-------------------+    +----------------------------+  |
-|  |   Svelte 5 UI     |    |     Tauri IPC Bridge       |  |
-|  |  (Pages, Stores,  |--->|  invoke() / listen()       |  |
-|  |   Services)        |    |                            |  |
-|  +-------------------+    +----------------------------+  |
-+-----------------------------------------------------------+
-            |                           |
-            v                           v
-+-----------------------------------------------------------+
-|                     Rust Backend                           |
-|  +----------+  +---------+  +--------+  +-------------+  |
-|  | DhtService|  | Geth    |  | Drive  |  | File        |  |
-|  | (libp2p)  |  | Process |  | API    |  | Transfer    |  |
-|  +----------+  +---------+  +--------+  +-------------+  |
-|  +----------+  +---------+  +--------+  +-------------+  |
-|  | Wallet   |  | RPC     |  | Hosting|  | Encryption  |  |
-|  | (wallet. |  | Client  |  | Server |  | Keypair     |  |
-|  |  rs)     |  | (pooled)|  |        |  |             |  |
-|  +----------+  +---------+  +--------+  +-------------+  |
-+-----------------------------------------------------------+
-            |                           |
-            v                           v
-+-------------------------+    +------------------------+
-|   P2P Network (libp2p)  |    |   Blockchain (Geth)    |
-|   Kademlia DHT          |    |   Ethash PoW chain     |
-|   TCP + Noise + Yamux   |    |   Chain ID: 98765      |
-|   File chunk protocol   |    |   RPC: localhost:8545   |
-+-------------------------+    +------------------------+
-            |
-            v
-+-------------------------+
-|   Relay Server           |
-|   130.245.173.73         |
-|   :4001 libp2p relay     |
-|   :8080 HTTP API         |
-|   - Circuit relay v2     |
-|   - Kademlia routing     |
-|   - Reputation API       |
-|   - Drive share proxy    |
-|   - WebSocket tunnels    |
-|   - Email backup relay   |
-+-------------------------+
++-------------------------------------------------------------+
+|  DISCOVERY  — libp2p Kademlia DHT (untrusted bulletin board)|
+|  signed resource offers: chiral_offer_<class>_<wallet>      |
++-------------------------------------------------------------+
+          |  (verify signature, rank by price + reputation)
+          v
++-------------------------------------------------------------+
+|  INTERACTION — direct consumer -> provider HTTP(S)          |
+|   storage: S3-compatible   compute: submit/lifecycle        |
+|   inference: OpenAI-compatible                              |
+|   (providers are publicly reachable; no NAT traversal)      |
++-------------------------------------------------------------+
+          |  (meter usage, draw down balance)
+          v
++-------------------------------------------------------------+
+|  SETTLEMENT — Ethash PoW chain (CHI), RPC localhost:8545    |
+|   prepaid balance funded on-chain; provider verifies + credits |
++-------------------------------------------------------------+
+          |
+          v
++-------------------------------------------------------------+
+|  RELAY / BOOTSTRAP  130.245.173.73                          |
+|   :4001 libp2p (DHT bootstrap)   :8080 HTTP (reputation,    |
+|   version policy)   — no provider NAT relay in v1           |
++-------------------------------------------------------------+
 ```
 
-### Data Flow: File Download
+### Data Flow: Renting a Resource
 
-1. Publisher registers a file on the DHT with its hash, name, size, price, and peer ID.
-2. Consumer searches the DHT by file hash or magnet link.
-3. Consumer sees the file info, seeder list, and Elo scores.
-4. Consumer confirms the download. If the file has a price, CHI is sent to the seeder's wallet — at the price quoted in the seeder's signed `FileInfo` envelope, split between seller and platform wallet via `split_payment` (default 0.5% platform fee).
-5. Consumer's node sends chunk requests to the seeder over the libp2p file transfer protocol.
-6. Each 256 KB chunk is SHA-256 verified on receipt.
-7. After all chunks arrive, the full file hash is verified.
-8. The file is saved to the download directory and optionally added to Drive.
-
----
-
-## Feature Reference
-
-### File Sharing
-- Publish files to the DHT so other peers can discover and download them.
-- Chunked file transfer protocol (256 KB chunks) with SHA-256 verification per chunk and full-file hash verification on completion.
-- Set a CHI price per file. Payments are processed on-chain before the download begins; the buyer pays the seeder's signed price (the earlier burn-address per-MB download fee was removed to avoid double-charging).
-- Platform fee on all transactions — default 0.5%, adjustable down to a 0.1% floor (split between seller and platform wallet; the fee is a cut of the listed price, not a surcharge added on top).
-- The client-side cost *estimate* (`calculate_download_cost` Tauri command, `chiral download cost` CLI) is not charged by the payment path. It currently uses the static anchor 0.01 CHI/MB; the [Dynamic Fee Index](#dynamic-fee-index) specifies its network-derived replacement (hashpower + 14-day median of paid-transfer prices).
-
-### Folder Bundles
-- Sell an entire folder as a single product at a folder-level price — buyers pay once for the bundle, not the sum of per-file prices.
-- The folder hash is content-addressed: SHA-256 of the owner address plus the sorted `(rel_path, file_hash)` list of every file in the folder. Same files + same owner always produce the same hash, so re-publishes are stable.
-- The seller publishes a signed `chiral_folder_<hash>` manifest to the DHT and registers as a Kademlia provider for that hash. The manifest carries `priceWei` and `walletAddress` (both inside the signed payload, so a hostile peer can't substitute a different price/recipient for an existing folder hash). Child files are published at price 0 — payment is collected once at the folder level.
-- Buyers paste the folder hash into Search, see the file list, the bundle price, and the set of seeders that hold every file in the bundle (the "common seeders" intersection).
-- "Buy Folder for X CHI" sends one transaction to the folder's payment wallet and then dispatches each child file's chunked transfer at price 0 — no per-file payment loop.
-- Known V1 gap: child files remain individually downloadable at price 0 when a buyer has the bare file hash. Closing this requires extending the chunked-transfer PaymentProof with folder context (tracked as a follow-up).
-
-### ChiralDrop
-- Direct peer-to-peer file transfer between two users, similar to AirDrop.
-- Discover nearby peers on the network.
-- Accept or decline incoming transfer requests.
-- Optional pricing for paid file drops.
-
-### Drive
-- Local file management system with folders, uploads, renaming, starring, and deletion.
-- Files are stored locally at `~/.local/share/chiral-network/chiral-drive/`.
-- Seed files to the P2P network directly from Drive.
-- HTTP preview pages for downloaded files (images, video, audio, PDF, text).
-
-### Mining
-- CPU mining with configurable thread count and utilization percentage.
-- GPU mining support via ethminer (limited to older NVIDIA GPUs, Compute Capability 7.5 and below).
-- Mining rewards are 5 CHI per block.
-- Real-time hash rate display via eth_hashrate RPC.
-
-### Wallet
-- Generate a new wallet from a 12-word BIP39 mnemonic.
-- Import an existing wallet using a private key or recovery phrase.
-- Send and receive CHI tokens.
-- Optional one-time email backup of wallet credentials.
-- Transaction history with type classification (send, receive, download payment, file sale).
-
-### Reputation (Elo)
-- Each wallet has an Elo reputation score (0-100) derived from file transfer outcomes.
-- Completed transfers increase the score; failed transfers decrease it.
-- Time-weighted: recent events within a 180-day lookback period carry more weight.
-- Amount-weighted: larger transfers have a proportionally larger effect (logarithmic scaling).
-- Batch lookup available for displaying seller reputations on the download page.
-
-### Hosting Marketplace
-- Publish a host advertisement to offer storage to the network.
-- Browse available hosts, propose hosting agreements, and track active agreements.
-- Hosted files are automatically seeded to the DHT.
-- CDN Servers tab: always-on infrastructure servers separated from peer hosts.
-
-### CDN Service
-- Always-on file hosting servers that keep files available when the uploader goes offline.
-- Market-based dynamic pricing: `max(floor_price, median_peer_price × 1.2)`.
-- Payment required before upload — verified on-chain with exact integer math.
-- Uploader sets a download price that other users pay to download from the CDN.
-- Files auto-expire and are cleaned up when the paid hosting duration elapses.
-- CDN re-seeds all active files to DHT on startup (15s after bootstrap).
-- Expiration cleanup runs every 60 seconds — files past their paid duration are removed from disk and from the DHT seeder list.
-- CDN can also host static sites (HTML/JS/CSS bundles), separate from per-file uploads.
-- Download page queries CDN servers directly as fallback when DHT search is slow.
-- Deployed at `130.245.173.73:9420` with 227 GB capacity.
-- Desktop app: Hosts → CDN Servers tab → Upload from Drive with payment confirmation.
+1. Consumer searches the DHT for offers of a class (e.g. `storage`), receiving signed offers.
+2. Consumer verifies each offer's signature, drops invalid ones, and ranks survivors by price and provider Elo.
+3. Consumer funds a prepaid balance: an on-chain CHI payment to the chosen provider's wallet.
+4. Provider verifies the payment against the chain (mined, correct recipient, amount, chain ID) and credits the consumer's balance, splitting off the platform fee via `split_payment`.
+5. Consumer uses the resource over the provider's HTTP API (S3 / submission / OpenAI-compatible).
+6. Provider meters usage and draws the balance down at published rates; service pauses when the balance is exhausted until the consumer tops up.
+7. Consumer submits a payment-gated rating; the provider's reputation updates.
 
 ---
 
-## Security Implementation
+## Resource Offers (Discovery)
 
-The trust model and its rationale are in [Part I](#part-i-white-paper) (Sections 3, 6, 10). This section is the implementation-level inventory. Note the scope: these are integrity / authenticity protections — Chiral Network is not an anonymity network, and wallet addresses, peer IDs, IPs, and publish/request patterns are observable by participants.
+> **Status: the offer record generalizes today's signed host-advertisement machinery (`hosting.rs`, `hosting/publish-ad`, `hosting/registry`) from a single "hosting" type to a typed, multi-class offer.** The signing, publish/refresh, and read-verify paths are reused.
 
-**Signed records (writers refuse to publish unsigned; readers drop unsigned/invalid):**
+A resource offer is a signed DHT record. The signed payload carries:
 
-- File metadata (`chiral_file_<hash>`) — signed by publisher wallet over a length-prefixed canonical payload. `search_file` rejects unsigned/invalid metadata as not-found.
-- Seeder entries (`chiral_seeder_<hash>_<peer>`) — signed by the seeder's wallet, binding peer ID + file hash + wallet address. `fetch_seeders` drops empty-signature non-stub entries.
-- Folder manifests (`chiral_folder_<hash>`) — signed by `owner_wallet` over a payload that includes the folder's `priceWei` and `walletAddress`, so a hostile peer can't republish the same hash with a swapped price/recipient. The Tauri `search_folder` and the headless `POST /api/headless/folder/search` both verify and drop unsigned/invalid bundles. Manifests published before folder-level pricing existed (v1) are still accepted via a fallback gated on the pricing fields being empty.
-- Chunked-transfer `FileInfo` envelopes — signed by the seeder's wallet. The downloader verifies before consuming the seeder's claimed `wallet_address` / `price_wei` and fails over to other seeders on bad signatures (closes the payment-redirection vector where a hostile seeder could substitute its own wallet).
+| Field | Meaning |
+|-------|---------|
+| `provider_wallet` | secp256k1 address; the payee and the reputation subject |
+| `resource_class` | `storage` \| `container` \| `inference` |
+| `capacity` | class-specific descriptor (GB available; CPU/mem/GPU; model IDs) |
+| `price_schedule` | CHI per metered unit (GB-month + egress; container-hour / GPU-hour; per-1K input/output tokens) |
+| `endpoint` | public base URL of the provider's HTTP API (scheme + host [+ port]) |
+| `region` | optional locality hint |
+| `valid_until` | Unix-seconds; readers ignore expired offers |
+| `signature` | ECDSA over the length-prefixed, domain-tagged payload above |
 
-**HTTP authentication (replaces the previously-trusted bare `X-Owner` header):**
-
-- Authenticated routes require both `X-Owner: 0x<wallet>` and `X-Owner-Sig: <unix_ts>:<hex_signature>` headers.
-- Signed payload is length-prefixed canonical bytes binding wallet ↔ HTTP method ↔ path-with-query ↔ timestamp; a captured proof can't be replayed against a different endpoint within its ±5-minute window.
-- Server-side `auth::owner_proof_middleware` recovers the secp256k1 signer and rejects with 401 on mismatch / expiry.
-- Applied to: `/api/drive/*`, `POST /api/ratings/transfer`, and the unregister DELETEs on relay register routes.
-- Tauri command `compute_owner_proof` produces the header in-process; wallet private keys never leave the desktop app.
-
-**Relay registration (FM-A04/A05):**
-
-- `register_share` / `register_site` POST bodies carry an ECDSA signature by `owner_wallet` over `(operation, id, owner_wallet, origin_url)`. Captured proofs can't be reused with a substituted origin URL.
-- First-claim-wins is enforced: an existing record can only be overwritten by the wallet that originally signed it.
-- Origin-URL validation rejects link-local (incl. AWS / GCP cloud metadata at `169.254.169.254`), multicast, broadcast, unspecified addresses, and anything outside `http(s)://`. Loopback stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time. Private RFC1918, CGNAT, and unique-local IPv6 origins are accepted only when the relay operator explicitly includes the target IP/CIDR in `CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST`.
-
-**Payment verification:**
-
-- On-chain tx receipt checked before serving file chunks. Chain ID is verified so cross-chain replays of signed txs are rejected.
-- Spent-tx ledger keys on `(tx_hash, file_hash)` so one payment ↔ one file delivery (no replay across different priced files seeded by the same wallet).
-- Drive shares additionally bind each redeemed `tx_hash` to the first share token it unlocks, so a publicly-shared `?access=<tx>` URL can't unlock any of the wallet's other shares.
-- `wait_for_tx_mined` is checked separately from `verify_tx_details` so the seeder can return a retryable "not yet confirmed" answer when chain propagation is slow.
-- CDN payment uses exact `u128` ceil-rounded math — no `f64` truncation, no percentage tolerance.
-
-**Operational hardening:**
-
-- Local-daemon CORS allowlists only Tauri webview origins (blocks CSRF from arbitrary websites visited by the user); relay-mode keeps `Any`.
-- `dht_put` headless route refuses raw writes to reserved-namespace keys (returns 403); each namespace has its own dedicated signed-publication command.
-- Drive multipart upload caps body at 500 MiB before allocation; `is_item_under_shared_root` short-circuits parent cycles.
-- ECDSA signatures enforce low-`s` (EIP-2), so signature hex is unique per (key, message).
-- Relay filters private IPs from Kademlia routing table.
-- Stop seeding removes peer from DHT seeder list (prevents ghost seeders).
-- Platform fee on all transactions — default 0.5%, adjustable down to a 0.1% floor (remainder to the seller); `split_payment` is the single source of truth and `seller + fee == total` exactly, with exact integer arithmetic (no rounding tolerance).
-- Wallet RPC reads use an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → relay's `/api/chain/rpc` proxy. Either path can be down without taking the wallet UI offline.
-- RPC failures surface as a yellow "canonical RPC unreachable" banner in the wallet UI rather than a misleading `0.00`. Mining page renders an inline divergence warning when local-Geth balance disagrees with canonical-RPC balance for the miner address (private-fork diagnostic).
-- Embedded Geth binds its HTTP RPC to loopback only, exposes only `eth,net,web3,miner`, and does not enable wildcard browser CORS. Public read-only RPC access goes through the `/api/chain/rpc` proxy allowlist.
+- **Key namespace.** `chiral_offer_<class>_<wallet>` in the DHT; the provider also registers as a Kademlia provider for the class so consumers can enumerate sellers. Reserved namespaces reject raw `dht_put` (403) — offers are writable only through the signed publication command.
+- **Publish / refresh / expire.** A provider republishes on an interval; readers drop records past `valid_until`, so a provider that stops refreshing falls out of the catalog.
+- **Read path.** `search_offers(class)` collects records, verifies signatures, drops unsigned/invalid, and returns survivors with the provider Elo attached (batch reputation lookup). As in the content design, the first signature-valid replica may be acted on without waiting for quorum convergence.
 
 ---
 
-## Getting Started
+## Resource Interfaces
 
-### Prerequisites
+Each class is a standard HTTP API the provider serves at its offer's `endpoint`. Consumers use existing tooling; the backend supplies helpers and a provider-side server.
 
-- Node.js 20+
-- Rust toolchain (rustup)
-- npm
+### Storage — S3-compatible
 
-### Development
+> **Status: new provider-side server; replaces the retired chunked file-transfer protocol.**
 
-```bash
-# Install frontend dependencies
-npm install
+- Object operations: `PUT`/`GET`/`DELETE` object, list bucket, and presigned URLs for time-boxed anonymous access.
+- Addressing: an object may be keyed by the SHA-256 of its content; the object's ETag is that hash, so a consumer verifies integrity against the name it requested. Content-addressed public-read objects are the successor to "sharing a file by its hash."
+- Metering: GB-month stored (sampled) + GB egress.
+- Auth: writes and management use the owner-proof scheme ([Security](#security-implementation)); public-read objects are unauthenticated by design.
 
-# Start the desktop app in development mode
-npm run tauri:dev
+### Containerized compute
 
-# Build the frontend only
-npm run build
+> **Status: specified; v1 reference provider runs a single-node container runtime.**
 
-# Run frontend tests
-npm test
+- Submit: `POST` a container spec (image ref, CPU/mem/GPU request, ports, env); receive a handle + endpoint.
+- Lifecycle: `GET` status/logs, `DELETE` to tear down (stops metering).
+- Metering: wall-clock runtime at the per-hour (or per-GPU-hour) rate.
 
-# Run Rust tests
-cargo test --manifest-path src-tauri/Cargo.toml
+### LLM serving — OpenAI-compatible
 
-# Type check the Rust backend
-cargo check --manifest-path src-tauri/Cargo.toml
-```
+> **Status: specified; provider fronts a served model with a token meter.**
 
-### Headless Mode
-
-Run the application without a GUI for server deployments or automated testing:
-
-```bash
-# Start the daemon
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral_daemon -- --port 9419
-
-# Start with auto-mining
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral_daemon -- \
-  --port 9419 \
-  --auto-mine \
-  --miner-address 0xYOUR_WALLET \
-  --mining-threads 4
-
-# Use the CLI
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status --port 9419
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- wallet create
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht start --port 9419
-```
+- Endpoints mirror the OpenAI HTTP API (e.g. `POST /v1/chat/completions`, `GET /v1/models`).
+- Metering: input + output tokens at the per-1K rates in the offer; usage is returned in each response so the consumer can reconcile against its balance drain.
 
 ---
 
-## Application Pages
+## Settlement and Balances
 
-| Route | Page | Description |
-|-------|------|-------------|
-| `/wallet` | Wallet | Create, import, or restore a wallet. Optional email backup of recovery phrase. |
-| `/account` | Account | View wallet address, CHI balance, transaction history, and reputation score. Send CHI to other addresses. |
-| `/network` | Network | Manage P2P connections. Start/stop the local Geth node. View peer list, bootstrap health, and DHT status. |
-| `/download` | Download | Search for files by hash or magnet link. View seeder list with Elo scores. Pay and download files. |
-| `/drive` | Drive | Local file manager with folders. Upload, rename, star, delete files. Seed files to the P2P network. |
-| `/chiraldrop` | ChiralDrop | Direct peer-to-peer file transfers. Discover nearby peers and send/receive files. |
-| `/hosts` | Hosts | Hosting marketplace. Publish storage offers, browse hosts, manage agreements. |
-| `/mining` | Mining | CPU and GPU mining controls. View hash rate, block height, and total mined CHI. |
-| `/settings` | Settings | Appearance (dark mode, color theme, nav style), notification preferences, download directory. |
-| `/diagnostics` | Diagnostics | System event log, DHT health, bootstrap status, Geth status, mining diagnostics, Geth log viewer. |
+> **Status: balance accounting is new; it is built from the existing single-shot payment-verification primitives (`wallet::verify_tx_details`, the spent-tx ledger, `speed_tiers::split_payment`).**
 
----
+Settlement reuses the on-chain payment path and adds per-`(consumer, provider)` balance accounting on the provider side.
 
-## Backend Modules
-
-The Rust backend is organized into the following modules under `src-tauri/src/`:
-
-| Module | File | Responsibility |
-|--------|------|---------------|
-| Command Layer | `lib.rs` | Thin Tauri command wrappers, AppState management (103 commands) |
-| Wallet | `wallet.rs` | Balance queries, transaction signing (EIP-155), history, metadata persistence, CHI/Wei conversion |
-| RPC Client | `rpc_client.rs` | Connection-pooled HTTP client, batch JSON-RPC, response cache with TTL |
-| DHT Service | `dht.rs` | libp2p Kademlia DHT, peer management, file publishing/searching, chunk transfer protocol |
-| File Transfer | `file_transfer.rs` | Chunked file sending/receiving, SHA-256 verification, retry logic |
-| Geth Process | `geth.rs` | Manages Core-Geth lifecycle, mining, batch RPC status queries |
-| Drive API | `drive_api.rs` | HTTP routes for file CRUD, share links, preview pages |
-| Drive Storage | `drive_storage.rs` | On-disk manifest and file storage management |
-| Hosting Server | `hosting_server.rs` | Axum gateway server combining Drive, Rating, and Hosting routes |
-| Hosting Types | `hosting.rs` | Site metadata, MIME detection, persistence |
-| Rating API | `rating_api.rs` | Elo reputation calculation and HTTP endpoints |
-| Rating Storage | `rating_storage.rs` | Persistent storage for reputation events |
-| Relay Share Proxy | `relay_share_proxy.rs` | Reverse proxy + WebSocket tunnel for NAT traversal |
-| Wallet Backup | `wallet_backup_api.rs` | SMTP email sending for wallet credential backup |
-| Encryption | `encryption.rs` | X25519 key exchange and AES-GCM file encryption |
-| Chain RPC | `chain_rpc_api.rs` | Blockchain RPC proxy |
-| Speed Tiers | `speed_tiers.rs` | `split_payment` (fee split, single source of truth — default 0.5%, 0.1% floor) + download cost estimation (0.01 CHI/MB) |
-| Event Sink | `event_sink.rs` | Frontend event emission abstraction |
-| Geth Bootstrap | `geth_bootstrap.rs` | Bootstrap node health checking and selection |
-| Version Policy | `version.rs` | `VersionPolicy` types, Ed25519 sign/verify, `is_acceptable_remote_policy`, global effective-policy slot |
-
-Total: 24 Rust source files, 5 binary targets.
-
-### Binary Targets
-
-| Binary | Source | Purpose |
-|--------|--------|---------|
-| `chiral-network` | `src-tauri/src/main.rs` | Desktop application (Tauri) |
-| `chiral` | `src-tauri/src/bin/chiral.rs` | Command-line interface |
-| `chiral_daemon` | `src-tauri/src/bin/chiral_daemon.rs` | Headless daemon server |
-| `relay_server` | `src-tauri/src/bin/relay_server.rs` | Relay and reputation server |
-| `chiral-policy-sign` | `src-tauri/src/bin/chiral_policy_sign.rs` | Operator CLI: keygen / sign / verify a `VersionPolicy` with the project's offline Ed25519 key |
-
----
-
-## Blockchain and Mining
-
-Chiral Network runs a private Ethereum-compatible blockchain using the Ethash proof-of-work consensus algorithm.
-
-### Chain Parameters
-
-| Parameter | Value |
-|-----------|-------|
-| Chain ID | 98765 |
-| Network ID | 98765 |
-| Consensus | Ethash |
-| Block reward | 5 CHI |
-| Genesis difficulty | 0x400000 (4,194,304) |
-| Gas limit | 0x47b760 (4,700,000) |
-| Gas price | 0 (free transactions) |
-| Client | Core-Geth v1.12.20 |
-
-### Geth Configuration
-
-| Setting | Value | Notes |
-|---------|-------|-------|
-| Sync mode | `full` | Replays all blocks from genesis; preserves full history on restart |
-| GC mode | `archive` | Keeps all state; prevents block height regression on restart |
-| Cache | 1024 MB | RAM cache for blockchain state |
-| Max peers | 50 | Maximum Geth P2P connections |
-
-### How Mining Works
-
-1. The application auto-starts Geth with the wallet address as the coinbase (miner.etherbase).
-2. On the Mining page, users can start CPU mining with a configurable number of threads.
-3. Geth communicates via JSON-RPC on `localhost:8545`.
-4. Mining status is polled every 10 seconds using batch RPC (eth_mining + eth_hashrate + eth_coinbase + eth_blockNumber in one request).
-5. Balance and total mined both query the local Geth node via `eth_getBalance` through the shared `rpc_client.rs` connection pool.
-6. All wallet queries route through `effective_rpc_endpoint()`: local Geth if running, otherwise remote fallback at `130.245.173.73:8545`.
-
-### Bootstrap Node
-
-A bootstrap node runs at `130.245.173.73` and serves as the initial peer for new nodes joining the network. It runs both Geth (port 8545 for RPC, port 30303 for P2P) and the relay server (port 8080 for HTTP, port 4001 for libp2p).
+1. **Fund.** The consumer sends CHI to the provider's wallet and presents the tx hash. The provider verifies it exactly as a content seeder verified a download payment: mined (`wait_for_tx_mined`), recipient is the provider, amount is credited in full, and `tx.chainId == geth::chain_id()` (cross-chain replay rejected). The tx is recorded in a spent-tx ledger keyed on `(tx_hash, provider)` so a funding payment credits exactly one balance.
+2. **Credit + fee.** `split_payment(amount)` divides the payment into the provider's credit and the platform fee (default 0.5%, 0.1% floor) with exact `u128` integer arithmetic; `credit + fee == amount` exactly. The fee is forwarded to the platform wallet.
+3. **Draw down.** As the consumer uses the resource, the provider meters usage and decrements the balance at the offer's rates. Metering is provider-side (the honest-provider assumption of Part I §9); the consumer reconciles against observable usage (object listings, returned token counts, container uptime).
+4. **Top up / exhaust.** When the balance runs low the consumer funds again (a new payment, steps 1–2). When it reaches zero, service pauses. **Balances are non-refundable** — there is no withdrawal path in v1.
 
 ---
 
 ## Reputation System
 
-The design rationale and the Elo update formula are in [Part I](#part-i-white-paper), Section 9. The system replaces an earlier 1-to-5-star user-rating model; historical rating data was reset to start the new system fresh.
+> **Status: the Elo engine, on-chain verification of the rating event, and the batch lookup are reused as-is (`rating_api.rs`, `rating_storage.rs`, the relay `/api/ratings/*` routes). The change is admitting a subjective score in the event, gated by verified payment.**
+
+The design rationale and formula are in [Part I](#part-i-white-paper), §7. A rating event carries the provider wallet, the rater wallet, the normalized subjective score, the CHI amount, the funding `tx_hash`, and a timestamp. Before an event is admitted, the relay verifies the `tx_hash` on-chain (sender = rater, recipient = provider, amount) — the backend does not trust client-submitted event data — so **only a consumer who actually paid a provider can move that provider's score**, and the move is weighted by amount and recency.
 
 ### Parameters
 
@@ -577,430 +311,191 @@ The design rationale and the Elo update formula are in [Part I](#part-i-white-pa
 | Base score for new wallets | 50 |
 | Lookback window | 180 days |
 | Time weight `w_time` | Linear decay from 1.0 (today) to 0.0 (180 days ago) |
-| Amount weight `w_amount` | `1.0 + clamp(ln(1 + chi) / ln(51), 0, 1)` — 1.0 (free) to 2.0 (50+ CHI) |
-| Outcome | 1.0 for completed, 0.0 for failed |
+| Amount weight `w_amount` | `1.0 + clamp(ln(1 + chi) / ln(51), 0, 1)` — 1.0 (small) to 2.0 (50+ CHI) |
+| Outcome `S` | normalized user rating in `[0, 1]` |
 | Expected score | `1 / (1 + 10^((50 - elo) / 12))` |
 | K factor | `4 * w_time * w_amount` |
-| Update | `elo = clamp(elo + K * (outcome - expected), 0, 100)` |
+| Update | `elo = clamp(elo + K * (S - expected), 0, 100)` |
 
 ### API Endpoints (Relay Server)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/ratings/:wallet` | GET | Get Elo score and event history for a wallet |
-| `/api/ratings/batch` | POST | Batch lookup of Elo scores for multiple wallets |
-| `/api/ratings/transfer` | POST | Record a transfer outcome (completed/failed) |
-
-Wallet addresses are normalized to lowercase for consistent lookup.
-
-### Integration
-
-- The Download page displays seeder Elo scores next to each search result.
-- After a file transfer completes or fails, the outcome is automatically reported to the relay.
-- Paid-transfer events are verified against the on-chain tx (sender, recipient, amount) before being recorded — the backend does not trust frontend-submitted event data. Future hardening can add per-event cryptographic attestations.
+| `/api/ratings/:wallet` | GET | Elo score and event history for a provider |
+| `/api/ratings/batch` | POST | Batch lookup for ranking offers in discovery |
+| `/api/ratings/feedback` | POST | Record a payment-gated rating (verified on-chain before admission) |
 
 ---
 
-## Dynamic Fee Index
+## Identity and Wallet
 
-> **Status: specified, not yet implemented.** Current builds use the static bootstrap anchor `f₀ = 0.01 CHI/MB` everywhere the index is consumed. This section is the normative spec for the replacement.
+Reused unchanged. A single secp256k1 keypair is a participant's identity, offer signer, and payee.
 
-The reference download fee (design rationale: Part I, Section 8) replaces the fixed 0.01 CHI/MB constant with a network-derived rate:
+- Generate from a 12-word BIP39 mnemonic; import via private key or recovery phrase; optional one-time email backup.
+- Send/receive CHI; transaction history classified (send, receive, balance funding, provider earnings).
+- All wallet logic lives in `wallet.rs`; `lib.rs` holds thin command wrappers. RPC reads walk an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → the relay's `/api/chain/rpc` proxy, so either path can be down without taking the wallet offline. Write paths pin a single endpoint to avoid double-broadcast.
 
-```
-f = clamp( M × (H₀ / H)^0.5 ,  f_min, f_max )
-```
+---
 
-The index is **advisory**: it drives defaults and estimates but is never checked in payment verification, so nodes do not need bit-for-bit agreement on its value and no trusted fee oracle is introduced.
+## Blockchain and Mining
 
-### Parameters
+A private Ethereum-compatible chain using Ethash proof-of-work.
 
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| `f₀` | 0.01 CHI/MB | Bootstrap anchor: launch value and thin-market fallback (today's `COST_PER_MB_WEI`) |
-| `f_min`, `f_max` | 0.001, 0.1 CHI/MB | Hard band: `f₀/10` to `f₀×10` |
-| Market window | 14 days | Trailing window for the median `M` |
-| `N_min` | 30 transfers | Fewer qualifying transfers in the window ⇒ `M := f₀` |
-| Hashpower window | 4,096 blocks (~15 h at 13 s blocks) | `H = Σ difficulty / (t_last − t_first)` over the window |
-| `H₀` | fixed at activation | Chosen so `f = f₀` under the hashpower observed at rollout (continuity) |
-| Damping exponent | 0.5 | Square-root response to hashpower swings |
-| Rate limit | ±10% per day | Maximum movement of the published index toward its target |
+### Chain Parameters
 
-### Data sources
+| Parameter | Value |
+|-----------|-------|
+| Chain ID / Network ID | 98765 |
+| Consensus | Ethash |
+| Block reward | 5 CHI |
+| Genesis difficulty | 0x400000 (4,194,304) |
+| Gas price | 0 (free transactions) |
+| Sync mode | `full` (configurable via `CHIRAL_GETH_SYNCMODE`) |
+| GC mode | `archive` (keeps all state; prevents height regression on restart) |
+| Client | Core-Geth v1.12.20 |
+| Bootstrap enode | `130.245.173.73:30303` |
+| RPC | local `127.0.0.1:8545`; remote fallback `130.245.173.73:8545` |
 
-- **`H` (network hashpower)** — derived from block headers (`difficulty`, `timestamp`) over the trailing window via `eth_getBlockByNumber` through the shared `rpc_client.rs` (local Geth when running, canonical-RPC fallback otherwise). This is consensus data: every synced node computes the same value.
-- **`M` (market median)** — fee-bearing transfers are enumerable on-chain: each pays the platform fee to `speed_tiers::PLATFORM_WALLET`, so a fee transaction of amount `x` marks a transfer totalling `x ÷ fee_rate` (`200·x` at the default 0.5%). Per-MB normalization joins the transfer to its file size from seller-signed metadata (`chiral_file_*` records / signed `FileInfo` envelopes). Practically, the relay can serve a precomputed 14-day median (the rating system already records on-chain-verified transfer events); clients may recompute or spot-check it, and small divergence is harmless because the index is advisory.
-
-### Integration points (where the static constant lives today)
-
-- `src-tauri/src/speed_tiers.rs` — `COST_PER_MB_WEI`, the backend estimate constant
-- `calculate_download_cost` Tauri command (`lib.rs`) — buyer-facing cost estimate
-- `src/lib/speedTiers.ts` — frontend mirror of the estimate
-- `chiral download cost` CLI subcommand (`src-tauri/src/bin/chiral.rs`)
-- CDN pricing floor — `floor_price` in `max(floor, median_peer_price × 1.2)` becomes index-derived
-- Suggested default per-file ask when seeding from Drive
+Embedded Geth binds its HTTP RPC to loopback only, exposes only the `eth,net,web3,miner` namespaces (no `admin`, so `admin_stopRPC` cannot be reached remotely), and does not enable wildcard browser CORS; public read-only RPC access goes through the relay's `/api/chain/rpc` proxy allowlist. Mining auto-starts Geth with the wallet as coinbase; CPU threads are configurable; status is polled every 10 s via batch RPC.
 
 ---
 
 ## Version Enforcement
 
-Chiral Network ships a defence-in-depth scheme for keeping vulnerable client builds off the network. It is layered so a single bypass does not disable enforcement. (Design rationale: Part I, Section 12.)
-
-### `VersionPolicy`
-
-The on-the-wire policy (`src-tauri/src/version.rs`) carries:
-
-| Field | Meaning |
-|-------|---------|
-| `minRequired` | Versions strictly below this are blocked. |
-| `recommended` | Versions below this trigger a soft "update available" nudge. |
-| `downloadUrl` | Where the UI sends users to upgrade. |
-| `message` | Optional human-readable reason (e.g. "fixes payment bug"). |
-| `issuedAt` | Unix-seconds the policy was issued (used for rollback protection). |
-| `validUntil` | Unix-seconds after which clients should re-fetch. `0` = no expiry. |
-| `signature` | Hex Ed25519 signature over a length-prefixed canonical payload. |
-
-Comparing the running build's `CARGO_PKG_VERSION` against the effective policy returns one of three states:
-
-- `ok` — version ≥ `recommended`, no UI.
-- `recommended` — `recommended > version ≥ minRequired`, soft banner the user can dismiss for the session.
-- `required` — `version < minRequired`, full-screen blocking modal (`UpdateGate.svelte`).
-
-### Enforcement layers
-
-1. **UI gate (`UpdateGate.svelte`)** — driven by `versionStore` over the Tauri `get_version_status` command; renders the soft banner / hard modal.
-2. **Tauri command gate** — `ensure_version_supported` is called from `start_dht_internal` and `start_download` so a stale build cannot join the DHT or initiate a download.
-3. **HTTP middleware** — every `/api/*` route on the gateway server (relay, daemon, desktop hosting) reads `X-Chiral-Client-Version` and returns `426 Upgrade Required` (with the policy JSON in the body) when the client is below `minRequired`. Health and `/api/version-policy` are exempted.
-4. **libp2p Identify** — `agent_version` is set to `chiral/<version>` and the Identify handler disconnects peers whose advertised version is below `minRequired`, blacklisting them so they aren't re-dialled.
-
-### Distribution
-
-Every binary embeds a `bundled_policy()` snapshot at compile time. On startup, the desktop app probes `http://130.245.173.73:8080/api/version-policy` (the relay's gateway) and promotes the result via `update_effective_policy()` if it passes acceptance. The same `/api/version-policy` route is mounted by the relay server, the headless daemon, and the desktop's hosting server, so any peer can read the network's current view of the policy.
-
-A global `EFFECTIVE_POLICY` slot (`OnceCell<RwLock<VersionPolicy>>`) holds the live policy. It's a sync `parking_lot::RwLock` because the libp2p event loop reads it from non-async contexts.
-
-### Acceptance rules (`is_acceptable_remote_policy`)
-
-A fetched policy replaces the current effective policy only if:
-
-1. **Rollback protection** — `remote.issuedAt` is not older than `current.issuedAt`.
-2. **Signature** — if `remote.signature` is non-empty, it must verify against `POLICY_PUBLIC_KEY`.
-3. **Unsigned transitional path** — if `current.signature` is empty *and* `remote.signature` is empty *and* `remote.minRequired` does not raise the floor above the binary's bundled `minRequired`, the policy is accepted. Once a signed policy has been adopted, unsigned remotes are no longer accepted.
-
-The transitional path lets relays advertise the recommended-version nudge before the project's offline signing key is wired in, while still preventing a hostile relay from raising `minRequired` to lock honest peers out.
-
-### Operator CLI: `chiral-policy-sign`
-
-The `chiral-policy-sign` binary signs and verifies policies with the project's offline Ed25519 key:
-
-```bash
-# Generate a new project keypair (paste the public hex into POLICY_PUBLIC_KEY).
-chiral-policy-sign keygen
-
-# Sign a policy JSON.
-chiral-policy-sign sign --key <secret-hex> --in policy.json --out policy.signed.json
-
-# Verify (defaults to the binary's compiled-in public key; --pub overrides).
-chiral-policy-sign verify --in policy.signed.json
-```
-
-The compile-time `POLICY_PUBLIC_KEY` constant is a 32-byte zero placeholder. Operators activate signed policies at deploy time without recompiling by setting the `CHIRAL_POLICY_PUBLIC_KEY` environment variable to the 32-byte public key (hex, with or without `0x` prefix); `version::policy_public_key()` resolves the env var on first access and caches it. All three binaries (desktop, daemon, relay) print a `[VERSION]` line on startup confirming whether signed policies are enabled or warning that the placeholder is still in use. Until a real key is wired in, only the unsigned-transitional path can promote a remote policy.
+Unchanged from the content design — a defence-in-depth scheme keeping vulnerable builds off the network, layered so one bypass does not disable it. `VersionPolicy` (`version.rs`) carries `minRequired`, `recommended`, `downloadUrl`, `message`, `issuedAt`, `validUntil`, and an Ed25519 `signature`. Layers: the `UpdateGate.svelte` UI (soft banner / hard modal), the `ensure_version_supported` Tauri gate, an `X-Chiral-Client-Version` HTTP middleware (426 below `minRequired`), and a libp2p Identify check (`agent_version = chiral/<v>`, disconnect on mismatch). The relay serves `/api/version-policy`; desktops promote it if `is_acceptable_remote_policy` accepts. Operators activate signed policies at deploy time via `CHIRAL_POLICY_PUBLIC_KEY`; `chiral-policy-sign` handles keygen / sign / verify.
 
 ---
 
-## File Transfer Protocol
+## Application Surface
 
-Files are transferred using a custom request-response protocol built on libp2p.
+| Route | Page | Description |
+|-------|------|-------------|
+| `/marketplace` | Marketplace | Browse offers by resource class; view price and provider Elo; fund a balance and connect. |
+| `/provider` | My Resources | Provider dashboard: publish/refresh offers, view balances and earnings, manage running resources. |
+| `/wallet` | Wallet | Create, import, or restore a wallet; optional email backup. |
+| `/account` | Account | Wallet address, CHI balance, transaction history, reputation. Send CHI. |
+| `/network` | Network | P2P connections, local Geth control, peer list, bootstrap and DHT health. |
+| `/mining` | Mining | CPU/GPU mining controls; hash rate, block height, total mined CHI. |
+| `/settings` | Settings | Appearance, notifications, provider defaults. |
+| `/diagnostics` | Diagnostics | Event log, DHT health, bootstrap and Geth status, log viewer. |
 
-### Protocol Details
+---
 
-| Property | Value |
-|----------|-------|
-| Protocol ID | `/chiral/file-request/2.0.0` |
-| Chunk size | 256 KB |
-| Encoding | CBOR (custom codec) |
-| Request limit | 1 MB |
-| Response limit | 32 MB |
-| Verification | SHA-256 per chunk + full file hash |
-| Retry | Up to 3 attempts per chunk |
+## Backend Modules
 
-### Message Types
+Rust backend under `src-tauri/src/` (selected; adapted for the resource exchange):
 
-**Request:** `ChunkRequest` enum with `FileInfo` (metadata request) and `Chunk` (data request with offset) variants.
+| Module | File | Responsibility |
+|--------|------|---------------|
+| Command Layer | `lib.rs` | Thin Tauri command wrappers, AppState |
+| Wallet | `wallet.rs` | Balance, tx signing (EIP-155), history, on-chain payment verification |
+| RPC Client | `rpc_client.rs` | Connection-pooled HTTP, batch JSON-RPC, response cache |
+| DHT Service | `dht.rs` | libp2p Kademlia, peer management, signed offer publish/search |
+| Offers / Marketplace | `hosting.rs`, `hosting_server.rs` | Offer record types, signing, publish/registry (generalized from host ads) |
+| Settlement | `speed_tiers.rs`, `wallet.rs` | `split_payment` (fee cut, default 0.5% / 0.1% floor) + balance funding verification |
+| Storage provider | *(new)* | S3-compatible object server + metering |
+| Compute / inference providers | *(new)* | container submission + OpenAI-compatible token meter |
+| Rating API | `rating_api.rs`, `rating_storage.rs` | Elo computation + payment-gated feedback endpoints |
+| Geth Process | `geth.rs`, `geth_bootstrap.rs` | Core-Geth lifecycle, mining, bootstrap health |
+| Chain RPC | `chain_rpc_api.rs` | Blockchain RPC proxy |
+| Version Policy | `version.rs` | `VersionPolicy`, Ed25519 sign/verify, effective-policy slot |
 
-**Response:** `ChunkResponse` enum with `FileInfo` (file metadata: name, size, hash, chunk count) and `Chunk` (data bytes + SHA-256 hash) variants.
+Binary targets: `chiral-network` (desktop), `chiral` (CLI), `chiral_daemon` (headless provider/node), `relay_server` (bootstrap + reputation), `chiral-policy-sign` (operator CLI).
 
 ---
 
 ## Headless Mode and CLI
 
-### Daemon
-
-The headless daemon runs the full backend without a GUI. It exposes an HTTP API on the configured port (default 9419).
+The daemon runs the backend without a GUI — used to **run a provider** on a public host, and for automated testing. It exposes an HTTP API (default port 9419).
 
 ```bash
 chiral_daemon --port 9419 --auto-start-dht --auto-mine --miner-address 0xABC
 ```
 
-| Flag | Env Var | Default | Description |
-|------|---------|---------|-------------|
-| `--port` | `CHIRAL_DAEMON_PORT` | 9419 | HTTP API port |
-| `--auto-start-dht` | `CHIRAL_AUTO_START_DHT` | false | Start DHT on boot |
-| `--auto-start-geth` | `CHIRAL_AUTO_START_GETH` | false | Start Geth on boot |
-| `--auto-mine` | `CHIRAL_AUTO_MINE` | false | Start mining (implies DHT + Geth) |
-| `--miner-address` | `CHIRAL_MINER_ADDRESS` | none | Wallet for mining rewards |
-| `--mining-threads` | `CHIRAL_MINING_THREADS` | 1 | CPU mining threads |
-
-### Daemon API Endpoints
-
-All headless paths are prefixed with `/api/headless/` except health, ready, drive, and the publicly-mounted `/api/version-policy`.
-
-| Category | Endpoints |
+| Category | Endpoints (prefix `/api/headless/` unless noted) |
 |----------|-----------|
-| Health | `GET /api/health`, `GET /api/ready`, `GET runtime` |
-| Version policy | `GET /api/version-policy` — returns the currently-effective `VersionPolicy` (mounted on the gateway router; available on relay, daemon, and desktop hosting server alike) |
-| Wallet | `GET wallet`, `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/receipt`, `wallet/history`, `wallet/faucet`; `GET wallet/chain-id` |
-| DHT | `POST dht/start`, `dht/stop`, `dht/put`, `dht/get`, `dht/ping`, `dht/echo`; `GET dht/health`, `dht/peers`, `dht/peer-id`, `dht/listening-addresses` |
-| Files | `POST file/search`, `dht/register-shared-file`, `dht/unregister-shared-file`, `dht/request-file`, `dht/send-file` |
-| ChiralDrop | `GET drop/inbox`, `drop/outgoing`; `POST drop/accept`, `drop/decline` |
-| Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
-| Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status`, `mining/blocks` |
-| Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
-| Folder bundles | Tauri-only: `publish_drive_folder`, `unpublish_drive_folder`, `search_folder` (one content-addressed hash per folder) |
-| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
-| Drive | Full CRUD via `/api/drive/*` (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_signature>` headers; see [Security Implementation](#security-implementation)) |
-| Diagnostics | `GET bootstrap-health` |
+| Health | `GET /api/health`, `GET /api/ready` |
+| Version policy | `GET /api/version-policy` (mounted on the gateway router) |
+| Wallet | `GET wallet`; `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/history` |
+| DHT | `POST dht/start`, `dht/stop`, `dht/get`, `dht/ping`; `GET dht/health`, `dht/peers`, `dht/peer-id` |
+| Offers | `POST offers/publish` (signed), `offers/unpublish`; `GET offers/search?class=` |
+| Settlement | `POST settlement/fund` (verify + credit), `settlement/meter`; `GET settlement/balance` |
+| Geth | `POST geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
+| Mining | `POST mining/start`, `mining/stop`; `GET mining/status`, `mining/blocks` |
+| Reputation | `POST ratings/feedback`; `GET ratings/:wallet` |
 
-### CLI
-
-The CLI tool communicates with a running daemon over HTTP.
-
-```bash
-chiral daemon status --port 9419
-chiral wallet create
-chiral wallet show
-chiral account balance
-chiral account send --to 0xADDRESS --amount 1.5
-chiral dht start --port 9419
-chiral dht peers --port 9419
-chiral download search --hash FILEHASH --port 9419
-chiral drive ls
-chiral mining start --threads 4 --port 9419
-chiral mining status --port 9419
-```
+The CLI talks to a running daemon over HTTP: `chiral daemon status`, `chiral wallet create`, `chiral offers search --class storage`, `chiral mining start --threads 4`.
 
 ---
 
-## Docker and Scaled Testing
+## Security Implementation
 
-### Docker Images
+The trust model is in [Part I](#part-i-white-paper) (§3, §6, §9). Implementation inventory:
 
-The project includes a multi-stage Dockerfile that produces four image targets:
+**Signed records (writers refuse to publish unsigned; readers drop unsigned/invalid):**
+- Resource offers (`chiral_offer_<class>_<wallet>`) — signed by the provider wallet over a length-prefixed canonical payload including price, endpoint, and payee, so a relaying node cannot substitute any of them.
+- Reserved namespaces reject raw `dht_put` (403); offers are writable only through the signed publish command.
 
-| Target | Binary | Ports | Purpose |
-|--------|--------|-------|---------|
-| `daemon` | `chiral_daemon` | 9419, 30303 | Headless P2P node |
-| `relay` | `relay_server` | 4001, 8080 | Bootstrap relay server |
-| `cli` | `chiral` | -- | Command-line tool |
-| `test-node` | `chiral_daemon` + `chiral` | 9419, 30303 | Testing with healthcheck |
+**Settlement verification:**
+- Funding tx checked on-chain before credit: mined, recipient = provider, amount, and `chainId == geth::chain_id()` (cross-chain replay rejected).
+- Spent-tx ledger keyed on `(tx_hash, provider)` so one funding payment credits exactly one balance.
+- Exact `u128` split (`split_payment`) — no `f64`, no rounding tolerance; `credit + fee == amount`.
+- ECDSA signatures enforce low-`s` (EIP-2), so signature hex is unique per (key, message).
 
-### Docker Compose Files
+**HTTP authentication (owner-proof):**
+- Authenticated provider-management routes require `X-Owner: 0x<wallet>` + `X-Owner-Sig: <unix_ts>:<hex_sig>` over a canonical `(wallet, ts, method, path)` payload; the server recovers the signer and rejects on mismatch/expiry (±5-minute window). Private keys never leave the desktop process (`compute_owner_proof`).
 
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | General test network (relay + scalable nodes) |
-| `docker-compose.local-test.yml` | Local isolated testing with relay |
-| `docker-compose.production-net.yml` | 30 nodes on host networking, connected to production relay |
-| `docker-compose.scaled-test.yml` | Scaled integration test overlay |
+**Rests on reputation (not cryptographically enforced):** fair metering, storage retrievability, container liveness, and inference quality — disciplined by payment-gated reputation (§7), not by proofs. This is the deliberate v1 trade.
 
-```bash
-# 30 production-connected nodes (host networking)
-docker compose -f docker-compose.production-net.yml up -d
+---
 
-# Local isolated testing
-docker compose -f docker-compose.local-test.yml up -d --scale node=10
+## Deployment
 
-# Tear down
-docker compose -f docker-compose.production-net.yml down
-```
+**Running a provider (v1).** A provider must be **publicly reachable**: its offer's `endpoint` has to resolve to a public IP that consumers can connect to directly. A domain name with TLS is strongly recommended — consumers connect over HTTPS, and a stable hostname survives IP changes. There is **no NAT traversal or circuit relay for providers** in v1; a provider behind NAT is not reachable and its offers are dead listings. Consumers, which only make outbound calls, may be behind NAT.
 
-### Kubernetes Deployment (k3s/Rancher)
+**Relay / bootstrap.** The canonical box `130.245.173.73` runs the DHT bootstrap (libp2p :4001) and the HTTP gateway (:8080) serving the reputation registry (`/api/ratings/*`), the version policy (`/api/version-policy`), and the chain-RPC proxy (`/api/chain/rpc`). Its former role relaying data for NAT'd peers is **not** part of the v1 provider path.
 
-Test nodes can also be deployed to the k3s cluster at `130.245.173.231`:
+**Blockchain.** Geth is spawned locally (RPC 8545, P2P 30303) or reached via the canonical fallback; the CDN/always-on infrastructure of earlier designs is retired.
+
+---
+
+## Getting Started
 
 ```bash
-export KUBECONFIG=~/.kube/config-k3s
-kubectl apply -f k8s/chiral-30-pods.yaml
-kubectl get pods -n chiral-test
+npm install                                   # frontend deps
+npm run tauri:dev                             # desktop dev
+npm run build                                 # frontend build
+npm test                                      # frontend tests
+cargo test  --manifest-path src-tauri/Cargo.toml   # rust tests
+cargo check --manifest-path src-tauri/Cargo.toml   # rust type-check
 ```
 
-### Stress Testing
-
-A 12-phase, 35-test stress suite exercises every feature across 30 nodes:
-
-```bash
-bash scripts/stress-test-30-nodes.sh
-```
-
-#### Stress Test Phases (stress-test-30-nodes.sh)
-
-| Phase | Name | What It Tests |
-|-------|------|--------------|
-| 1 | Health & Connectivity | All 30 health/readiness endpoints |
-| 2 | DHT Network | Unique peer IDs, peer counts, relay circuits, cross-node ping |
-| 3 | DHT Storage | Cross-node put/get, 10 concurrent writes |
-| 4 | Wallet | Create (10 nodes), import, balance query, chain ID |
-| 5 | File Registration | Publish file, search from publisher + 5 remote nodes |
-| 6 | Echo Protocol | Direct echo + fan-out to 10 nodes |
-| 7 | Hosting Ads | Publish advertisement, query registry from remote node |
-| 8 | Concurrent Stress | 30 simultaneous DHT puts, peer queries, health checks |
-| 9 | Ping Mesh | 10 random node pairs |
-| 10 | Drive Operations | List items, create folder |
-| 11 | Bootstrap Health | Diagnostics report |
-| 12 | DHT Reconnect | Stop DHT, restart, verify peer recovery |
+Prerequisites: Node.js 20+, the Rust toolchain (rustup), npm.
 
 ---
 
 ## Testing
 
-### Unit and Integration Tests (vitest)
-
-```bash
-npm test                    # Run all frontend tests
-npm test -- tests/load/     # Run load tests only
-```
-
-The test suite contains 585+ tests across 35 files:
-
-| Category | Files | Tests | Coverage |
-|----------|-------|-------|----------|
-| Store/service unit tests | 24 | 497 | Stores, services, utilities, wallet, DHT, Drive |
-| Load/stress tests | 9 | 89 | Concurrent operations, throughput, caching |
-| Network tests (skipped in CI) | 2 | 43 | Relay server, gateway endpoints |
-
-### Rust Tests
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-270+ Rust tests across 14 modules covering: wallet CHI/Wei conversion, genesis validation, syncing logic, mining status, serialization, GPU error detection, Kademlia peer filtering, encryption, hosting server, rating storage, relay share proxy, drive API, owner-proof signing (path/method/wallet binding + replay protection), folder-bundle hashing (order independence, owner case-folding, file-set sensitivity), folder-manifest v1/v2 signature roundtrip, and CDN payment math (`required_upload_wei` ceil rounding + saturation).
-
-### Scaled Integration Tests
-
-12-phase stress test running against 30 Docker/k8s containers. See the [Docker and Scaled Testing](#docker-and-scaled-testing) section.
-
----
-
-## Project Structure
-
-```
-chiral-network/
-  src/                          # Frontend (Svelte 5 + TypeScript)
-    App.svelte                  # Main app shell, routing, DHT auto-start on login
-    pages/                      # 11 page components
-      Account.svelte            # Wallet balance, transactions, reputation
-      Download.svelte           # File search, download with CHI payments
-      Drive.svelte              # Local file manager, seeding, sharing
-      Mining.svelte             # CPU/GPU mining controls
-      Network.svelte            # Peer list, DHT health, bootstrap status
-      Hosts.svelte              # Hosting marketplace, agreements
-      ChiralDrop.svelte         # Direct P2P file transfers
-      Wallet.svelte             # Wallet creation, import, backup
-      Settings.svelte           # Appearance, notifications, download dir
-      Diagnostics.svelte        # Event log, system info
-    lib/
-      stores.ts                 # Svelte stores (wallet, settings, peers)
-      dhtService.ts             # Frontend DHT service (event listeners before start)
-      services/                 # 8 service modules
-        walletService.ts        # Balance caching (10s TTL), chain ID
-        gethService.ts          # Geth/mining status polling (10s interval)
-        hostingService.ts       # Host discovery, agreements, echo retry
-        driveApiService.ts      # Drive CRUD operations
-        ratingApiService.ts     # Reputation batch lookups
-        encryptionService.ts    # File encryption helpers
-        walletBackupService.ts  # Email backup
-        colorThemeService.ts    # Theme management
-      components/               # Reusable UI components
-      chiralDropStore.ts        # Wallet-specific ChiralDrop history
-      toastStore.ts             # Toast notification system
-      logout.ts                 # Logout with 5s DHT timeout + loading state
-
-  src-tauri/                    # Backend (Rust, 23 source files)
-    src/
-      lib.rs                    # Thin Tauri command wrappers (103 commands)
-      wallet.rs                 # All wallet logic (balance, tx, history, signing)
-      rpc_client.rs             # Connection-pooled HTTP, batch RPC, cache
-      dht.rs                    # libp2p Kademlia DHT, peer discovery, file transfer
-      geth.rs                   # Geth lifecycle, mining, batch status queries
-      geth_bootstrap.rs         # Bootstrap node health checking
-      file_transfer.rs          # Chunked protocol (256KB, SHA-256)
-      drive_api.rs              # Drive HTTP routes, preview pages
-      drive_storage.rs          # Drive manifest and file storage
-      hosting.rs                # Hosting types, MIME detection, persistence
-      hosting_server.rs         # Axum gateway server
-      relay_share_proxy.rs      # Reverse proxy + WebSocket tunnel
-      rating_api.rs             # Reputation HTTP endpoints
-      rating_storage.rs         # Elo computation
-      encryption.rs             # AES-GCM + X25519 encryption
-      wallet_backup_api.rs      # Email backup endpoint
-      chain_rpc_api.rs          # Blockchain RPC proxy
-      speed_tiers.rs            # Payment split (fee cut, default 0.5%) + cost estimate
-      event_sink.rs             # Frontend event emission
-      bin/
-        chiral.rs               # CLI client
-        chiral_daemon.rs        # Headless daemon (44 API routes)
-        relay_server.rs         # Production relay server
-
-  tests/                        # Frontend tests (vitest, 585+ tests)
-  scripts/
-    stress-test-30-nodes.sh     # 12-phase, 35-test stress suite
-    local-test-cluster.sh       # Local process-based test cluster
-    full-feature-test.sh        # Feature validation suite
-    extended-feature-test.sh    # Extended feature tests
-    scaled-test.sh              # Scaled test orchestrator
-    docker-test.sh              # Basic Docker test
-
-  Dockerfile                    # Multi-stage build (daemon, relay, cli, test-node)
-  Dockerfile.local              # Pre-built binary image
-  docker-compose.yml            # General test network
-  docker-compose.local-test.yml # Local isolated testing
-  docker-compose.production-net.yml # 30 nodes, host networking, production relay
-```
+- **Frontend (vitest):** `npm test` — store/service unit tests, load/stress, and network tests (skipped in CI).
+- **Rust:** `cargo test --manifest-path src-tauri/Cargo.toml` — wallet CHI/Wei conversion, payment verification, offer signing/verification, the split-payment invariant (`credit + fee == amount`), reputation storage, and version-policy sign/verify.
+- **Scaled:** Docker/k3s multi-node harness for DHT discovery and offer propagation across many nodes.
 
 ---
 
 ## Configuration
 
-### Environment Variables
+### Environment Variables (selected)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHIRAL_RPC_ENDPOINT` | `http://130.245.173.73:8545` | Remote blockchain RPC fallback |
 | `CHIRAL_GETH_SYNCMODE` | `full` | Geth sync mode (`full` or `snap`) |
-| `CHIRAL_BOOTSTRAP_NODES` | Built-in bootstrap list | Comma-separated enode URLs |
 | `CHIRAL_DAEMON_PORT` | `9419` | Daemon HTTP port |
 | `CHIRAL_AUTO_START_DHT` | `false` | Auto-start DHT on daemon boot |
-| `CHIRAL_AUTO_START_GETH` | `false` | Auto-start Geth on daemon boot |
 | `CHIRAL_AUTO_MINE` | `false` | Auto-start mining (implies DHT + Geth) |
 | `CHIRAL_MINER_ADDRESS` | none | Wallet address for mining rewards |
 | `CHIRAL_MINING_THREADS` | `1` | CPU mining thread count |
-| `CHIRAL_GPU_MINER_PATH` | auto-detected | Path to ethminer binary |
-| `CHIRAL_WALLET_EMAIL_SMTP_HOST` | none | SMTP server for email backup |
-| `CHIRAL_WALLET_EMAIL_FROM` | none | Sender address for email backup |
-| `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex (with or without `0x` prefix) of the project's Ed25519 policy-signing public key. Setting this activates signed `VersionPolicy` updates without recompiling. Generate the matching keypair with `chiral-policy-sign keygen`. |
-| `CHIRAL_WALLET_KEY_FILE` | none | Path to a file containing a single hex secp256k1 private key (with or without `0x` prefix; mode 0600 expected). At startup the daemon loads the key, derives the address, and populates `state.wallet` so the CDN module can sign `chiral_seeder_*` / `chiral_file_*` records and `ChunkResponse::FileInfo` envelopes. Without it, the CDN runs with empty signatures and clients reject every record it publishes. Used in production at `/etc/chiral-cdn-wallet.key` on the canonical relay. |
-| `CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST` | none | Comma-separated IP/CIDR allowlist for private relay-share origins, e.g. `10.0.0.0/8,100.64.0.0/10,fd00::/8`. Applies only to private RFC1918, CGNAT, and unique-local IPv6 origin literals; link-local, cloud metadata, unspecified, multicast, and broadcast targets remain blocked. |
-
-### Local Storage Keys
-
-User data is stored in localStorage with wallet-specific keys to prevent data leakage between accounts:
-
-- `chiraldrop_history_<address>` -- ChiralDrop transfer history
-- `chiraldrop_history_encrypted_<address>` -- Encrypted history cache
-- `chiral_download_history_<address>` -- Download history
-- `chiral_active_downloads_<address>` -- Active downloads
-- `chiral_saved_recipients_<address>` -- Saved recipient addresses
+| `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex Ed25519 key that activates signed `VersionPolicy` updates |
 
 ### Data Directories
 
@@ -1010,11 +505,4 @@ User data is stored in localStorage with wallet-specific keys to prevent data le
 | macOS | `~/Library/Application Support/chiral-network/` |
 | Windows | `%APPDATA%/chiral-network/` |
 
-Subdirectories:
-- `chiral-drive/` -- Drive file storage
-- `geth/` -- Blockchain data and logs (archive mode)
-- `agreements/` -- Hosting agreement JSON files
-- `sites/` -- Hosted site files
-- `headless/` -- Daemon PID file
-- `tx_metadata.json` -- Persisted transaction metadata
-- `hosted_sites.json` -- Hosted site registry
+Subdirectories include `geth/` (blockchain data, archive mode), provider stores for served resources, and `tx_metadata.json` (persisted transaction metadata).

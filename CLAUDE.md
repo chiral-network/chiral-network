@@ -1,10 +1,27 @@
 # Chiral Network Development Guide
 
+## Project Direction & Status (READ FIRST)
+
+Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage**, **container compute**, and **LLM inference**; consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+
+- **Target design is authoritative:** `docs/chiral-book.md` (Part I white paper + Part II design & implementation). Align new work with it.
+- **The current code is still the legacy file-sharing system** — it has NOT been migrated yet. The sections below describe the current as-built implementation and operations. Infrastructure (wallet, RPC, DHT, Geth/mining, relay, version enforcement, owner-proof auth) largely carries forward; the file-sharing feature specifics (Drive, downloads, CDN, folders, chunked transfer, drive shares) are the legacy layer being migrated.
+- **Key v1 decisions** (see the book): discovery = signed DHT resource offers (chain = settlement only); charging = prepaid direct-to-provider, **non-refundable**; reputation = payment-gated user feedback over the existing Elo engine; storage = S3 over HTTP (BitTorrent / chunked-p2p transports retired); providers must be **publicly reachable** (no NAT traversal in v1).
+
 ## Overview
 
 Chiral Network is a Tauri 2 desktop app with a Svelte 5 frontend and Rust backend.
 
-Primary domains:
+**Target domains** (resource exchange — see `docs/chiral-book.md`):
+
+- Signed resource-offer discovery (storage / container / inference)
+- The three provider interfaces: S3-compatible storage, container submission, OpenAI-compatible inference
+- Prepaid-balance settlement (provider-metered drawdown) + platform fee
+- Payment-gated reputation (Elo)
+- Wallet management and CPU/GPU mining
+- Headless provider daemon + CLI operations
+
+**Current (legacy) domains still in the code:**
 
 - DHT peer networking and file transfer
 - Drive file management + seeding
@@ -15,6 +32,8 @@ Primary domains:
 - Headless daemon + CLI operations
 
 ## Current Page Surface
+
+_Legacy pages (file-sharing). Target surface per the book: `/marketplace` (browse offers by class), `/provider` (provider dashboard), plus wallet / account / mining / network / settings / diagnostics._
 
 - `/wallet` — wallet creation, import, backup
 - `/network` — P2P connection, peer list, Geth status
@@ -160,6 +179,8 @@ docker compose -f docker-compose.local-test.yml up -d --scale node=10
 
 ## Reputation System
 
+_Pivot note: the book generalizes this to **payment-gated subjective feedback** (only a wallet with an on-chain-verified payment to a provider may rate it; same amount + recency weighting), adding a `POST /api/ratings/feedback` route. The Elo engine below is reused as-is — the change is admitting a user score in the event. Current code is still outcome-only._
+
 Elo scores are computed from transfer outcomes only (no user ratings). The formula uses:
 - Transfer outcome: completed (1.0) or failed (0.0)
 - Time weighting: recent events (within 180-day lookback) weighted more heavily
@@ -222,6 +243,8 @@ The manifest at `/tmp/chiral-nodes.yaml` on `.231` covers the 30 pods (each with
 
 ## Implementation Notes
 
+_Most notes below document the current **legacy file-sharing** implementation (downloads, Drive, CDN, folders, chunked transfer, drive shares) — accurate for the code as it stands and the migration reference; the target model is in `docs/chiral-book.md`. Reusable infrastructure (wallet, RPC, DHT, mining, version enforcement, owner-proof auth) carries into the resource exchange largely unchanged._
+
 - Prefer Tauri `invoke()` paths for app runtime behavior.
 - All wallet logic lives in `wallet.rs` — `lib.rs` contains thin wrappers only.
 - All RPC calls use the shared `rpc_client.rs` (connection-pooled, 5s timeout).
@@ -238,8 +261,8 @@ The manifest at `/tmp/chiral-nodes.yaml` on `.231` covers the 30 pods (each with
 - App shows a close confirmation dialog before quitting (wired in `src/App.svelte`).
 - Wallet backup email step is optional (skip button) during wallet creation.
 - Logout has 5s timeout on DHT stop + loading state to prevent hanging.
-- Download cost: 0.01 CHI per MB. Platform fee: 0.5% on all transactions.
-- Platform fee split: 99.5% to seller/burn, 0.5% to platform wallet.
+- Download cost: 0.01 CHI per MB. Platform fee: default 0.5% on all transactions, adjustable down to a 0.1% floor.
+- Platform fee split: seller/burn gets the remainder, platform wallet gets the fee; `split_payment` is the single source of truth (`seller + fee == total`, exact integer math).
 - File metadata, seeder entries, folder manifests, site-directory entries, and the chunked-transfer FileInfo envelope are all ECDSA-signed by the publisher / seeder wallet. Readers verify before consuming and drop unsigned/invalid records — every Tauri publisher refuses to write a record unless `private_key` is provided.
 - Payment verification: on-chain tx receipt checked before serving file chunks.
 - CDN server at `130.245.173.73:9420` — always-on file hosting with market-based pricing.
