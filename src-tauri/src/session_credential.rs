@@ -96,6 +96,12 @@ impl SessionStore {
             .map(|c| c.s3_secret_access_key.as_str())
     }
 
+    /// The live credential for a contract, if any (used for idempotent re-open).
+    pub fn credential_for_contract(&self, contract_id: &str) -> Option<&SessionCredential> {
+        let id = contract_id.to_lowercase();
+        self.by_bearer.values().find(|c| c.contract_id == id)
+    }
+
     /// Revoke every credential for a contract (e.g. on close or rotation).
     pub fn revoke_contract(&mut self, contract_id: &str) {
         let id = contract_id.to_lowercase();
