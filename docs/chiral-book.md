@@ -154,6 +154,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Wire Protocol & API Reference](#wire-protocol--api-reference-contract-spine)
 - [Data-Plane API: Storage (S3)](#data-plane-api-storage-s3)
 - [Data-Plane API: Compute (Containers)](#data-plane-api-compute-containers)
+- [Data-Plane API: Inference (LLM)](#data-plane-api-inference-llm)
 - [Reputation System](#reputation-system)
 - [Open Design Decisions](#open-design-decisions)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
@@ -635,6 +636,103 @@ A request for `privileged: true`, host networking, host bind-mounts, or capabili
 ### v1 limits
 
 Ephemeral rootfs only (durable state via a mounted Storage bucket); HTTP(S) ingress only (no raw TCP); hardened-OCI isolation (no microVM); one spec = one container (no autoscaling/orchestration); bring a prebuilt image (no in-provider build).
+
+---
+
+## Data-Plane API: Inference (LLM)
+
+> **Status: normative v1 spec for the inference data plane** — an OpenAI-compatible API, so standard OpenAI SDKs work by pointing `base_url` at the provider's `endpoint` and using the contract session as the API key. Bearer-authenticated against the contract.
+
+### Auth & base
+
+- **Auth.** `Authorization: Bearer <session bearer>` — the OpenAI convention; set the SDK's `api_key` to the [session credential](#session-credential)'s bearer and `base_url` to `<endpoint>/v1`.
+- **Error shape.** Errors use the **OpenAI** envelope (not the spine envelope) so SDKs parse them: `{ "error": { "message", "type", "param", "code" } }`. The `X-Chiral-Client-Version` gate and `X-Chiral-*` metering headers still apply.
+
+### Endpoints
+
+| Operation | Request | Notes |
+|---|---|---|
+| List models | `GET /v1/models` | the models the offer advertises |
+| Chat completion | `POST /v1/chat/completions` | primary; `stream:true` → SSE |
+| Text completion | `POST /v1/completions` | legacy compatibility |
+| Embeddings | `POST /v1/embeddings` | billed on input tokens only |
+
+#### `POST /v1/chat/completions`
+Request (OpenAI-shaped):
+```json
+{ "model": "llama-3.1-70b-instruct",
+  "messages": [ { "role": "user", "content": "…" } ],
+  "max_tokens": 512, "temperature": 0.7,
+  "stream": true, "stream_options": { "include_usage": true } }
+```
+Non-streaming `200 OK` is the OpenAI `chat.completion` object, including `usage`:
+```json
+{ "id":"chatcmpl-…", "object":"chat.completion", "model":"llama-3.1-70b-instruct",
+  "choices":[ { "index":0, "message":{"role":"assistant","content":"…"}, "finish_reason":"stop" } ],
+  "usage":{ "prompt_tokens":42, "completion_tokens":128, "total_tokens":170 } }
+```
+Non-streaming responses carry the actual `X-Chiral-Cost-Wei` / `X-Chiral-Balance-Wei` headers.
+
+**Streaming** (`stream:true`) is Server-Sent Events — `data: {chat.completion.chunk}` lines then `data: [DONE]`. Because HTTP headers precede the body, cost/balance cannot ride in headers; with `stream_options.include_usage:true` the **final chunk** carries `usage` plus Chiral fields:
+```
+data: {"id":"chatcmpl-…","object":"chat.completion.chunk",
+       "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+       "usage":{"prompt_tokens":42,"completion_tokens":128,"total_tokens":170},
+       "x_chiral":{"cost_wei":"…","balance_wei":"…"}}
+
+data: [DONE]
+```
+
+#### `POST /v1/embeddings`
+```json
+{ "model":"bge-large-en", "input":["text a","text b"] }
+```
+`200 OK`: an OpenAI `list` of `{ object:"embedding", index, embedding:[…] }` + `usage:{ prompt_tokens, total_tokens }`. Billed on input tokens only.
+
+#### `GET /v1/models`
+`200 OK` reflects the offer's `capacity.models` and `price_schedule`:
+```json
+{ "object":"list", "data":[ { "id":"llama-3.1-70b-instruct", "object":"model",
+    "context_length":131072,
+    "chiral":{ "per_1k_input_wei":"…", "per_1k_output_wei":"…" } } ] }
+```
+
+### Model selection & identity
+
+The consumer sets `model` to an advertised id; an unknown id returns `404 model_not_found`. A provider cannot cheaply prove it runs the claimed model rather than a smaller/quantized one — a **reputation-policed** quality property (optional model attestation is an [open decision](#open-design-decisions)).
+
+### Metering & pre-authorization
+
+- **Billed:** `prompt_tokens × per_1k_input + completion_tokens × per_1k_output` (embeddings: input only), drawn down on completion.
+- **Pre-authorization:** before generating, the provider checks the balance covers the *worst case* — `prompt_tokens + max_tokens` — and returns `402` if not, so a request never exhausts mid-stream. The actual (usually lower) cost is billed on completion.
+- **Reporting:** non-streaming → the `usage` block + `X-Chiral-*` headers; streaming → the final chunk's `usage` + `x_chiral` fields (headers are already sent). A local tokenizer lets the consumer reconcile.
+
+### Errors (OpenAI-shaped)
+
+```json
+{ "error": { "message":"…", "type":"insufficient_quota", "param":null, "code":"insufficient_balance" } }
+```
+
+| HTTP | `type` / `code` | Meaning |
+|---|---|---|
+| 401 | `invalid_request_error` / `invalid_api_key` | bad / expired session bearer |
+| 404 | `invalid_request_error` / `model_not_found` | model not served |
+| 400 | `invalid_request_error` / `context_length_exceeded` | prompt + `max_tokens` > context |
+| 402 | `insufficient_quota` / `insufficient_balance` | balance can't cover worst-case cost *(Chiral uses 402, not OpenAI's 429)* |
+| 403 | `invalid_request_error` / `contract_paused` | balance exhausted |
+| 426 | `invalid_request_error` / `upgrade_required` | client below `minRequired` |
+| 429 | `rate_limit_exceeded` | per-contract concurrency / rate cap |
+
+### Deviations from OpenAI (v1)
+
+| Area | Chiral v1 |
+|---|---|
+| Auth | bearer = contract session credential (ephemeral), not a long-lived API key |
+| Billing | per-token against the contract balance; **402 `insufficient_quota`** on exhaustion (not 429) |
+| Models | only what the provider serves; identity is reputation-policed, no attestation |
+| Streaming usage | via `stream_options.include_usage`; final chunk carries `usage` + `x_chiral` cost/balance |
+| Endpoints | `chat/completions`, `completions`, `embeddings`, `models` |
+| Not in v1 | assistants / threads, files, fine-tuning, batch, images, audio, moderations; function/tool calling passes through to the model but is not separately guaranteed |
 
 ---
 
