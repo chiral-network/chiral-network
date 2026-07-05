@@ -16,6 +16,7 @@ pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
 pub mod reputation;
+pub mod resource_offer;
 pub mod rpc_client;
 mod speed_tiers;
 pub mod version;
