@@ -37,11 +37,24 @@ Until these exist, nothing below is removable.
 |---|---|---|
 | Host advertisement (`host_advertisement_payload`, `hosting/publish-ad`, host registry) | `resource_offer` (typed, multi-class) | offer publish/search wired |
 | Chunked file transfer (`file_transfer.rs`, `dht` chunk protocol, `ChunkResponse::FileInfo`) | S3 storage data-plane | storage provider serves objects |
-| BitTorrent / magnet / `.torrent` UI scaffolding (Download / Drive Svelte) | hash-addressed S3 objects | safe now (inert per book) — UX change, coordinate |
+| ~~BitTorrent protocol toggle (Drive / DriveSeedingPanel)~~ | hash-addressed S3 objects | **removed** — inert, no backend (see "Deprecations landed") |
+| magnet / `.torrent` search + export (Download / Drive) | hash-addressed lookup | pending (btih = content hash; partially functional) |
 | CDN service (`cdn_server.rs`, `cdn/*`) | Provider offers + contracts | providers replace always-on CDN |
 | Drive HTTP shares (`relay_share_proxy.rs`, drive share links) | S3 presigned / public-read | storage data-plane ships |
 | Per-download payment (per-file price path in `dht.rs`) | Contract prepaid balance (`contract_ledger`) | settlement handlers wired |
 | Reputation transfer-outcome events | Payment-gated feedback (contract-keyed) | `feedback` endpoint ships |
+
+## Deprecations landed
+
+- **BitTorrent protocol scaffolding removed** (`driveStore.ts`, `pages/Drive.svelte`,
+  `components/drive/DriveSeedingPanel.svelte`): the WebRTC/BitTorrent seeding
+  toggle and the `'BitTorrent'` protocol variant. It drove no real transport
+  (there is no BitTorrent backend; retired per the White Paper), so seeding is
+  WebRTC-only now. Verified: frontend `vite build` green, `driveStore` tests
+  28/28. The `dead_code`-flagged Rust items (`persist_spent_tx_set`,
+  `route_tunnel_response_frame`, `LAUNCH_DOWNLOAD_COST_PER_MB_CHI`) are left
+  in place — they are *recent* team commits (WIP / refactor artifacts), not
+  old code, so removing them would risk clobbering active work.
 
 ## Reused as-is (not deprecated)
 

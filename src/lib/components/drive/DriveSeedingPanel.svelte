@@ -12,11 +12,11 @@
     onOptionsChange,
   }: {
     manifest: DriveManifest;
-    onAddFiles: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
-    onOptionsChange?: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
+    onAddFiles: (protocol: 'WebRTC', priceChi: string) => void;
+    onOptionsChange?: (protocol: 'WebRTC', priceChi: string) => void;
   } = $props();
 
-  let selectedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+  let selectedProtocol = $state<'WebRTC'>('WebRTC');
   let filePrice = $state('');
   let expandedFileId = $state<string | null>(null);
   let priceDrafts = $state<Record<string, string>>({});
@@ -58,10 +58,8 @@
     }
   }
 
-  function getProtocolColor(protocol?: string): string {
-    return protocol === 'BitTorrent'
-      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-      : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
+  function getProtocolColor(_protocol?: string): string {
+    return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
   }
 
   function normalizePriceChi(value: string | number | null | undefined): string {
@@ -96,7 +94,7 @@
       return;
     }
     const priceChi = normalizePriceChi(getPriceDraft(item));
-    const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' : 'WebRTC';
+    const protocol = 'WebRTC';
     const updated = await driveStore.seedFile(item.id, protocol, priceChi || undefined);
     if (!updated) {
       toasts.show(`Failed to update price for ${item.name}`, 'error');
@@ -128,29 +126,6 @@
   <!-- Protocol selector + Price input + Add files button -->
   <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
     <div class="flex flex-wrap items-end gap-4">
-      <!-- Protocol toggle -->
-      <div>
-        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
-        <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
-          <button
-            onclick={() => selectedProtocol = 'WebRTC'}
-            class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'WebRTC'
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
-          >
-            WebRTC
-          </button>
-          <button
-            onclick={() => selectedProtocol = 'BitTorrent'}
-            class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'BitTorrent'
-              ? 'bg-green-600 text-white'
-              : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
-          >
-            BitTorrent
-          </button>
-        </div>
-      </div>
-
       <!-- Price input -->
       <div>
         <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>

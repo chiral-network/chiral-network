@@ -52,7 +52,7 @@
 
   // Seed modal
   let seedModalItem = $state<DriveItem | null>(null);
-  let seedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+  let seedProtocol = $state<'WebRTC'>('WebRTC');
   let seedPrice = $state('');
   // Live progress for folder publishes — populated from per-file events
   // emitted by the Rust `publish_drive_folder` command. Without this,
@@ -138,7 +138,7 @@
           if (entry.hash) {
             await driveStore.seedFile(
               driveItem.id,
-              (entry.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC',
+              (entry.protocol as 'WebRTC') || 'WebRTC',
               entry.priceChi && entry.priceChi !== '0' ? entry.priceChi : undefined,
             );
           }
@@ -502,7 +502,7 @@
       toasts.show('Connect to the network to start seeding', 'warning');
       return;
     }
-    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedProtocol = (item.protocol as 'WebRTC') || 'WebRTC';
     seedPrice = item.priceChi || '';
     seedModalItem = item;
   }
@@ -621,7 +621,7 @@
   }
 
   function handleEditPrice(item: DriveItem) {
-    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedProtocol = (item.protocol as 'WebRTC') || 'WebRTC';
     seedPrice = item.priceChi || '';
     seedModalItem = item;
   }
@@ -1086,29 +1086,6 @@
       </p>
 
       <div class="space-y-4">
-        <!-- Protocol picker -->
-        <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
-          <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
-            <button
-              onclick={() => seedProtocol = 'WebRTC'}
-              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
-                ? 'bg-primary-600 text-white'
-                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
-            >
-              WebRTC
-            </button>
-            <button
-              onclick={() => seedProtocol = 'BitTorrent'}
-              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
-                ? 'bg-green-600 text-white'
-                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
-            >
-              BitTorrent
-            </button>
-          </div>
-        </div>
-
         <!-- Price input -->
         <div>
           <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
