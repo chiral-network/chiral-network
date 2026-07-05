@@ -6,6 +6,12 @@ authors = ["you"]
 edition = "2021"
 default-run = "chiral-desktop"
 
+# Standalone workspace root. This repo has no top-level workspace manifest, so
+# without this table cargo walks up the filesystem and may adopt an unrelated
+# parent Cargo.toml (e.g. one in the build user's home dir) as the workspace,
+# breaking the build. Declaring an empty workspace pins the root here.
+[workspace]
+
 [lib]
 name = "chiral_network"
 crate-type = ["staticlib", "cdylib", "rlib"]
