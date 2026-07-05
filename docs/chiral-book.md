@@ -794,7 +794,7 @@ The decisions that shaped this design, now settled — each records the choice; 
 
 ## Provider Implementation
 
-> **Status: implementation design.** The settlement-engine modules this builds on — `resource_offer`, `service_contract`, `contract_ledger`, `session_credential`, `usage_receipt`, `codec` — are implemented and unit-tested; the provider servers and wiring described here are **not yet built**. This is the normative design for building them.
+> **Status: partially implemented** (branch `feat/resource-exchange-v1`). The settlement engine (`resource_offer`, `codec`, `service_contract`, `contract_ledger`, `session_credential`, `usage_receipt`) and the provider cores + HTTP routers are implemented and unit-tested: the handshake (`contract_service` + `contract_api`, `/v1/contracts/*`), storage (`storage_provider` + `storage_api`, S3 object ops), inference (`llm_provider` + `llm_api`, OpenAI-compatible), and compute (`container_provider` + `container_api`). **Not yet wired:** the real on-chain `ChainVerifier` (`wallet` + `rpc_client`), the `bollard` Docker `ContainerRuntime`, DHT offer publish/search, mounting the routers into `chiral_daemon`, and full S3 SigV4 / SSE streaming. Those adapters need a live chain / Docker / model backend.
 
 A **provider** is a headless process — the `chiral_daemon` in *provider mode*, or a dedicated `chiral_provider` binary — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
 
