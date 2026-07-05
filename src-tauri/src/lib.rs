@@ -22,6 +22,7 @@ pub mod resource_offer;
 pub mod rpc_client;
 pub mod service_contract;
 mod speed_tiers;
+pub mod usage_receipt;
 pub mod version;
 pub mod wallet;
 pub mod wallet_backup_api;
