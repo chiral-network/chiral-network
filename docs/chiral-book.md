@@ -156,7 +156,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Data-Plane API: Compute (Containers)](#data-plane-api-compute-containers)
 - [Data-Plane API: Inference (LLM)](#data-plane-api-inference-llm)
 - [Reputation System](#reputation-system)
-- [Open Design Decisions](#open-design-decisions)
+- [Design Decisions](#design-decisions)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
 - [Identity and Wallet](#identity-and-wallet)
 - [Blockchain and Mining](#blockchain-and-mining)
@@ -273,7 +273,7 @@ A resource offer is a signed DHT record. The signed payload is a canonical, leng
 
 ## Resource Interfaces
 
-Each class is a standard HTTP API the provider serves over HTTPS at its offer's `endpoint`. A consumer authenticates to the API **against its open contract** (see [Service Contracts](#service-contracts-and-the-handshake) and the auth decision in [Open Design Decisions](#open-design-decisions)); the desktop app ships a client for each class, and existing third-party tooling works via the **contract-scoped session credential** the provider issues when the contract opens (an S3 key / OpenAI bearer / container token bound to `contract_id`); a local wallet-signing proxy is available for users who want no shared secret.
+Each class is a standard HTTP API the provider serves over HTTPS at its offer's `endpoint`. A consumer authenticates to the API **against its open contract** (see [Service Contracts](#service-contracts-and-the-handshake) and the auth decision in [Design Decisions](#design-decisions)); the desktop app ships a client for each class, and existing third-party tooling works via the **contract-scoped session credential** the provider issues when the contract opens (an S3 key / OpenAI bearer / container token bound to `contract_id`); a local wallet-signing proxy is available for users who want no shared secret.
 
 ### Storage — S3-compatible
 
@@ -283,7 +283,7 @@ Each class is a standard HTTP API the provider serves over HTTPS at its offer's 
 - **Namespacing.** One bucket namespace per contract (seeded by the contract tx hash); object keys are arbitrary UTF-8, up to the offer's `max_object_bytes`.
 - **Integrity & content addressing.** The object ETag is its SHA-256, so a consumer verifies bytes against the name it requested. A public-read object addressed by its hash is the successor to "sharing a file by its hash"; such objects are served unauthenticated (presigned or public ACL).
 - **Metering.** Capacity is sampled (GB-hours accumulated into GB-month); egress is metered on `GET` bytes; the balance is drawn down each interval at `per_gb_month` / `per_gb_egress`.
-- **Exhaustion & durability.** At zero balance the provider stops accepting writes and (after a grace window — see [Open Design Decisions](#open-design-decisions)) may delete stored objects. **v1 is single-provider: durability is the consumer's responsibility** — replicate across providers client-side if you need it. The book states this risk plainly rather than hiding it.
+- **Exhaustion & durability.** At zero balance the provider stops accepting writes and (after a grace window — see [Design Decisions](#design-decisions)) may delete stored objects. **v1 is single-provider: durability is the consumer's responsibility** — replicate across providers client-side if you need it. The book states this risk plainly rather than hiding it.
 
 ### Containerized compute — hardened OCI
 
@@ -300,7 +300,7 @@ Each class is a standard HTTP API the provider serves over HTTPS at its offer's 
 > **Status: specified; provider fronts one or more served models with a token meter.**
 
 - **API.** Mirrors the OpenAI HTTP API: `GET /v1/models`, `POST /v1/chat/completions` (including streaming SSE), `POST /v1/completions`, `POST /v1/embeddings`. Standard OpenAI SDKs point at the provider's endpoint with the contract session as the bearer key.
-- **Model selection.** The consumer sets `model` to an ID the offer advertises. A provider cannot cheaply *prove* it runs the claimed model rather than a smaller/quantized one — a reputation-policed quality property (see [Open Design Decisions](#open-design-decisions) for optional model attestation).
+- **Model selection.** The consumer sets `model` to an ID the offer advertises. A provider cannot cheaply *prove* it runs the claimed model rather than a smaller/quantized one — a reputation-policed quality property (see [Design Decisions](#design-decisions) for optional model attestation).
 - **Metering.** Input + output tokens (the response `usage` block) at the model's `per_1k_input_tokens` / `per_1k_output_tokens`; streaming responses meter tokens as they emit. The consumer can approximately re-count with a local tokenizer to reconcile against balance drain.
 - **Limits.** Per-contract concurrency and rate limits; requests are refused (not queued indefinitely) when the balance cannot cover the maximum possible completion.
 
@@ -320,12 +320,13 @@ A **service contract** is the agreement between a consumer and a provider, commi
    - `to` = `provider_wallet`, `value` = `funding_amount`
    - `data` = domain-tagged (`chiral-contract-v1`) canonical encoding of `{ offer_ref, terms_hash, contract_nonce }`
    - signs it with the consumer wallet and broadcasts it to the chain.
-4. **Open.** Consumer → `POST {endpoint}/contracts/open { tx_hash }`. The provider verifies on-chain: mined (or accepted optimistically from the mempool — see [Open Design Decisions](#open-design-decisions)), `to` = self, `value` = the quoted amount, `data` decodes to the quoted `terms_hash` + unused `contract_nonce`, `from` = the consumer, `chainId == geth::chain_id()`. It records `(tx_hash, provider)` in the contract ledger (one tx ⇒ one contract, no replay), credits the balance = `value − fee` (via `split_payment`; the fee — default 0.5%, 0.1% floor — is forwarded to the platform wallet), and returns the **contract handle** (`contract_id = tx_hash`) plus a **contract-scoped session credential** — an S3 access-key/secret, an OpenAI-style bearer, or a container token bound to `contract_id` — which is the handle standard tooling authenticates with (proof of contract control, not an independent grant of authority).
+4. **Open.** Consumer → `POST {endpoint}/contracts/open { tx_hash }`. The provider verifies on-chain: mined for a large contract, or accepted optimistically from the mempool for a small one (see [Design Decisions](#design-decisions)), `to` = self, `value` = the quoted amount, `data` decodes to the quoted `terms_hash` + unused `contract_nonce`, `from` = the consumer, `chainId == geth::chain_id()`. It records `(tx_hash, provider)` in the contract ledger (one tx ⇒ one contract, no replay), credits the balance = `value − fee` (via `split_payment`; the fee — default 0.5%, 0.1% floor — is forwarded to the platform wallet), and returns the **contract handle** (`contract_id = tx_hash`) plus a **contract-scoped session credential** — an S3 access-key/secret, an OpenAI-style bearer, or a container token bound to `contract_id` — which is the handle standard tooling authenticates with (proof of contract control, not an independent grant of authority).
 
 ### Balance, metering, and top-ups
 
 - **Drawdown.** The provider meters usage per class ([Resource Interfaces](#resource-interfaces)) and decrements the contract balance at the agreed rates. Metering is provider-side — the honest-provider assumption of [Part I §9](#9-trust-model) — and the provider reports running usage to the consumer (response headers / a `GET {endpoint}/contracts/:id` endpoint) so the consumer can reconcile against observable output.
 - **Top-up.** When the balance runs low, the consumer sends a further payment transaction whose `data` references `contract_id`; the provider verifies it and adds to the same balance. No new handshake is needed.
+- **Signed receipts.** On demand (`GET {endpoint}/contracts/:id/receipt`) and periodically, the provider returns a **usage receipt signed by its wallet** — `{contract_id, funded_wei, spent_wei, balance_wei, usage, as_of}` — so the consumer holds portable, attributable evidence of what it was charged. Reputation ratings and disputes cite these ([wire format](#wire-protocol--api-reference-contract-spine)).
 - **Exhaustion.** At zero balance the provider pauses service (class-specific: storage may enter a read-only grace window; containers are stopped; inference is refused).
 - **Non-refundable.** There is no withdrawal path. A consumer funds what it intends to spend and tops up incrementally.
 
@@ -448,6 +449,15 @@ Auth: `Authorization: Bearer <session bearer>`.
 #### `POST /v1/contracts/:contract_id/topup`
 Request `{ "tx_hash":"0x…" }` (a `CHR2` tx referencing this contract). `200 OK` returns the updated balance; same 402 / 404 semantics as `open`.
 
+#### `GET /v1/contracts/:contract_id/receipt`
+Auth: `Authorization: Bearer <session bearer>`. Returns a **provider-wallet-signed** usage statement — portable evidence a consumer can cite in a rating or dispute:
+```json
+{ "contract_id":"0x…", "funded_wei":"…", "spent_wei":"…", "balance_wei":"…",
+  "usage":{ /* class-specific meters */ }, "as_of":1712349278,
+  "provider_wallet":"0x…", "signature":"0x…65" }
+```
+`signature = sign(keccak256(canonical("chiral-receipt-v1", contract_id, funded_wei, spent_wei, balance_wei, jcs(usage), as_of)))`; the consumer checks `ecrecover == provider_wallet`.
+
 ### Session credential
 
 Issued in the `open` response, bound to `contract_id`, scoped to that contract's resources only:
@@ -509,7 +519,7 @@ Data-plane responses carry the standard `ETag` / `Content-Length` / `Content-Typ
 
 - **Billed:** stored capacity (sampled into GB-month at `per_gb_month`) and **egress** on `GET`/part downloads (at `per_gb_egress`). Ingress is not billed beyond the capacity it creates.
 - Every response reports live drawdown via the `X-Chiral-*` headers.
-- **Insufficient balance:** an operation that cannot be covered returns `402` with S3-XML `<Code>InsufficientBalance</Code>`. On full exhaustion the provider blocks writes immediately and serves reads for a grace window (default — see [Open Design Decisions](#open-design-decisions)), after which objects may be deleted. **Single-provider durability is the consumer's responsibility.**
+- **Insufficient balance:** an operation that cannot be covered returns `402` with S3-XML `<Code>InsufficientBalance</Code>`. On full exhaustion the provider blocks writes immediately and serves reads for a grace window (default — see [Design Decisions](#design-decisions)), after which objects may be deleted. **Single-provider durability is the consumer's responsibility.**
 
 ### Errors (S3-native XML)
 
@@ -699,7 +709,7 @@ data: [DONE]
 
 ### Model selection & identity
 
-The consumer sets `model` to an advertised id; an unknown id returns `404 model_not_found`. A provider cannot cheaply prove it runs the claimed model rather than a smaller/quantized one — a **reputation-policed** quality property (optional model attestation is an [open decision](#open-design-decisions)).
+The consumer sets `model` to an advertised id; an unknown id returns `404 model_not_found`. A provider cannot cheaply prove it runs the claimed model rather than a smaller/quantized one — a **reputation-policed** quality property; model attestation is deferred to future work (see [Design Decisions](#design-decisions)).
 
 ### Metering & pre-authorization
 
@@ -766,19 +776,18 @@ The design rationale and formula are in [Part I](#part-i-white-paper), §7. A ra
 
 ---
 
-## Open Design Decisions
+## Design Decisions
 
-**Resolved.** *Post-handshake auth* — the provider issues a **contract-scoped session credential** (an S3 access-key/secret, an OpenAI-style bearer, or a container token, each bound to `contract_id`) when the contract opens, so off-the-shelf S3/OpenAI tooling works directly; a local wallet-signing proxy remains available for users who want no shared secret. The credential is proof of contract control, not an independent grant of authority.
+The decisions that shaped this design, now settled — each records the choice; the mechanics live in the linked sections.
 
-Still open — each has a recommended default; flag any you want to change.
-
-1. **Optimistic service start** — wait for the contract tx to be *mined* (one block of latency) vs. accept on *mempool-seen* and confirm shortly after. *Recommended:* optimistic for small contracts with a short confirmation deadline; require mined for large ones.
-2. **On-chain contract payload** — full terms in tx `data` vs. only a commitment. *Recommended:* commit `{offer_ref, terms_hash, nonce}` (small, private); exchange the full terms in the handshake and store them on both sides, bound by `terms_hash`.
-3. **Storage retention at exhaustion** — stop-and-keep vs. grace-then-delete. *Recommended:* a read-only grace window, then delete; state the durability risk plainly (single-provider, non-refundable).
-4. **Provider usage receipts** — none vs. wallet-signed. *Recommended:* the provider signs periodic usage receipts so the consumer holds evidence for disputes and reputation.
-5. **Discovery aggregation** — pure DHT vs. relay-cached index. *Recommended:* both — DHT is the source of truth; the relay caches a verified per-class list for speed; clients always re-verify signatures.
-6. **LLM model attestation** — trust + reputation vs. a provider-published model fingerprint. *Recommended:* v1 relies on reputation; note attestation (published weights hash / attested runtime) as future work.
-7. **Container persistence** — ephemeral only vs. persistent volumes. *Recommended:* v1 ephemeral rootfs; durable state via a mounted Storage-class bucket; local persistent volumes later.
+1. **Post-handshake auth** — the provider issues a **contract-scoped session credential** (S3 access-key/secret, OpenAI-style bearer, or container token bound to `contract_id`) at `open`, so off-the-shelf S3/OpenAI tooling works directly; a local wallet-signing proxy is the no-shared-secret alternative. The credential is proof of contract control, not an independent grant of authority.
+2. **Optimistic service start** — a small contract starts on *mempool-seen* with a short confirmation deadline; a large one waits for the tx to be *mined*. Bounds start latency without exposing the provider to large unconfirmed value. ([Service Contracts](#service-contracts-and-the-handshake))
+3. **On-chain contract payload** — the contract tx commits only `{offer_ref, terms_hash, contract_nonce}` (compact, private); full terms are exchanged in the handshake and stored on both sides, bound by `terms_hash`. ([Wire Protocol](#wire-protocol--api-reference-contract-spine))
+4. **Storage retention at exhaustion** — at zero balance, writes stop immediately and reads continue for a bounded grace window, after which objects may be deleted; single-provider durability is the consumer's responsibility. ([Storage](#data-plane-api-storage-s3))
+5. **Provider usage receipts** — the provider issues **wallet-signed usage receipts** (`GET /v1/contracts/:id/receipt`) so a consumer holds portable, attributable evidence of what it was charged, for disputes and reputation. ([Service Contracts](#service-contracts-and-the-handshake))
+6. **Discovery aggregation** — both: the DHT is the source of truth; the relay caches a verified per-class offer list for speed; clients always re-verify signatures. ([Resource Offers](#resource-offers-discovery))
+7. **LLM model attestation** — v1 relies on reputation for model identity; a provider-published model fingerprint / attested runtime is future work. ([Inference](#data-plane-api-inference-llm))
+8. **Container persistence** — v1 rootfs is ephemeral; durable state is a mounted Storage-class bucket; local persistent volumes are future work. ([Compute](#data-plane-api-compute-containers))
 
 ---
 
