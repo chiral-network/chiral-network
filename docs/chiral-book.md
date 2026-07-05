@@ -157,6 +157,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Data-Plane API: Inference (LLM)](#data-plane-api-inference-llm)
 - [Reputation System](#reputation-system)
 - [Design Decisions](#design-decisions)
+- [Provider Implementation](#provider-implementation)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
 - [Identity and Wallet](#identity-and-wallet)
 - [Blockchain and Mining](#blockchain-and-mining)
@@ -791,19 +792,92 @@ The decisions that shaped this design, now settled — each records the choice; 
 
 ---
 
+## Provider Implementation
+
+> **Status: implementation design.** The settlement-engine modules this builds on — `resource_offer`, `service_contract`, `contract_ledger`, `session_credential`, `usage_receipt`, `codec` — are implemented and unit-tested; the provider servers and wiring described here are **not yet built**. This is the normative design for building them.
+
+A **provider** is a headless process — the `chiral_daemon` in *provider mode*, or a dedicated `chiral_provider` binary — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
+
+### Shared provider node
+
+```
+                +-------------------- Provider process --------------------+
+ DHT  <-------- | Offer publisher   (resource_offer: sign + republish)     |
+                |                                                           |
+ HTTPS (own TLS)| Axum gateway                                             |
+   consumer --> |  /v1/contracts/*   Contract service (handshake)          |
+                |     propose / open / get / topup / receipt               |
+                |  /v1/...           Data-plane router (class-specific)     |
+                |        |                     |                            |
+                |        v                     v                            |
+                |  Auth middleware       Meter -> ContractLedger::draw_down |
+                |  (SessionStore)                      |                    |
+                |  ContractLedger <---- on-chain verify (wallet+rpc_client) |
+                +-----------------------------------------------------------+
+                          | persistence (ledger, spent-tx, offers) -> disk
+```
+
+- **Offer publisher.** Builds a signed `ResourceOffer`, publishes it under `chiral_offer_<class>_<wallet>` + the class index, and refreshes on an interval (≈ every 2–3 min). Reuses the DHT put / provider machinery.
+- **Contract service** (`/v1/contracts/*`). **propose:** validate `offer_ref` + class params, quote `ContractTerms`, mint a single-use `contract_nonce`, return `terms_hash`. **open:** verify the funding tx on-chain (reuse `wallet` verification — mined, `to`=self, `value`, `chainId`, via `rpc_client`), parse the tx `data` (`service_contract::parse` → `CHR1`), check the committed `terms_hash`/`nonce`, credit with `ContractLedger::open`, mint a `SessionCredential`, register it in the `SessionStore`. **topup:** verify a `CHR2` tx → `ContractLedger::topup`. **get/receipt:** read the ledger; sign a `UsageReceipt`.
+- **Auth middleware.** Resolves the presented credential — bearer or S3 access-key — to a `contract_id` via `SessionStore` (honoring expiry); 401 on miss.
+- **Meter → drawdown.** Each data-plane operation computes a `cost_wei` and calls `ContractLedger::draw_down(contract_id, cost_wei)`; an `Err(insufficient)` becomes the class's exhaustion response.
+- **State & persistence.** `Arc<Mutex<ContractLedger>>` + `Arc<Mutex<SessionStore>>` in app state. The ledger, the spent-tx set, and published offers persist to disk (JSON under `<data_dir>/provider/`) so a restart neither loses balances nor re-accepts a funding tx — extending the existing spent-tx-ledger persistence pattern.
+- **Reachability.** The provider terminates HTTPS itself (own cert/domain per [Deployment](#deployment)); no relay/NAT in v1.
+
+### Storage provider (S3)
+
+- **Server.** Axum handlers implementing the S3 subset ([Data-Plane: Storage](#data-plane-api-storage-s3)). v1 recommendation: **custom Axum handlers over a local object store** (full control of auth + metering); fronting a standalone S3 impl (MinIO) behind a Chiral auth/meter proxy is the fallback if S3 coverage gaps bite.
+- **Object store.** Bytes on disk at `<data_dir>/provider/storage/<bucket>/<key-digest>`; a metadata index (`key → {size, content_type, etag=md5, sha256, created}`) persisted (sled or JSON); `x-amz-checksum-sha256` computed on `PUT`.
+- **Auth.** SigV4 verified against the contract's `secret_access_key` from `SessionStore::secret_for_access_key`; presigned URLs check the same secret; public-read objects bypass auth.
+- **Metering.** Egress metered on `GET`/part bytes → `draw_down(bytes · per_gb_egress / GiB)`; capacity sampled by a periodic task summing per-contract stored bytes and charging `bytes · per_gb_month · Δt / month`. A pre-check refuses an op the balance can't cover (`402 InsufficientBalance`).
+- **Exhaustion.** Zero balance → block writes; serve reads through a grace timer; then GC the bucket (Design Decision #4).
+
+### Container provider (hardened OCI)
+
+- **Runtime driver.** Drive Docker/Podman via the Docker Engine API (Rust `bollard`). On submit: allowed-registry check + pull; create/start with the hardened profile — non-root, `cap-drop=ALL` (+ minimal adds), seccomp, read-only rootfs, `--memory`/`--cpus`/`--pids-limit` from the contract envelope, no host mounts, an egress policy; publish the exposed port.
+- **Ingress.** A reverse proxy on the provider's HTTPS front routes the assigned subdomain (`ctr-<id>-<port>.<host>`) to the container's mapped port; TLS terminates at the proxy.
+- **Meter.** A periodic task sums running-container resource-seconds → `draw_down(vcpu·rate + mem·rate + gpu·rate)`; insufficient → stop the container and pause the contract.
+- **Lifecycle.** `GET`/`DELETE`/`logs`(stream)/`stats` map to Docker API calls. Ephemeral rootfs; durable state via a mounted Storage bucket is future work. GPU via the runtime's device requests, billed while allocated.
+
+### LLM provider (OpenAI-compatible)
+
+- **Model backend.** The provider runs a local inference server (llama.cpp `server`, vLLM, or Ollama); the Chiral LLM server is a **thin proxy** in front that adds contract auth + metering + the `x_chiral` fields and normalizes to the exact OpenAI shape.
+- **Auth.** Bearer → `SessionStore::resolve_bearer` → contract.
+- **Pre-authorization.** Before forwarding, estimate worst-case cost (`prompt_tokens + max_tokens`) with a local tokenizer; `> balance` → `402 insufficient_quota`.
+- **Meter.** On completion, read `usage` from the backend, `draw_down(in·per_1k_in + out·per_1k_out)`; for streaming, buffer usage and emit it plus `x_chiral` in the final chunk.
+- **Models.** `/v1/models` reflects the offer's advertised models; the proxy maps a requested `model` to a backend model and 404s unknown ones.
+
+### Engine → provider integration
+
+| Engine module | Storage | Container | LLM |
+|---|---|---|---|
+| `resource_offer` (advertise) | ✓ | ✓ | ✓ |
+| `service_contract` (handshake `data` / terms) | ✓ | ✓ | ✓ |
+| `contract_ledger` (balance / drawdown) | ✓ | ✓ | ✓ |
+| `session_credential` (auth) | bearer + **SigV4 secret** | bearer | bearer |
+| `usage_receipt` (evidence) | ✓ | ✓ | ✓ |
+
+---
+
 ## Implementation Plan (Milestones)
 
-A build order that reaches a working single-resource marketplace early, then adds classes on the same contract/auth spine:
+Phased carry-out. **Phase 0 is done** (settlement engine); the rest builds on it. Each phase names new/touched files, a verification, and the main risk.
 
-1. **Offers + discovery.** Generalize the signed host-ad into the typed `resource_offer` (publish/refresh/search by class); marketplace browse UI with signature verification + Elo ranking.
-2. **Contract spine.** Handshake endpoints, the on-chain contract transaction (encode/verify `data`), the provider contract ledger + balance accounting, the `split_payment` fee cut, and top-ups. This is the reusable core for all three classes.
-3. **Storage provider (first end-to-end).** S3-compatible server behind the contract/auth layer; consumer client + tool compatibility; metering (capacity + egress); exhaustion policy.
-4. **Reputation.** Payment-gated `/api/ratings/feedback` keyed to contracts; rating UI; ranking wired into discovery.
-5. **LLM provider.** OpenAI-compatible front-end + token meter over the contract spine (reuses steps 2 & 4).
-6. **Container provider.** Hardened-OCI runtime, ingress proxy, lifecycle + runtime meter.
-7. **Provider dashboard & ops.** Offers / earnings / contracts views, signed usage receipts, diagnostics, headless provider mode.
+**Phase 0 — Settlement engine (done).** `resource_offer`, `codec`, `service_contract`, `contract_ledger`, `usage_receipt`, `session_credential` — pure, unit-tested (34 tests). *Not wired.*
 
-Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
+**Phase 1 — Shared provider node (wiring).** Offer publisher (DHT publish/search) + the `/v1/contracts/*` handshake handlers + on-chain funding verification + ledger/session state + persistence, mounted into `chiral_daemon` provider mode. New: `provider_node.rs`, `contract_api.rs`; touches `dht.rs`, `chiral_daemon.rs`, `lib.rs`. *Verify:* a client runs propose→open→get→topup→receipt against a live daemon (integration test). *Risk:* high — `dht.rs`/daemon are hot files.
+
+**Phase 2 — Storage provider (first end-to-end).** S3 Axum handlers + disk object store + SigV4 + capacity/egress metering + exhaustion. New: `storage_provider.rs`. *Verify:* `aws s3 cp` with the contract's issued keys stores/reads an object and draws the balance down. *Risk:* medium.
+
+**Phase 3 — Reputation (payment-gated).** `POST /api/ratings/feedback` keyed to a contract tx, verified on-chain; rating UI; ranking wired into discovery. Touches `rating_api.rs` / `reputation.rs`. *Verify:* a rating lands only with a valid contract payment; score moves by amount.
+
+**Phase 4 — LLM provider.** OpenAI-compatible proxy + token meter over the spine (reuses Phase 1). New: `llm_provider.rs` + a model-backend adapter. *Verify:* the `openai` SDK completes a chat against the endpoint and bills tokens.
+
+**Phase 5 — Container provider.** `bollard` driver (hardened profile) + ingress proxy + runtime meter. New: `container_provider.rs`. *Verify:* submit an image, reach it at its subdomain, watch runtime bill; teardown halts metering. *Risk:* isolation correctness.
+
+**Phase 6 — Client & UX.** Marketplace browse (offers by class + Elo), provider dashboard (offers/earnings/contracts), a consumer contract client + local proxy for tool auth; provider-mode daemon flags/config. Touches frontend + `chiral.rs` / `chiral_daemon.rs`.
+
+**Cross-cutting:** persistence, config/env (provider wallet key, endpoint/domain, model-backend URL), deployment (public IP + TLS), and an integration test per phase. Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
 
 ---
 
