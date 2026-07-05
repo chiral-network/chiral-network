@@ -114,7 +114,7 @@ impl LlmProvider {
 /// tokenizer runs at the backend; this only *bounds* pre-auth, and actual
 /// billing always uses the backend's returned `usage`.
 pub fn estimate_tokens(text: &str) -> u64 {
-    (text.chars().count() as u64 + 3) / 4
+    (text.chars().count() as u64).div_ceil(4)
 }
 
 fn wei_field(v: &serde_json::Value, key: &str) -> Result<u128, String> {
@@ -129,7 +129,7 @@ fn ceil_div(n: u128, d: u128) -> u128 {
     if d == 0 {
         return 0;
     }
-    (n + d - 1) / d
+    n.div_ceil(d)
 }
 
 #[cfg(test)]

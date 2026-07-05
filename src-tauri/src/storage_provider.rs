@@ -220,7 +220,7 @@ fn ceil_div(n: u128, d: u128) -> u128 {
     if d == 0 {
         return 0;
     }
-    (n + d - 1) / d
+    n.div_ceil(d)
 }
 
 fn base64_std(bytes: &[u8]) -> String {

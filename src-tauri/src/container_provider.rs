@@ -56,7 +56,6 @@ pub trait ContainerRuntime {
 struct Running {
     contract_id: String,
     req: ResourceRequest,
-    started_at: u64,
     last_metered_at: u64,
 }
 
@@ -100,7 +99,6 @@ impl ContainerProvider {
             Running {
                 contract_id: contract_id.to_lowercase(),
                 req,
-                started_at: now_unix,
                 last_metered_at: now_unix,
             },
         );
@@ -173,7 +171,7 @@ fn ceil_div(n: u128, d: u128) -> u128 {
     if d == 0 {
         return 0;
     }
-    (n + d - 1) / d
+    n.div_ceil(d)
 }
 
 #[cfg(test)]

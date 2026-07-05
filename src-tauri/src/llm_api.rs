@@ -101,6 +101,7 @@ async fn chat<V: ChainVerifier + Send + Sync + 'static>(
     resp
 }
 
+#[allow(clippy::result_large_err)]
 fn prepare_chat<V: ChainVerifier>(
     st: &LlmState<V>,
     headers: &HeaderMap,
