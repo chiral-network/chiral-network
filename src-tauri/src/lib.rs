@@ -3,6 +3,7 @@ pub mod cdn_server;
 pub mod chain_rpc_api;
 pub mod codec;
 pub mod container_provider;
+pub mod contract_api;
 pub mod contract_ledger;
 pub mod contract_service;
 pub mod dht;
