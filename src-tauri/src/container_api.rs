@@ -2,9 +2,10 @@
 //! a contract's bearer, admits a container against the contract's resource
 //! envelope, starts it through the [`ContainerRuntime`] driver, and on stop
 //! charges the accrued runtime to the contract balance. Continuous runtime
-//! metering is done by a background task calling `ContainerProvider::meter_all`
-//! (not shown here); this router covers submit + lifecycle.
+//! metering is a background task calling `ContainerProvider::meter_all`; this
+//! router covers submit + lifecycle.
 //!
+//! The state shares `Arc<Mutex<ProviderState>>` with the handshake router.
 //! Design: `docs/chiral-book.md` → "Data-Plane API: Compute (Containers)" and
 //! "Provider Implementation" → Container. The real `ContainerRuntime` drives
 //! Docker/Podman via `bollard`; a mock drives the tests here (no Docker host).
@@ -26,15 +27,39 @@ use crate::container_provider::{
 use crate::contract_service::{ChainVerifier, ProviderState};
 
 pub struct ContainerState<V: ChainVerifier, R: ContainerRuntime> {
-    pub provider: ProviderState<V>,
-    pub containers: ContainerProvider,
-    pub runtime: R,
-    /// The resource envelope contracts of this provider may consume (from the
-    /// offer's advertised shape).
+    pub provider: Arc<Mutex<ProviderState<V>>>,
+    pub containers: Arc<Mutex<ContainerProvider>>,
+    pub runtime: Arc<R>,
+    /// The resource envelope contracts of this provider may consume.
     pub envelope: ResourceEnvelope,
 }
 
-pub type Shared<V, R> = Arc<Mutex<ContainerState<V, R>>>;
+impl<V: ChainVerifier, R: ContainerRuntime> ContainerState<V, R> {
+    pub fn new(
+        provider: Arc<Mutex<ProviderState<V>>>,
+        containers: ContainerProvider,
+        runtime: R,
+        envelope: ResourceEnvelope,
+    ) -> Self {
+        ContainerState {
+            provider,
+            containers: Arc::new(Mutex::new(containers)),
+            runtime: Arc::new(runtime),
+            envelope,
+        }
+    }
+}
+
+impl<V: ChainVerifier, R: ContainerRuntime> Clone for ContainerState<V, R> {
+    fn clone(&self) -> Self {
+        ContainerState {
+            provider: Arc::clone(&self.provider),
+            containers: Arc::clone(&self.containers),
+            runtime: Arc::clone(&self.runtime),
+            envelope: self.envelope,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ContainerSpec {
@@ -42,7 +67,7 @@ pub struct ContainerSpec {
     pub resources: ResourceRequest,
 }
 
-pub fn router<V, R>(state: Shared<V, R>) -> Router
+pub fn router<V, R>(state: ContainerState<V, R>) -> Router
 where
     V: ChainVerifier + Send + Sync + 'static,
     R: ContainerRuntime + Send + Sync + 'static,
@@ -54,7 +79,7 @@ where
 }
 
 async fn create<V, R>(
-    State(state): State<Shared<V, R>>,
+    State(st): State<ContainerState<V, R>>,
     headers: HeaderMap,
     Json(spec): Json<ContainerSpec>,
 ) -> Response
@@ -63,14 +88,20 @@ where
     R: ContainerRuntime + Send + Sync + 'static,
 {
     let now = now_unix();
-    let mut st = state.lock().unwrap();
-    let contract = match auth(&st.provider, &headers, now) {
-        Ok(c) => c,
-        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    let contract = {
+        let p = st.provider.lock().unwrap();
+        match auth(&p, &headers, now) {
+            Ok(c) => c,
+            Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        }
     };
     let id = format!("ctr_{}", uuid::Uuid::new_v4().simple());
-    let envelope = st.envelope;
-    if let Err(e) = st.containers.admit(&contract, &id, spec.resources, envelope, now) {
+    let admit = st
+        .containers
+        .lock()
+        .unwrap()
+        .admit(&contract, &id, spec.resources, st.envelope, now);
+    if let Err(e) = admit {
         let code = match e {
             ContainerError::EnvelopeExceeded => "envelope_exceeded",
             ContainerError::NotFound => "not_found",
@@ -92,8 +123,7 @@ where
         )
             .into_response(),
         Err(e) => {
-            // Roll back the admission if the runtime couldn't start it.
-            let _ = st.containers.stop(&id, now);
+            let _ = st.containers.lock().unwrap().stop(&id, now);
             (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": { "code": "start_failed", "message": e } })),
@@ -104,7 +134,7 @@ where
 }
 
 async fn delete_container<V, R>(
-    State(state): State<Shared<V, R>>,
+    State(st): State<ContainerState<V, R>>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Response
@@ -113,13 +143,16 @@ where
     R: ContainerRuntime + Send + Sync + 'static,
 {
     let now = now_unix();
-    let mut st = state.lock().unwrap();
-    if auth(&st.provider, &headers, now).is_err() {
-        return StatusCode::UNAUTHORIZED.into_response();
+    {
+        let p = st.provider.lock().unwrap();
+        if auth(&p, &headers, now).is_err() {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
-    match st.containers.stop(&id, now) {
+    let stopped = st.containers.lock().unwrap().stop(&id, now);
+    match stopped {
         Ok((contract, cost)) => {
-            let _ = st.provider.draw_down(&contract, cost);
+            let _ = st.provider.lock().unwrap().draw_down(&contract, cost);
             let _ = st.runtime.stop(&id);
             StatusCode::NO_CONTENT.into_response()
         }
@@ -205,13 +238,13 @@ mod tests {
             per_gb_mem_hour_wei: 360_000,
             per_gpu_hour_wei: 36_000_000,
         });
-        let st = ContainerState {
-            provider,
+        let state = ContainerState::new(
+            Arc::new(Mutex::new(provider)),
             containers,
-            runtime: MockRt,
-            envelope: ResourceEnvelope { max_vcpu: 4, max_mem_gb: 8, max_gpu: 1 },
-        };
-        (router(Arc::new(Mutex::new(st))), bearer)
+            MockRt,
+            ResourceEnvelope { max_vcpu: 4, max_mem_gb: 8, max_gpu: 1 },
+        );
+        (router(state), bearer)
     }
 
     fn post(uri: &str, bearer: Option<&str>, body: serde_json::Value) -> axum::http::Request<Body> {

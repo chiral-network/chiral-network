@@ -5,11 +5,12 @@
 //! (llama.cpp / vLLM / Ollama), then meters the backend's returned `usage` and
 //! charges the ledger.
 //!
-//! Design: `docs/chiral-book.md` → "Data-Plane API: Inference (LLM)" and
-//! "Provider Implementation" → LLM. The billing math lives in
-//! [`crate::llm_provider`]; this module is the HTTP + backend-forward wrapper.
-//! The pre-forward guard rails (auth, model-not-found, insufficient balance) are
-//! unit-tested here; the forward itself is `reqwest` against a live backend.
+//! The state shares `Arc<Mutex<ProviderState>>` with the handshake router (so a
+//! session opened via `/v1/contracts/open` authorizes here) plus a read-only
+//! `Arc<LlmProvider>` catalog. Design: `docs/chiral-book.md` → "Data-Plane API:
+//! Inference (LLM)" and "Provider Implementation" → LLM. The pre-forward guard
+//! rails (auth, model-not-found, insufficient balance) are unit-tested; the
+//! forward itself is `reqwest` against a live backend.
 
 use std::sync::{Arc, Mutex};
 
@@ -25,15 +26,33 @@ use crate::contract_service::{ChainVerifier, ProviderState};
 use crate::llm_provider::{estimate_tokens, LlmProvider, Usage};
 
 pub struct LlmState<V: ChainVerifier> {
-    pub provider: ProviderState<V>,
-    pub llm: LlmProvider,
+    pub provider: Arc<Mutex<ProviderState<V>>>,
+    pub llm: Arc<LlmProvider>,
     /// Base URL of the local model backend (OpenAI-compatible).
     pub backend_url: String,
 }
 
-pub type Shared<V> = Arc<Mutex<LlmState<V>>>;
+impl<V: ChainVerifier> LlmState<V> {
+    pub fn new(provider: Arc<Mutex<ProviderState<V>>>, llm: LlmProvider, backend_url: String) -> Self {
+        LlmState {
+            provider,
+            llm: Arc::new(llm),
+            backend_url,
+        }
+    }
+}
 
-pub fn router<V: ChainVerifier + Send + Sync + 'static>(state: Shared<V>) -> Router {
+impl<V: ChainVerifier> Clone for LlmState<V> {
+    fn clone(&self) -> Self {
+        LlmState {
+            provider: Arc::clone(&self.provider),
+            llm: Arc::clone(&self.llm),
+            backend_url: self.backend_url.clone(),
+        }
+    }
+}
+
+pub fn router<V: ChainVerifier + Send + Sync + 'static>(state: LlmState<V>) -> Router {
     Router::new()
         .route("/v1/models", get(models::<V>))
         .route("/v1/chat/completions", post(chat::<V>))
@@ -47,13 +66,15 @@ struct Proceed {
 }
 
 async fn models<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<LlmState<V>>,
     headers: HeaderMap,
 ) -> Response {
     let now = now_unix();
-    let st = state.lock().unwrap();
-    if auth(&st.provider, &headers, now).is_err() {
-        return openai_err(StatusCode::UNAUTHORIZED, "invalid_request_error", "invalid_api_key");
+    {
+        let p = st.provider.lock().unwrap();
+        if auth(&p, &headers, now).is_err() {
+            return openai_err(StatusCode::UNAUTHORIZED, "invalid_request_error", "invalid_api_key");
+        }
     }
     let data: Vec<serde_json::Value> = st
         .llm
@@ -65,34 +86,27 @@ async fn models<V: ChainVerifier + Send + Sync + 'static>(
 }
 
 async fn chat<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<LlmState<V>>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let now = now_unix();
-    // Phase 1 (locked): auth, model resolution, worst-case pre-authorization.
-    let proceed = {
-        let st = state.lock().unwrap();
-        match prepare_chat(&st, &headers, &body, now) {
-            Ok(p) => p,
-            Err(resp) => return resp,
-        }
+    // Phase 1: auth, model resolution, worst-case pre-authorization.
+    let proceed = match prepare_chat(&st, &headers, &body, now) {
+        Ok(p) => p,
+        Err(resp) => return resp,
     };
-    // Phase 2 (unlocked): forward to the model backend.
+    // Phase 2: forward to the model backend (no lock held).
     let (status, json, usage) = match forward(&proceed.backend_url, &body).await {
         Ok(x) => x,
         Err(e) => return openai_err(StatusCode::BAD_GATEWAY, "api_error", &e),
     };
-    // Phase 3 (locked): meter the actual usage.
-    let (cost, balance) = {
-        let mut st = state.lock().unwrap();
-        let cost = st
-            .llm
-            .cost_wei(&proceed.model, usage.prompt_tokens, usage.completion_tokens)
-            .unwrap_or(0);
-        let balance = st.provider.draw_down(&proceed.contract, cost).unwrap_or(0);
-        (cost, balance)
-    };
+    // Phase 3: meter the actual usage.
+    let cost = st
+        .llm
+        .cost_wei(&proceed.model, usage.prompt_tokens, usage.completion_tokens)
+        .unwrap_or(0);
+    let balance = st.provider.lock().unwrap().draw_down(&proceed.contract, cost).unwrap_or(0);
     let mut resp = (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), Json(json)).into_response();
     let h = resp.headers_mut();
     h.insert("X-Chiral-Contract-Id", proceed.contract.parse().unwrap());
@@ -108,8 +122,6 @@ fn prepare_chat<V: ChainVerifier>(
     body: &serde_json::Value,
     now: u64,
 ) -> Result<Proceed, Response> {
-    let contract = auth(&st.provider, headers, now)
-        .map_err(|_| openai_err(StatusCode::UNAUTHORIZED, "invalid_request_error", "invalid_api_key"))?;
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
@@ -121,7 +133,12 @@ fn prepare_chat<V: ChainVerifier>(
     let est = estimate_tokens(&messages_text(body));
     let max_tokens = body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(256);
     let preauth = st.llm.preauth_cost_wei(&model, est, max_tokens).unwrap_or(0);
-    let balance = st.provider.ledger.balance_wei(&contract).unwrap_or(0);
+
+    let p = st.provider.lock().unwrap();
+    let contract = auth(&p, headers, now)
+        .map_err(|_| openai_err(StatusCode::UNAUTHORIZED, "invalid_request_error", "invalid_api_key"))?;
+    let balance = p.ledger.balance_wei(&contract).unwrap_or(0);
+    drop(p);
     if preauth > balance {
         return Err(openai_err(StatusCode::PAYMENT_REQUIRED, "insufficient_quota", "insufficient_balance"));
     }
@@ -230,10 +247,8 @@ mod tests {
         }
     }
 
-    /// State with one contract funded to `balance_wei`, a session, and a model.
     fn app(balance_wei: u128, per_1k_out: u128) -> (Router, String) {
         let mut provider = ProviderState::new("0xp".into(), "0x".to_string() + &"33".repeat(32), offer(), NoChain);
-        // Fund gross so the net credit is ~balance_wei; for the test just open with balance_wei.
         provider.ledger.open(CONTRACT, "0xconsumer", ResourceClass::Inference, balance_wei * 1000 / 995 + 1).unwrap();
         let cred = SessionCredential::derive(CONTRACT, u64::MAX, &[2u8; 64]).unwrap();
         let bearer = cred.bearer.clone();
@@ -242,8 +257,8 @@ mod tests {
             "llama",
             TokenRates { per_1k_input_wei: 1_000_000, per_1k_output_wei: per_1k_out },
         );
-        let st = LlmState { provider, llm, backend_url: "http://127.0.0.1:1".into() };
-        (router(Arc::new(Mutex::new(st))), bearer)
+        let state = LlmState::new(Arc::new(Mutex::new(provider)), llm, "http://127.0.0.1:1".into());
+        (router(state), bearer)
     }
 
     fn get(uri: &str, bearer: Option<&str>) -> axum::http::Request<Body> {
@@ -266,10 +281,8 @@ mod tests {
     #[tokio::test]
     async fn models_lists_after_auth() {
         let (app, bearer) = app(1_000_000_000_000_000_000, 2_000_000);
-        // Unauthenticated -> 401.
         let r = app.clone().oneshot(get("/v1/models", None)).await.unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-        // Authenticated -> the model list.
         let r = app.oneshot(get("/v1/models", Some(&bearer))).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
@@ -289,7 +302,6 @@ mod tests {
 
     #[tokio::test]
     async fn insufficient_balance_is_402_before_any_forward() {
-        // Tiny balance, huge output rate + max_tokens => preauth >> balance.
         let (app, bearer) = app(1000, 1_000_000_000_000_000);
         let body = serde_json::json!({
             "model": "llama",
