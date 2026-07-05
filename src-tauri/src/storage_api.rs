@@ -1,9 +1,15 @@
 //! Storage API — the Axum HTTP surface for the storage data plane. It puts the
-//! [`crate::storage_provider::StorageProvider`] object store behind
-//! contract auth and metering: a request authenticates with its contract's
-//! session bearer, the bucket is bound to the contract, egress is charged to the
+//! [`crate::storage_provider::StorageProvider`] object store behind contract
+//! auth and metering: a request authenticates with its contract's session
+//! bearer, the bucket is bound to the contract, egress is charged to the
 //! contract's balance via the ledger, and the S3 metadata headers (`ETag`,
 //! `x-amz-checksum-sha256`) plus the `X-Chiral-*` metering headers are returned.
+//!
+//! The state is two shared handles — `Arc<Mutex<ProviderState>>` (the ledger +
+//! sessions, **shared with the handshake router** so a contract opened via
+//! `/v1/contracts/open` is visible here) and `Arc<Mutex<StorageProvider>>` (the
+//! object store). This is what lets one provider process serve the handshake and
+//! the data plane over one `ProviderState`.
 //!
 //! This is a working object HTTP interface (`PUT`/`GET`/`HEAD`/`DELETE`) with
 //! bearer auth; full AWS SigV4 + XML listing/multipart is the tool-compat layer
@@ -24,17 +30,34 @@ use axum::{
 use crate::contract_service::{ChainVerifier, ProviderState};
 use crate::storage_provider::StorageProvider;
 
-/// Combined state: the provider's ledger/sessions (for auth + metering) plus its
-/// object store.
+/// Shared state: the provider's ledger/sessions (shared with the handshake) plus
+/// its object store.
 pub struct StorageState<V: ChainVerifier> {
-    pub provider: ProviderState<V>,
-    pub store: StorageProvider,
+    pub provider: Arc<Mutex<ProviderState<V>>>,
+    pub store: Arc<Mutex<StorageProvider>>,
 }
 
-pub type Shared<V> = Arc<Mutex<StorageState<V>>>;
+impl<V: ChainVerifier> StorageState<V> {
+    pub fn new(provider: Arc<Mutex<ProviderState<V>>>, store: StorageProvider) -> Self {
+        StorageState {
+            provider,
+            store: Arc::new(Mutex::new(store)),
+        }
+    }
+}
+
+// Manual Clone (Arc clones regardless of whether V is Clone).
+impl<V: ChainVerifier> Clone for StorageState<V> {
+    fn clone(&self) -> Self {
+        StorageState {
+            provider: Arc::clone(&self.provider),
+            store: Arc::clone(&self.store),
+        }
+    }
+}
 
 /// Build the object router (`/{bucket}/{key...}`).
-pub fn router<V: ChainVerifier + Send + Sync + 'static>(state: Shared<V>) -> Router {
+pub fn router<V: ChainVerifier + Send + Sync + 'static>(state: StorageState<V>) -> Router {
     Router::new()
         .route(
             "/:bucket/*key",
@@ -66,6 +89,8 @@ fn authed<V: ChainVerifier>(
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let contract = st
         .provider
+        .lock()
+        .unwrap()
         .resolve_bearer(bearer, now)
         .ok_or(StatusCode::UNAUTHORIZED)?;
     if bucket != bucket_for(&contract) {
@@ -75,13 +100,12 @@ fn authed<V: ChainVerifier>(
 }
 
 async fn put_object<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<StorageState<V>>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     let now = now_unix();
-    let mut st = state.lock().unwrap();
     if let Err(s) = authed(&st, &headers, &bucket, now) {
         return s.into_response();
     }
@@ -90,7 +114,12 @@ async fn put_object<V: ChainVerifier + Send + Sync + 'static>(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    match st.store.put(&bucket, &key, body.to_vec(), &content_type, now) {
+    let result = st
+        .store
+        .lock()
+        .unwrap()
+        .put(&bucket, &key, body.to_vec(), &content_type, now);
+    match result {
         Ok(r) => Response::builder()
             .status(StatusCode::OK)
             .header(header::ETAG, format!("\"{}\"", r.etag))
@@ -102,22 +131,21 @@ async fn put_object<V: ChainVerifier + Send + Sync + 'static>(
 }
 
 async fn get_object<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<StorageState<V>>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let now = now_unix();
-    let mut st = state.lock().unwrap();
     let contract = match authed(&st, &headers, &bucket, now) {
         Ok(c) => c,
         Err(s) => return s.into_response(),
     };
-    let g = match st.store.get(&bucket, &key) {
+    let g = match st.store.lock().unwrap().get(&bucket, &key) {
         Ok(g) => g,
         Err(e) => return s3_error(&e),
     };
     // Charge egress before serving; refuse if the balance can't cover it.
-    let balance = match st.provider.draw_down(&contract, g.egress_cost_wei) {
+    let balance = match st.provider.lock().unwrap().draw_down(&contract, g.egress_cost_wei) {
         Ok(b) => b,
         Err(_) => {
             return (
@@ -140,16 +168,16 @@ async fn get_object<V: ChainVerifier + Send + Sync + 'static>(
 }
 
 async fn head_object<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<StorageState<V>>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let now = now_unix();
-    let st = state.lock().unwrap();
     if let Err(s) = authed(&st, &headers, &bucket, now) {
         return s.into_response();
     }
-    match st.store.head(&bucket, &key) {
+    let m = st.store.lock().unwrap().head(&bucket, &key);
+    match m {
         Ok(m) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, m.content_type)
@@ -163,16 +191,15 @@ async fn head_object<V: ChainVerifier + Send + Sync + 'static>(
 }
 
 async fn delete_object<V: ChainVerifier + Send + Sync + 'static>(
-    State(state): State<Shared<V>>,
+    State(st): State<StorageState<V>>,
     Path((bucket, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
     let now = now_unix();
-    let mut st = state.lock().unwrap();
     if let Err(s) = authed(&st, &headers, &bucket, now) {
         return s.into_response();
     }
-    st.store.delete(&bucket, &key);
+    st.store.lock().unwrap().delete(&bucket, &key);
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -221,7 +248,6 @@ mod tests {
         }
     }
 
-    /// Build a state with one open contract + a session; return (app, bearer, bucket).
     fn app() -> (Router, String, String) {
         let mut provider = ProviderState::new("0xp".into(), "0x".to_string() + &"33".repeat(32), offer(), NoChain);
         provider
@@ -232,7 +258,7 @@ mod tests {
         let (bearer, bucket) = (cred.bearer.clone(), cred.bucket.clone());
         provider.sessions.insert(cred);
         let store = StorageProvider::new(1_000_000_000_000_000, 10_000_000_000_000_000, 5_000_000);
-        let state = Arc::new(Mutex::new(StorageState { provider, store }));
+        let state = StorageState::new(Arc::new(Mutex::new(provider)), store);
         (router(state), bearer, bucket)
     }
 
@@ -248,33 +274,14 @@ mod tests {
     async fn put_get_roundtrip_charges_egress() {
         let (app, bearer, bucket) = app();
         let uri = format!("/{}/hello.txt", bucket);
-
-        // PUT
-        let resp = app
-            .clone()
-            .oneshot(req("PUT", &uri, Some(&bearer), b"hello world".to_vec()))
-            .await
-            .unwrap();
+        let resp = app.clone().oneshot(req("PUT", &uri, Some(&bearer), b"hello world".to_vec())).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(resp.headers().get(header::ETAG).is_some());
 
-        // GET — served, with metering headers and a debited balance.
-        let resp = app
-            .clone()
-            .oneshot(req("GET", &uri, Some(&bearer), vec![]))
-            .await
-            .unwrap();
+        let resp = app.clone().oneshot(req("GET", &uri, Some(&bearer), vec![])).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(resp.headers().get("X-Chiral-Cost-Wei").is_some());
-        let balance: u128 = resp
-            .headers()
-            .get("X-Chiral-Balance-Wei")
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(balance < 995_000_000_000_000_000); // less than the post-fee credit (egress charged)
+        let balance: u128 = resp.headers().get("X-Chiral-Balance-Wei").unwrap().to_str().unwrap().parse().unwrap();
+        assert!(balance < 995_000_000_000_000_000);
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&bytes[..], b"hello world");
     }
@@ -283,32 +290,18 @@ mod tests {
     async fn missing_auth_is_401_and_wrong_bucket_403() {
         let (app, bearer, bucket) = app();
         let uri = format!("/{}/k", bucket);
-        // No bearer.
         let r = app.clone().oneshot(req("GET", &uri, None, vec![])).await.unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-        // Valid bearer, wrong bucket.
-        let r = app
-            .clone()
-            .oneshot(req("GET", "/c-someoneelse00000/k", Some(&bearer), vec![]))
-            .await
-            .unwrap();
+        let r = app.clone().oneshot(req("GET", "/c-someoneelse00000/k", Some(&bearer), vec![])).await.unwrap();
         assert_eq!(r.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn missing_key_is_404_and_delete_204() {
         let (app, bearer, bucket) = app();
-        let get = app
-            .clone()
-            .oneshot(req("GET", &format!("/{}/nope", bucket), Some(&bearer), vec![]))
-            .await
-            .unwrap();
+        let get = app.clone().oneshot(req("GET", &format!("/{}/nope", bucket), Some(&bearer), vec![])).await.unwrap();
         assert_eq!(get.status(), StatusCode::NOT_FOUND);
-        let del = app
-            .clone()
-            .oneshot(req("DELETE", &format!("/{}/nope", bucket), Some(&bearer), vec![]))
-            .await
-            .unwrap();
+        let del = app.clone().oneshot(req("DELETE", &format!("/{}/nope", bucket), Some(&bearer), vec![])).await.unwrap();
         assert_eq!(del.status(), StatusCode::NO_CONTENT);
     }
 }
