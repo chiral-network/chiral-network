@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod cdn_server;
 pub mod chain_rpc_api;
+pub mod codec;
 pub mod dht;
 pub mod drive_api;
 pub mod drive_storage;
@@ -18,6 +19,7 @@ pub mod relay_share_proxy;
 pub mod reputation;
 pub mod resource_offer;
 pub mod rpc_client;
+pub mod service_contract;
 mod speed_tiers;
 pub mod version;
 pub mod wallet;

@@ -19,8 +19,8 @@
 //! determinism matters for the signature, and both sides use this module.
 
 use serde::{Deserialize, Serialize};
-use tiny_keccak::{Hasher, Keccak};
 
+use crate::codec::{canonical_json, keccak256, put_lp};
 use crate::wallet;
 
 /// Domain tag mixed into the signed payload so an offer signature can never be
@@ -107,11 +107,7 @@ impl ResourceOffer {
     /// to inside a contract transaction. 0x-prefixed hex. Any change to the
     /// offer's terms (price, endpoint, capacity, …) changes the `offer_ref`.
     pub fn offer_ref(&self) -> String {
-        let mut k = Keccak::v256();
-        k.update(&self.signing_payload());
-        let mut out = [0u8; 32];
-        k.finalize(&mut out);
-        format!("0x{}", hex::encode(out))
+        format!("0x{}", hex::encode(keccak256(&self.signing_payload())))
     }
 
     /// DHT key under which the offer is stored (`chiral_offer_<class>_<wallet>`).
@@ -160,35 +156,7 @@ impl ResourceOffer {
     }
 }
 
-fn put_lp(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
-/// Deterministic JSON: object keys sorted recursively, compact output. Ensures
-/// the structured `capacity` / `price_schedule` fields hash identically on both
-/// sides regardless of the serializer's key ordering (robust even if
-/// `serde_json`'s `preserve_order` feature is ever enabled).
-fn canonical_json(v: &serde_json::Value) -> String {
-    fn canon(v: &serde_json::Value) -> serde_json::Value {
-        match v {
-            serde_json::Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                let mut sorted = serde_json::Map::new();
-                for k in keys {
-                    sorted.insert(k.clone(), canon(&map[k]));
-                }
-                serde_json::Value::Object(sorted)
-            }
-            serde_json::Value::Array(arr) => {
-                serde_json::Value::Array(arr.iter().map(canon).collect())
-            }
-            other => other.clone(),
-        }
-    }
-    serde_json::to_string(&canon(v)).unwrap_or_default()
-}
+// `put_lp` / `canonical_json` / `keccak256` now live in `crate::codec`.
 
 #[cfg(test)]
 mod tests {
@@ -291,12 +259,6 @@ mod tests {
             ResourceOffer::class_index_key(ResourceClass::Inference),
             "chiral_offers_inference"
         );
-    }
-
-    #[test]
-    fn canonical_json_sorts_keys() {
-        let a = json!({ "b": 1, "a": 2, "nested": { "y": 1, "x": 2 } });
-        assert_eq!(canonical_json(&a), r#"{"a":2,"b":1,"nested":{"x":2,"y":1}}"#);
     }
 
     #[test]
