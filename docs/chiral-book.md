@@ -151,6 +151,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Resource Offers (Discovery)](#resource-offers-discovery)
 - [Resource Interfaces](#resource-interfaces)
 - [Service Contracts and the Handshake](#service-contracts-and-the-handshake)
+- [Wire Protocol & API Reference](#wire-protocol--api-reference-contract-spine)
 - [Reputation System](#reputation-system)
 - [Open Design Decisions](#open-design-decisions)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
@@ -329,6 +330,144 @@ A **service contract** is the agreement between a consumer and a provider, commi
 
 - **Cryptographic:** the payee and amount (the tx), the consumer's identity (`from`), the agreed terms (`terms_hash` in `data`, matched against the provider's signed offer), and no replay/double-open (contract ledger + chain-id + low-`s`).
 - **By reputation:** that the provider then *delivers* the metered resource and meters it honestly. A provider that takes a contract and cheats can do so once per victim, bounded by that victim's prepaid balance, and the conduct is recorded against the paid wallet.
+
+---
+
+## Wire Protocol & API Reference (Contract Spine)
+
+> **Status: normative spec for v1 of the shared spine** — the signed encodings, the handshake, the contract transaction, and the session credential. The three class data-plane APIs (S3, container, LLM) get their own reference in a later pass. Reconcile exact symbol names with current `main` at implementation time.
+
+### Conventions
+
+- **Transport.** HTTPS to the provider's offer `endpoint`; control-plane paths live under `/v1/`. JSON bodies are `Content-Type: application/json; charset=utf-8`.
+- **Hashing & signatures.** `keccak256` for all digests. Signatures are secp256k1 **recoverable**, low-`s` (EIP-2), 65 bytes `r ‖ s ‖ v` as `0x`-hex; the signer is recovered with `ecrecover` and must equal the claimed wallet (same primitive as `wallet::recover_signer`).
+- **Hex & numbers.** Binary fields (addresses, hashes, nonces, signatures) are `0x`-prefixed lower-case hex. Wei amounts are decimal **strings** (they exceed JS safe-integer range).
+- **Canonical byte encoding** for signed records:
+  ```
+  lp(b)                 = uint32_be(len(b)) ‖ b        # length-prefixed bytes
+  jcs(obj)              = RFC-8785 canonical JSON (sorted keys, no space), UTF-8
+  canonical(tag, f₁…fₙ) = lp(ascii(tag)) ‖ lp(f₁) ‖ … ‖ lp(fₙ)
+  digest                = keccak256(canonical(…))
+  ```
+  Addresses are 20 raw bytes; `u128`/`u64` integers are fixed big-endian (16 / 8 bytes); structured sub-objects (`capacity`, `price_schedule`, `params`) are `jcs(...)` bytes. The domain tag makes a signature for one record type unusable as another.
+- **Versioning.** Every request carries `X-Chiral-Client-Version: <semver>`; a provider returns `426 Upgrade Required` (policy JSON in the body) below `minRequired` — the same gate as the rest of the network.
+- **Error envelope** (all non-S3 endpoints; S3 data-plane uses S3-native XML for tool compatibility):
+  ```json
+  { "error": { "code": "below_min_funding", "message": "human text",
+               "retryable": false, "detail": {} } }
+  ```
+
+### Signed encodings
+
+**Resource offer** — domain tag `chiral-offer-v1`, fields in order:
+```
+provider_wallet : addr(20)
+resource_class  : u8          # 1=storage 2=container 3=inference
+capacity        : jcs(...)    # class-specific (see Resource Offers)
+price_schedule  : jcs(...)
+endpoint        : utf8        # "https://host[:port]"
+region          : utf8
+min_funding_wei : u128(16)
+offer_nonce     : u64(8)
+valid_until     : u64(8)      # unix seconds
+```
+`offer_signature = sign(keccak256(canonical("chiral-offer-v1", …)))`.
+`offer_ref = keccak256(canonical("chiral-offer-v1", …))` — 32 bytes; names the exact signed offer the consumer accepted (any change to price / endpoint / etc. changes `offer_ref`).
+
+**Contract terms** — the full negotiated deal, hashed into the on-chain commitment. A JSON object hashed with JCS:
+```json
+{ "offer_ref":"0x…", "provider_wallet":"0x…", "consumer_wallet":"0x…",
+  "resource_class":"storage", "funding_amount_wei":"…", "rates":{…},
+  "params":{…}, "contract_nonce":"0x…16", "expiry":1712345678 }
+```
+`terms_hash = keccak256(jcs(terms))`. Both sides compute it identically; the consumer commits it on-chain, the provider recomputes and checks equality at `open`.
+
+**Contract transaction `data`** — compact fixed layout, 84 bytes:
+```
+MAGIC(4)=0x43485231 "CHR1" ‖ offer_ref(32) ‖ terms_hash(32) ‖ contract_nonce(16)
+```
+The tx itself: `to = provider_wallet`, `value = funding_amount_wei`, signed by the consumer wallet. **Top-up** txs use `MAGIC=0x43485232 "CHR2" ‖ contract_id(32)` (36 bytes) so the provider credits the right open contract.
+
+### Handshake endpoints
+
+#### `POST /v1/contracts/propose`
+Request:
+```json
+{ "offer_ref":"0x…32", "consumer_wallet":"0x…20",
+  "funding_amount_wei":"1000000000000000000", "params":{ /* class-specific */ } }
+```
+`200 OK`:
+```json
+{ "provider_wallet":"0x…", "resource_class":"storage",
+  "contract_nonce":"0x…16", "terms":{ /* full terms object */ },
+  "terms_hash":"0x…32", "quote_expires_at":1712345678 }
+```
+| Status | `error.code` | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | malformed body / params fail the class schema |
+| 404 | `offer_not_found` | `offer_ref` unknown or expired |
+| 409 | `below_min_funding` | `funding_amount_wei < min_funding` |
+| 409 | `capacity_unavailable` | provider cannot currently honor the shape |
+| 426 | `upgrade_required` | client below `minRequired` |
+
+The `contract_nonce` is single-use and ties this quote to the eventual on-chain commitment; `quote_expires_at` bounds how long the consumer has to commit.
+
+#### `POST /v1/contracts/open`
+Request: `{ "tx_hash":"0x…32" }`
+`201 Created`:
+```json
+{ "contract_id":"0x…32", "status":"open",
+  "funded_wei":"1000000000000000000", "fee_wei":"5000000000000000",
+  "balance_wei":"995000000000000000",
+  "credential":{ /* see Session credential */ },
+  "opened_at":1712345678, "expires_at":1712432078 }
+```
+`202 Accepted` (optimistic; tx seen but not yet confirmed): `{ "contract_id":"0x…", "status":"pending", "retry_after_s":15 }`.
+| Status | `error.code` | `retryable` | Meaning |
+|---|---|---|---|
+| 402 | `payment_invalid` | false | wrong recipient / amount / chain, or `terms_hash`/`offer_ref` mismatch |
+| 404 | `tx_not_found` | true | not yet visible on-chain — retry after `retry_after_s` |
+| 409 | `already_open` | — | idempotent: returns the existing contract body |
+| 410 | `quote_expired` | false | `contract_nonce` / quote no longer valid |
+
+Verification at `open`: `to == provider_wallet`, `value == terms.funding_amount_wei`, `chainId == geth::chain_id()`, `data` parses to the quoted `offer_ref` + `terms_hash` + an unused `contract_nonce`, and `from == terms.consumer_wallet`; then `(tx_hash, provider)` is recorded in the contract ledger (replay-proof), `split_payment` cuts the fee, and the balance is credited. The 402-vs-404 split mirrors the seeder `PaymentProof` handler (permanent vs retryable).
+
+#### `GET /v1/contracts/:contract_id`
+Auth: `Authorization: Bearer <session bearer>`.
+`200 OK`:
+```json
+{ "contract_id":"0x…", "status":"open|paused|closed",
+  "funded_wei":"…", "spent_wei":"…", "balance_wei":"…",
+  "rates":{…}, "usage":{ /* class-specific meters */ }, "updated_at":1712345678 }
+```
+`401 unauthorized` on a bad/absent credential; `404` if unknown.
+
+#### `POST /v1/contracts/:contract_id/topup`
+Request `{ "tx_hash":"0x…" }` (a `CHR2` tx referencing this contract). `200 OK` returns the updated balance; same 402 / 404 semantics as `open`.
+
+### Session credential
+
+Issued in the `open` response, bound to `contract_id`, scoped to that contract's resources only:
+```json
+{ "bearer":"chi_sess_<≥43 base64url chars>",
+  "s3":{ "endpoint":"https://host", "region":"chiral",
+         "access_key_id":"AKIA…", "secret_access_key":"…",
+         "bucket":"c-<contract_id[:16]>" },
+  "expires_at":1712432078 }
+```
+- **Bearer** — an opaque, high-entropy token (≥256 bits) the provider maps server-side to the contract. Presented as `Authorization: Bearer <bearer>` on the control-plane, container, and LLM APIs. Treat it as a password: whoever holds it can spend the contract's balance-worth of service until `expires_at`.
+- **S3** — an access-key/secret pair for standard SigV4; the provider maps `access_key_id → contract`, so unmodified S3 SDKs/CLIs work.
+- **Lifetime & rotation** — valid while the contract is `open` and before `expires_at`; rotate with `POST /v1/contracts/:id/credential:rotate` (invalidates the prior credential). The credential grants no authority beyond the contract — it is a transport convenience over the on-chain proof of contract control, not an independent grant.
+- *Optional variant:* a provider-signed capability token — `base64url(jcs{contract_id,scope,exp}) . base64url(sig)` — for stateless verification without server-side session state. Opaque bearer is the v1 default.
+
+### Metering headers (data-plane)
+
+Every storage / container / inference response carries drawdown telemetry so any client can watch billing in real time:
+```
+X-Chiral-Contract-Id: 0x…
+X-Chiral-Cost-Wei:     12500000000000      # cost attributed to this request
+X-Chiral-Balance-Wei:  982500000000000     # remaining after this request
+```
 
 ---
 
