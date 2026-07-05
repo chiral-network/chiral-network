@@ -333,6 +333,77 @@ impl<V: ChainVerifier> ProviderState<V> {
     }
 }
 
+/// Production [`ChainVerifier`]: reads the funding transaction on-chain through
+/// the shared RPC client (`eth_getTransactionByHash`), extracting the sender,
+/// value, and `data` (the contract commitment), and checking the recipient is
+/// the provider and the chain id is this network's. `confirmed` is `false` while
+/// the tx is only in the mempool (no `blockNumber`), which the caller turns into
+/// a retryable "pending".
+///
+/// The `ChainVerifier` trait is synchronous but the RPC is async; this bridges
+/// with `block_in_place` + the current runtime handle, which is sound on the
+/// daemon's multi-threaded Tokio runtime (a provider always runs one).
+pub struct RpcChainVerifier;
+
+impl ChainVerifier for RpcChainVerifier {
+    fn verify_funding(&self, tx_hash: &str, expected_to: &str) -> Result<VerifiedFunding, String> {
+        let tx_hash = tx_hash.to_string();
+        let expected_to = expected_to.to_lowercase();
+        tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(async move {
+                let endpoints = crate::geth::wallet_rpc_endpoints();
+                let tx = crate::rpc_client::call_with_fallbacks(
+                    &endpoints,
+                    "eth_getTransactionByHash",
+                    serde_json::json!([tx_hash]),
+                )
+                .await?;
+                if tx.is_null() {
+                    return Err("tx_not_found".to_string());
+                }
+                let to = tx
+                    .get("to")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if to != expected_to {
+                    return Err("payment_invalid: wrong recipient".to_string());
+                }
+                if let Some(cid) = tx.get("chainId").and_then(|v| v.as_str()) {
+                    let observed = crate::rpc_client::hex_to_u128(cid).map_err(|e| format!("chainId: {e}"))?;
+                    if observed != crate::geth::chain_id() as u128 {
+                        return Err("payment_invalid: wrong chain".to_string());
+                    }
+                }
+                let from = tx
+                    .get("from")
+                    .and_then(|f| f.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let value_hex = tx
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .ok_or("tx missing value")?;
+                let value_wei =
+                    crate::rpc_client::hex_to_u128(value_hex).map_err(|e| format!("value: {e}"))?;
+                let input = tx.get("input").and_then(|v| v.as_str()).unwrap_or("0x");
+                let data = hex::decode(input.trim_start_matches("0x"))
+                    .map_err(|e| format!("bad input hex: {e}"))?;
+                let confirmed = tx
+                    .get("blockNumber")
+                    .map(|b| !b.is_null())
+                    .unwrap_or(false);
+                Ok(VerifiedFunding {
+                    from,
+                    value_wei,
+                    data,
+                    confirmed,
+                })
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
