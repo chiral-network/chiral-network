@@ -21,6 +21,7 @@ pub mod reputation;
 pub mod resource_offer;
 pub mod rpc_client;
 pub mod service_contract;
+pub mod session_credential;
 mod speed_tiers;
 pub mod usage_receipt;
 pub mod version;
