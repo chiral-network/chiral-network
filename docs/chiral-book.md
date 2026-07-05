@@ -153,6 +153,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Service Contracts and the Handshake](#service-contracts-and-the-handshake)
 - [Wire Protocol & API Reference](#wire-protocol--api-reference-contract-spine)
 - [Data-Plane API: Storage (S3)](#data-plane-api-storage-s3)
+- [Data-Plane API: Compute (Containers)](#data-plane-api-compute-containers)
 - [Reputation System](#reputation-system)
 - [Open Design Decisions](#open-design-decisions)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
@@ -541,6 +542,99 @@ A consumer exposes an object anonymously two ways: a **presigned GET** (SigV4 qu
 | Integrity | ETag = MD5; content hash via `x-amz-checksum-sha256` |
 | Durability | single-provider, non-refundable; no cross-region replication |
 | Not in v1 | versioning, lifecycle rules, bucket policies / CORS config, object tagging, SSE-KMS |
+
+---
+
+## Data-Plane API: Compute (Containers)
+
+> **Status: normative v1 spec for the container data plane** — a Chiral-native control API over a hardened OCI runtime (isolation model in [Resource Interfaces](#resource-interfaces)). Bearer-authenticated against the contract; MicroVM isolation is the noted post-v1 path.
+
+### Auth & envelope
+
+- **Auth.** `Authorization: Bearer <session bearer>` (the [session credential](#session-credential)). Paths under `/v1/`, JSON bodies, the spine's [error envelope](#conventions) and `X-Chiral-*` metering headers on every response.
+- **Resource envelope.** The contract `terms.params` fix what the contract may consume — `max_vcpu`, `max_mem_gb`, `max_gpu` (model + count), and the allowed image registries. A contract may run **one or more** containers concurrently as long as their summed requests fit the envelope; metering sums all running containers.
+
+### Endpoints
+
+| Operation | Request | Success |
+|---|---|---|
+| Run container | `POST /v1/containers` | `201` container object |
+| List | `GET /v1/containers` | `200` `{ "containers": [...] }` |
+| Inspect | `GET /v1/containers/:id` | `200` container object |
+| Logs | `GET /v1/containers/:id/logs?since=&tail=&follow=` | `200` text (or SSE if `follow=true`) |
+| Stats | `GET /v1/containers/:id/stats` | `200` utilization snapshot |
+| Stop | `POST /v1/containers/:id/stop` | `200` (halts metering; allocation released) |
+| Delete | `DELETE /v1/containers/:id` | `204` (stop + remove) |
+
+#### `POST /v1/containers`
+Request:
+```json
+{ "image": "docker.io/library/nginx:1.27",
+  "cmd": ["nginx","-g","daemon off;"],
+  "env": { "KEY": "value" },
+  "ports": [ { "container_port": 80, "protocol": "tcp" } ],
+  "resources": { "vcpu": 2, "mem_gb": 4, "gpu": { "model": "a100", "count": 1 } },
+  "pull_secret": { "registry": "…", "auth": "…" } }
+```
+`201 Created`:
+```json
+{ "container_id": "ctr_<base32>", "status": "provisioning",
+  "image_digest": "sha256:…",
+  "resources": { "vcpu": 2, "mem_gb": 4, "gpu": { "model": "a100", "count": 1 } },
+  "endpoints": [ { "container_port": 80, "url": "https://ctr-<id>-80.<provider-host>", "proto": "https" } ],
+  "created_at": 1712345678 }
+```
+The provider pulls `image` (allowed registries only), enforces the [isolation profile](#resource-interfaces) (non-privileged, read-only rootfs, dropped caps, seccomp, cgroup caps, egress policy), and reverse-proxies each exposed `container_port` at an assigned HTTPS subdomain (TLS terminated at the provider).
+
+#### `GET /v1/containers/:id`
+```json
+{ "container_id": "ctr_…", "status": "running",
+  "resources": {…}, "endpoints": [...],
+  "uptime_s": 3600,
+  "usage": { "vcpu_seconds": 7200, "gpu_seconds": 3600, "cost_wei": "…" },
+  "health": "healthy", "restart_count": 0, "updated_at": 1712349278 }
+```
+
+#### `GET /v1/containers/:id/logs`
+`follow=false` (default) returns the buffered tail as `text/plain`; `follow=true` streams new lines as `text/event-stream` (SSE) until the client disconnects or the container exits.
+
+#### `GET /v1/containers/:id/stats`
+```json
+{ "cpu_pct": 41.2, "mem_used_mb": 812, "mem_limit_mb": 4096,
+  "gpu_pct": 88.0, "net_rx_bytes": 0, "net_tx_bytes": 0, "sampled_at": 1712349278 }
+```
+
+### Ingress & networking
+
+- Each exposed `container_port` gets an assigned **HTTPS subdomain** (`https://ctr-<id>-<port>.<provider-host>`), TLS-terminated at the provider and reverse-proxied to the container. Raw TCP port mapping is a post-v1 option.
+- Outbound egress is permitted under the provider's abuse policy; egress bandwidth is billed at the offer's `per_gb_egress` when set, otherwise folded into the runtime rate.
+
+### Isolation constraints (wire-visible)
+
+A request for `privileged: true`, host networking, host bind-mounts, or capabilities outside the allowed set is rejected with `400 invalid_spec`. The rootfs is read-only unless the spec declares an ephemeral, size-capped writable scratch. Durable state is achieved by mounting a Storage-class bucket, not a local volume (v1).
+
+### Metering, states & exhaustion
+
+- **Billed:** per-second wall-clock × the contract's `per_vcpu_hour` / `per_gb_mem_hour` / `per_gpu_hour`, summed over running containers, plus egress if priced. GPU time is billed while allocated.
+- **States:** `provisioning → running → (stopped | exited | failed) → removed`. `stopped` (via `/stop` or balance exhaustion) releases the allocation and halts metering; the ephemeral rootfs does **not** survive a stop.
+- **Exhaustion:** at zero balance running containers are stopped and the contract enters `ContractPaused`; a top-up re-enables new runs (previous ephemeral state is gone).
+
+### Errors
+
+| HTTP | `error.code` | Meaning |
+|---|---|---|
+| 400 | `invalid_spec` | bad image ref / resources / a rejected privileged or host option |
+| 402 | `insufficient_balance` | balance cannot cover the requested shape |
+| 403 | `contract_paused` | balance exhausted |
+| 404 | `container_not_found` | unknown id |
+| 409 | `envelope_exceeded` | request + running containers exceed the contract cap |
+| 409 | `capacity_unavailable` | provider cannot currently place the workload |
+| 422 | `image_not_allowed` | registry not in the offer's allowlist |
+| 422 | `image_pull_failed` | pull or auth error |
+
+### v1 limits
+
+Ephemeral rootfs only (durable state via a mounted Storage bucket); HTTP(S) ingress only (no raw TCP); hardened-OCI isolation (no microVM); one spec = one container (no autoscaling/orchestration); bring a prebuilt image (no in-provider build).
 
 ---
 
