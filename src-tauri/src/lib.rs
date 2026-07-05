@@ -27,6 +27,7 @@ pub mod rpc_client;
 pub mod service_contract;
 pub mod session_credential;
 mod speed_tiers;
+pub mod storage_api;
 pub mod storage_provider;
 pub mod usage_receipt;
 pub mod version;
