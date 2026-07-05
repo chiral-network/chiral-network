@@ -8,6 +8,7 @@ pub mod contract_api;
 pub mod contract_ledger;
 pub mod contract_service;
 pub mod dht;
+pub mod docker_runtime;
 pub mod drive_api;
 pub mod drive_storage;
 mod encryption;

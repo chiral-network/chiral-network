@@ -6,17 +6,16 @@
 //! Router assembly ([`build`]) is separated from the serve loop ([`run`]) so the
 //! config → offer → router path is unit-testable without binding a socket.
 //!
-//! Not yet wired (each behind a clear seam): publishing the offer to the DHT
-//! (so it's discoverable), and the real `bollard` container runtime — a
-//! [`StubRuntime`] stands in so a compute provider still serves the handshake
-//! and reports a clear error on container creates until Docker is wired.
+//! The compute provider uses the real [`crate::docker_runtime::DockerCliRuntime`]
+//! (the `docker` CLI). One marked seam remains: publishing the offer to the DHT
+//! so it is discoverable (`// TODO` in [`build`]).
 
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use serde_json::Value;
 
-use crate::container_provider::{ContainerProvider, ContainerRates, ContainerRuntime, ResourceEnvelope, ResourceRequest};
+use crate::container_provider::{ContainerProvider, ContainerRates, ResourceEnvelope};
 use crate::contract_service::{ProviderState, RpcChainVerifier};
 use crate::llm_provider::LlmProvider;
 use crate::provider_gateway;
@@ -81,18 +80,6 @@ pub enum Assembled {
     Storage { control: Router, data: Router },
 }
 
-/// A placeholder container runtime until the `bollard` driver is wired: the
-/// handshake still works, container creates fail with a clear message.
-pub struct StubRuntime;
-impl ContainerRuntime for StubRuntime {
-    fn start(&self, _id: &str, _image: &str, _req: ResourceRequest) -> Result<String, String> {
-        Err("container runtime not configured (build with the bollard runtime)".to_string())
-    }
-    fn stop(&self, _id: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 fn address_from_key(pk: &str) -> Result<String, String> {
     let sig = crate::wallet::sign_message(pk, b"chiral-provider-address")?;
     crate::wallet::recover_signer(b"chiral-provider-address", &sig)
@@ -154,7 +141,7 @@ pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
             Ok(Assembled::Single(provider_gateway::compute_gateway(
                 shared,
                 ContainerProvider::new(rates),
-                StubRuntime,
+                crate::docker_runtime::DockerCliRuntime::new(config.endpoint.clone()),
                 envelope,
             )))
         }
