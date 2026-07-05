@@ -20,6 +20,7 @@ pub mod hosting_server;
 pub mod llm_api;
 pub mod llm_provider;
 pub mod network;
+pub mod provider_daemon;
 pub mod provider_gateway;
 pub mod rating_api;
 pub mod rating_storage;

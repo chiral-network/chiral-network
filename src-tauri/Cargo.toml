@@ -36,6 +36,10 @@ path = "src/bin/chiral_daemon.rs"
 name = "chiral-policy-sign"
 path = "src/bin/chiral_policy_sign.rs"
 
+[[bin]]
+name = "chiral_provider"
+path = "src/bin/chiral_provider.rs"
+
 [build-dependencies]
 ed25519-dalek = "2.0"
 hex = "0.4"
