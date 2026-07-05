@@ -150,8 +150,10 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Architecture](#architecture)
 - [Resource Offers (Discovery)](#resource-offers-discovery)
 - [Resource Interfaces](#resource-interfaces)
-- [Settlement and Balances](#settlement-and-balances)
+- [Service Contracts and the Handshake](#service-contracts-and-the-handshake)
 - [Reputation System](#reputation-system)
+- [Open Design Decisions](#open-design-decisions)
+- [Implementation Plan (Milestones)](#implementation-plan-milestones)
 - [Identity and Wallet](#identity-and-wallet)
 - [Blockchain and Mining](#blockchain-and-mining)
 - [Version Enforcement](#version-enforcement)
@@ -221,79 +223,112 @@ The application consists of three layers:
 
 ### Data Flow: Renting a Resource
 
-1. Consumer searches the DHT for offers of a class (e.g. `storage`), receiving signed offers.
-2. Consumer verifies each offer's signature, drops invalid ones, and ranks survivors by price and provider Elo.
-3. Consumer funds a prepaid balance: an on-chain CHI payment to the chosen provider's wallet.
-4. Provider verifies the payment against the chain (mined, correct recipient, amount, chain ID) and credits the consumer's balance, splitting off the platform fee via `split_payment`.
-5. Consumer uses the resource over the provider's HTTP API (S3 / submission / OpenAI-compatible).
-6. Provider meters usage and draws the balance down at published rates; service pauses when the balance is exhausted until the consumer tops up.
-7. Consumer submits a payment-gated rating; the provider's reputation updates.
+1. **Discover.** Consumer searches the DHT for offers of a class (e.g. `storage`), verifies each offer's signature, drops invalid/expired ones, and ranks survivors by price, provider Elo, and region.
+2. **Handshake.** Consumer contacts the chosen provider's endpoint and proposes terms referencing the offer; the provider confirms the exact terms and returns a fresh anti-replay `nonce`.
+3. **Contract on-chain.** Consumer builds a **contract transaction** — recipient = provider wallet, `value` = the amount to prepay, `data` = the agreed contract commitment (offer reference, terms hash, nonce) — signs it, and broadcasts it. The signed tx is an immutable, timestamped record of the deal.
+4. **Verify + open.** Consumer hands the `tx_hash` to the provider; the provider verifies it on-chain (recipient, value, decoded terms, `from` = consumer, chain ID), records `(tx_hash, provider)` in its contract ledger, credits the balance (`value − platform fee` via `split_payment`), and opens the contract.
+5. **Use.** Consumer uses the resource over the provider's HTTP API (S3 / container / OpenAI-compatible), authenticated to the contract.
+6. **Meter + draw down.** Provider meters usage and decrements the balance at the contract's rates, reporting usage back to the consumer. When the balance runs low the consumer tops up (a further payment referencing the contract); when it hits zero, service pauses.
+7. **Rate.** The consumer submits a payment-gated rating keyed to the contract tx; the provider's Elo updates.
 
 ---
 
 ## Resource Offers (Discovery)
 
-> **Status: the offer record generalizes today's signed host-advertisement machinery (`hosting.rs`, `hosting/publish-ad`, `hosting/registry`) from a single "hosting" type to a typed, multi-class offer.** The signing, publish/refresh, and read-verify paths are reused.
+> **Status: the offer record generalizes today's signed host-advertisement machinery (`hosting.rs`, `hosting/publish-ad`, `hosting/registry`) from a single "hosting" type to a typed, multi-class offer.** The signing, publish/refresh, and read-verify paths are reused. (`main` has moved substantially since this was drafted — reconcile exact symbol names at implementation time.)
 
-A resource offer is a signed DHT record. The signed payload carries:
+A resource offer is a signed DHT record. The signed payload is a canonical, length-prefixed, domain-tagged (`chiral-offer-v1`) encoding of:
 
 | Field | Meaning |
 |-------|---------|
-| `provider_wallet` | secp256k1 address; the payee and the reputation subject |
+| `provider_wallet` | secp256k1 address; the payee, reputation subject, and offer signer |
 | `resource_class` | `storage` \| `container` \| `inference` |
-| `capacity` | class-specific descriptor (GB available; CPU/mem/GPU; model IDs) |
-| `price_schedule` | CHI per metered unit (GB-month + egress; container-hour / GPU-hour; per-1K input/output tokens) |
-| `endpoint` | public base URL of the provider's HTTP API (scheme + host [+ port]) |
-| `region` | optional locality hint |
+| `capacity` | class-specific descriptor (below) |
+| `price_schedule` | class-specific CHI-per-unit rates (below) |
+| `endpoint` | public base URL of the provider's HTTPS API (host + optional port) |
+| `region` | optional locality hint (e.g. `us-east`) |
+| `min_funding` | smallest contract the provider will open (CHI) |
+| `offer_nonce` | monotonic; lets the provider supersede a prior offer under first-claim ownership |
 | `valid_until` | Unix-seconds; readers ignore expired offers |
-| `signature` | ECDSA over the length-prefixed, domain-tagged payload above |
+| `signature` | secp256k1 over the canonical payload above |
 
-- **Key namespace.** `chiral_offer_<class>_<wallet>` in the DHT; the provider also registers as a Kademlia provider for the class so consumers can enumerate sellers. Reserved namespaces reject raw `dht_put` (403) — offers are writable only through the signed publication command.
-- **Publish / refresh / expire.** A provider republishes on an interval; readers drop records past `valid_until`, so a provider that stops refreshing falls out of the catalog.
-- **Read path.** `search_offers(class)` collects records, verifies signatures, drops unsigned/invalid, and returns survivors with the provider Elo attached (batch reputation lookup). As in the content design, the first signature-valid replica may be acted on without waiting for quorum convergence.
+**Class-specific `capacity` / `price_schedule`:**
+
+| Class | `capacity` | `price_schedule` |
+|-------|-----------|------------------|
+| `storage` | `gb_available`, `max_object_bytes` | `per_gb_month`, `per_gb_egress` |
+| `container` | `cpu_cores`, `mem_gb`, `gpu_model?`, `gpu_count?` | `per_vcpu_hour`, `per_gb_mem_hour`, `per_gpu_hour?` |
+| `inference` | `models: [{id, context_len, quantization?}]` | per-model `per_1k_input_tokens`, `per_1k_output_tokens` |
+
+- **DHT keys.** Each offer is stored at `chiral_offer_<class>_<wallet>`; the provider also registers as a Kademlia provider under a per-class index (`chiral_offers_<class>`) so consumers can enumerate sellers of a class. Reserved namespaces reject raw `dht_put` (403) — offers are writable only through the signed publish command.
+- **Publish / refresh / expire.** A provider republishes on a short interval (≈ every 2–3 min) with `valid_until` a few minutes out; one that stops refreshing falls out of the catalog. First-claim ownership means only the provider's wallet can overwrite its own offer key.
+- **Discovery + ranking.** `search_offers(class)` resolves the class index, fetches each offer, verifies signatures, drops unsigned/invalid/expired, attaches provider Elo via batch reputation lookup, and ranks by price × reputation (with an optional region filter). The first signature-valid replica may be used without waiting for quorum convergence.
+- **Relay aggregation (convenience, advisory).** The relay may cache a verified per-class offer list (mirroring today's host registry) so light clients get a fast catalog; clients re-verify every signature, so the cache is never trusted — it only accelerates discovery.
 
 ---
 
 ## Resource Interfaces
 
-Each class is a standard HTTP API the provider serves at its offer's `endpoint`. Consumers use existing tooling; the backend supplies helpers and a provider-side server.
+Each class is a standard HTTP API the provider serves over HTTPS at its offer's `endpoint`. A consumer authenticates to the API **against its open contract** (see [Service Contracts](#service-contracts-and-the-handshake) and the auth decision in [Open Design Decisions](#open-design-decisions)); the desktop app ships a client for each class, and existing third-party tooling works via the **contract-scoped session credential** the provider issues when the contract opens (an S3 key / OpenAI bearer / container token bound to `contract_id`); a local wallet-signing proxy is available for users who want no shared secret.
 
 ### Storage — S3-compatible
 
-> **Status: new provider-side server; replaces the retired chunked file-transfer protocol.**
+> **Status: new provider-side server (may wrap an existing S3 implementation, e.g. MinIO, behind the contract/auth layer).**
 
-- Object operations: `PUT`/`GET`/`DELETE` object, list bucket, and presigned URLs for time-boxed anonymous access.
-- Addressing: an object may be keyed by the SHA-256 of its content; the object's ETag is that hash, so a consumer verifies integrity against the name it requested. Content-addressed public-read objects are the successor to "sharing a file by its hash."
-- Metering: GB-month stored (sampled) + GB egress.
-- Auth: writes and management use the owner-proof scheme ([Security](#security-implementation)); public-read objects are unauthenticated by design.
+- **API.** S3 object semantics: `PUT`/`GET`/`HEAD`/`DELETE` object, multipart upload for large objects, `GET` bucket (list), and presigned URLs for time-boxed anonymous access. Path-style and virtual-host-style addressing.
+- **Namespacing.** One bucket namespace per contract (seeded by the contract tx hash); object keys are arbitrary UTF-8, up to the offer's `max_object_bytes`.
+- **Integrity & content addressing.** The object ETag is its SHA-256, so a consumer verifies bytes against the name it requested. A public-read object addressed by its hash is the successor to "sharing a file by its hash"; such objects are served unauthenticated (presigned or public ACL).
+- **Metering.** Capacity is sampled (GB-hours accumulated into GB-month); egress is metered on `GET` bytes; the balance is drawn down each interval at `per_gb_month` / `per_gb_egress`.
+- **Exhaustion & durability.** At zero balance the provider stops accepting writes and (after a grace window — see [Open Design Decisions](#open-design-decisions)) may delete stored objects. **v1 is single-provider: durability is the consumer's responsibility** — replicate across providers client-side if you need it. The book states this risk plainly rather than hiding it.
 
-### Containerized compute
+### Containerized compute — hardened OCI
 
-> **Status: specified; v1 reference provider runs a single-node container runtime.**
+> **Status: specified; v1 reference provider runs OCI containers under a hardened Docker/Podman runtime.**
 
-- Submit: `POST` a container spec (image ref, CPU/mem/GPU request, ports, env); receive a handle + endpoint.
-- Lifecycle: `GET` status/logs, `DELETE` to tear down (stops metering).
-- Metering: wall-clock runtime at the per-hour (or per-GPU-hour) rate.
+- **Submit.** `POST /containers` with `{ image, cmd?, env?, ports, resources{ vcpu, mem_gb, gpu? } }`; the provider pulls the image (from allowed registries), schedules it within the contract's resource cap, and returns a handle + a public endpoint (an assigned subdomain/port reverse-proxied to the container).
+- **Isolation (both directions).** Containers run **non-privileged**, with user-namespace remapping, a seccomp/AppArmor profile, dropped capabilities, a read-only rootfs by default, no host bind-mounts, cgroup CPU/memory/PID caps, and an egress network policy. This protects the *provider's* host from hostile workloads; the *consumer* in turn trusts the provider not to introspect its container — a mutual-trust boundary that reputation, not cryptography, polices. MicroVM isolation (Firecracker/Kata) is the noted hardening path beyond v1.
+- **Lifecycle.** `GET /containers/:id` (status, stats, logs), `DELETE /containers/:id` (stop — halts metering). The container is force-stopped when the balance is exhausted.
+- **Persistence.** v1 rootfs is ephemeral; a container may mount a Storage-class bucket for durable state (composition across classes). Local persistent volumes are future work.
+- **Metering.** Wall-clock runtime × the contract's `per_vcpu_hour` / `per_gb_mem_hour` / `per_gpu_hour`, billed per second and drawn down periodically.
 
 ### LLM serving — OpenAI-compatible
 
-> **Status: specified; provider fronts a served model with a token meter.**
+> **Status: specified; provider fronts one or more served models with a token meter.**
 
-- Endpoints mirror the OpenAI HTTP API (e.g. `POST /v1/chat/completions`, `GET /v1/models`).
-- Metering: input + output tokens at the per-1K rates in the offer; usage is returned in each response so the consumer can reconcile against its balance drain.
+- **API.** Mirrors the OpenAI HTTP API: `GET /v1/models`, `POST /v1/chat/completions` (including streaming SSE), `POST /v1/completions`, `POST /v1/embeddings`. Standard OpenAI SDKs point at the provider's endpoint with the contract session as the bearer key.
+- **Model selection.** The consumer sets `model` to an ID the offer advertises. A provider cannot cheaply *prove* it runs the claimed model rather than a smaller/quantized one — a reputation-policed quality property (see [Open Design Decisions](#open-design-decisions) for optional model attestation).
+- **Metering.** Input + output tokens (the response `usage` block) at the model's `per_1k_input_tokens` / `per_1k_output_tokens`; streaming responses meter tokens as they emit. The consumer can approximately re-count with a local tokenizer to reconcile against balance drain.
+- **Limits.** Per-contract concurrency and rate limits; requests are refused (not queued indefinitely) when the balance cannot cover the maximum possible completion.
 
 ---
 
-## Settlement and Balances
+## Service Contracts and the Handshake
 
-> **Status: balance accounting is new; it is built from the existing single-shot payment-verification primitives (`wallet::verify_tx_details`, the spent-tx ledger, `speed_tiers::split_payment`).**
+> **Status: new. Built from the existing on-chain payment-verification primitives (wallet tx verification: mined + recipient + amount + chain-id, and the `(tx, …)` spent-tx ledger) plus the `split_payment` fee cut. No smart contract is introduced — the chain carries only signed, value-bearing transactions.**
 
-Settlement reuses the on-chain payment path and adds per-`(consumer, provider)` balance accounting on the provider side.
+A **service contract** is the agreement between a consumer and a provider, committed as a single signed on-chain transaction. The transaction *is* the contract: it moves the prepaid CHI to the provider and carries the agreed terms in its `data` field, so the deal is immutable, timestamped, and attributable to the consumer's wallet.
 
-1. **Fund.** The consumer sends CHI to the provider's wallet and presents the tx hash. The provider verifies it exactly as a content seeder verified a download payment: mined (`wait_for_tx_mined`), recipient is the provider, amount is credited in full, and `tx.chainId == geth::chain_id()` (cross-chain replay rejected). The tx is recorded in a spent-tx ledger keyed on `(tx_hash, provider)` so a funding payment credits exactly one balance.
-2. **Credit + fee.** `split_payment(amount)` divides the payment into the provider's credit and the platform fee (default 0.5%, 0.1% floor) with exact `u128` integer arithmetic; `credit + fee == amount` exactly. The fee is forwarded to the platform wallet.
-3. **Draw down.** As the consumer uses the resource, the provider meters usage and decrements the balance at the offer's rates. Metering is provider-side (the honest-provider assumption of Part I §9); the consumer reconciles against observable usage (object listings, returned token counts, container uptime).
-4. **Top up / exhaust.** When the balance runs low the consumer funds again (a new payment, steps 1–2). When it reaches zero, service pauses. **Balances are non-refundable** — there is no withdrawal path in v1.
+### The handshake
+
+1. **Propose.** Consumer → `POST {endpoint}/contracts/propose` with the accepted `offer` reference and desired terms (`funding_amount`, class-specific parameters such as bucket name / resource shape / model). Over HTTPS to the provider's public endpoint.
+2. **Quote.** Provider → returns the exact terms it will honor, a fresh `contract_nonce` (anti-replay), and the `terms_hash` to commit. It rejects proposals below the offer's `min_funding`.
+3. **Commit on-chain.** Consumer builds the **contract transaction**:
+   - `to` = `provider_wallet`, `value` = `funding_amount`
+   - `data` = domain-tagged (`chiral-contract-v1`) canonical encoding of `{ offer_ref, terms_hash, contract_nonce }`
+   - signs it with the consumer wallet and broadcasts it to the chain.
+4. **Open.** Consumer → `POST {endpoint}/contracts/open { tx_hash }`. The provider verifies on-chain: mined (or accepted optimistically from the mempool — see [Open Design Decisions](#open-design-decisions)), `to` = self, `value` = the quoted amount, `data` decodes to the quoted `terms_hash` + unused `contract_nonce`, `from` = the consumer, `chainId == geth::chain_id()`. It records `(tx_hash, provider)` in the contract ledger (one tx ⇒ one contract, no replay), credits the balance = `value − fee` (via `split_payment`; the fee — default 0.5%, 0.1% floor — is forwarded to the platform wallet), and returns the **contract handle** (`contract_id = tx_hash`) plus a **contract-scoped session credential** — an S3 access-key/secret, an OpenAI-style bearer, or a container token bound to `contract_id` — which is the handle standard tooling authenticates with (proof of contract control, not an independent grant of authority).
+
+### Balance, metering, and top-ups
+
+- **Drawdown.** The provider meters usage per class ([Resource Interfaces](#resource-interfaces)) and decrements the contract balance at the agreed rates. Metering is provider-side — the honest-provider assumption of [Part I §9](#9-trust-model) — and the provider reports running usage to the consumer (response headers / a `GET {endpoint}/contracts/:id` endpoint) so the consumer can reconcile against observable output.
+- **Top-up.** When the balance runs low, the consumer sends a further payment transaction whose `data` references `contract_id`; the provider verifies it and adds to the same balance. No new handshake is needed.
+- **Exhaustion.** At zero balance the provider pauses service (class-specific: storage may enter a read-only grace window; containers are stopped; inference is refused).
+- **Non-refundable.** There is no withdrawal path. A consumer funds what it intends to spend and tops up incrementally.
+
+### What binds — cryptographically vs by trust
+
+- **Cryptographic:** the payee and amount (the tx), the consumer's identity (`from`), the agreed terms (`terms_hash` in `data`, matched against the provider's signed offer), and no replay/double-open (contract ledger + chain-id + low-`s`).
+- **By reputation:** that the provider then *delivers* the metered resource and meters it honestly. A provider that takes a contract and cheats can do so once per victim, bounded by that victim's prepaid balance, and the conduct is recorded against the paid wallet.
 
 ---
 
@@ -301,7 +336,7 @@ Settlement reuses the on-chain payment path and adds per-`(consumer, provider)` 
 
 > **Status: the Elo engine, on-chain verification of the rating event, and the batch lookup are reused as-is (`rating_api.rs`, `rating_storage.rs`, the relay `/api/ratings/*` routes). The change is admitting a subjective score in the event, gated by verified payment.**
 
-The design rationale and formula are in [Part I](#part-i-white-paper), §7. A rating event carries the provider wallet, the rater wallet, the normalized subjective score, the CHI amount, the funding `tx_hash`, and a timestamp. Before an event is admitted, the relay verifies the `tx_hash` on-chain (sender = rater, recipient = provider, amount) — the backend does not trust client-submitted event data — so **only a consumer who actually paid a provider can move that provider's score**, and the move is weighted by amount and recency.
+The design rationale and formula are in [Part I](#part-i-white-paper), §7. A rating event is keyed to a **service contract**: it carries the provider wallet, the rater wallet, a normalized subjective score, the contract's CHI `funding_amount`, the contract `tx_hash`, and a timestamp. Before admission the relay verifies the `tx_hash` on-chain (it is a contract-funding tx: `from` = rater, `to` = provider, `value` = amount) — the backend never trusts client-submitted event data — so **only the consumer who actually opened a contract with a provider can move that provider's score**, weighted by the contract amount and recency. A star/thumbs rating normalizes to `S ∈ [0,1]`; the latest rating for a given contract supersedes earlier ones (a consumer may revise after longer use), so a single contract yields a single live vote whose weight is its funding amount.
 
 ### Parameters
 
@@ -324,6 +359,38 @@ The design rationale and formula are in [Part I](#part-i-white-paper), §7. A ra
 | `/api/ratings/:wallet` | GET | Elo score and event history for a provider |
 | `/api/ratings/batch` | POST | Batch lookup for ranking offers in discovery |
 | `/api/ratings/feedback` | POST | Record a payment-gated rating (verified on-chain before admission) |
+
+---
+
+## Open Design Decisions
+
+**Resolved.** *Post-handshake auth* — the provider issues a **contract-scoped session credential** (an S3 access-key/secret, an OpenAI-style bearer, or a container token, each bound to `contract_id`) when the contract opens, so off-the-shelf S3/OpenAI tooling works directly; a local wallet-signing proxy remains available for users who want no shared secret. The credential is proof of contract control, not an independent grant of authority.
+
+Still open — each has a recommended default; flag any you want to change.
+
+1. **Optimistic service start** — wait for the contract tx to be *mined* (one block of latency) vs. accept on *mempool-seen* and confirm shortly after. *Recommended:* optimistic for small contracts with a short confirmation deadline; require mined for large ones.
+2. **On-chain contract payload** — full terms in tx `data` vs. only a commitment. *Recommended:* commit `{offer_ref, terms_hash, nonce}` (small, private); exchange the full terms in the handshake and store them on both sides, bound by `terms_hash`.
+3. **Storage retention at exhaustion** — stop-and-keep vs. grace-then-delete. *Recommended:* a read-only grace window, then delete; state the durability risk plainly (single-provider, non-refundable).
+4. **Provider usage receipts** — none vs. wallet-signed. *Recommended:* the provider signs periodic usage receipts so the consumer holds evidence for disputes and reputation.
+5. **Discovery aggregation** — pure DHT vs. relay-cached index. *Recommended:* both — DHT is the source of truth; the relay caches a verified per-class list for speed; clients always re-verify signatures.
+6. **LLM model attestation** — trust + reputation vs. a provider-published model fingerprint. *Recommended:* v1 relies on reputation; note attestation (published weights hash / attested runtime) as future work.
+7. **Container persistence** — ephemeral only vs. persistent volumes. *Recommended:* v1 ephemeral rootfs; durable state via a mounted Storage-class bucket; local persistent volumes later.
+
+---
+
+## Implementation Plan (Milestones)
+
+A build order that reaches a working single-resource marketplace early, then adds classes on the same contract/auth spine:
+
+1. **Offers + discovery.** Generalize the signed host-ad into the typed `resource_offer` (publish/refresh/search by class); marketplace browse UI with signature verification + Elo ranking.
+2. **Contract spine.** Handshake endpoints, the on-chain contract transaction (encode/verify `data`), the provider contract ledger + balance accounting, the `split_payment` fee cut, and top-ups. This is the reusable core for all three classes.
+3. **Storage provider (first end-to-end).** S3-compatible server behind the contract/auth layer; consumer client + tool compatibility; metering (capacity + egress); exhaustion policy.
+4. **Reputation.** Payment-gated `/api/ratings/feedback` keyed to contracts; rating UI; ranking wired into discovery.
+5. **LLM provider.** OpenAI-compatible front-end + token meter over the contract spine (reuses steps 2 & 4).
+6. **Container provider.** Hardened-OCI runtime, ingress proxy, lifecycle + runtime meter.
+7. **Provider dashboard & ops.** Offers / earnings / contracts views, signed usage receipts, diagnostics, headless provider mode.
+
+Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
 
 ---
 
