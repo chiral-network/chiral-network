@@ -152,6 +152,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Resource Interfaces](#resource-interfaces)
 - [Service Contracts and the Handshake](#service-contracts-and-the-handshake)
 - [Wire Protocol & API Reference](#wire-protocol--api-reference-contract-spine)
+- [Data-Plane API: Storage (S3)](#data-plane-api-storage-s3)
 - [Reputation System](#reputation-system)
 - [Open Design Decisions](#open-design-decisions)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
@@ -468,6 +469,78 @@ X-Chiral-Contract-Id: 0x…
 X-Chiral-Cost-Wei:     12500000000000      # cost attributed to this request
 X-Chiral-Balance-Wei:  982500000000000     # remaining after this request
 ```
+
+---
+
+## Data-Plane API: Storage (S3)
+
+> **Status: normative v1 spec for the storage data plane.** It wraps standard S3 semantics behind the contract/credential layer of the [Wire Protocol spine](#wire-protocol--api-reference-contract-spine), so unmodified S3 SDKs/CLIs work against it. Container and inference data planes follow in later passes.
+
+### Auth, endpoint, addressing
+
+- **Auth.** AWS **SigV4** with the contract's issued `access_key_id` / `secret_access_key` (the [session credential](#session-credential)); `region = chiral`, `service = s3`. Presigned URLs use SigV4 query signing for anonymous, time-boxed access.
+- **Bucket.** Exactly one bucket per contract, named `c-<contract_id[:16]>` and returned in the credential. There is no `CreateBucket` / `ListBuckets` — the bucket lives for the life of the contract.
+- **Addressing.** Path-style (`https://host/c-<id>/<key>`) and virtual-host-style (`https://c-<id>.host/<key>`) both accepted. Keys are arbitrary UTF-8 up to 1024 bytes; single-`PUT` bodies up to the offer's `max_object_bytes`, larger via multipart.
+
+### Object operations
+
+| Operation | Request | Success | Notes |
+|---|---|---|---|
+| Put object | `PUT /{bucket}/{key}` body=bytes | `200` + `ETag` | `Content-Length` required; optional `Content-Type`, `x-amz-meta-*`, `x-amz-checksum-sha256` |
+| Get object | `GET /{bucket}/{key}` | `200` / `206` (`Range`) | streams bytes; egress metered |
+| Head object | `HEAD /{bucket}/{key}` | `200` (headers only) | size, ETag, content-type, checksum |
+| Delete object | `DELETE /{bucket}/{key}` | `204` | idempotent |
+| List objects | `GET /{bucket}?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=` | `200` XML `ListBucketResult` | paginated |
+| Initiate multipart | `POST /{bucket}/{key}?uploads` | `200` XML (`UploadId`) | for large objects |
+| Upload part | `PUT /{bucket}/{key}?partNumber=N&uploadId=U` body=bytes | `200` + part `ETag` | parts ≥ 5 MiB except the last |
+| Complete multipart | `POST /{bucket}/{key}?uploadId=U` body=`<CompleteMultipartUpload>…</…>` | `200` XML result | assembles parts |
+| Abort multipart | `DELETE /{bucket}/{key}?uploadId=U` | `204` | frees parts |
+
+Data-plane responses carry the standard `ETag` / `Content-Length` / `Content-Type` / `Last-Modified` **plus** the metering trio `X-Chiral-Contract-Id` / `X-Chiral-Cost-Wei` / `X-Chiral-Balance-Wei`.
+
+### Integrity & content addressing
+
+- **ETag** is the object's **MD5** (quoted hex) for single-part puts — the AWS convention, so integrity-checking clients keep working; multipart ETags use the AWS `"<md5-of-part-md5s>-<n>"` form.
+- **Content SHA-256** rides the native `x-amz-checksum-sha256` header (base64), settable on `PUT` and returned on `GET`/`HEAD` (with `x-amz-checksum-algorithm: SHA256`). This is the content-addressing hook: a **content-addressed object** uses the hex SHA-256 as its key and the checksum header to verify — the standards-aligned successor to "sharing a file by its hash."
+
+### Metering, balance & exhaustion
+
+- **Billed:** stored capacity (sampled into GB-month at `per_gb_month`) and **egress** on `GET`/part downloads (at `per_gb_egress`). Ingress is not billed beyond the capacity it creates.
+- Every response reports live drawdown via the `X-Chiral-*` headers.
+- **Insufficient balance:** an operation that cannot be covered returns `402` with S3-XML `<Code>InsufficientBalance</Code>`. On full exhaustion the provider blocks writes immediately and serves reads for a grace window (default — see [Open Design Decisions](#open-design-decisions)), after which objects may be deleted. **Single-provider durability is the consumer's responsibility.**
+
+### Errors (S3-native XML)
+
+```xml
+<Error><Code>NoSuchKey</Code><Message>…</Message>
+       <Resource>/c-…/key</Resource><RequestId>…</RequestId></Error>
+```
+
+| HTTP | `Code` | Meaning |
+|---|---|---|
+| 404 | `NoSuchKey` / `NoSuchBucket` | object / bucket absent |
+| 403 | `AccessDenied` / `SignatureDoesNotMatch` | bad SigV4 or wrong contract |
+| 400 | `EntityTooLarge` | body exceeds `max_object_bytes` |
+| 400 | `InvalidArgument` / `MalformedXML` | bad request |
+| 402 | `InsufficientBalance` | balance cannot cover the op *(Chiral extension)* |
+| 403 | `ContractPaused` | exhausted, in read-only grace *(Chiral extension)* |
+| 410 | `ContractClosed` | contract ended *(Chiral extension)* |
+
+### Public-read objects (distribution)
+
+A consumer exposes an object anonymously two ways: a **presigned GET** (SigV4 query URL bounded by `X-Amz-Expires`), or a **public-read ACL** (`x-amz-acl: public-read` on `PUT`) that serves the object at its bucket URL without auth. Egress on anonymous reads still draws down the owning contract's balance, so a popular public object drains the balance and pauses when exhausted — the intended "pay for the availability you provide" behavior, and the direct successor to the old file-sharing use case.
+
+### Deviations from AWS S3 (v1)
+
+| Area | Chiral v1 |
+|---|---|
+| Buckets | one per contract, auto-provisioned; no `CreateBucket` / `ListBuckets` |
+| Region | fixed `chiral` |
+| Credentials | contract-scoped, ephemeral (expire with the contract), rotatable |
+| Billing | per-op against the contract balance; `InsufficientBalance` (402) |
+| Integrity | ETag = MD5; content hash via `x-amz-checksum-sha256` |
+| Durability | single-provider, non-refundable; no cross-region replication |
+| Not in v1 | versioning, lifecycle rules, bucket policies / CORS config, object tagging, SSE-KMS |
 
 ---
 
