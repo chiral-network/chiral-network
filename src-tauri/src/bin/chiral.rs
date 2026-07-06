@@ -84,6 +84,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: MarketCommand,
     },
+    /// Resource exchange: discover provider offers and open prepaid contracts.
+    Exchange {
+        #[command(subcommand)]
+        cmd: ExchangeCommand,
+    },
     Mining {
         #[command(subcommand)]
         cmd: MiningCommand,
@@ -551,6 +556,37 @@ enum MarketCommand {
         port: u16,
     },
     Cleanup,
+}
+
+#[derive(Subcommand, Debug)]
+enum ExchangeCommand {
+    /// Discover signed resource offers for a class via the running daemon's DHT.
+    Discover {
+        /// Resource class: storage | container | inference.
+        #[arg(long)]
+        class: String,
+        #[arg(long, default_value_t = 9419)]
+        port: u16,
+    },
+    /// Open a prepaid contract against a discovered provider (propose → fund
+    /// on-chain → open) and print the session credential. The deposit is
+    /// non-refundable once the funding tx is broadcast.
+    Open {
+        /// Offer JSON from `exchange discover` — inline, or `@path` for a file.
+        #[arg(long)]
+        offer: String,
+        /// Deposit in CHI.
+        #[arg(long)]
+        funding: String,
+        /// Consumer wallet address (0x…).
+        #[arg(long)]
+        wallet: String,
+        /// Consumer private key hex — inline, or `@path` for a file.
+        #[arg(long)]
+        key: String,
+        #[arg(long, default_value_t = 9419)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1995,6 +2031,23 @@ fn cleanup_agreements_in_dir(dir: &Path) -> Result<AgreementCleanupReport, Strin
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn read_maybe_file_inline_and_from_file() {
+        // Inline value is returned verbatim.
+        assert_eq!(read_maybe_file("0xabc").unwrap(), "0xabc");
+        // `@path` reads and trims the file (handy for a key/offer file).
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("key.hex");
+        std::fs::write(&p, "  0xdeadbeef\n").unwrap();
+        assert_eq!(
+            read_maybe_file(&format!("@{}", p.display())).unwrap(),
+            "0xdeadbeef"
+        );
+        // Bare `@` and a missing file are errors.
+        assert!(read_maybe_file("@").is_err());
+        assert!(read_maybe_file("@/no/such/file/xyz-should-not-exist").is_err());
+    }
 
     fn write_agreement(dir: &Path, id: &str, status: &str) -> PathBuf {
         let path = dir.join(format!("{id}.json"));
@@ -4049,6 +4102,60 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
     }
 }
 
+/// Resolve a CLI argument that may be given inline or as `@path` (read from a
+/// file). Trailing whitespace/newline is trimmed — convenient for key/offer
+/// files. A bare `@` with no path is an error.
+fn read_maybe_file(arg: &str) -> Result<String, String> {
+    match arg.strip_prefix('@') {
+        Some("") => Err("expected a path after '@'".to_string()),
+        Some(path) => std::fs::read_to_string(path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("failed to read {path}: {e}")),
+        None => Ok(arg.to_string()),
+    }
+}
+
+async fn handle_exchange(cmd: ExchangeCommand) -> Result<(), String> {
+    match cmd {
+        ExchangeCommand::Discover { class, port } => {
+            let resp = daemon_post_json(
+                port,
+                "/api/headless/exchange/discover",
+                &serde_json::json!({ "class": class }),
+            )
+            .await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string())
+            );
+            Ok(())
+        }
+        ExchangeCommand::Open {
+            offer,
+            funding,
+            wallet,
+            key,
+            port,
+        } => {
+            let offer_json: Value = serde_json::from_str(&read_maybe_file(&offer)?)
+                .map_err(|e| format!("--offer is not valid JSON: {e}"))?;
+            let key = read_maybe_file(&key)?;
+            let payload = serde_json::json!({
+                "offer": offer_json,
+                "funding_chi": funding,
+                "wallet_address": wallet,
+                "private_key": key,
+            });
+            let resp = daemon_post_json(port, "/api/headless/exchange/open", &payload).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string())
+            );
+            Ok(())
+        }
+    }
+}
+
 async fn handle_mining(cmd: MiningCommand) -> Result<(), String> {
     match cmd {
         MiningCommand::Install { port } => {
@@ -4132,7 +4239,7 @@ async fn handle_hosting_daemon_passthrough(cmd: DaemonCommand) -> Result<(), Str
 }
 
 #[cfg(test)]
-mod tests {
+mod headless_cli_tests {
     use super::*;
 
     #[test]
@@ -4276,6 +4383,7 @@ async fn main() {
             other => handle_hosting(other).await,
         },
         Commands::Market { cmd } => handle_market(cmd).await,
+        Commands::Exchange { cmd } => handle_exchange(cmd).await,
         Commands::Mining { cmd } => handle_mining(cmd).await,
         Commands::Geth { cmd } => handle_geth(cmd).await,
     };

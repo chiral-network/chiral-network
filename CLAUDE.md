@@ -147,6 +147,7 @@ Headless daemon API endpoints (port 9419 by default):
 - **Geth**: POST `geth/install`, `geth/start`, `geth/stop`; GET `geth/status`, `geth/logs`
 - **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
 - **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
+- **Exchange** (resource exchange): POST `exchange/discover` (verified offers for a class off the DHT), `exchange/open` (propose → fund on-chain → open → session credential). CLI: `chiral exchange discover --class <storage|container|inference>` and `chiral exchange open --offer <@file|json> --funding <CHI> --wallet 0x… --key <@file|hex>`. Providers are run by the separate `chiral_provider` binary (`provider_daemon`, `CHIRAL_PROVIDER_*`).
 - **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`; PUT `cdn/files/:hash` (update price)
 - **Drive**: Full CRUD via `/api/drive/*` routes (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_sig>` headers — see Owner-proof auth below)
 - **Diagnostics**: GET `bootstrap-health`
