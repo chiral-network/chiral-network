@@ -587,6 +587,88 @@ enum ExchangeCommand {
         #[arg(long, default_value_t = 9419)]
         port: u16,
     },
+    /// Use a contract's session credential directly against a provider's data
+    /// plane (bearer-authenticated HTTP; no daemon needed).
+    Use {
+        #[command(subcommand)]
+        cmd: UseCommand,
+    },
+}
+
+/// Data-plane operations that present a contract's bearer credential to the
+/// provider. `--endpoint` is the provider's data-plane base URL (for storage
+/// this is the S3 listener); `--credential` is the JSON from `exchange open`
+/// (the full output or just the `credential` object), inline or `@path`.
+#[derive(Subcommand, Debug)]
+enum UseCommand {
+    /// PUT an object into the contract's S3 bucket (storage).
+    Put {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        /// Object key within the bucket.
+        #[arg(long)]
+        key: String,
+        /// Local file to upload.
+        #[arg(long)]
+        file: String,
+    },
+    /// GET an object from the contract's bucket (to `--out`, else stdout).
+    Get {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// DELETE an object from the contract's bucket.
+    Delete {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        #[arg(long)]
+        key: String,
+    },
+    /// OpenAI-compatible chat completion (inference).
+    Chat {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        prompt: String,
+    },
+    /// Start a container (compute).
+    Run {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        #[arg(long)]
+        image: String,
+        #[arg(long, default_value_t = 1)]
+        vcpu: u32,
+        #[arg(long, default_value_t = 1)]
+        mem_gb: u32,
+        #[arg(long, default_value_t = 0)]
+        gpu: u32,
+    },
+    /// Stop a container by id (compute).
+    Kill {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        credential: String,
+        #[arg(long)]
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2047,6 +2129,32 @@ mod tests {
         // Bare `@` and a missing file are errors.
         assert!(read_maybe_file("@").is_err());
         assert!(read_maybe_file("@/no/such/file/xyz-should-not-exist").is_err());
+    }
+
+    #[test]
+    fn parse_credential_accepts_full_and_bare() {
+        // The full `exchange open` output (credential nested under "credential").
+        let full = r#"{"contractId":"c1","credential":{"bearer":"tok","bucket":"c-abc"}}"#;
+        let (bearer, bucket) = parse_credential(full).unwrap();
+        assert_eq!(bearer, "tok");
+        assert_eq!(bucket, "c-abc");
+        // A bare credential object; bucket is optional (empty for non-storage).
+        let (b2, bucket2) = parse_credential(r#"{"bearer":"t2"}"#).unwrap();
+        assert_eq!(b2, "t2");
+        assert_eq!(bucket2, "");
+        // Missing / empty bearer, or non-JSON, is an error.
+        assert!(parse_credential(r#"{"bucket":"x"}"#).is_err());
+        assert!(parse_credential(r#"{"bearer":""}"#).is_err());
+        assert!(parse_credential("not json").is_err());
+    }
+
+    #[test]
+    fn object_url_joins_and_trims() {
+        assert_eq!(
+            object_url("https://p.example/", "c-abc", "/dir/file.txt"),
+            "https://p.example/c-abc/dir/file.txt"
+        );
+        assert_eq!(object_url("https://p.example", "c-abc", "k"), "https://p.example/c-abc/k");
     }
 
     fn write_agreement(dir: &Path, id: &str, status: &str) -> PathBuf {
@@ -4153,7 +4261,212 @@ async fn handle_exchange(cmd: ExchangeCommand) -> Result<(), String> {
             );
             Ok(())
         }
+        ExchangeCommand::Use { cmd } => handle_use(cmd).await,
     }
+}
+
+/// Extract `(bearer, bucket)` from a credential argument. Accepts either the full
+/// `exchange open` output (`{ "credential": { … } }`) or a bare credential object
+/// (`{ "bearer": …, "bucket": … }`), inline or `@path`. `bucket` may be empty for
+/// non-storage classes.
+fn parse_credential(arg: &str) -> Result<(String, String), String> {
+    let raw = read_maybe_file(arg)?;
+    let v: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("--credential is not valid JSON: {e}"))?;
+    let cred = v.get("credential").unwrap_or(&v);
+    let bearer = cred
+        .get("bearer")
+        .and_then(|b| b.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or("credential JSON has no non-empty 'bearer' field")?
+        .to_string();
+    let bucket = cred
+        .get("bucket")
+        .and_then(|b| b.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok((bearer, bucket))
+}
+
+/// Fail a data-plane call with the provider's status + body when it's not 2xx.
+async fn ok_or_body(resp: reqwest::Response, what: &str) -> Result<reqwest::Response, String> {
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    Err(format!("{what} -> {status}: {body}"))
+}
+
+async fn handle_use(cmd: UseCommand) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    match cmd {
+        UseCommand::Put {
+            endpoint,
+            credential,
+            key,
+            file,
+        } => {
+            let (bearer, bucket) = parse_credential(&credential)?;
+            if bucket.is_empty() {
+                return Err("credential has no bucket (required for storage put)".to_string());
+            }
+            let bytes = std::fs::read(&file).map_err(|e| format!("read {file}: {e}"))?;
+            let url = object_url(&endpoint, &bucket, &key);
+            let resp = client
+                .put(&url)
+                .bearer_auth(&bearer)
+                .body(bytes)
+                .send()
+                .await
+                .map_err(|e| format!("PUT failed: {e}"))?;
+            let resp = ok_or_body(resp, "PUT").await?;
+            let etag = resp
+                .headers()
+                .get(reqwest::header::ETAG)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            println!("put ok key={key} etag={etag}");
+            Ok(())
+        }
+        UseCommand::Get {
+            endpoint,
+            credential,
+            key,
+            out,
+        } => {
+            let (bearer, bucket) = parse_credential(&credential)?;
+            let url = object_url(&endpoint, &bucket, &key);
+            let resp = client
+                .get(&url)
+                .bearer_auth(&bearer)
+                .send()
+                .await
+                .map_err(|e| format!("GET failed: {e}"))?;
+            let resp = ok_or_body(resp, "GET").await?;
+            let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
+            match out {
+                Some(path) => {
+                    std::fs::write(&path, &bytes).map_err(|e| format!("write {path}: {e}"))?;
+                    println!("wrote {} bytes to {path}", bytes.len());
+                }
+                None => {
+                    use std::io::Write;
+                    std::io::stdout().write_all(&bytes).ok();
+                }
+            }
+            Ok(())
+        }
+        UseCommand::Delete {
+            endpoint,
+            credential,
+            key,
+        } => {
+            let (bearer, bucket) = parse_credential(&credential)?;
+            let url = object_url(&endpoint, &bucket, &key);
+            let resp = client
+                .delete(&url)
+                .bearer_auth(&bearer)
+                .send()
+                .await
+                .map_err(|e| format!("DELETE failed: {e}"))?;
+            ok_or_body(resp, "DELETE").await?;
+            println!("deleted key={key}");
+            Ok(())
+        }
+        UseCommand::Chat {
+            endpoint,
+            credential,
+            model,
+            prompt,
+        } => {
+            let (bearer, _) = parse_credential(&credential)?;
+            let url = format!("{}/v1/chat/completions", endpoint.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{ "role": "user", "content": prompt }],
+            });
+            let resp = client
+                .post(&url)
+                .bearer_auth(&bearer)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("chat failed: {e}"))?;
+            let resp = ok_or_body(resp, "chat").await?;
+            let text = resp.text().await.unwrap_or_default();
+            // Print the assistant message if present, else the raw JSON.
+            match serde_json::from_str::<Value>(&text) {
+                Ok(v) => match v.pointer("/choices/0/message/content").and_then(|c| c.as_str()) {
+                    Some(content) => println!("{content}"),
+                    None => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&v).unwrap_or_else(|_| text.clone())
+                    ),
+                },
+                Err(_) => println!("{text}"),
+            }
+            Ok(())
+        }
+        UseCommand::Run {
+            endpoint,
+            credential,
+            image,
+            vcpu,
+            mem_gb,
+            gpu,
+        } => {
+            let (bearer, _) = parse_credential(&credential)?;
+            let url = format!("{}/v1/containers", endpoint.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "image": image,
+                "resources": { "vcpu": vcpu, "mem_gb": mem_gb, "gpu": gpu },
+            });
+            let resp = client
+                .post(&url)
+                .bearer_auth(&bearer)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("container run failed: {e}"))?;
+            let resp = ok_or_body(resp, "container run").await?;
+            let v: Value = resp.json().await.map_err(|e| format!("read body: {e}"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())
+            );
+            Ok(())
+        }
+        UseCommand::Kill {
+            endpoint,
+            credential,
+            id,
+        } => {
+            let (bearer, _) = parse_credential(&credential)?;
+            let url = format!("{}/v1/containers/{}", endpoint.trim_end_matches('/'), id);
+            let resp = client
+                .delete(&url)
+                .bearer_auth(&bearer)
+                .send()
+                .await
+                .map_err(|e| format!("container stop failed: {e}"))?;
+            ok_or_body(resp, "container stop").await?;
+            println!("stopped id={id}");
+            Ok(())
+        }
+    }
+}
+
+/// Build an S3 object URL: `<endpoint>/<bucket>/<key>` with the key's leading
+/// slash trimmed (the bucket + key form the path).
+fn object_url(endpoint: &str, bucket: &str, key: &str) -> String {
+    format!(
+        "{}/{}/{}",
+        endpoint.trim_end_matches('/'),
+        bucket,
+        key.trim_start_matches('/')
+    )
 }
 
 async fn handle_mining(cmd: MiningCommand) -> Result<(), String> {
