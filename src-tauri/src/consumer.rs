@@ -85,6 +85,15 @@ pub async fn open_contract(
     private_key: &str,
     rpc_endpoints: &[String],
 ) -> Result<OpenedContract, String> {
+    // Refuse to fund a class disabled in this version, even if a signed offer for
+    // it somehow reaches us (discovery can't surface one — parse gates the class
+    // string — but this is the authoritative choke point every open path shares).
+    if !offer.resource_class.is_enabled() {
+        return Err(format!(
+            "resource class '{}' (LLM/inference) is disabled in this version",
+            offer.resource_class.as_str()
+        ));
+    }
     let base = provider_base_url.trim_end_matches('/');
     let funding_wei = crate::wallet::parse_chi_to_wei(funding_chi)?;
 

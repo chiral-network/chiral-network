@@ -50,12 +50,9 @@ impl ProviderConfig {
     pub fn from_env() -> Result<Self, String> {
         let get = |k: &str| std::env::var(k).map_err(|_| format!("{k} is required"));
         let opt = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
-        let class = match opt("CHIRAL_PROVIDER_CLASS", "storage").as_str() {
-            "storage" => ResourceClass::Storage,
-            "container" => ResourceClass::Container,
-            "inference" => ResourceClass::Inference,
-            other => return Err(format!("unknown CHIRAL_PROVIDER_CLASS: {other}")),
-        };
+        // `parse` gates disabled classes, so a provider cannot start as an
+        // inference (LLM) node in this version.
+        let class = ResourceClass::parse(&opt("CHIRAL_PROVIDER_CLASS", "storage"))?;
         let json = |k: &str| -> Result<Value, String> {
             serde_json::from_str(&opt(k, "{}")).map_err(|e| format!("{k}: {e}"))
         };
@@ -123,6 +120,9 @@ pub fn build(config: &ProviderConfig) -> Result<(ResourceOffer, Assembled), Stri
     )));
 
     let assembled = match config.class {
+        // Dormant in this version: `from_env` rejects inference, so a real
+        // provider never reaches this arm. Kept (and still assembly-tested) so
+        // re-enabling LLM sharing is a one-line change in `ResourceClass`.
         ResourceClass::Inference => {
             let llm = LlmProvider::from_offer(&shared.lock().unwrap().offer)?;
             Assembled::Single(provider_gateway::inference_gateway(

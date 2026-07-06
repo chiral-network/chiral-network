@@ -6,12 +6,16 @@ import { invoke } from '@tauri-apps/api/core';
  * data-plane helpers that present a contract's session credential to a provider.
  *
  * Flow: `discoverOffers(class)` → pick an offer → `openContract(offer, …)` to get
- * a `SessionCredential` → use `storagePut` / `chat` / … against the provider's
- * data plane. The deposit funded in `openContract` is non-refundable once the
- * on-chain tx is broadcast; the private key never leaves the backend process.
+ * a `SessionCredential` → use `storagePut` / `containerRun` / … against the
+ * provider's data plane. The deposit funded in `openContract` is non-refundable
+ * once the on-chain tx is broadcast; the private key never leaves the backend
+ * process. This version offers storage + container (LLM inference is deferred).
  */
 
-export type ResourceClass = 'storage' | 'container' | 'inference';
+// LLM (inference) sharing is deferred to a future version — this version offers
+// storage and container only. (The backend keeps the inference class dormant;
+// the frontend simply doesn't surface it.)
+export type ResourceClass = 'storage' | 'container';
 
 /**
  * A signature-verified provider offer. Fields mirror the Rust `ResourceOffer`
@@ -149,23 +153,45 @@ export async function storageDelete(
   );
 }
 
-/** OpenAI-compatible chat completion (inference). Returns the raw response JSON. */
-export async function chat(
+/** Resources requested for a container (compute). */
+export interface ContainerResources {
+  vcpu: number;
+  mem_gb: number;
+  gpu: number;
+}
+
+/** Start a container (compute). Returns the provider's response JSON. */
+export async function containerRun(
   endpoint: string,
   credential: SessionCredential,
-  model: string,
-  prompt: string,
+  image: string,
+  resources: ContainerResources,
 ): Promise<unknown> {
   const resp = await assertOk(
-    await fetch(`${endpoint.replace(/\/+$/, '')}/v1/chat/completions`, {
+    await fetch(`${endpoint.replace(/\/+$/, '')}/v1/containers`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${credential.bearer}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ image, resources }),
     }),
-    'chat',
+    'container run',
   );
   return resp.json();
+}
+
+/** Stop a container by id (compute). */
+export async function containerStop(
+  endpoint: string,
+  credential: SessionCredential,
+  id: string,
+): Promise<void> {
+  await assertOk(
+    await fetch(`${endpoint.replace(/\/+$/, '')}/v1/containers/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${credential.bearer}` },
+    }),
+    'container stop',
+  );
 }

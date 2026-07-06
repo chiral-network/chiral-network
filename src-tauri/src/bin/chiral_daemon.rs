@@ -2190,11 +2190,12 @@ mod exchange_tests {
     use chiral_network::resource_offer::ResourceClass;
 
     #[test]
-    fn parse_resource_class_accepts_known_and_rejects_unknown() {
+    fn parse_resource_class_accepts_enabled_and_rejects_rest() {
         assert_eq!(parse_resource_class("storage").unwrap(), ResourceClass::Storage);
         assert_eq!(parse_resource_class(" Container ").unwrap(), ResourceClass::Container);
-        assert_eq!(parse_resource_class("inference").unwrap(), ResourceClass::Inference);
-        assert_eq!(parse_resource_class("LLM").unwrap(), ResourceClass::Inference);
+        // LLM/inference is disabled in this version.
+        assert!(parse_resource_class("inference").is_err());
+        assert!(parse_resource_class("llm").is_err());
         assert!(parse_resource_class("gpu").is_err());
         assert!(parse_resource_class("").is_err());
     }

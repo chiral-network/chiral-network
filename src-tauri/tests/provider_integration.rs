@@ -185,6 +185,9 @@ async fn handshake_then_storage() {
     assert_eq!(&bytes[..], b"integration");
 }
 
+// LLM (inference) sharing is disabled in this version (`ResourceClass::is_enabled`
+// gates it out of the marketplace), but the provider core + data-plane stay in
+// the tree; this test guards that dormant path so re-enabling stays a one-liner.
 #[tokio::test]
 async fn handshake_then_llm() {
     let (shared, bearer, _) = open_via_handshake(offer(

@@ -45,18 +45,39 @@ impl ResourceClass {
         }
     }
 
+    /// Whether this class can be advertised, discovered, or contracted in the
+    /// current version. **LLM (inference) sharing is deferred to a future
+    /// version**: its provider core (`llm_provider`) and data-plane API
+    /// (`llm_api`) remain in the tree — dormant and still tested — but no
+    /// inference offer can enter the marketplace. Re-enable by adding
+    /// `Inference` here.
+    pub fn is_enabled(self) -> bool {
+        matches!(self, ResourceClass::Storage | ResourceClass::Container)
+    }
+
     /// Parse a class from a user/API string (case-insensitive; `"llm"` is an
     /// alias for inference). Shared by the desktop commands, the daemon HTTP
     /// endpoints, and the CLI so the three surfaces accept exactly the same set.
+    /// A recognized-but-disabled class (see [`is_enabled`](Self::is_enabled)) is
+    /// rejected, so every surface refuses LLM sharing uniformly.
     pub fn parse(s: &str) -> Result<Self, String> {
-        match s.trim().to_lowercase().as_str() {
-            "storage" => Ok(ResourceClass::Storage),
-            "container" => Ok(ResourceClass::Container),
-            "inference" | "llm" => Ok(ResourceClass::Inference),
-            other => Err(format!(
-                "unknown resource class '{other}' (expected storage|container|inference)"
-            )),
+        let class = match s.trim().to_lowercase().as_str() {
+            "storage" => ResourceClass::Storage,
+            "container" => ResourceClass::Container,
+            "inference" | "llm" => ResourceClass::Inference,
+            other => {
+                return Err(format!(
+                    "unknown resource class '{other}' (expected storage|container)"
+                ))
+            }
+        };
+        if !class.is_enabled() {
+            return Err(format!(
+                "resource class '{}' (LLM/inference) is not available in this version",
+                class.as_str()
+            ));
         }
+        Ok(class)
     }
 
     /// Compact wire discriminant used inside the signed payload.
@@ -232,6 +253,21 @@ mod tests {
         let o = signed_sample();
         assert!(o.verify().is_ok(), "freshly signed offer must verify");
         assert!(o.provider_wallet.starts_with("0x"));
+    }
+
+    #[test]
+    fn parse_gates_disabled_classes() {
+        // Enabled in this version.
+        assert_eq!(ResourceClass::parse("storage").unwrap(), ResourceClass::Storage);
+        assert_eq!(ResourceClass::parse(" Container ").unwrap(), ResourceClass::Container);
+        assert!(ResourceClass::Storage.is_enabled());
+        assert!(ResourceClass::Container.is_enabled());
+        // LLM/inference is recognized but disabled — parse rejects both spellings.
+        assert!(!ResourceClass::Inference.is_enabled());
+        assert!(ResourceClass::parse("inference").is_err());
+        assert!(ResourceClass::parse("llm").is_err());
+        // Unknown is still unknown.
+        assert!(ResourceClass::parse("gpu").is_err());
     }
 
     #[test]

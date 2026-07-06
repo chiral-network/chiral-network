@@ -2,7 +2,9 @@
 
 ## Project Direction & Status (READ FIRST)
 
-Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage**, **container compute**, and **LLM inference**; consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage** and **container compute** (LLM inference is designed and built but **disabled in this version** — deferred to a future release); consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+
+- **This version's resource classes are storage + container only.** The inference (LLM) provider core (`llm_provider`) + data-plane (`llm_api`) remain in the tree — dormant and still tested — but `ResourceClass::is_enabled` gates them out of every marketplace surface (a provider can't advertise inference, a consumer can't discover or open one). Re-enable by adding `Inference` to `ResourceClass::is_enabled`.
 
 - **Target design is authoritative:** `docs/chiral-book.md` (Part I white paper + Part II design & implementation). Align new work with it.
 - **The current code is still the legacy file-sharing system** — it has NOT been migrated yet. The sections below describe the current as-built implementation and operations. Infrastructure (wallet, RPC, DHT, Geth/mining, relay, version enforcement, owner-proof auth) largely carries forward; the file-sharing feature specifics (Drive, downloads, CDN, folders, chunked transfer, drive shares) are the legacy layer being migrated.
@@ -14,8 +16,8 @@ Chiral Network is a Tauri 2 desktop app with a Svelte 5 frontend and Rust backen
 
 **Target domains** (resource exchange — see `docs/chiral-book.md`):
 
-- Signed resource-offer discovery (storage / container / inference)
-- The three provider interfaces: S3-compatible storage, container submission, OpenAI-compatible inference
+- Signed resource-offer discovery (storage / container; inference deferred)
+- The provider interfaces: S3-compatible storage, container submission (OpenAI-compatible inference is built but disabled this version)
 - Prepaid-balance settlement (provider-metered drawdown) + platform fee
 - Payment-gated reputation (Elo)
 - Wallet management and CPU/GPU mining
@@ -147,7 +149,7 @@ Headless daemon API endpoints (port 9419 by default):
 - **Geth**: POST `geth/install`, `geth/start`, `geth/stop`; GET `geth/status`, `geth/logs`
 - **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
 - **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
-- **Exchange** (resource exchange): POST `exchange/discover` (verified offers for a class off the DHT), `exchange/open` (propose → fund on-chain → open → session credential). CLI: `chiral exchange discover --class <storage|container|inference>` and `chiral exchange open --offer <@file|json> --funding <CHI> --wallet 0x… --key <@file|hex>`. Providers are run by the separate `chiral_provider` binary (`provider_daemon`, `CHIRAL_PROVIDER_*`).
+- **Exchange** (resource exchange): POST `exchange/discover` (verified offers for a class off the DHT), `exchange/open` (propose → fund on-chain → open → session credential). CLI: `chiral exchange discover --class <storage|container>` and `chiral exchange open --offer <@file|json> --funding <CHI> --wallet 0x… --key <@file|hex>`; `chiral exchange use …` for data-plane calls. Providers are run by the separate `chiral_provider` binary (`provider_daemon`, `CHIRAL_PROVIDER_*`). Class `inference` is gated off this version.
 - **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`; PUT `cdn/files/:hash` (update price)
 - **Drive**: Full CRUD via `/api/drive/*` routes (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_sig>` headers — see Owner-proof auth below)
 - **Diagnostics**: GET `bootstrap-health`
