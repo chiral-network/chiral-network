@@ -1371,6 +1371,21 @@ impl DhtService {
         }
     }
 
+    /// Publish a signed resource offer to the DHT: store it under its key and
+    /// register as a Kademlia provider for the class index so consumers can
+    /// enumerate sellers of the class. Reuses the record-put + provider paths;
+    /// the record is ECDSA-signed by the provider wallet (verified by readers).
+    pub async fn register_offer(
+        &self,
+        offer_key: String,
+        offer_json: String,
+        class_index_key: String,
+    ) -> Result<(), String> {
+        self.put_dht_value(offer_key, offer_json).await?;
+        self.start_providing_file(class_index_key).await?;
+        Ok(())
+    }
+
     /// Stop advertising this node as a provider for a file hash.
     pub async fn stop_providing_file(&self, file_hash: String) -> Result<(), String> {
         let sender = self.command_sender.lock().await;

@@ -1,15 +1,18 @@
 //! Provider daemon — turns a [`ProviderConfig`] into a running provider: it
 //! builds and signs the offer, constructs the shared `ProviderState` with the
 //! real on-chain [`RpcChainVerifier`], assembles the gateway router(s) for the
-//! resource class, and serves them with `axum::serve`.
+//! resource class, starts a headless DHT node and **publishes the signed offer**
+//! (so it is discoverable), and serves the router(s) with `axum::serve`.
 //!
 //! Router assembly ([`build`]) is separated from the serve loop ([`run`]) so the
-//! config → offer → router path is unit-testable without binding a socket.
+//! config → offer → router path is unit-testable without binding a socket or
+//! joining the DHT. Offer publication is best-effort: if the DHT node can't
+//! start, the provider still serves (just isn't discoverable yet).
 //!
 //! The compute provider uses the real [`crate::docker_runtime::DockerCliRuntime`]
-//! (the `docker` CLI). One marked seam remains: publishing the offer to the DHT
-//! so it is discoverable (`// TODO` in [`build`]).
+//! (the `docker` CLI).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -93,8 +96,9 @@ fn u32_field(v: &Value, key: &str) -> u32 {
 }
 
 /// Build (and sign) the provider's offer, its shared state, and the router(s).
-/// Does not bind any socket.
-pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
+/// Returns the signed offer (for publication) and the assembled router(s). Does
+/// not bind any socket or touch the DHT.
+pub fn build(config: &ProviderConfig) -> Result<(ResourceOffer, Assembled), String> {
     let wallet = address_from_key(&config.wallet_private_key)?;
     let mut offer = ResourceOffer {
         provider_wallet: wallet.clone(),
@@ -109,6 +113,7 @@ pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
         signature: String::new(),
     };
     offer.sign(&config.wallet_private_key)?;
+    let offer_out = offer.clone();
 
     let shared = Arc::new(Mutex::new(ProviderState::new(
         wallet,
@@ -116,16 +121,15 @@ pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
         offer,
         RpcChainVerifier,
     )));
-    // TODO: publish `shared.lock().offer` to the DHT here so it is discoverable.
 
-    match config.class {
+    let assembled = match config.class {
         ResourceClass::Inference => {
             let llm = LlmProvider::from_offer(&shared.lock().unwrap().offer)?;
-            Ok(Assembled::Single(provider_gateway::inference_gateway(
+            Assembled::Single(provider_gateway::inference_gateway(
                 shared,
                 llm,
                 config.llm_backend_url.clone(),
-            )))
+            ))
         }
         ResourceClass::Container => {
             let rates = ContainerRates {
@@ -138,12 +142,12 @@ pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
                 max_mem_gb: u32_field(&config.capacity, "mem_gb"),
                 max_gpu: u32_field(&config.capacity, "gpu_count"),
             };
-            Ok(Assembled::Single(provider_gateway::compute_gateway(
+            Assembled::Single(provider_gateway::compute_gateway(
                 shared,
                 ContainerProvider::new(rates),
                 crate::docker_runtime::DockerCliRuntime::new(config.endpoint.clone()),
                 envelope,
-            )))
+            ))
         }
         ResourceClass::Storage => {
             let store = StorageProvider::new(
@@ -156,15 +160,58 @@ pub fn build(config: &ProviderConfig) -> Result<Assembled, String> {
                     .unwrap_or(5_000_000_000),
             );
             let (control, data) = provider_gateway::storage_control_and_data(shared, store);
-            Ok(Assembled::Storage { control, data })
+            Assembled::Storage { control, data }
         }
-    }
+    };
+    Ok((offer_out, assembled))
 }
 
-/// Build and serve. Runs until the listener(s) close. Requires a multi-threaded
-/// Tokio runtime (the `RpcChainVerifier` uses `block_in_place`).
+/// Publish a signed offer to the DHT via a running node.
+pub async fn publish_offer(dht: &crate::dht::DhtService, offer: &ResourceOffer) -> Result<(), String> {
+    let offer_json = serde_json::to_string(offer).map_err(|e| e.to_string())?;
+    dht.register_offer(
+        offer.dht_key(),
+        offer_json,
+        ResourceOffer::class_index_key(offer.resource_class),
+    )
+    .await
+}
+
+/// Start a headless DHT node (a provider needs one only to publish its offer and
+/// keep it republished).
+async fn start_dht_node() -> Result<Arc<crate::dht::DhtService>, String> {
+    use tokio::sync::Mutex as AsyncMutex;
+    let ft = Arc::new(AsyncMutex::new(crate::file_transfer::FileTransferService::new()));
+    let dd: crate::dht::DownloadDirectoryRef = Arc::new(AsyncMutex::new(None));
+    let dc: crate::dht::DownloadCredentialsMap = Arc::new(AsyncMutex::new(HashMap::new()));
+    let dht = Arc::new(crate::dht::DhtService::new(ft, dd, dc));
+    dht.start_headless().await?;
+    dht.wait_for_bootstrap_ready(std::time::Duration::from_secs(60)).await;
+    Ok(dht)
+}
+
+/// Build, publish the offer to the DHT, and serve. Runs until the listener(s)
+/// close. Requires a multi-threaded Tokio runtime (the `RpcChainVerifier` uses
+/// `block_in_place`).
 pub async fn run(config: ProviderConfig) -> Result<(), String> {
-    match build(&config)? {
+    let (offer, assembled) = build(&config)?;
+
+    // Best-effort discovery: start a DHT node and publish the signed offer.
+    let _dht = match start_dht_node().await {
+        Ok(dht) => {
+            match publish_offer(&dht, &offer).await {
+                Ok(()) => println!("[provider] published offer {} to the DHT", offer.dht_key()),
+                Err(e) => eprintln!("[provider] offer publish failed: {e}"),
+            }
+            Some(dht) // keep the node alive while serving
+        }
+        Err(e) => {
+            eprintln!("[provider] DHT node did not start ({e}); serving without discovery");
+            None
+        }
+    };
+
+    match assembled {
         Assembled::Single(router) => serve(&config.control_bind, router).await,
         Assembled::Storage { control, data } => {
             let c = serve(&config.control_bind, control);
@@ -188,7 +235,6 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    // A fixed test key -> a derived address; capacity/price shape a valid offer.
     fn inference_config() -> ProviderConfig {
         ProviderConfig {
             wallet_private_key: "0x".to_string() + &"33".repeat(32),
@@ -207,28 +253,13 @@ mod tests {
 
     #[tokio::test]
     async fn build_assembles_a_serving_inference_router() {
-        let router = match build(&inference_config()).unwrap() {
+        // `build` returns the signed offer + the router; the offer_ref it returns
+        // is what the served handshake will accept.
+        let (offer, assembled) = build(&inference_config()).unwrap();
+        let router = match assembled {
             Assembled::Single(r) => r,
             _ => panic!("inference should assemble a single router"),
         };
-        // The assembled router serves the handshake control plane. We recover the
-        // signed offer_ref by rebuilding the offer the same way `build` does.
-        let cfg = inference_config();
-        let wallet = address_from_key(&cfg.wallet_private_key).unwrap();
-        let mut offer = ResourceOffer {
-            provider_wallet: wallet,
-            resource_class: cfg.class,
-            capacity: cfg.capacity.clone(),
-            price_schedule: cfg.price_schedule.clone(),
-            endpoint: cfg.endpoint.clone(),
-            region: cfg.region.clone(),
-            min_funding_wei: cfg.min_funding_wei.clone(),
-            offer_nonce: cfg.offer_nonce,
-            valid_until: 0,
-            signature: String::new(),
-        };
-        offer.sign(&cfg.wallet_private_key).unwrap();
-
         let resp = router
             .oneshot(
                 Request::builder()
@@ -257,6 +288,6 @@ mod tests {
         cfg.class = ResourceClass::Storage;
         cfg.capacity = serde_json::json!({ "max_object_bytes": 1000000 });
         cfg.price_schedule = serde_json::json!({ "per_gb_egress": "1000", "per_gb_month": "2000" });
-        assert!(matches!(build(&cfg).unwrap(), Assembled::Storage { .. }));
+        assert!(matches!(build(&cfg).unwrap().1, Assembled::Storage { .. }));
     }
 }
