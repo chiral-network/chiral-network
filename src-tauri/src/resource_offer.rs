@@ -124,6 +124,20 @@ impl ResourceOffer {
         format!("chiral_offers_{}", class.as_str())
     }
 
+    /// DHT key under which a provider stores its offer so a consumer can fetch it
+    /// after enumerating the class index (`chiral_offer_<class>_<peer_id>`).
+    ///
+    /// Discovery keys by **peer id**, not wallet: the class provider-index
+    /// (`class_index_key`) resolves to peer ids, and the consumer doesn't know a
+    /// provider's wallet in advance. The offer's signature still binds the wallet
+    /// (the payee), which the consumer recovers and verifies from the fetched
+    /// record — so keying by peer id is only a lookup convenience, not a trust
+    /// input. (`dht_key` remains the wallet-keyed variant for direct-by-wallet
+    /// fetch when the wallet is already known.)
+    pub fn peer_dht_key(class: ResourceClass, peer_id: &str) -> String {
+        format!("chiral_offer_{}_{}", class.as_str(), peer_id)
+    }
+
     /// Sign the offer in place with the provider's private key.
     pub fn sign(&mut self, private_key_hex: &str) -> Result<(), String> {
         let payload = self.signing_payload();

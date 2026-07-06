@@ -167,14 +167,22 @@ pub fn build(config: &ProviderConfig) -> Result<(ResourceOffer, Assembled), Stri
 }
 
 /// Publish a signed offer to the DHT via a running node.
-pub async fn publish_offer(dht: &crate::dht::DhtService, offer: &ResourceOffer) -> Result<(), String> {
+///
+/// Keys the offer record by the node's **peer id** (`peer_dht_key`) so a consumer
+/// that enumerated the class index — which resolves to peer ids — can fetch it,
+/// and registers the node as a provider for the class index so it shows up in
+/// that enumeration.
+pub async fn publish_offer(dht: &crate::dht::DhtService, offer: &ResourceOffer) -> Result<String, String> {
+    let peer_id = dht.get_peer_id().await.ok_or("DHT has no local peer id yet")?;
+    let offer_key = ResourceOffer::peer_dht_key(offer.resource_class, &peer_id);
     let offer_json = serde_json::to_string(offer).map_err(|e| e.to_string())?;
     dht.register_offer(
-        offer.dht_key(),
+        offer_key.clone(),
         offer_json,
         ResourceOffer::class_index_key(offer.resource_class),
     )
-    .await
+    .await?;
+    Ok(offer_key)
 }
 
 /// Start a headless DHT node (a provider needs one only to publish its offer and
@@ -200,7 +208,7 @@ pub async fn run(config: ProviderConfig) -> Result<(), String> {
     let _dht = match start_dht_node().await {
         Ok(dht) => {
             match publish_offer(&dht, &offer).await {
-                Ok(()) => println!("[provider] published offer {} to the DHT", offer.dht_key()),
+                Ok(key) => println!("[provider] published offer under {key} (offer_ref {})", offer.offer_ref()),
                 Err(e) => eprintln!("[provider] offer publish failed: {e}"),
             }
             Some(dht) // keep the node alive while serving
