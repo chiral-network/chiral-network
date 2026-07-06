@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cdn_server;
 pub mod chain_rpc_api;
 pub mod codec;
+pub mod consumer;
 pub mod container_api;
 pub mod container_provider;
 pub mod contract_api;
