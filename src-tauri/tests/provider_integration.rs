@@ -12,17 +12,16 @@ use axum::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use chiral_network::codec::hex_to_array;
+use chiral_network::consumer;
 use chiral_network::container_api::{self, ContainerState};
 use chiral_network::container_provider::{
     ContainerProvider, ContainerRates, ContainerRuntime, ResourceEnvelope, ResourceRequest,
 };
 use chiral_network::contract_api;
-use chiral_network::contract_service::{ChainVerifier, ProviderState, VerifiedFunding};
+use chiral_network::contract_service::{ChainVerifier, ProviderState, Quote, VerifiedFunding};
 use chiral_network::llm_api::{self, LlmState};
 use chiral_network::llm_provider::{LlmProvider, TokenRates};
 use chiral_network::resource_offer::{ResourceClass, ResourceOffer};
-use chiral_network::service_contract::encode_open;
 use chiral_network::storage_api::{self, StorageState};
 use chiral_network::storage_provider::StorageProvider;
 
@@ -116,17 +115,16 @@ async fn open_via_handshake(offer: ResourceOffer) -> (Arc<Mutex<ProviderState<Mo
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "propose");
-    let quote = body_json(resp).await;
-    let nonce = quote["contract_nonce"].as_str().unwrap();
-    let terms_hash = quote["terms_hash"].as_str().unwrap();
-    let offer_ref = quote["terms"]["offer_ref"].as_str().unwrap();
+
+    // Deserialize the provider's quote and build the commitment calldata exactly
+    // as a real consumer would. This asserts the byte-for-byte contract between
+    // the two halves: the provider must accept precisely what the consumer's
+    // build_open_tx_data emits (offer_ref + terms_hash + contract_nonce under the
+    // CHR1 magic) — if either side changes the layout, this handshake breaks.
+    let quote: Quote = serde_json::from_value(body_json(resp).await).unwrap();
+    let data = consumer::build_open_tx_data(&offer, &quote).unwrap();
 
     // commit on-chain (inject the funding the mock will report)
-    let data = encode_open(
-        &hex_to_array::<32>(offer_ref).unwrap(),
-        &hex_to_array::<32>(terms_hash).unwrap(),
-        &hex_to_array::<16>(nonce).unwrap(),
-    );
     shared
         .lock()
         .unwrap()
