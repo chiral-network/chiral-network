@@ -45,6 +45,20 @@ impl ResourceClass {
         }
     }
 
+    /// Parse a class from a user/API string (case-insensitive; `"llm"` is an
+    /// alias for inference). Shared by the desktop commands, the daemon HTTP
+    /// endpoints, and the CLI so the three surfaces accept exactly the same set.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "storage" => Ok(ResourceClass::Storage),
+            "container" => Ok(ResourceClass::Container),
+            "inference" | "llm" => Ok(ResourceClass::Inference),
+            other => Err(format!(
+                "unknown resource class '{other}' (expected storage|container|inference)"
+            )),
+        }
+    }
+
     /// Compact wire discriminant used inside the signed payload.
     pub fn wire_byte(&self) -> u8 {
         match self {

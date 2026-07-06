@@ -8085,6 +8085,66 @@ fn get_version_status() -> VersionStatus {
     }
 }
 
+// ---- Resource exchange (desktop marketplace) ----
+
+/// Discover verified resource offers for a class off the running DHT node
+/// (marketplace browse). Every returned offer is signature-verified
+/// (`discovery::search_offers`); the frontend may trust each offer's
+/// `provider_wallet` / `endpoint` / `price_schedule`.
+#[tauri::command]
+async fn discover_offers(
+    state: tauri::State<'_, AppState>,
+    class: String,
+) -> Result<Vec<resource_offer::ResourceOffer>, String> {
+    let class = resource_offer::ResourceClass::parse(&class)?;
+    let dht_guard = state.dht.lock().await;
+    let Some(dht) = dht_guard.as_ref() else {
+        return Err("DHT not running".to_string());
+    };
+    let dht = Arc::clone(dht);
+    drop(dht_guard);
+    discovery::search_offers(&dht, class).await
+}
+
+/// Open a prepaid contract against a discovered provider: propose, commit the
+/// funding tx on-chain, then open — returning `{contractId, credential, …}`. The
+/// offer is re-verified so a tampered body can't redirect funding. Requires a
+/// funded wallet; the deposit is **non-refundable** once broadcast. `privateKey`
+/// never leaves the process.
+#[tauri::command]
+async fn open_service_contract(
+    offer: resource_offer::ResourceOffer,
+    funding_chi: String,
+    wallet_address: String,
+    private_key: String,
+) -> Result<serde_json::Value, String> {
+    offer
+        .verify()
+        .map_err(|e| format!("offer failed signature verification: {e}"))?;
+    if offer.endpoint.trim().is_empty() {
+        return Err("offer has no endpoint to contact".to_string());
+    }
+    let http = reqwest::Client::new();
+    let rpc = geth::wallet_rpc_endpoints();
+    let o = consumer::open_contract(
+        &http,
+        &offer.endpoint,
+        &offer,
+        &wallet_address,
+        &funding_chi,
+        &private_key,
+        &rpc,
+    )
+    .await?;
+    Ok(serde_json::json!({
+        "contractId": o.contract_id,
+        "credential": o.credential,
+        "balanceWei": o.balance_wei,
+        "expiresAt": o.expires_at,
+        "txHash": o.tx_hash,
+    }))
+}
+
 /// Phase 2 backend gate: refuse to enter ops protected by the version
 /// floor (DHT start, paid downloads, …) if this client is below the
 /// policy's `min_required`. The frontend's blocking modal already
@@ -8445,6 +8505,9 @@ pub fn run() {
             // Version policy
             get_version_policy,
             get_version_status,
+            // Resource exchange (marketplace)
+            discover_offers,
+            open_service_contract,
             compute_owner_proof,
             compute_reputation_verdict_proof,
             compute_relay_register_signature,

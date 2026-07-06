@@ -2115,15 +2115,7 @@ struct ExchangeOpenRequest {
 }
 
 fn parse_resource_class(s: &str) -> Result<chiral_network::resource_offer::ResourceClass, String> {
-    use chiral_network::resource_offer::ResourceClass;
-    match s.trim().to_lowercase().as_str() {
-        "storage" => Ok(ResourceClass::Storage),
-        "container" => Ok(ResourceClass::Container),
-        "inference" | "llm" => Ok(ResourceClass::Inference),
-        other => Err(format!(
-            "unknown resource class '{other}' (expected storage|container|inference)"
-        )),
-    }
+    chiral_network::resource_offer::ResourceClass::parse(s)
 }
 
 /// Discover signed resource offers for a class off the running DHT node. Every
