@@ -8106,6 +8106,43 @@ async fn discover_offers(
     discovery::search_offers(&dht, class).await
 }
 
+/// Discover offers through a hosted **discovery gateway** instead of a local DHT
+/// node — the thin (infra-free) client path. Calls the gateway's
+/// `POST /api/headless/exchange/discover`, then **re-verifies every offer's
+/// signature locally** so the gateway can't inject forged offers
+/// (`discovery::accept_gateway_offers`). `gatewayUrl` is a user-configured base
+/// URL (thin mode ships without a default), e.g. `http://host:9420`.
+#[tauri::command]
+async fn discover_offers_via_gateway(
+    gateway_url: String,
+    class: String,
+) -> Result<Vec<resource_offer::ResourceOffer>, String> {
+    let class = resource_offer::ResourceClass::parse(&class)?;
+    let base = gateway_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("no discovery gateway configured (set one in Settings)".to_string());
+    }
+    let url = format!("{base}/api/headless/exchange/discover");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "class": class.as_str() }))
+        .send()
+        .await
+        .map_err(|e| format!("gateway discover request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("gateway rejected discover: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("gateway response was not JSON: {e}"))?;
+    let raw = body
+        .get("offers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(discovery::accept_gateway_offers(raw, class))
+}
+
 /// Open a prepaid contract against a discovered provider: propose, commit the
 /// funding tx on-chain, then open — returning `{contractId, credential, …}`. The
 /// offer is re-verified so a tampered body can't redirect funding. Requires a
@@ -8507,6 +8544,7 @@ pub fn run() {
             get_version_status,
             // Resource exchange (marketplace)
             discover_offers,
+            discover_offers_via_gateway,
             open_service_contract,
             compute_owner_proof,
             compute_reputation_verdict_proof,

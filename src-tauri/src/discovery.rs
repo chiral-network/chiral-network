@@ -58,6 +58,35 @@ pub fn price_wei(offer: &ResourceOffer, field: &str) -> Option<u128> {
         .and_then(|s| s.parse::<u128>().ok())
 }
 
+/// Filter a discovery **gateway's** returned offer array down to the offers a
+/// thin client may trust: signature-verified, class-matching, and enabled in this
+/// version. Pure.
+///
+/// A thin (infra-free) client fetches offers through a hosted gateway's DHT
+/// instead of running its own. The gateway is a convenience, **not** a trust
+/// authority — so every offer it returns is re-verified here exactly as
+/// [`accept_offer_record`] does for a direct DHT read. A forged, tampered,
+/// wrong-class, or disabled-class offer the gateway injects is silently dropped.
+pub fn accept_gateway_offers(
+    values: Vec<serde_json::Value>,
+    class: ResourceClass,
+) -> Vec<ResourceOffer> {
+    values
+        .into_iter()
+        .filter_map(|v| {
+            let offer: ResourceOffer = serde_json::from_value(v).ok()?;
+            if offer.resource_class == class
+                && offer.resource_class.is_enabled()
+                && offer.verify().is_ok()
+            {
+                Some(offer)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Discover verified offers for a resource class:
 ///
 /// 1. enumerate the class provider-index (`chiral_offers_<class>`) → peer ids,
@@ -158,6 +187,28 @@ mod tests {
         let unsigned = serde_json::to_string(&o).unwrap();
         assert!(accept_offer_record(&unsigned, ResourceClass::Storage).is_none());
         assert!(accept_offer_record("not json", ResourceClass::Storage).is_none());
+    }
+
+    #[test]
+    fn accept_gateway_offers_reverifies_and_filters() {
+        let good = signed_offer(ResourceClass::Storage, "per_gb_month", "1000");
+        let good_val = serde_json::to_value(&good).unwrap();
+
+        // A forged offer (terms tampered after signing) the gateway might inject.
+        let mut forged = signed_offer(ResourceClass::Storage, "per_gb_month", "1");
+        forged.endpoint = "https://evil.example".to_string();
+        let forged_val = serde_json::to_value(&forged).unwrap();
+
+        // A validly-signed offer of the wrong class.
+        let wrong_class = signed_offer(ResourceClass::Container, "per_vcpu_hour_wei", "5");
+        let wrong_val = serde_json::to_value(&wrong_class).unwrap();
+
+        let kept = accept_gateway_offers(
+            vec![good_val, forged_val, wrong_val, serde_json::json!({ "junk": true })],
+            ResourceClass::Storage,
+        );
+        assert_eq!(kept.len(), 1, "only the valid, class-matching offer survives");
+        assert_eq!(kept[0].endpoint, good.endpoint);
     }
 
     #[test]
