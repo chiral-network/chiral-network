@@ -158,17 +158,15 @@
   async function setAppMode(mode: AppMode) {
     if ($settings.appMode === mode) return;
     settings.update((s) => ({ ...s, appMode: mode }));
+    // Switch the running DHT's Kademlia mode live (no restart): thin = client
+    // (discover + publish only), full = server/backbone. geth + mining follow the
+    // mode via App.svelte's effects (they start on switch-to-full; a restart is
+    // needed to stop them when switching back to thin).
+    await dhtService.setMode(mode !== 'full');
     if (mode === 'thin') {
-      // Thin mode runs no local node — stop the DHT now; geth/mining (if running)
-      // stop on next launch.
-      try {
-        await dhtService.stop();
-      } catch {
-        /* not running */
-      }
-      toasts.show('Thin mode enabled — no local node. Restart to fully stop geth/mining.', 'success');
+      toasts.show('Thin mode — DHT is now a client. Restart to stop geth/mining if running.', 'success');
     } else {
-      toasts.show('Full mode enabled — the local node will start.', 'success');
+      toasts.show('Full mode — DHT is now a server; geth/mining start after login.', 'success');
     }
   }
 
@@ -660,10 +658,11 @@
 
             {#if $settings.appMode === 'thin'}
               <div class="mt-4">
-                <label for="gateway-url" class="text-sm font-medium text-gray-900 dark:text-white">Discovery gateway</label>
+                <label for="gateway-url" class="text-sm font-medium text-gray-900 dark:text-white">Discovery gateway <span class="text-gray-400 font-normal">(optional fallback)</span></label>
                 <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                  Base URL of a node that answers offer queries (e.g. <code>http://host:9420</code>). Required to browse
-                  the marketplace in thin mode; offers are re-verified locally, so the gateway is only a convenience.
+                  Thin mode normally discovers peer-to-peer via its DHT client. If a network blocks libp2p, set a
+                  gateway node's base URL here (e.g. <code>http://host:9420</code>) and the marketplace falls back to it.
+                  Offers are re-verified locally either way, so the gateway is never trusted.
                 </p>
                 <input
                   id="gateway-url"

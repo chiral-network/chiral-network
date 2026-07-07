@@ -38,15 +38,19 @@
     loading = true;
     searched = true;
     try {
-      const mode = $settings.appMode;
-      if (mode === 'thin') {
-        const gateway = ($settings.gatewayUrl || '').trim();
-        if (!gateway) {
-          throw new Error('No discovery gateway configured. Set one in Settings → Startup.');
-        }
-        offers = await discoverOffersViaGateway(gateway, selectedClass);
-      } else {
+      // Primary (both modes): the local DHT — thin queries as a Kademlia client,
+      // full as a server. Dormant fallback (thin only): a configured gateway, used
+      // if the direct DHT path fails (e.g. libp2p blocked). Offers are re-verified
+      // in the backend on either path.
+      try {
         offers = await discoverOffers(selectedClass);
+      } catch (dhtErr) {
+        const gateway = ($settings.gatewayUrl || '').trim();
+        if ($settings.appMode === 'thin' && gateway) {
+          offers = await discoverOffersViaGateway(gateway, selectedClass);
+        } else {
+          throw dhtErr;
+        }
       }
     } catch (e) {
       offers = [];

@@ -440,13 +440,17 @@
   let dhtStartedForSession = $state(false);
   $effect(() => {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-    // Thin mode (the default) runs no local DHT node — marketplace discovery
-    // goes through a hosted gateway instead. Only full/advanced mode joins the DHT.
-    if ($settings.appMode === 'full' && $isAuthenticated && !dhtStartedForSession) {
+    // Both modes run a DHT node: thin joins as a Kademlia *client* (discovers
+    // + publishes, no server load), full as a server/backbone. start() attaches
+    // UI listeners (the backend may have already started it on launch) and
+    // setMode() pins the correct mode for this session's appMode.
+    if ($isAuthenticated && !dhtStartedForSession) {
       dhtStartedForSession = true;
-      dhtService.start().catch((err) => {
-        console.warn('DHT auto-start failed:', err);
-      });
+      const clientMode = $settings.appMode !== 'full';
+      dhtService
+        .start(clientMode)
+        .then(() => dhtService.setMode(clientMode))
+        .catch((err) => console.warn('DHT auto-start failed:', err));
     }
     if (!$isAuthenticated) {
       dhtStartedForSession = false;
