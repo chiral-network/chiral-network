@@ -46,6 +46,15 @@ export interface NotificationSettings {
   fileShared: boolean;
 }
 
+/**
+ * Application mode. `thin` (the default) runs no local infrastructure — no DHT
+ * node, no geth, no mining — and acts as a consumer client: wallet keys stay
+ * in-process, chain access is remote RPC, and marketplace discovery goes through
+ * a hosted gateway. `full` (advanced) runs the local DHT + optional geth + mining
+ * and exposes the legacy file-sharing pages.
+ */
+export type AppMode = 'thin' | 'full';
+
 export interface AppSettings {
   theme: ThemeMode;
   colorTheme: ColorTheme;
@@ -53,6 +62,10 @@ export interface AppSettings {
   reducedMotion: boolean;
   autoStartMining: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
+  /** Thin (default) vs full/advanced. See {@link AppMode}. */
+  appMode: AppMode;
+  /** Discovery gateway base URL used in thin mode (empty = not configured). */
+  gatewayUrl: string;
   notifications: NotificationSettings;
   hostingConfig: HostingConfig;
 }
@@ -75,6 +88,8 @@ const defaultSettings: AppSettings = {
   reducedMotion: false,
   autoStartMining: false,
   downloadDirectory: '',
+  appMode: 'thin',
+  gatewayUrl: '',
   notifications: { ...defaultNotifications },
   hostingConfig: {
     enabled: false,

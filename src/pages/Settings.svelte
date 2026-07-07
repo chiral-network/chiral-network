@@ -7,9 +7,11 @@
     type NotificationSettings,
     type ColorTheme,
     type NavStyle,
+    type AppMode,
   } from '$lib/stores';
   import { availableThemes } from '$lib/services/colorThemeService';
   import { toasts } from '$lib/toastStore';
+  import { dhtService } from '$lib/dhtService';
   import {
     Sun,
     Moon,
@@ -151,6 +153,27 @@
 
   function toggleAutoStartMining() {
     settings.update((s) => ({ ...s, autoStartMining: !s.autoStartMining }));
+  }
+
+  async function setAppMode(mode: AppMode) {
+    if ($settings.appMode === mode) return;
+    settings.update((s) => ({ ...s, appMode: mode }));
+    if (mode === 'thin') {
+      // Thin mode runs no local node — stop the DHT now; geth/mining (if running)
+      // stop on next launch.
+      try {
+        await dhtService.stop();
+      } catch {
+        /* not running */
+      }
+      toasts.show('Thin mode enabled — no local node. Restart to fully stop geth/mining.', 'success');
+    } else {
+      toasts.show('Full mode enabled — the local node will start.', 'success');
+    }
+  }
+
+  function updateGatewayUrl(url: string) {
+    settings.update((s) => ({ ...s, gatewayUrl: url.trim() }));
   }
 
   // ---------- Notifications ----------
@@ -610,28 +633,74 @@
             </div>
           </header>
 
-          <button
-            onclick={toggleAutoStartMining}
-            class="w-full flex items-center justify-between gap-4 py-3 px-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"
-            role="switch"
-            aria-checked={$settings.autoStartMining}
-          >
-            <div>
-              <p class="text-sm font-medium text-gray-900 dark:text-white">Auto-start mining on login</p>
-              <p class="text-sm text-gray-500 dark:text-gray-400">
-                Begins mining as soon as your node is online after login. Default: off.
-              </p>
+          <!-- App mode: thin (default) vs full/advanced -->
+          <div class="mb-4 p-4 rounded-xl border border-gray-200 dark:border-gray-700">
+            <p class="text-sm font-medium text-gray-900 dark:text-white mb-1">Mode</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              <strong>Thin</strong> (default) runs no local node — wallet + marketplace over remote services, instant
+              startup. <strong>Full</strong> runs a local DHT node, optional geth, and mining, and unlocks the
+              file-sharing pages.
+            </p>
+            <div class="flex gap-2">
+              <button
+                onclick={() => setAppMode('thin')}
+                class="flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors
+                  {$settings.appMode === 'thin'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                    : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'}"
+              >Thin (default)</button>
+              <button
+                onclick={() => setAppMode('full')}
+                class="flex-1 py-2 px-3 rounded-lg border text-sm font-medium transition-colors
+                  {$settings.appMode === 'full'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                    : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'}"
+              >Full node (advanced)</button>
             </div>
-            <div
-              class="relative w-11 h-6 rounded-full shrink-0 transition-colors
-                {$settings.autoStartMining ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+
+            {#if $settings.appMode === 'thin'}
+              <div class="mt-4">
+                <label for="gateway-url" class="text-sm font-medium text-gray-900 dark:text-white">Discovery gateway</label>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                  Base URL of a node that answers offer queries (e.g. <code>http://host:9420</code>). Required to browse
+                  the marketplace in thin mode; offers are re-verified locally, so the gateway is only a convenience.
+                </p>
+                <input
+                  id="gateway-url"
+                  type="text"
+                  placeholder="http://host:9420"
+                  value={$settings.gatewayUrl}
+                  onchange={(e) => updateGatewayUrl((e.currentTarget as HTMLInputElement).value)}
+                  class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                />
+              </div>
+            {/if}
+          </div>
+
+          {#if $settings.appMode === 'full'}
+            <button
+              onclick={toggleAutoStartMining}
+              class="w-full flex items-center justify-between gap-4 py-3 px-4 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"
+              role="switch"
+              aria-checked={$settings.autoStartMining}
             >
-              <span
-                class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-                  {$settings.autoStartMining ? 'translate-x-5' : 'translate-x-0'}"
-              ></span>
-            </div>
-          </button>
+              <div>
+                <p class="text-sm font-medium text-gray-900 dark:text-white">Auto-start mining on login</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Begins mining as soon as your node is online after login. Default: off.
+                </p>
+              </div>
+              <div
+                class="relative w-11 h-6 rounded-full shrink-0 transition-colors
+                  {$settings.autoStartMining ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+              >
+                <span
+                  class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+                    {$settings.autoStartMining ? 'translate-x-5' : 'translate-x-0'}"
+                ></span>
+              </div>
+            </button>
+          {/if}
         </section>
 
       {:else if activeSection === 'advanced'}

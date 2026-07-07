@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, ChevronLeft, ChevronRight, Server, HardDrive } from 'lucide-svelte';
+  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, ChevronLeft, ChevronRight, Server, HardDrive, Store } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { networkConnected, walletAccount } from '$lib/stores';
+  import { networkConnected, walletAccount, settings } from '$lib/stores';
   import { requestLogout } from '$lib/logout';
 
   let { currentPage = 'download', collapsed = $bindable(false) }: { currentPage?: string; collapsed?: boolean } = $props();
@@ -26,18 +26,25 @@
     mobileOpen = false;
   }
 
+  // `full: true` items only appear in full/advanced mode (they need the local
+  // DHT / geth). Thin mode shows the consumer set: marketplace, account,
+  // diagnostics, settings.
   const navItems = [
-    { path: '/download', label: 'Download', icon: Download },
-    { path: '/drive', label: 'Drive', icon: HardDrive },
+    { path: '/marketplace', label: 'Marketplace', icon: Store },
     { path: '/account', label: 'Account', icon: Wallet },
-
-    { path: '/hosts', label: 'Hosts', icon: Server },
-    { path: '/network', label: 'Network', icon: Globe },
-    { path: '/settings', label: 'Settings', icon: Settings },
-    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },
+    { path: '/download', label: 'Download', icon: Download, full: true },
+    { path: '/drive', label: 'Drive', icon: HardDrive, full: true },
+    { path: '/hosts', label: 'Hosts', icon: Server, full: true },
+    { path: '/network', label: 'Network', icon: Globe, full: true },
+    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send, full: true },
+    { path: '/mining', label: 'Mining', icon: Pickaxe, full: true },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
-    { path: '/mining', label: 'Mining', icon: Pickaxe },
+    { path: '/settings', label: 'Settings', icon: Settings },
   ];
+
+  const visibleNav = $derived(
+    navItems.filter((item) => $settings.appMode === 'full' || !item.full),
+  );
 </script>
 
 <!-- Mobile top bar -->
@@ -71,7 +78,7 @@
   <div class="md:hidden fixed inset-0 z-40 bg-black/50" onclick={() => mobileOpen = false}></div>
   <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-lg max-h-[calc(100vh-3.5rem)] overflow-y-auto">
     <div class="px-3 py-2 space-y-1">
-      {#each navItems as item}
+      {#each visibleNav as item}
         <button
           onclick={() => navigate(item.path)}
           class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm
@@ -136,7 +143,7 @@
 
   <!-- Nav items -->
   <nav class="flex-1 px-2 py-3 space-y-1 overflow-y-auto overflow-x-hidden">
-    {#each navItems as item}
+    {#each visibleNav as item}
       <button
         onclick={() => navigate(item.path)}
         class="flex items-center gap-3 w-full py-2.5 rounded-lg transition text-sm

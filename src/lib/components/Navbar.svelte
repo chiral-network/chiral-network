@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive } from 'lucide-svelte';
+  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive, Store } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { networkConnected, walletAccount } from '$lib/stores';
+  import { networkConnected, walletAccount, settings } from '$lib/stores';
   import { requestLogout } from '$lib/logout';
   import { computeAnchoredDropdownPlacement } from '$lib/utils/uiPositioning';
 
@@ -45,21 +45,26 @@
 
   const MAX_VISIBLE = 6;
 
+  // `full: true` items only appear in full/advanced mode (they need the local
+  // DHT / geth). Thin mode shows the consumer set.
   const navItems = [
-    { path: '/download', label: 'Download', icon: Download },
-    { path: '/drive', label: 'Drive', icon: HardDrive },
+    { path: '/marketplace', label: 'Marketplace', icon: Store },
     { path: '/account', label: 'Account', icon: Wallet },
-
-    { path: '/hosts', label: 'Hosts', icon: Server },
-    { path: '/network', label: 'Network', icon: Globe },
-    { path: '/settings', label: 'Settings', icon: Settings },
-    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },
+    { path: '/download', label: 'Download', icon: Download, full: true },
+    { path: '/drive', label: 'Drive', icon: HardDrive, full: true },
+    { path: '/hosts', label: 'Hosts', icon: Server, full: true },
+    { path: '/network', label: 'Network', icon: Globe, full: true },
+    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send, full: true },
+    { path: '/mining', label: 'Mining', icon: Pickaxe, full: true },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
-    { path: '/mining', label: 'Mining', icon: Pickaxe },
+    { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
-  const visibleItems = navItems.slice(0, MAX_VISIBLE);
-  const moreItems = navItems.slice(MAX_VISIBLE);
+  const filteredNav = $derived(
+    navItems.filter((item) => $settings.appMode === 'full' || !item.full),
+  );
+  const visibleItems = $derived(filteredNav.slice(0, MAX_VISIBLE));
+  const moreItems = $derived(filteredNav.slice(MAX_VISIBLE));
 
   $effect(() => {
     if (!moreMenuOpen) return;

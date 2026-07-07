@@ -68,6 +68,22 @@ export async function discoverOffers(resourceClass: ResourceClass): Promise<Reso
 }
 
 /**
+ * Discover offers through a hosted gateway (the thin-mode path) rather than a
+ * local DHT node. Every offer is re-verified in the backend, so a malicious
+ * gateway can't inject forged offers. `gatewayUrl` is the user-configured base
+ * URL from Settings.
+ */
+export async function discoverOffersViaGateway(
+  gatewayUrl: string,
+  resourceClass: ResourceClass,
+): Promise<ResourceOffer[]> {
+  return invoke<ResourceOffer[]>('discover_offers_via_gateway', {
+    gatewayUrl,
+    class: resourceClass,
+  });
+}
+
+/**
  * Open a prepaid contract against a discovered offer: propose → fund the deposit
  * on-chain → open. Returns the contract id + session credential. The deposit
  * (`fundingChi`, in CHI) is **non-refundable** once broadcast; `privateKey` is

@@ -23,6 +23,7 @@
   import SettingsPage from './pages/Settings.svelte';
   import HostsPage from './pages/Hosts.svelte';
   import DrivePage from './pages/Drive.svelte';
+  import MarketplacePage from './pages/Marketplace.svelte';
 
 
   let currentPath = $state('/wallet');
@@ -345,6 +346,10 @@
 
   const authenticatedRoutes: RouteConfig[] = [
     {
+      path: '/marketplace',
+      component: MarketplacePage
+    },
+    {
       path: '/download',
       component: DownloadPage
     },
@@ -435,7 +440,9 @@
   let dhtStartedForSession = $state(false);
   $effect(() => {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-    if ($isAuthenticated && !dhtStartedForSession) {
+    // Thin mode (the default) runs no local DHT node — marketplace discovery
+    // goes through a hosted gateway instead. Only full/advanced mode joins the DHT.
+    if ($settings.appMode === 'full' && $isAuthenticated && !dhtStartedForSession) {
       dhtStartedForSession = true;
       dhtService.start().catch((err) => {
         console.warn('DHT auto-start failed:', err);
@@ -482,10 +489,11 @@
     void maybeAutoPublishHosting();
   });
 
-  // Auto-start Geth node once when user logs in
+  // Auto-start Geth node once when user logs in (full/advanced mode only —
+  // thin mode uses remote RPC, so it runs no local geth node and never mines).
   let gethAutoStarted = false;
   $effect(() => {
-    if ($isAuthenticated && !gethAutoStarted) {
+    if ($settings.appMode === 'full' && $isAuthenticated && !gethAutoStarted) {
       gethAutoStarted = true;
       (async () => {
         try {
