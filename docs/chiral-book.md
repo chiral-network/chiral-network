@@ -798,11 +798,32 @@ The decisions that shaped this design, now settled — each records the choice; 
 >
 > **Scope for this version — storage + container only.** LLM (inference) sharing is **disabled and deferred to a future release**. The inference provider core (`llm_provider`) + data-plane (`llm_api`) and this document's inference design remain in the tree, dormant and still tested, but `ResourceClass::is_enabled` gates the class out of every marketplace surface — a provider cannot advertise inference, and a consumer cannot discover or open an inference contract (`consumer::open_contract` refuses it as a defense-in-depth choke point). Re-enabling is a one-line change to `ResourceClass::is_enabled`.
 >
-> **Desktop runs thin by default.** A fresh install starts **no local infrastructure** (no DHT, geth, or mining) and acts as a consumer client — wallet keys stay in-process, chain access is remote RPC, and discovery goes through a user-configured gateway (`discover_offers_via_gateway`, offers re-verified locally via `discovery::accept_gateway_offers`). *Full* mode (Settings → Startup) restores the local DHT + geth + mining + legacy pages. The `/marketplace` page (browse → open → use) is the thin-mode consumer surface; `App.svelte` gates the infra auto-starts on full mode; the nav hides full-only pages in thin.
+> **Desktop runs thin by default** — see [Node model](#node-model--thin-full-and-light-nodes) below. A fresh install is a **client-mode libp2p** node: it discovers offers directly on the DHT (no server or gateway load) with **remote-RPC** chain access — no local geth, no stored ledger, no legacy pages. *Full* ("advanced") mode runs the server-mode DHT + local geth + mining + seeding + legacy pages. Thin nodes may still **mine** (Ethash loop locally, per-address work from a solo coordinator) and **provide** (a *light provider* publishes its offer via client-mode `put_record`, serves a public data-plane endpoint, and verifies payments over remote RPC — no full node). The `/marketplace` page (browse → open → use) is the thin consumer surface.
 >
-> **Remaining:** tool-compat polish (full S3 SigV4) and live-DHT / soak testing.
+> **Remaining:** DHT client-mode wiring, the thin-miner loop + solo coordinator, and the desktop light-provider path (this pass); then tool-compat polish (full S3 SigV4) and live-DHT / soak testing.
 
-A **provider** is a headless process — the `chiral_daemon` in *provider mode*, or a dedicated `chiral_provider` binary — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
+A **provider** is a process — a headless `chiral_provider` binary, or a **desktop in provider mode** (see Node model) — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
+
+### Node model — thin, full, and light nodes
+
+Every desktop takes one of two **DHT roles**, independent of whether it also provides or mines:
+
+- **Thin (client) — the default.** libp2p Kademlia in **client mode** (`kad::Mode::Client`): it issues its own queries (`get_providers`, `get_record`) to discover offers and, if it provides, `put_record`s + republishes its own offer — but it is never inserted into other peers' routing tables and never answers inbound DHT requests, so it carries **no server or gateway load**. Chain access is **remote RPC** (the `rpc_client` fallback list) — no local geth, no stored ledger. No seeding, no legacy file-sharing pages.
+- **Full (server / node) — advanced opt-in.** Kademlia in **server mode** (stores + routes records — the network's record backbone), plus a local geth full node, mining, seeding, and the legacy pages.
+
+The record backbone is the relay + CDN + any full-mode desktops; thin nodes (consumers and light providers alike) are leaves that read and publish through it. Because a consumer only issues **outbound** queries, thin nodes work behind NAT — only *serving* roles need public reachability.
+
+**Discovery paths (thin).** *Primary:* the client-mode DHT (`discovery::search_offers` over the local swarm). *Fallback:* the HTTP gateway (`discover_offers_via_gateway`, offers re-verified locally via `accept_gateway_offers`) — **kept but off by default**, for consumers on networks that block libp2p. Full mode always uses its local server-mode DHT.
+
+**Light provider.** Providing is orthogonal to the DHT role: a **thin** node becomes a provider by (1) publishing its signed offer via client-mode `put_record`, (2) serving its data-plane HTTPS endpoint — **public IP/domain required**, the one thing that does *not* get lighter — and (3) verifying incoming funding txs over **remote RPC** (`RpcChainVerifier`), which happens only at open/top-up (never per request, since the data plane meters against the local `ContractLedger`). So a desktop can provide storage/container without a full node or DHT-server duty.
+
+**Thin mining — solo coordinator.** A thin node mines without a local chain by running the **Ethash PoW loop locally** (CPU/GPU) and pulling work from a **solo coordinator** hosted on a full node:
+
+- `getWork(minerAddress)` → the coordinator assembles a block template with `coinbase = minerAddress` off the chain head + txpool and returns `(headerHash, seedHash, target)`;
+- the miner searches for a `nonce`/`mixHash` under `target`;
+- `submitWork(minerAddress, nonce, mixHash)` → the coordinator seals + broadcasts the block; the **reward is paid on-chain directly to the miner's own address**.
+
+The per-address template is the crux: in stock `eth_getWork` the coinbase is baked into the hashed header, so an external miner **cannot** redirect the reward — a naive remote miner would earn for the *node's* etherbase, not itself. The coordinator is a "pool of one": direct on-chain rewards, no share accounting, but **lumpy** variance (you earn only on blocks you find). *Implementation note:* stock geth exposes only node-global `getWork`, so the v1 coordinator assembles per-address templates itself (or serializes etherbase swaps at low concurrency) — the heaviest new piece of the light-node model. A share-based pool (smooth rewards) is the post-v1 alternative.
 
 ### Shared provider node
 
