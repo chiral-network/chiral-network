@@ -23,6 +23,7 @@ pub mod hosting;
 pub mod hosting_server;
 pub mod llm_api;
 pub mod llm_provider;
+pub mod mining_coordinator;
 pub mod network;
 pub mod provider_daemon;
 pub mod provider_gateway;
