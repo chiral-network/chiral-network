@@ -2536,6 +2536,40 @@ async fn main() {
     // interval, so the manual CDN republish loop from the legacy blob
     // schema is no longer needed.
 
+    // Optional solo mining coordinator: lets thin miners (running ethminer with
+    // no local chain) mine to their own address against this full node's geth.
+    // Enabled by CHIRAL_MINING_COORDINATOR_PORT. Requires geth to expose the
+    // `miner` + `eth` RPC namespaces. See `mining_coordinator` for the lease model.
+    if let Some(port) = std::env::var("CHIRAL_MINING_COORDINATOR_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+    {
+        let geth_endpoint = chiral_network::geth::effective_rpc_endpoint();
+        let lease_ttl = std::env::var("CHIRAL_MINING_LEASE_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30u64);
+        let coord_state = chiral_network::mining_coordinator::CoordinatorState {
+            geth_endpoint,
+            leases: Arc::new(chiral_network::mining_coordinator::LeaseManager::new(lease_ttl)),
+        };
+        let coord_router = chiral_network::mining_coordinator::router(coord_state);
+        let addr = format!("0.0.0.0:{port}");
+        tokio::spawn(async move {
+            match tokio::net::TcpListener::bind(&addr).await {
+                Ok(l) => {
+                    println!(
+                        "[MINING] Solo coordinator on {addr} — thin miners: ethminer -P http://<addr>@host:{port}/<addr>"
+                    );
+                    if let Err(e) = axum::serve(l, coord_router).await {
+                        eprintln!("[MINING] coordinator serve error: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[MINING] coordinator bind {addr} failed: {e}"),
+            }
+        });
+    }
+
     tokio::spawn(async move {
         let server = axum::serve(
             listener,

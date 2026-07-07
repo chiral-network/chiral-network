@@ -4222,7 +4222,34 @@ async fn start_gpu_mining(
         return Err("Start geth with a miner address before GPU mining".to_string());
     }
     let mut miner = state.gpu_miner.lock().await;
-    miner.start(&miner_address, device_ids, utilization_percent)
+    miner.start(&miner_address, device_ids, utilization_percent, None)
+}
+
+/// Thin mining: run ethminer against a remote **solo coordinator** (no local geth
+/// / no chain), mining to `miner_address`. The coordinator assembles per-address
+/// work so the reward is paid to this address. `coordinator_url` is a full node's
+/// coordinator endpoint, e.g. `1.2.3.4:9555`.
+#[tauri::command]
+async fn start_thin_mining(
+    state: tauri::State<'_, AppState>,
+    coordinator_url: String,
+    miner_address: String,
+    device_ids: Option<Vec<String>>,
+    utilization_percent: Option<u8>,
+) -> Result<(), String> {
+    if miner_address.trim().is_empty() {
+        return Err("miner address required".to_string());
+    }
+    if coordinator_url.trim().is_empty() {
+        return Err("coordinator URL required".to_string());
+    }
+    let mut miner = state.gpu_miner.lock().await;
+    miner.start(
+        miner_address.trim(),
+        device_ids,
+        utilization_percent,
+        Some(coordinator_url.trim()),
+    )
 }
 
 #[tauri::command]
@@ -8676,6 +8703,7 @@ pub fn run() {
             get_gpu_mining_capabilities,
             list_gpu_devices,
             start_gpu_mining,
+            start_thin_mining,
             stop_gpu_mining,
             get_gpu_mining_status,
             set_miner_address,
