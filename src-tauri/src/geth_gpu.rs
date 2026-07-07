@@ -134,11 +134,17 @@ impl GpuMiner {
         Ok(parse_device_list(&text))
     }
 
+    /// Start ethminer. With `coordinator` = `None` it points at the local geth
+    /// (`127.0.0.1:8545`) as before. With `coordinator` = `Some("host:port")` it
+    /// points at a **solo mining coordinator** (thin mining, no local chain): the
+    /// URL carries the reward address in both the path and the Basic-Auth user, so
+    /// the coordinator can assemble per-address work for it.
     pub fn start(
         &mut self,
         miner_address: &str,
         device_ids: Option<Vec<String>>,
         utilization_percent: Option<u8>,
+        coordinator: Option<&str>,
     ) -> Result<(), String> {
         if self.child.is_some() {
             return Err("GPU mining is already running".to_string());
@@ -149,12 +155,21 @@ impl GpuMiner {
             return Err("Miner address required to start GPU mining".to_string());
         }
 
-        // ethminer getwork URL against local geth. The scheme prefix `http://`
-        // (not `stratum://`) tells ethminer to use HTTP getwork, which is what
-        // geth exposes on port 8545. The address-as-user is a convention
-        // ethminer carries over from pool mining; geth ignores it because
-        // the coinbase comes from geth's own --miner.etherbase flag.
-        let url = format!("http://{miner_address}@127.0.0.1:8545");
+        // ethminer getwork URL. The `http://` scheme (not `stratum://`) selects
+        // HTTP getwork. The address-as-user is a pool convention: local geth
+        // ignores it (coinbase = its --miner.etherbase), but the solo coordinator
+        // *reads* it (path + Basic-Auth) to serve per-address work.
+        let url = match coordinator {
+            Some(hostport) => {
+                let hp = hostport
+                    .trim()
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://")
+                    .trim_end_matches('/');
+                format!("http://{miner_address}@{hp}/{miner_address}")
+            }
+            None => format!("http://{miner_address}@127.0.0.1:8545"),
+        };
 
         let mut cmd = Command::new(path);
         cmd.arg("-G").arg("-P").arg(&url);

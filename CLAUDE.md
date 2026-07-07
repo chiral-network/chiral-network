@@ -2,7 +2,11 @@
 
 ## Project Direction & Status (READ FIRST)
 
-Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage**, **container compute**, and **LLM inference**; consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage** and **container compute** (LLM inference is designed and built but **disabled in this version** — deferred to a future release); consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+
+- **This version's resource classes are storage + container only.** The inference (LLM) provider core (`llm_provider`) + data-plane (`llm_api`) remain in the tree — dormant and still tested — but `ResourceClass::is_enabled` gates them out of every marketplace surface (a provider can't advertise inference, a consumer can't discover or open one). Re-enable by adding `Inference` to `ResourceClass::is_enabled`.
+- **Thin mode is the default app mode** (`settings.appMode`, in the `chiral-settings` store). Thin runs a **client-mode libp2p** node (`dht.rs` `create_swarm(client_mode)` / `DhtService::set_dht_mode`, driven by the `set_dht_mode` command): it discovers offers directly on the DHT (`discover_offers`) and publishes its own records, but stores/routes nothing — no server or gateway load. Chain access is **remote RPC** (no local geth, no stored ledger). The HTTP gateway (`discover_offers_via_gateway`, offers **re-verified locally** via `discovery::accept_gateway_offers`) is a **dormant off-by-default fallback** for networks that block libp2p. Wallet keys stay in-process (the reason it's a desktop app, not a webapp). **Full** ("advanced") mode runs a server-mode DHT + local geth + mining + the legacy file-sharing pages. The DHT runs in both modes (client vs server); geth/mining auto-start only in full (`App.svelte`); Sidebar/Navbar hide full-only pages in thin. The `/marketplace` page (browse → open → use) is the thin consumer surface.
+- **Thin nodes can also provide and mine** (a thin node isn't only a consumer). *Light provider* (`desktop_provider` + `start_provider`/`stop_provider`/`get_provider_status` + the `/provider` panel, currently full-mode nav): serve storage/container from the desktop, publish the offer through the client-mode DHT, verify payments over **remote RPC** — a **public endpoint is required** (no NAT in v1). *Thin mining* (`mining_coordinator` + the `start_thin_mining` command + the Mining-page thin card): run **ethminer** against a full node's **solo coordinator** (opt-in on the daemon via `CHIRAL_MINING_COORDINATOR_PORT`) that serves per-address work via an etherbase **lease**, so the reward is paid to the miner's own address. Coordinator concurrency is single-miner-at-a-time; fork-level per-address `getWork` is the real fix (post-v1). Requires geth to expose the `miner` + `eth` RPC namespaces.
 
 - **Target design is authoritative:** `docs/chiral-book.md` (Part I white paper + Part II design & implementation). Align new work with it.
 - **The current code is still the legacy file-sharing system** — it has NOT been migrated yet. The sections below describe the current as-built implementation and operations. Infrastructure (wallet, RPC, DHT, Geth/mining, relay, version enforcement, owner-proof auth) largely carries forward; the file-sharing feature specifics (Drive, downloads, CDN, folders, chunked transfer, drive shares) are the legacy layer being migrated.
@@ -14,8 +18,8 @@ Chiral Network is a Tauri 2 desktop app with a Svelte 5 frontend and Rust backen
 
 **Target domains** (resource exchange — see `docs/chiral-book.md`):
 
-- Signed resource-offer discovery (storage / container / inference)
-- The three provider interfaces: S3-compatible storage, container submission, OpenAI-compatible inference
+- Signed resource-offer discovery (storage / container; inference deferred)
+- The provider interfaces: S3-compatible storage, container submission (OpenAI-compatible inference is built but disabled this version)
 - Prepaid-balance settlement (provider-metered drawdown) + platform fee
 - Payment-gated reputation (Elo)
 - Wallet management and CPU/GPU mining
@@ -147,6 +151,7 @@ Headless daemon API endpoints (port 9419 by default):
 - **Geth**: POST `geth/install`, `geth/start`, `geth/stop`; GET `geth/status`, `geth/logs`
 - **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
 - **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
+- **Exchange** (resource exchange): POST `exchange/discover` (verified offers for a class off the DHT), `exchange/open` (propose → fund on-chain → open → session credential). CLI: `chiral exchange discover --class <storage|container>` and `chiral exchange open --offer <@file|json> --funding <CHI> --wallet 0x… --key <@file|hex>`; `chiral exchange use …` for data-plane calls. Providers are run by the separate `chiral_provider` binary (`provider_daemon`, `CHIRAL_PROVIDER_*`). Class `inference` is gated off this version.
 - **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`; PUT `cdn/files/:hash` (update price)
 - **Drive**: Full CRUD via `/api/drive/*` routes (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_sig>` headers — see Owner-proof auth below)
 - **Diagnostics**: GET `bootstrap-health`

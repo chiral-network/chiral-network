@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { walletAccount } from '$lib/stores';
+  import { walletAccount, settings } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import {
     Pickaxe,
@@ -433,6 +433,51 @@
     return `${rate} H/s`;
   }
 
+  // ---- Thin mining (mine via a coordinator, no local node) ----
+  let coordinatorUrl = $state('');
+  let thinMining = $state(false);
+  let thinBusy = $state(false);
+  let thinError = $state<string | null>(null);
+
+  async function startThin() {
+    thinError = null;
+    const addr = $walletAccount?.address;
+    if (!addr) {
+      toasts.show('Unlock your wallet first.', 'error');
+      return;
+    }
+    if (!coordinatorUrl.trim()) {
+      thinError = 'Enter a coordinator URL (host:port of a full node running the coordinator).';
+      return;
+    }
+    thinBusy = true;
+    try {
+      await invoke('start_thin_mining', {
+        coordinatorUrl: coordinatorUrl.trim(),
+        minerAddress: addr,
+      });
+      thinMining = true;
+      toasts.detail('Thin mining started', `ethminer → ${coordinatorUrl.trim()}`, 'success');
+    } catch (e) {
+      thinError = e instanceof Error ? e.message : String(e);
+    } finally {
+      thinBusy = false;
+    }
+  }
+
+  async function stopThin() {
+    thinBusy = true;
+    thinError = null;
+    try {
+      await invoke('stop_gpu_mining');
+      thinMining = false;
+      toasts.show('Thin mining stopped.', 'success');
+    } catch (e) {
+      thinError = e instanceof Error ? e.message : String(e);
+    } finally {
+      thinBusy = false;
+    }
+  }
 </script>
 
 <svelte:head><title>Mining | Chiral Network</title></svelte:head>
@@ -452,6 +497,45 @@
       <RefreshCw class="w-5 h-5 {isLoading ? 'animate-spin' : ''}" />
     </button>
   </div>
+
+  {#if $settings.appMode === 'thin'}
+    <!-- Thin mining: mine to your wallet via a remote coordinator, no local node. -->
+    <div class="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 space-y-3">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Thin mining</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          Mine to your wallet with no local node — your machine runs the Ethash miner (ethminer) and pulls
+          per-address work from a full node's coordinator, so the reward is paid to your address.
+        </p>
+      </div>
+      {#if thinMining}
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-sm text-emerald-700 dark:text-emerald-300">Mining via <code>{coordinatorUrl}</code></p>
+          <button
+            onclick={stopThin}
+            disabled={thinBusy}
+            class="py-2 px-4 rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-sm font-medium transition-colors"
+          >Stop</button>
+        </div>
+      {:else}
+        <label class="block">
+          <span class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Coordinator URL (host:port of a full node)</span>
+          <input
+            type="text"
+            bind:value={coordinatorUrl}
+            placeholder="1.2.3.4:9555"
+            class="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+          />
+        </label>
+        {#if thinError}<p class="text-sm text-red-600 dark:text-red-400">{thinError}</p>{/if}
+        <button
+          onclick={startThin}
+          disabled={thinBusy}
+          class="py-2 px-4 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:opacity-60 text-white text-sm font-medium transition-colors"
+        >Start thin mining</button>
+      {/if}
+    </div>
+  {/if}
 
   {#if isLoading}
     <div class="flex items-center justify-center py-12">

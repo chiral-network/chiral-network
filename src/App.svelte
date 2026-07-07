@@ -23,6 +23,8 @@
   import SettingsPage from './pages/Settings.svelte';
   import HostsPage from './pages/Hosts.svelte';
   import DrivePage from './pages/Drive.svelte';
+  import MarketplacePage from './pages/Marketplace.svelte';
+  import ProviderPage from './pages/Provider.svelte';
 
 
   let currentPath = $state('/wallet');
@@ -345,6 +347,14 @@
 
   const authenticatedRoutes: RouteConfig[] = [
     {
+      path: '/marketplace',
+      component: MarketplacePage
+    },
+    {
+      path: '/provider',
+      component: ProviderPage
+    },
+    {
       path: '/download',
       component: DownloadPage
     },
@@ -435,11 +445,17 @@
   let dhtStartedForSession = $state(false);
   $effect(() => {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    // Both modes run a DHT node: thin joins as a Kademlia *client* (discovers
+    // + publishes, no server load), full as a server/backbone. start() attaches
+    // UI listeners (the backend may have already started it on launch) and
+    // setMode() pins the correct mode for this session's appMode.
     if ($isAuthenticated && !dhtStartedForSession) {
       dhtStartedForSession = true;
-      dhtService.start().catch((err) => {
-        console.warn('DHT auto-start failed:', err);
-      });
+      const clientMode = $settings.appMode !== 'full';
+      dhtService
+        .start(clientMode)
+        .then(() => dhtService.setMode(clientMode))
+        .catch((err) => console.warn('DHT auto-start failed:', err));
     }
     if (!$isAuthenticated) {
       dhtStartedForSession = false;
@@ -482,10 +498,11 @@
     void maybeAutoPublishHosting();
   });
 
-  // Auto-start Geth node once when user logs in
+  // Auto-start Geth node once when user logs in (full/advanced mode only —
+  // thin mode uses remote RPC, so it runs no local geth node and never mines).
   let gethAutoStarted = false;
   $effect(() => {
-    if ($isAuthenticated && !gethAutoStarted) {
+    if ($settings.appMode === 'full' && $isAuthenticated && !gethAutoStarted) {
       gethAutoStarted = true;
       (async () => {
         try {

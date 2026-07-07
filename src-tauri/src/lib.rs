@@ -1,7 +1,17 @@
 pub mod auth;
 pub mod cdn_server;
 pub mod chain_rpc_api;
+pub mod codec;
+pub mod consumer;
+pub mod container_api;
+pub mod container_provider;
+pub mod contract_api;
+pub mod contract_ledger;
+pub mod contract_service;
+pub mod desktop_provider;
 pub mod dht;
+pub mod discovery;
+pub mod docker_runtime;
 pub mod drive_api;
 pub mod drive_storage;
 mod encryption;
@@ -11,13 +21,24 @@ pub mod geth;
 pub mod geth_gpu;
 pub mod hosting;
 pub mod hosting_server;
+pub mod llm_api;
+pub mod llm_provider;
+pub mod mining_coordinator;
 pub mod network;
+pub mod provider_daemon;
+pub mod provider_gateway;
 pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
 pub mod reputation;
+pub mod resource_offer;
 pub mod rpc_client;
+pub mod service_contract;
+pub mod session_credential;
 mod speed_tiers;
+pub mod storage_api;
+pub mod storage_provider;
+pub mod usage_receipt;
 pub mod version;
 pub mod wallet;
 pub mod wallet_backup_api;
@@ -57,6 +78,9 @@ pub struct AppState {
     /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
     /// Dropping the AbortHandle cancels the tunnel task.
     pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
+    /// A light provider server running inside this desktop (desktop provider
+    /// mode), if any. `Some` while advertising + serving; `None` otherwise.
+    pub provider: Arc<Mutex<Option<desktop_provider::RunningProvider>>>,
     // The effective `VersionPolicy` lives in `version::EFFECTIVE_POLICY`
     // (a global RwLock) since Phase 5; that gives every caller —
     // including the sync libp2p Identify event handler — a non-blocking
@@ -167,6 +191,7 @@ async fn start_dht_internal(
     app: tauri::AppHandle,
     state: &AppState,
     allow_already_running: bool,
+    client_mode: bool,
 ) -> Result<String, String> {
     // Phase 2 gate: refuse to enter the network if our build is below
     // the policy's `min_required`. The frontend's blocking modal already
@@ -187,6 +212,9 @@ async fn start_dht_internal(
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
+    // Thin mode (default) runs Kademlia in client mode; full mode leaves the
+    // default (auto → server once publicly reachable).
+    dht.set_client_mode(client_mode);
     let app_for_bootstrap_reseed = app.clone();
     let dht_for_bootstrap_reseed = dht.clone();
     let result = dht.start(app).await?;
@@ -223,8 +251,138 @@ async fn start_dht_internal(
 async fn start_dht(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    client_mode: bool,
 ) -> Result<String, String> {
-    start_dht_internal(app, state.inner(), false).await
+    start_dht_internal(app, state.inner(), false, client_mode).await
+}
+
+/// Switch the running DHT's Kademlia mode without restarting it (thin ↔ full
+/// toggle). `clientMode` = thin/light (client); false = full node (auto/server).
+/// No-op-safe if the DHT isn't running.
+#[tauri::command]
+async fn set_dht_mode(
+    state: tauri::State<'_, AppState>,
+    client_mode: bool,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.set_dht_mode(client_mode).await
+    } else {
+        Ok(())
+    }
+}
+
+// ---- Desktop provider mode (light provider) ----
+
+fn default_offer_nonce() -> u64 {
+    1
+}
+
+#[derive(serde::Deserialize)]
+struct ProviderStartRequest {
+    class: String,
+    /// Public HTTPS base URL advertised in the offer (must be reachable).
+    endpoint: String,
+    price_schedule: serde_json::Value,
+    #[serde(default)]
+    capacity: serde_json::Value,
+    min_funding_wei: String,
+    /// Control-plane bind (handshake + merged data plane), e.g. `0.0.0.0:8443`.
+    control_bind: String,
+    /// Storage S3 data-plane bind (storage serves two listeners), e.g. `0.0.0.0:8444`.
+    #[serde(default)]
+    data_bind: String,
+    /// Provider wallet private key (from the unlocked account) — signs the offer
+    /// and usage receipts. Never leaves the process.
+    private_key: String,
+    #[serde(default)]
+    region: String,
+    #[serde(default = "default_offer_nonce")]
+    offer_nonce: u64,
+}
+
+/// Start a **light provider** inside the desktop (full/advanced mode): assemble
+/// the provider server, serve it on the given bind address(es), and publish the
+/// signed offer through the desktop's client-mode DHT. Requires a running DHT and
+/// a publicly reachable `endpoint`. Storage + container only (inference disabled).
+#[tauri::command]
+async fn start_provider(
+    state: tauri::State<'_, AppState>,
+    req: ProviderStartRequest,
+) -> Result<serde_json::Value, String> {
+    let class = resource_offer::ResourceClass::parse(&req.class)?;
+    let dht = {
+        let guard = state.dht.lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("DHT is not running (start the network first)")?
+    };
+
+    let config = provider_daemon::ProviderConfig {
+        wallet_private_key: req.private_key,
+        region: req.region,
+        endpoint: req.endpoint,
+        control_bind: req.control_bind,
+        data_bind: if req.data_bind.is_empty() {
+            "0.0.0.0:8444".to_string()
+        } else {
+            req.data_bind
+        },
+        class,
+        capacity: req.capacity,
+        price_schedule: req.price_schedule,
+        min_funding_wei: req.min_funding_wei,
+        offer_nonce: req.offer_nonce,
+        llm_backend_url: String::new(),
+    };
+
+    // Replace any provider already running.
+    if let Some(prev) = state.provider.lock().await.take() {
+        prev.stop();
+    }
+
+    let running = desktop_provider::start(config, dht).await?;
+    let info = serde_json::json!({
+        "running": true,
+        "offerRef": running.offer.offer_ref(),
+        "class": running.offer.resource_class.as_str(),
+        "endpoint": running.offer.endpoint,
+        "controlBind": running.control_bind,
+        "dataBind": running.data_bind,
+        "providerWallet": running.offer.provider_wallet,
+    });
+    *state.provider.lock().await = Some(running);
+    Ok(info)
+}
+
+/// Stop the desktop provider server (if running).
+#[tauri::command]
+async fn stop_provider(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    if let Some(p) = state.provider.lock().await.take() {
+        p.stop();
+    }
+    Ok(())
+}
+
+/// Whether a desktop provider is running, plus its offer summary.
+#[tauri::command]
+async fn get_provider_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let guard = state.provider.lock().await;
+    Ok(match guard.as_ref() {
+        Some(p) => serde_json::json!({
+            "running": true,
+            "offerRef": p.offer.offer_ref(),
+            "class": p.offer.resource_class.as_str(),
+            "endpoint": p.offer.endpoint,
+            "controlBind": p.control_bind,
+            "dataBind": p.data_bind,
+            "providerWallet": p.offer.provider_wallet,
+        }),
+        None => serde_json::json!({ "running": false }),
+    })
 }
 
 fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
@@ -4064,7 +4222,34 @@ async fn start_gpu_mining(
         return Err("Start geth with a miner address before GPU mining".to_string());
     }
     let mut miner = state.gpu_miner.lock().await;
-    miner.start(&miner_address, device_ids, utilization_percent)
+    miner.start(&miner_address, device_ids, utilization_percent, None)
+}
+
+/// Thin mining: run ethminer against a remote **solo coordinator** (no local geth
+/// / no chain), mining to `miner_address`. The coordinator assembles per-address
+/// work so the reward is paid to this address. `coordinator_url` is a full node's
+/// coordinator endpoint, e.g. `1.2.3.4:9555`.
+#[tauri::command]
+async fn start_thin_mining(
+    state: tauri::State<'_, AppState>,
+    coordinator_url: String,
+    miner_address: String,
+    device_ids: Option<Vec<String>>,
+    utilization_percent: Option<u8>,
+) -> Result<(), String> {
+    if miner_address.trim().is_empty() {
+        return Err("miner address required".to_string());
+    }
+    if coordinator_url.trim().is_empty() {
+        return Err("coordinator URL required".to_string());
+    }
+    let mut miner = state.gpu_miner.lock().await;
+    miner.start(
+        miner_address.trim(),
+        device_ids,
+        utilization_percent,
+        Some(coordinator_url.trim()),
+    )
 }
 
 #[tauri::command]
@@ -8066,6 +8251,103 @@ fn get_version_status() -> VersionStatus {
     }
 }
 
+// ---- Resource exchange (desktop marketplace) ----
+
+/// Discover verified resource offers for a class off the running DHT node
+/// (marketplace browse). Every returned offer is signature-verified
+/// (`discovery::search_offers`); the frontend may trust each offer's
+/// `provider_wallet` / `endpoint` / `price_schedule`.
+#[tauri::command]
+async fn discover_offers(
+    state: tauri::State<'_, AppState>,
+    class: String,
+) -> Result<Vec<resource_offer::ResourceOffer>, String> {
+    let class = resource_offer::ResourceClass::parse(&class)?;
+    let dht_guard = state.dht.lock().await;
+    let Some(dht) = dht_guard.as_ref() else {
+        return Err("DHT not running".to_string());
+    };
+    let dht = Arc::clone(dht);
+    drop(dht_guard);
+    discovery::search_offers(&dht, class).await
+}
+
+/// Discover offers through a hosted **discovery gateway** instead of a local DHT
+/// node — the thin (infra-free) client path. Calls the gateway's
+/// `POST /api/headless/exchange/discover`, then **re-verifies every offer's
+/// signature locally** so the gateway can't inject forged offers
+/// (`discovery::accept_gateway_offers`). `gatewayUrl` is a user-configured base
+/// URL (thin mode ships without a default), e.g. `http://host:9420`.
+#[tauri::command]
+async fn discover_offers_via_gateway(
+    gateway_url: String,
+    class: String,
+) -> Result<Vec<resource_offer::ResourceOffer>, String> {
+    let class = resource_offer::ResourceClass::parse(&class)?;
+    let base = gateway_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("no discovery gateway configured (set one in Settings)".to_string());
+    }
+    let url = format!("{base}/api/headless/exchange/discover");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "class": class.as_str() }))
+        .send()
+        .await
+        .map_err(|e| format!("gateway discover request failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("gateway rejected discover: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("gateway response was not JSON: {e}"))?;
+    let raw = body
+        .get("offers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(discovery::accept_gateway_offers(raw, class))
+}
+
+/// Open a prepaid contract against a discovered provider: propose, commit the
+/// funding tx on-chain, then open — returning `{contractId, credential, …}`. The
+/// offer is re-verified so a tampered body can't redirect funding. Requires a
+/// funded wallet; the deposit is **non-refundable** once broadcast. `privateKey`
+/// never leaves the process.
+#[tauri::command]
+async fn open_service_contract(
+    offer: resource_offer::ResourceOffer,
+    funding_chi: String,
+    wallet_address: String,
+    private_key: String,
+) -> Result<serde_json::Value, String> {
+    offer
+        .verify()
+        .map_err(|e| format!("offer failed signature verification: {e}"))?;
+    if offer.endpoint.trim().is_empty() {
+        return Err("offer has no endpoint to contact".to_string());
+    }
+    let http = reqwest::Client::new();
+    let rpc = geth::wallet_rpc_endpoints();
+    let o = consumer::open_contract(
+        &http,
+        &offer.endpoint,
+        &offer,
+        &wallet_address,
+        &funding_chi,
+        &private_key,
+        &rpc,
+    )
+    .await?;
+    Ok(serde_json::json!({
+        "contractId": o.contract_id,
+        "credential": o.credential,
+        "balanceWei": o.balance_wei,
+        "expiresAt": o.expires_at,
+        "txHash": o.tx_hash,
+    }))
+}
+
 /// Phase 2 backend gate: refuse to enter ops protected by the version
 /// floor (DHT start, paid downloads, …) if this client is below the
 /// policy's `min_required`. The frontend's blocking modal already
@@ -8278,6 +8560,7 @@ pub fn run() {
             hosting_server_shutdown: Arc::clone(&hosting_shutdown_for_exit),
             drive_state: Arc::new(drive_api::DriveState::new()),
             tunnel_handles: Arc::clone(&tunnel_handles_for_exit),
+            provider: Arc::new(Mutex::new(None)),
         })
         .setup(|app| {
             use tauri::Manager;
@@ -8309,8 +8592,10 @@ pub fn run() {
                 drive.load_from_disk_async().await;
 
                 // Always start DHT on app launch so seeding resumes immediately after restart.
+                // Start in client mode (thin is the default); the frontend switches it to
+                // full/server via `set_dht_mode` after login if the user is in full mode.
                 let app_state = app_for_boot.state::<AppState>();
-                match start_dht_internal(app_for_boot.clone(), app_state.inner(), true).await {
+                match start_dht_internal(app_for_boot.clone(), app_state.inner(), true, true).await {
                     Ok(msg) => println!("[DHT] Auto-start on launch: {}", msg),
                     Err(err) => eprintln!("[DHT] Auto-start on launch failed: {}", err),
                 }
@@ -8418,6 +8703,7 @@ pub fn run() {
             get_gpu_mining_capabilities,
             list_gpu_devices,
             start_gpu_mining,
+            start_thin_mining,
             stop_gpu_mining,
             get_gpu_mining_status,
             set_miner_address,
@@ -8426,6 +8712,14 @@ pub fn run() {
             // Version policy
             get_version_policy,
             get_version_status,
+            // Resource exchange (marketplace)
+            discover_offers,
+            discover_offers_via_gateway,
+            open_service_contract,
+            set_dht_mode,
+            start_provider,
+            stop_provider,
+            get_provider_status,
             compute_owner_proof,
             compute_reputation_verdict_proof,
             compute_relay_register_signature,

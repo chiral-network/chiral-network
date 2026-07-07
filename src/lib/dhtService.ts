@@ -45,12 +45,31 @@ class DhtService {
   private pongReceivedUnlisten: (() => void) | null = null;
   private bootstrapCompleteUnlisten: (() => void) | null = null;
 
-  async start(): Promise<void> {
+  /**
+   * Switch the running DHT's Kademlia mode without restarting it (thin ↔ full
+   * toggle). `clientMode` true = thin/light (client); false = full (auto/server).
+   * Safe no-op if the DHT isn't running.
+   */
+  async setMode(clientMode: boolean): Promise<void> {
+    try {
+      await invoke('set_dht_mode', { clientMode });
+    } catch (error) {
+      log.warn('Failed to switch DHT mode:', error);
+    }
+  }
+
+  /**
+   * Start (or attach to) the DHT. `clientMode` (default true — thin) starts
+   * Kademlia in client mode; full/advanced mode passes false to become a
+   * server/backbone node once publicly reachable. If the DHT is already running
+   * (e.g. the backend auto-started it on launch), use {@link setMode} to switch.
+   */
+  async start(clientMode = true): Promise<void> {
     // Wire up event listeners BEFORE starting DHT so no events are missed
     await this.ensureRuntimeWiring();
 
     try {
-      const result = await invoke<string>('start_dht');
+      const result = await invoke<string>('start_dht', { clientMode });
       log.ok('DHT started:', result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

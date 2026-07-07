@@ -17,7 +17,7 @@ export interface DriveItem {
   isPublic: boolean;
   // Seeding metadata
   merkleRoot?: string;
-  protocol?: 'WebRTC' | 'BitTorrent';
+  protocol?: 'WebRTC';
   priceChi?: string;
   seeding?: boolean;
 }
@@ -44,7 +44,7 @@ function fromApi(item: ApiDriveItem): DriveItem {
     shared: false, // will be updated from shares
     isPublic: item.isPublic ?? true,
     merkleRoot: item.merkleRoot,
-    protocol: (item.protocol as 'WebRTC' | 'BitTorrent') || undefined,
+    protocol: (item.protocol as 'WebRTC') || undefined,
     priceChi: item.priceChi,
     seeding: item.seeding ?? false,
   };
@@ -483,7 +483,7 @@ function createDriveStore() {
     /** Publish a Drive file to the P2P network (DHT seeding) */
     async seedFile(
       itemId: string,
-      protocol: 'WebRTC' | 'BitTorrent',
+      protocol: 'WebRTC',
       priceChi?: string | number | null,
     ): Promise<DriveItem | null> {
       const owner = syncOwner();
@@ -543,7 +543,7 @@ function createDriveStore() {
      */
     async seedFolder(
       folderId: string,
-      protocol: 'WebRTC' | 'BitTorrent',
+      protocol: 'WebRTC',
       priceChi?: string | number | null,
       onProgress?: (p: {
         stage: string;

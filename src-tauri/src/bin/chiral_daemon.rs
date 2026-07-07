@@ -2099,6 +2099,108 @@ async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Re
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
+// ---- Resource exchange (offers + contracts) ----
+
+#[derive(Deserialize)]
+struct ExchangeDiscoverRequest {
+    class: String,
+}
+
+#[derive(Deserialize)]
+struct ExchangeOpenRequest {
+    offer: chiral_network::resource_offer::ResourceOffer,
+    funding_chi: String,
+    wallet_address: String,
+    private_key: String,
+}
+
+fn parse_resource_class(s: &str) -> Result<chiral_network::resource_offer::ResourceClass, String> {
+    chiral_network::resource_offer::ResourceClass::parse(s)
+}
+
+/// Discover signed resource offers for a class off the running DHT node. Every
+/// returned offer is signature-verified (see `discovery::search_offers`).
+async fn exchange_discover(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(req): Json<ExchangeDiscoverRequest>,
+) -> Response {
+    let class = match parse_resource_class(&req.class) {
+        Ok(c) => c,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+    };
+    let Some(svc) = state.dht_service().await else {
+        return json_error(StatusCode::BAD_REQUEST, "DHT not running");
+    };
+    match chiral_network::discovery::search_offers(&svc, class).await {
+        Ok(offers) => Json(json!({
+            "class": req.class,
+            "count": offers.len(),
+            "offers": offers,
+        }))
+        .into_response(),
+        Err(e) => json_error(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
+/// Open a prepaid contract against a discovered provider: propose, commit the
+/// funding tx on-chain, then open — returning the session credential. The offer
+/// is re-verified here so a tampered offer body can't redirect funding. Requires
+/// a funded wallet; the deposit is **non-refundable** once broadcast.
+async fn exchange_open(
+    State(_state): State<Arc<HeadlessRuntimeState>>,
+    Json(req): Json<ExchangeOpenRequest>,
+) -> Response {
+    if let Err(e) = req.offer.verify() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("offer failed signature verification: {e}"),
+        );
+    }
+    if req.offer.endpoint.trim().is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "offer has no endpoint to contact");
+    }
+    let http = reqwest::Client::new();
+    let rpc = chiral_network::geth::wallet_rpc_endpoints();
+    match chiral_network::consumer::open_contract(
+        &http,
+        &req.offer.endpoint,
+        &req.offer,
+        &req.wallet_address,
+        &req.funding_chi,
+        &req.private_key,
+        &rpc,
+    )
+    .await
+    {
+        Ok(o) => Json(json!({
+            "contractId": o.contract_id,
+            "credential": o.credential,
+            "balanceWei": o.balance_wei,
+            "expiresAt": o.expires_at,
+            "txHash": o.tx_hash,
+        }))
+        .into_response(),
+        Err(e) => json_error(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
+#[cfg(test)]
+mod exchange_tests {
+    use super::*;
+    use chiral_network::resource_offer::ResourceClass;
+
+    #[test]
+    fn parse_resource_class_accepts_enabled_and_rejects_rest() {
+        assert_eq!(parse_resource_class("storage").unwrap(), ResourceClass::Storage);
+        assert_eq!(parse_resource_class(" Container ").unwrap(), ResourceClass::Container);
+        // LLM/inference is disabled in this version.
+        assert!(parse_resource_class("inference").is_err());
+        assert!(parse_resource_class("llm").is_err());
+        assert!(parse_resource_class("gpu").is_err());
+        assert!(parse_resource_class("").is_err());
+    }
+}
+
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
         // Health/readiness probes
@@ -2167,6 +2269,9 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         // Hosting
         .route("/api/headless/hosting/publish-ad", post(hosting_publish_ad))
         .route("/api/headless/hosting/registry", get(hosting_get_registry))
+        // Resource exchange (offers + contracts)
+        .route("/api/headless/exchange/discover", post(exchange_discover))
+        .route("/api/headless/exchange/open", post(exchange_open))
         // CDN routes live in crate::cdn_server and are merged into the
         // top-level router via main() — kept separate from this handler
         // state so the CDN module can own its own registry + price config.
@@ -2430,6 +2535,40 @@ async fn main() {
     // Kademlia handles provider-record republishing on its configured
     // interval, so the manual CDN republish loop from the legacy blob
     // schema is no longer needed.
+
+    // Optional solo mining coordinator: lets thin miners (running ethminer with
+    // no local chain) mine to their own address against this full node's geth.
+    // Enabled by CHIRAL_MINING_COORDINATOR_PORT. Requires geth to expose the
+    // `miner` + `eth` RPC namespaces. See `mining_coordinator` for the lease model.
+    if let Some(port) = std::env::var("CHIRAL_MINING_COORDINATOR_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+    {
+        let geth_endpoint = chiral_network::geth::effective_rpc_endpoint();
+        let lease_ttl = std::env::var("CHIRAL_MINING_LEASE_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30u64);
+        let coord_state = chiral_network::mining_coordinator::CoordinatorState {
+            geth_endpoint,
+            leases: Arc::new(chiral_network::mining_coordinator::LeaseManager::new(lease_ttl)),
+        };
+        let coord_router = chiral_network::mining_coordinator::router(coord_state);
+        let addr = format!("0.0.0.0:{port}");
+        tokio::spawn(async move {
+            match tokio::net::TcpListener::bind(&addr).await {
+                Ok(l) => {
+                    println!(
+                        "[MINING] Solo coordinator on {addr} — thin miners: ethminer -P http://<addr>@host:{port}/<addr>"
+                    );
+                    if let Err(e) = axum::serve(l, coord_router).await {
+                        eprintln!("[MINING] coordinator serve error: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[MINING] coordinator bind {addr} failed: {e}"),
+            }
+        });
+    }
 
     tokio::spawn(async move {
         let server = axum::serve(

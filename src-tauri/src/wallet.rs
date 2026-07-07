@@ -180,6 +180,22 @@ pub async fn send_transaction(
     amount: &str,
     private_key: &str,
 ) -> Result<SendTransactionResult, String> {
+    send_transaction_with_data(endpoints, from_address, to_address, amount, &[], private_key).await
+}
+
+/// Sign and broadcast a transaction carrying `data` (calldata). Used for the
+/// resource-exchange contract-open / top-up transactions, whose `data` field
+/// commits the consumer to a specific offer + terms (see `service_contract`).
+/// Gas is the exact EIP-2028 intrinsic cost for the calldata — recipients are
+/// provider EOAs, so there is no execution gas beyond intrinsic.
+pub async fn send_transaction_with_data(
+    endpoints: &[String],
+    from_address: &str,
+    to_address: &str,
+    amount: &str,
+    data: &[u8],
+    private_key: &str,
+) -> Result<SendTransactionResult, String> {
     if endpoints.is_empty() {
         return Err("send_transaction: no RPC endpoints configured".to_string());
     }
@@ -225,7 +241,7 @@ pub async fn send_transaction(
         if raw == 0 { 1_000_000_000u64 } else { raw }
     };
 
-    let gas_limit: u64 = 21000;
+    let gas_limit: u64 = intrinsic_gas(data);
     let chain_id: u64 = crate::geth::chain_id();
     let gas_cost = gas_price as u128 * gas_limit as u128;
     let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow")?;
@@ -246,14 +262,14 @@ pub async fn send_transaction(
         .map_err(|e| format!("Invalid to address: {}", e))?;
 
     // Sign transaction (EIP-155)
-    let unsigned_tx = encode_unsigned_tx(nonce, gas_price as u128, gas_limit, &to_bytes, amount_wei, &[], chain_id);
+    let unsigned_tx = encode_unsigned_tx(nonce, gas_price as u128, gas_limit, &to_bytes, amount_wei, data, chain_id);
     let tx_hash_bytes = keccak256(&unsigned_tx);
     let message = Message::from_digest_slice(&tx_hash_bytes).map_err(|e| format!("Failed to create message: {}", e))?;
     let (recovery_id, signature) = secp.sign_ecdsa_recoverable(&message, &secret_key).serialize_compact();
     let v = chain_id * 2 + 35 + recovery_id.to_i32() as u64;
     let r = &signature[0..32];
     let s = &signature[32..64];
-    let signed_tx = encode_signed_tx(nonce, gas_price as u128, gas_limit, &to_bytes, amount_wei, &[], v, r, s);
+    let signed_tx = encode_signed_tx(nonce, gas_price as u128, gas_limit, &to_bytes, amount_wei, data, v, r, s);
     let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
 
     // Broadcast
@@ -706,6 +722,15 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     output
 }
 
+/// EIP-2028 intrinsic gas for a transaction carrying `data` sent to an EOA:
+/// 21000 base + 4 gas per zero byte + 16 gas per non-zero byte. Exact for EOA
+/// recipients (no execution gas), so the contract-open tx never over- or
+/// under-pays. Empty `data` yields 21000 — the plain value-transfer cost.
+fn intrinsic_gas(data: &[u8]) -> u64 {
+    let data_gas: u64 = data.iter().map(|b| if *b == 0 { 4 } else { 16 }).sum();
+    21_000 + data_gas
+}
+
 fn encode_unsigned_tx(nonce: u64, gas_price: u128, gas_limit: u64, to: &[u8], value: u128, data: &[u8], chain_id: u64) -> Vec<u8> {
     let mut s = RlpStream::new_list(9);
     s.append(&nonce); s.append(&gas_price); s.append(&gas_limit);
@@ -934,6 +959,20 @@ pub async fn verify_payment(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn intrinsic_gas_matches_eip2028() {
+        // Empty calldata => plain value-transfer cost.
+        assert_eq!(intrinsic_gas(&[]), 21_000);
+        // Zero bytes cost 4, non-zero cost 16.
+        assert_eq!(intrinsic_gas(&[0, 0, 0]), 21_000 + 12);
+        assert_eq!(intrinsic_gas(&[1, 2, 3]), 21_000 + 48);
+        // A representative CHR1 open payload (magic "CHR1" + 3 x 32-byte fields,
+        // mostly non-zero) stays a small, bounded bump over the base cost.
+        let mut open = b"CHR1".to_vec();
+        open.extend_from_slice(&[0x11u8; 96]);
+        assert_eq!(intrinsic_gas(&open), 21_000 + 4 * 16 + 96 * 16);
+    }
 
     fn test_tx_metadata_path(root: &Path) -> PathBuf {
         root.join("tx_metadata.json")

@@ -432,6 +432,13 @@ enum SwarmCommand {
     RemoveDhtRecord {
         key: String,
     },
+    /// Switch Kademlia mode at runtime without restarting the swarm. `client`
+    /// forces `Mode::Client` (thin node / light provider — publish + query only);
+    /// otherwise restores the default (auto → server once a public address is
+    /// confirmed). Used when the desktop toggles thin ↔ full.
+    SetKadMode {
+        client: bool,
+    },
     HealthCheck {
         response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
     },
@@ -907,6 +914,12 @@ pub struct DhtService {
     active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
     download_credentials: DownloadCredentialsMap,
     bootstrap_gate: DhtBootstrapGate,
+    /// When set, Kademlia runs in **client mode** (`kad::Mode::Client`): the node
+    /// issues its own queries and publishes its own records but is never inserted
+    /// into other peers' routing tables and answers no inbound DHT requests — the
+    /// thin-node / light-provider role (no server or gateway load). Left false
+    /// (auto: server once a public address is confirmed) for full nodes.
+    client_mode: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DhtService {
@@ -926,7 +939,29 @@ impl DhtService {
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_credentials,
             bootstrap_gate: DhtBootstrapGate::new(),
+            client_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Force Kademlia client mode for the next start (thin node / light provider).
+    /// Must be called before `start_headless`/`start`. See the `client_mode` field.
+    pub fn set_client_mode(&self, enabled: bool) {
+        self.client_mode
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Switch Kademlia mode, both at runtime (if the swarm is running) and for the
+    /// next start. `client` = thin node / light provider; `false` = full node
+    /// (auto → server once publicly reachable). Lets the desktop toggle thin ↔
+    /// full without tearing down the DHT.
+    pub async fn set_dht_mode(&self, client: bool) -> Result<(), String> {
+        self.set_client_mode(client);
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            tx.send(SwarmCommand::SetKadMode { client })
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// Register a file for sharing (seeding)
@@ -1104,8 +1139,9 @@ impl DhtService {
         }
         self.bootstrap_gate.reset();
 
-        // Create libp2p swarm
-        let (swarm, peer_id) = create_swarm().await.map_err(|e| e.to_string())?;
+        // Create libp2p swarm (in client mode for thin nodes / light providers)
+        let client_mode = self.client_mode.load(std::sync::atomic::Ordering::Relaxed);
+        let (swarm, peer_id) = create_swarm(client_mode).await.map_err(|e| e.to_string())?;
 
         // Store peer ID
         let mut local_id = self.local_peer_id.lock().await;
@@ -1369,6 +1405,21 @@ impl DhtService {
         } else {
             Err("DHT not running".to_string())
         }
+    }
+
+    /// Publish a signed resource offer to the DHT: store it under its key and
+    /// register as a Kademlia provider for the class index so consumers can
+    /// enumerate sellers of the class. Reuses the record-put + provider paths;
+    /// the record is ECDSA-signed by the provider wallet (verified by readers).
+    pub async fn register_offer(
+        &self,
+        offer_key: String,
+        offer_json: String,
+        class_index_key: String,
+    ) -> Result<(), String> {
+        self.put_dht_value(offer_key, offer_json).await?;
+        self.start_providing_file(class_index_key).await?;
+        Ok(())
     }
 
     /// Stop advertising this node as a provider for a file hash.
@@ -1922,7 +1973,7 @@ fn configured_p2p_port_from_env() -> Result<u16, String> {
     }
 }
 
-async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
+async fn create_swarm(client_mode: bool) -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
     let local_key = load_or_generate_keypair();
     let local_peer_id = PeerId::from(local_key.public());
 
@@ -2039,6 +2090,17 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
+
+    // Thin nodes / light providers force Kademlia client mode: they publish and
+    // query but never store others' records or answer inbound DHT requests, so
+    // they carry no server load. Full nodes leave the default (auto → server once
+    // a public address is confirmed), forming the record/routing backbone.
+    if client_mode {
+        swarm
+            .behaviour_mut()
+            .kad
+            .set_mode(Some(kad::Mode::Client));
+    }
 
     // Listen on all interfaces (dual-stack: IPv4 + IPv6).
     // CHIRAL_P2P_PORT pins the libp2p TCP port — set this on containerized nodes
@@ -3401,6 +3463,14 @@ async fn event_loop(
                         let record_key = kad::RecordKey::new(&key);
                         swarm.behaviour_mut().kad.remove_record(&record_key);
                         println!("Removed DHT record from local store: {}", key);
+                    }
+                    SwarmCommand::SetKadMode { client } => {
+                        let mode = if client { Some(kad::Mode::Client) } else { None };
+                        swarm.behaviour_mut().kad.set_mode(mode);
+                        println!(
+                            "DHT kademlia mode -> {}",
+                            if client { "client" } else { "auto (server when public)" }
+                        );
                     }
                     SwarmCommand::StartProviding { file_hash, response_tx } => {
                         let record_key = kad::RecordKey::new(&file_hash.as_bytes());

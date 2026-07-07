@@ -157,6 +157,7 @@ This part covers the concrete realization of Chiral Network — architecture, th
 - [Data-Plane API: Inference (LLM)](#data-plane-api-inference-llm)
 - [Reputation System](#reputation-system)
 - [Design Decisions](#design-decisions)
+- [Provider Implementation](#provider-implementation)
 - [Implementation Plan (Milestones)](#implementation-plan-milestones)
 - [Identity and Wallet](#identity-and-wallet)
 - [Blockchain and Mining](#blockchain-and-mining)
@@ -791,19 +792,121 @@ The decisions that shaped this design, now settled — each records the choice; 
 
 ---
 
+## Provider Implementation
+
+> **Status: implemented and runnable** (branch `feat/resource-exchange-v1`). The settlement engine (`resource_offer`, `codec`, `service_contract`, `contract_ledger`, `session_credential`, `usage_receipt`), the provider cores + HTTP routers (handshake `contract_api`; storage `storage_api`; inference `llm_api`; compute `container_api`), the real on-chain `RpcChainVerifier` (`eth_getTransactionByHash`), the shared-state composition, the `provider_gateway` assembly, and the real container runtime (`docker_runtime::DockerCliRuntime`, the hardened `docker` CLI), and the `chiral_provider` binary (`provider_daemon`, configured via `CHIRAL_PROVIDER_*`) are all implemented. Coverage is unit + HTTP-handler + **end-to-end integration** (`tests/provider_integration.rs`: all three providers driven through propose → open → data-plane → metered drawdown over one shared `ProviderState`). Providers also **publish their signed offer to the DHT on startup** (`DhtService::register_offer`, wired through `provider_daemon::run` via an embedded headless DHT node), so they are discoverable. The **consumer side** is built to match: `discovery::search_offers` enumerates the class index → peer ids, fetches each peer's offer, and returns only signature-verified records (`accept_offer_record` / `rank_by_price`, unit-tested); `consumer::open_contract` drives the full handshake — propose → build the `CHR1` commitment (`build_open_tx_data`, verified against the discovered offer) → broadcast the funding tx (`wallet::send_transaction_with_data`, exact EIP-2028 gas) → poll open → session credential. The end-to-end tests build the commitment via the consumer client, so both halves are proven to agree byte-for-byte. All three surfaces are wired: the **CLI** (`chiral exchange discover | open | use …`, thin clients over daemon endpoints `POST /api/headless/exchange/{discover,open}`) and the **desktop** (`discover_offers` / `open_service_contract` Tauri commands + the `exchangeService` frontend module with data-plane helpers).
+>
+> **Scope for this version — storage + container only.** LLM (inference) sharing is **disabled and deferred to a future release**. The inference provider core (`llm_provider`) + data-plane (`llm_api`) and this document's inference design remain in the tree, dormant and still tested, but `ResourceClass::is_enabled` gates the class out of every marketplace surface — a provider cannot advertise inference, and a consumer cannot discover or open an inference contract (`consumer::open_contract` refuses it as a defense-in-depth choke point). Re-enabling is a one-line change to `ResourceClass::is_enabled`.
+>
+> **Desktop runs thin by default** — see [Node model](#node-model--thin-full-and-light-nodes) below. A fresh install is a **client-mode libp2p** node: it discovers offers directly on the DHT (no server or gateway load) with **remote-RPC** chain access — no local geth, no stored ledger, no legacy pages. *Full* ("advanced") mode runs the server-mode DHT + local geth + mining + seeding + legacy pages. Thin nodes may still **mine** (Ethash loop locally, per-address work from a solo coordinator) and **provide** (a *light provider* publishes its offer via client-mode `put_record`, serves a public data-plane endpoint, and verifies payments over remote RPC — no full node). The `/marketplace` page (browse → open → use) is the thin consumer surface.
+>
+> **Node model — built.** DHT client mode (`dht.rs` `create_swarm(client_mode)` + runtime `set_dht_mode`), thin discovery over the client-mode swarm (gateway as dormant fallback), the **desktop light provider** (`desktop_provider` + `start/stop/get_provider_status` + `/provider` panel), and **thin mining** (`mining_coordinator` solo coordinator + the ethminer-based thin miner via `start_thin_mining`) are all implemented and unit-tested where feasible. Thin mining reuses **ethminer** as the Ethash engine (no from-scratch PoW); the coordinator's per-address serving is single-miner-at-a-time (etherbase lease) — fork-level per-address `getWork` is the post-v1 fix.
+>
+> **Remaining:** end-to-end thin-mining validation against a live geth + ethminer, tool-compat polish (full S3 SigV4), and live-DHT / soak testing. Open product question: the desktop provider panel is currently gated to full/advanced mode though a light provider is a thin-node capability.
+
+A **provider** is a process — a headless `chiral_provider` binary, or a **desktop in provider mode** (see Node model) — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
+
+### Node model — thin, full, and light nodes
+
+Every desktop takes one of two **DHT roles**, independent of whether it also provides or mines:
+
+- **Thin (client) — the default.** libp2p Kademlia in **client mode** (`kad::Mode::Client`): it issues its own queries (`get_providers`, `get_record`) to discover offers and, if it provides, `put_record`s + republishes its own offer — but it is never inserted into other peers' routing tables and never answers inbound DHT requests, so it carries **no server or gateway load**. Chain access is **remote RPC** (the `rpc_client` fallback list) — no local geth, no stored ledger. No seeding, no legacy file-sharing pages.
+- **Full (server / node) — advanced opt-in.** Kademlia in **server mode** (stores + routes records — the network's record backbone), plus a local geth full node, mining, seeding, and the legacy pages.
+
+The record backbone is the relay + CDN + any full-mode desktops; thin nodes (consumers and light providers alike) are leaves that read and publish through it. Because a consumer only issues **outbound** queries, thin nodes work behind NAT — only *serving* roles need public reachability.
+
+**Discovery paths (thin).** *Primary:* the client-mode DHT (`discovery::search_offers` over the local swarm). *Fallback:* the HTTP gateway (`discover_offers_via_gateway`, offers re-verified locally via `accept_gateway_offers`) — **kept but off by default**, for consumers on networks that block libp2p. Full mode always uses its local server-mode DHT.
+
+**Light provider.** Providing is orthogonal to the DHT role: a **thin** node becomes a provider by (1) publishing its signed offer via client-mode `put_record`, (2) serving its data-plane HTTPS endpoint — **public IP/domain required**, the one thing that does *not* get lighter — and (3) verifying incoming funding txs over **remote RPC** (`RpcChainVerifier`), which happens only at open/top-up (never per request, since the data plane meters against the local `ContractLedger`). So a desktop can provide storage/container without a full node or DHT-server duty.
+
+**Thin mining — solo coordinator.** A thin node mines without a local chain by running the **Ethash PoW loop locally** (CPU/GPU) and pulling work from a **solo coordinator** hosted on a full node:
+
+- `getWork(minerAddress)` → the coordinator assembles a block template with `coinbase = minerAddress` off the chain head + txpool and returns `(headerHash, seedHash, target)`;
+- the miner searches for a `nonce`/`mixHash` under `target`;
+- `submitWork(minerAddress, nonce, mixHash)` → the coordinator seals + broadcasts the block; the **reward is paid on-chain directly to the miner's own address**.
+
+The per-address template is the crux: in stock `eth_getWork` the coinbase is baked into the hashed header, so an external miner **cannot** redirect the reward — a naive remote miner would earn for the *node's* etherbase, not itself. The coordinator is a "pool of one": direct on-chain rewards, no share accounting, but **lumpy** variance (you earn only on blocks you find). *Implementation note:* stock geth exposes only node-global `getWork`, so the v1 coordinator assembles per-address templates itself (or serializes etherbase swaps at low concurrency) — the heaviest new piece of the light-node model. A share-based pool (smooth rewards) is the post-v1 alternative.
+
+### Shared provider node
+
+```
+                +-------------------- Provider process --------------------+
+ DHT  <-------- | Offer publisher   (resource_offer: sign + republish)     |
+                |                                                           |
+ HTTPS (own TLS)| Axum gateway                                             |
+   consumer --> |  /v1/contracts/*   Contract service (handshake)          |
+                |     propose / open / get / topup / receipt               |
+                |  /v1/...           Data-plane router (class-specific)     |
+                |        |                     |                            |
+                |        v                     v                            |
+                |  Auth middleware       Meter -> ContractLedger::draw_down |
+                |  (SessionStore)                      |                    |
+                |  ContractLedger <---- on-chain verify (wallet+rpc_client) |
+                +-----------------------------------------------------------+
+                          | persistence (ledger, spent-tx, offers) -> disk
+```
+
+- **Offer publisher.** Builds a signed `ResourceOffer`, publishes it under `chiral_offer_<class>_<wallet>` + the class index, and refreshes on an interval (≈ every 2–3 min). Reuses the DHT put / provider machinery.
+- **Contract service** (`/v1/contracts/*`). **propose:** validate `offer_ref` + class params, quote `ContractTerms`, mint a single-use `contract_nonce`, return `terms_hash`. **open:** verify the funding tx on-chain (reuse `wallet` verification — mined, `to`=self, `value`, `chainId`, via `rpc_client`), parse the tx `data` (`service_contract::parse` → `CHR1`), check the committed `terms_hash`/`nonce`, credit with `ContractLedger::open`, mint a `SessionCredential`, register it in the `SessionStore`. **topup:** verify a `CHR2` tx → `ContractLedger::topup`. **get/receipt:** read the ledger; sign a `UsageReceipt`.
+- **Auth middleware.** Resolves the presented credential — bearer or S3 access-key — to a `contract_id` via `SessionStore` (honoring expiry); 401 on miss.
+- **Meter → drawdown.** Each data-plane operation computes a `cost_wei` and calls `ContractLedger::draw_down(contract_id, cost_wei)`; an `Err(insufficient)` becomes the class's exhaustion response.
+- **State & persistence.** `Arc<Mutex<ContractLedger>>` + `Arc<Mutex<SessionStore>>` in app state. The ledger, the spent-tx set, and published offers persist to disk (JSON under `<data_dir>/provider/`) so a restart neither loses balances nor re-accepts a funding tx — extending the existing spent-tx-ledger persistence pattern.
+- **Reachability.** The provider terminates HTTPS itself (own cert/domain per [Deployment](#deployment)); no relay/NAT in v1.
+
+### Storage provider (S3)
+
+- **Server.** Axum handlers implementing the S3 subset ([Data-Plane: Storage](#data-plane-api-storage-s3)). v1 recommendation: **custom Axum handlers over a local object store** (full control of auth + metering); fronting a standalone S3 impl (MinIO) behind a Chiral auth/meter proxy is the fallback if S3 coverage gaps bite.
+- **Object store.** Bytes on disk at `<data_dir>/provider/storage/<bucket>/<key-digest>`; a metadata index (`key → {size, content_type, etag=md5, sha256, created}`) persisted (sled or JSON); `x-amz-checksum-sha256` computed on `PUT`.
+- **Auth.** SigV4 verified against the contract's `secret_access_key` from `SessionStore::secret_for_access_key`; presigned URLs check the same secret; public-read objects bypass auth.
+- **Metering.** Egress metered on `GET`/part bytes → `draw_down(bytes · per_gb_egress / GiB)`; capacity sampled by a periodic task summing per-contract stored bytes and charging `bytes · per_gb_month · Δt / month`. A pre-check refuses an op the balance can't cover (`402 InsufficientBalance`).
+- **Exhaustion.** Zero balance → block writes; serve reads through a grace timer; then GC the bucket (Design Decision #4).
+
+### Container provider (hardened OCI)
+
+- **Runtime driver.** Drive Docker/Podman via the Docker Engine API (Rust `bollard`). On submit: allowed-registry check + pull; create/start with the hardened profile — non-root, `cap-drop=ALL` (+ minimal adds), seccomp, read-only rootfs, `--memory`/`--cpus`/`--pids-limit` from the contract envelope, no host mounts, an egress policy; publish the exposed port.
+- **Ingress.** A reverse proxy on the provider's HTTPS front routes the assigned subdomain (`ctr-<id>-<port>.<host>`) to the container's mapped port; TLS terminates at the proxy.
+- **Meter.** A periodic task sums running-container resource-seconds → `draw_down(vcpu·rate + mem·rate + gpu·rate)`; insufficient → stop the container and pause the contract.
+- **Lifecycle.** `GET`/`DELETE`/`logs`(stream)/`stats` map to Docker API calls. Ephemeral rootfs; durable state via a mounted Storage bucket is future work. GPU via the runtime's device requests, billed while allocated.
+
+### LLM provider (OpenAI-compatible)
+
+- **Model backend.** The provider runs a local inference server (llama.cpp `server`, vLLM, or Ollama); the Chiral LLM server is a **thin proxy** in front that adds contract auth + metering + the `x_chiral` fields and normalizes to the exact OpenAI shape.
+- **Auth.** Bearer → `SessionStore::resolve_bearer` → contract.
+- **Pre-authorization.** Before forwarding, estimate worst-case cost (`prompt_tokens + max_tokens`) with a local tokenizer; `> balance` → `402 insufficient_quota`.
+- **Meter.** On completion, read `usage` from the backend, `draw_down(in·per_1k_in + out·per_1k_out)`; for streaming, buffer usage and emit it plus `x_chiral` in the final chunk.
+- **Models.** `/v1/models` reflects the offer's advertised models; the proxy maps a requested `model` to a backend model and 404s unknown ones.
+
+### Engine → provider integration
+
+| Engine module | Storage | Container | LLM |
+|---|---|---|---|
+| `resource_offer` (advertise) | ✓ | ✓ | ✓ |
+| `service_contract` (handshake `data` / terms) | ✓ | ✓ | ✓ |
+| `contract_ledger` (balance / drawdown) | ✓ | ✓ | ✓ |
+| `session_credential` (auth) | bearer + **SigV4 secret** | bearer | bearer |
+| `usage_receipt` (evidence) | ✓ | ✓ | ✓ |
+
+---
+
 ## Implementation Plan (Milestones)
 
-A build order that reaches a working single-resource marketplace early, then adds classes on the same contract/auth spine:
+Phased carry-out. **Phase 0 is done** (settlement engine); the rest builds on it. Each phase names new/touched files, a verification, and the main risk.
 
-1. **Offers + discovery.** Generalize the signed host-ad into the typed `resource_offer` (publish/refresh/search by class); marketplace browse UI with signature verification + Elo ranking.
-2. **Contract spine.** Handshake endpoints, the on-chain contract transaction (encode/verify `data`), the provider contract ledger + balance accounting, the `split_payment` fee cut, and top-ups. This is the reusable core for all three classes.
-3. **Storage provider (first end-to-end).** S3-compatible server behind the contract/auth layer; consumer client + tool compatibility; metering (capacity + egress); exhaustion policy.
-4. **Reputation.** Payment-gated `/api/ratings/feedback` keyed to contracts; rating UI; ranking wired into discovery.
-5. **LLM provider.** OpenAI-compatible front-end + token meter over the contract spine (reuses steps 2 & 4).
-6. **Container provider.** Hardened-OCI runtime, ingress proxy, lifecycle + runtime meter.
-7. **Provider dashboard & ops.** Offers / earnings / contracts views, signed usage receipts, diagnostics, headless provider mode.
+**Phase 0 — Settlement engine (done).** `resource_offer`, `codec`, `service_contract`, `contract_ledger`, `usage_receipt`, `session_credential` — pure, unit-tested (34 tests). *Not wired.*
 
-Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
+**Phase 1 — Shared provider node (wiring).** Offer publisher (DHT publish/search) + the `/v1/contracts/*` handshake handlers + on-chain funding verification + ledger/session state + persistence, mounted into `chiral_daemon` provider mode. New: `provider_node.rs`, `contract_api.rs`; touches `dht.rs`, `chiral_daemon.rs`, `lib.rs`. *Verify:* a client runs propose→open→get→topup→receipt against a live daemon (integration test). *Risk:* high — `dht.rs`/daemon are hot files.
+
+**Phase 2 — Storage provider (first end-to-end).** S3 Axum handlers + disk object store + SigV4 + capacity/egress metering + exhaustion. New: `storage_provider.rs`. *Verify:* `aws s3 cp` with the contract's issued keys stores/reads an object and draws the balance down. *Risk:* medium.
+
+**Phase 3 — Reputation (payment-gated).** `POST /api/ratings/feedback` keyed to a contract tx, verified on-chain; rating UI; ranking wired into discovery. Touches `rating_api.rs` / `reputation.rs`. *Verify:* a rating lands only with a valid contract payment; score moves by amount.
+
+**Phase 4 — LLM provider.** OpenAI-compatible proxy + token meter over the spine (reuses Phase 1). New: `llm_provider.rs` + a model-backend adapter. *Verify:* the `openai` SDK completes a chat against the endpoint and bills tokens.
+
+**Phase 5 — Container provider.** `bollard` driver (hardened profile) + ingress proxy + runtime meter. New: `container_provider.rs`. *Verify:* submit an image, reach it at its subdomain, watch runtime bill; teardown halts metering. *Risk:* isolation correctness.
+
+**Phase 6 — Client & UX.** Marketplace browse (offers by class + Elo), provider dashboard (offers/earnings/contracts), a consumer contract client + local proxy for tool auth; provider-mode daemon flags/config. Touches frontend + `chiral.rs` / `chiral_daemon.rs`.
+
+**Cross-cutting:** persistence, config/env (provider wallet key, endpoint/domain, model-backend URL), deployment (public IP + TLS), and an integration test per phase. Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
 
 ---
 
