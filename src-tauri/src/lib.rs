@@ -186,6 +186,7 @@ async fn start_dht_internal(
     app: tauri::AppHandle,
     state: &AppState,
     allow_already_running: bool,
+    client_mode: bool,
 ) -> Result<String, String> {
     // Phase 2 gate: refuse to enter the network if our build is below
     // the policy's `min_required`. The frontend's blocking modal already
@@ -206,6 +207,9 @@ async fn start_dht_internal(
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
+    // Thin mode (default) runs Kademlia in client mode; full mode leaves the
+    // default (auto → server once publicly reachable).
+    dht.set_client_mode(client_mode);
     let app_for_bootstrap_reseed = app.clone();
     let dht_for_bootstrap_reseed = dht.clone();
     let result = dht.start(app).await?;
@@ -242,8 +246,25 @@ async fn start_dht_internal(
 async fn start_dht(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    client_mode: bool,
 ) -> Result<String, String> {
-    start_dht_internal(app, state.inner(), false).await
+    start_dht_internal(app, state.inner(), false, client_mode).await
+}
+
+/// Switch the running DHT's Kademlia mode without restarting it (thin ↔ full
+/// toggle). `clientMode` = thin/light (client); false = full node (auto/server).
+/// No-op-safe if the DHT isn't running.
+#[tauri::command]
+async fn set_dht_mode(
+    state: tauri::State<'_, AppState>,
+    client_mode: bool,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.set_dht_mode(client_mode).await
+    } else {
+        Ok(())
+    }
 }
 
 fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
@@ -8425,8 +8446,10 @@ pub fn run() {
                 drive.load_from_disk_async().await;
 
                 // Always start DHT on app launch so seeding resumes immediately after restart.
+                // Start in client mode (thin is the default); the frontend switches it to
+                // full/server via `set_dht_mode` after login if the user is in full mode.
                 let app_state = app_for_boot.state::<AppState>();
-                match start_dht_internal(app_for_boot.clone(), app_state.inner(), true).await {
+                match start_dht_internal(app_for_boot.clone(), app_state.inner(), true, true).await {
                     Ok(msg) => println!("[DHT] Auto-start on launch: {}", msg),
                     Err(err) => eprintln!("[DHT] Auto-start on launch failed: {}", err),
                 }
@@ -8546,6 +8569,7 @@ pub fn run() {
             discover_offers,
             discover_offers_via_gateway,
             open_service_contract,
+            set_dht_mode,
             compute_owner_proof,
             compute_reputation_verdict_proof,
             compute_relay_register_signature,
