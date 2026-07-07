@@ -798,7 +798,9 @@ The decisions that shaped this design, now settled — each records the choice; 
 >
 > **Scope for this version — storage + container only.** LLM (inference) sharing is **disabled and deferred to a future release**. The inference provider core (`llm_provider`) + data-plane (`llm_api`) and this document's inference design remain in the tree, dormant and still tested, but `ResourceClass::is_enabled` gates the class out of every marketplace surface — a provider cannot advertise inference, and a consumer cannot discover or open an inference contract (`consumer::open_contract` refuses it as a defense-in-depth choke point). Re-enabling is a one-line change to `ResourceClass::is_enabled`.
 >
-> **Remaining:** the `/marketplace` desktop page (presentation over the wired `exchangeService`), and tool-compat polish (full S3 SigV4). These need the live DHT / soak testing.
+> **Desktop runs thin by default.** A fresh install starts **no local infrastructure** (no DHT, geth, or mining) and acts as a consumer client — wallet keys stay in-process, chain access is remote RPC, and discovery goes through a user-configured gateway (`discover_offers_via_gateway`, offers re-verified locally via `discovery::accept_gateway_offers`). *Full* mode (Settings → Startup) restores the local DHT + geth + mining + legacy pages. The `/marketplace` page (browse → open → use) is the thin-mode consumer surface; `App.svelte` gates the infra auto-starts on full mode; the nav hides full-only pages in thin.
+>
+> **Remaining:** tool-compat polish (full S3 SigV4) and live-DHT / soak testing.
 
 A **provider** is a headless process — the `chiral_daemon` in *provider mode*, or a dedicated `chiral_provider` binary — that (1) publishes signed offers to the DHT, (2) runs an HTTPS server exposing the contract handshake plus one or more data-plane APIs, and (3) meters usage against an in-memory contract ledger. All three classes share the same node skeleton and settlement engine; they differ only in the **data-plane server** and its **meter**.
 
