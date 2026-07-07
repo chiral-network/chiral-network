@@ -8,6 +8,7 @@ pub mod container_provider;
 pub mod contract_api;
 pub mod contract_ledger;
 pub mod contract_service;
+pub mod desktop_provider;
 pub mod dht;
 pub mod discovery;
 pub mod docker_runtime;
@@ -76,6 +77,9 @@ pub struct AppState {
     /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
     /// Dropping the AbortHandle cancels the tunnel task.
     pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
+    /// A light provider server running inside this desktop (desktop provider
+    /// mode), if any. `Some` while advertising + serving; `None` otherwise.
+    pub provider: Arc<Mutex<Option<desktop_provider::RunningProvider>>>,
     // The effective `VersionPolicy` lives in `version::EFFECTIVE_POLICY`
     // (a global RwLock) since Phase 5; that gives every caller —
     // including the sync libp2p Identify event handler — a non-blocking
@@ -265,6 +269,119 @@ async fn set_dht_mode(
     } else {
         Ok(())
     }
+}
+
+// ---- Desktop provider mode (light provider) ----
+
+fn default_offer_nonce() -> u64 {
+    1
+}
+
+#[derive(serde::Deserialize)]
+struct ProviderStartRequest {
+    class: String,
+    /// Public HTTPS base URL advertised in the offer (must be reachable).
+    endpoint: String,
+    price_schedule: serde_json::Value,
+    #[serde(default)]
+    capacity: serde_json::Value,
+    min_funding_wei: String,
+    /// Control-plane bind (handshake + merged data plane), e.g. `0.0.0.0:8443`.
+    control_bind: String,
+    /// Storage S3 data-plane bind (storage serves two listeners), e.g. `0.0.0.0:8444`.
+    #[serde(default)]
+    data_bind: String,
+    /// Provider wallet private key (from the unlocked account) — signs the offer
+    /// and usage receipts. Never leaves the process.
+    private_key: String,
+    #[serde(default)]
+    region: String,
+    #[serde(default = "default_offer_nonce")]
+    offer_nonce: u64,
+}
+
+/// Start a **light provider** inside the desktop (full/advanced mode): assemble
+/// the provider server, serve it on the given bind address(es), and publish the
+/// signed offer through the desktop's client-mode DHT. Requires a running DHT and
+/// a publicly reachable `endpoint`. Storage + container only (inference disabled).
+#[tauri::command]
+async fn start_provider(
+    state: tauri::State<'_, AppState>,
+    req: ProviderStartRequest,
+) -> Result<serde_json::Value, String> {
+    let class = resource_offer::ResourceClass::parse(&req.class)?;
+    let dht = {
+        let guard = state.dht.lock().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("DHT is not running (start the network first)")?
+    };
+
+    let config = provider_daemon::ProviderConfig {
+        wallet_private_key: req.private_key,
+        region: req.region,
+        endpoint: req.endpoint,
+        control_bind: req.control_bind,
+        data_bind: if req.data_bind.is_empty() {
+            "0.0.0.0:8444".to_string()
+        } else {
+            req.data_bind
+        },
+        class,
+        capacity: req.capacity,
+        price_schedule: req.price_schedule,
+        min_funding_wei: req.min_funding_wei,
+        offer_nonce: req.offer_nonce,
+        llm_backend_url: String::new(),
+    };
+
+    // Replace any provider already running.
+    if let Some(prev) = state.provider.lock().await.take() {
+        prev.stop();
+    }
+
+    let running = desktop_provider::start(config, dht).await?;
+    let info = serde_json::json!({
+        "running": true,
+        "offerRef": running.offer.offer_ref(),
+        "class": running.offer.resource_class.as_str(),
+        "endpoint": running.offer.endpoint,
+        "controlBind": running.control_bind,
+        "dataBind": running.data_bind,
+        "providerWallet": running.offer.provider_wallet,
+    });
+    *state.provider.lock().await = Some(running);
+    Ok(info)
+}
+
+/// Stop the desktop provider server (if running).
+#[tauri::command]
+async fn stop_provider(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    if let Some(p) = state.provider.lock().await.take() {
+        p.stop();
+    }
+    Ok(())
+}
+
+/// Whether a desktop provider is running, plus its offer summary.
+#[tauri::command]
+async fn get_provider_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let guard = state.provider.lock().await;
+    Ok(match guard.as_ref() {
+        Some(p) => serde_json::json!({
+            "running": true,
+            "offerRef": p.offer.offer_ref(),
+            "class": p.offer.resource_class.as_str(),
+            "endpoint": p.offer.endpoint,
+            "controlBind": p.control_bind,
+            "dataBind": p.data_bind,
+            "providerWallet": p.offer.provider_wallet,
+        }),
+        None => serde_json::json!({ "running": false }),
+    })
 }
 
 fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
@@ -8415,6 +8532,7 @@ pub fn run() {
             hosting_server_shutdown: Arc::clone(&hosting_shutdown_for_exit),
             drive_state: Arc::new(drive_api::DriveState::new()),
             tunnel_handles: Arc::clone(&tunnel_handles_for_exit),
+            provider: Arc::new(Mutex::new(None)),
         })
         .setup(|app| {
             use tauri::Manager;
@@ -8570,6 +8688,9 @@ pub fn run() {
             discover_offers_via_gateway,
             open_service_contract,
             set_dht_mode,
+            start_provider,
+            stop_provider,
+            get_provider_status,
             compute_owner_proof,
             compute_reputation_verdict_proof,
             compute_relay_register_signature,
