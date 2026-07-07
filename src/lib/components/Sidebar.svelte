@@ -32,6 +32,7 @@
   const navItems = [
     { path: '/marketplace', label: 'Marketplace', icon: Store },
     { path: '/account', label: 'Account', icon: Wallet },
+    { path: '/provider', label: 'Provider', icon: Server, full: true },
     { path: '/download', label: 'Download', icon: Download, full: true },
     { path: '/drive', label: 'Drive', icon: HardDrive, full: true },
     { path: '/hosts', label: 'Hosts', icon: Server, full: true },

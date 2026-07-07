@@ -24,6 +24,7 @@
   import HostsPage from './pages/Hosts.svelte';
   import DrivePage from './pages/Drive.svelte';
   import MarketplacePage from './pages/Marketplace.svelte';
+  import ProviderPage from './pages/Provider.svelte';
 
 
   let currentPath = $state('/wallet');
@@ -348,6 +349,10 @@
     {
       path: '/marketplace',
       component: MarketplacePage
+    },
+    {
+      path: '/provider',
+      component: ProviderPage
     },
     {
       path: '/download',
