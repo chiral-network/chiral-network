@@ -56,7 +56,7 @@
     { path: '/hosts', label: 'Hosts', icon: Server, full: true },
     { path: '/network', label: 'Network', icon: Globe, full: true },
     { path: '/chiraldrop', label: 'ChiralDrop', icon: Send, full: true },
-    { path: '/mining', label: 'Mining', icon: Pickaxe, full: true },
+    { path: '/mining', label: 'Mining', icon: Pickaxe },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
@@ -107,7 +107,7 @@
 
       <!-- Desktop nav: icon-only, all items (md to xl) -->
       <div class="hidden md:flex xl:hidden items-center gap-0.5 shrink-0">
-        {#each navItems as item}
+        {#each filteredNav as item}
           <button
             onclick={() => navigate(item.path)}
             class="flex items-center px-2 py-1.5 rounded-lg transition text-sm

@@ -38,7 +38,7 @@
     { path: '/hosts', label: 'Hosts', icon: Server, full: true },
     { path: '/network', label: 'Network', icon: Globe, full: true },
     { path: '/chiraldrop', label: 'ChiralDrop', icon: Send, full: true },
-    { path: '/mining', label: 'Mining', icon: Pickaxe, full: true },
+    { path: '/mining', label: 'Mining', icon: Pickaxe },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
