@@ -341,7 +341,7 @@ section "17. ChiralDrop Advanced Scenarios"
 dd if=/dev/urandom of=/tmp/chiral-drop-adv.bin bs=1024 count=5 2>/dev/null
 TID="adv-drop-$(date +%s)"
 api_post "http://localhost:9422/api/headless/dht/send-file" \
-    "{\"peerId\":\"${PEERS[8]}\",\"transferId\":\"$TID\",\"fileName\":\"advanced.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"adv123\",\"fileSize\":5120}"
+    "{\"peerId\":\"${PEERS[8]}\",\"transferId\":\"$TID\",\"fileName\":\"advanced.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"\",\"fileSize\":5120}"
 if [[ "$STATUS" == "200" ]]; then
     pass "ChiralDrop: node 2 -> node 8 (5KB)"
 else
@@ -367,7 +367,7 @@ fi
 # 17.3 Send to self (same node)
 TID2="self-drop-$(date +%s)"
 api_post "http://localhost:9425/api/headless/dht/send-file" \
-    "{\"peerId\":\"${PEERS[5]}\",\"transferId\":\"$TID2\",\"fileName\":\"self.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"self123\",\"fileSize\":5120}"
+    "{\"peerId\":\"${PEERS[5]}\",\"transferId\":\"$TID2\",\"fileName\":\"self.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"\",\"fileSize\":5120}"
 if [[ "$STATUS" == "200" ]]; then
     pass "ChiralDrop: send to self"
 elif [[ "$STATUS" == "400" ]]; then
@@ -382,7 +382,7 @@ for i in 6 7 8 9 10; do
     TID_MULTI="multi-$i-$(date +%s)"
     (curl -sf -X POST "http://localhost:9423/api/headless/dht/send-file" \
         -H 'Content-Type: application/json' \
-        -d "{\"peerId\":\"${PEERS[$i]}\",\"transferId\":\"$TID_MULTI\",\"fileName\":\"multi.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"m$i\",\"fileSize\":5120}" > /dev/null 2>&1 && touch "$DROP_DIR/ok_$i") &
+        -d "{\"peerId\":\"${PEERS[$i]}\",\"transferId\":\"$TID_MULTI\",\"fileName\":\"multi.bin\",\"filePath\":\"/tmp/chiral-drop-adv.bin\",\"priceWei\":\"\",\"senderWallet\":\"\",\"fileHash\":\"\",\"fileSize\":5120}" > /dev/null 2>&1 && touch "$DROP_DIR/ok_$i") &
 done
 wait
 MULTI_OK=$(ls "$DROP_DIR"/ok_* 2>/dev/null | wc -l)
