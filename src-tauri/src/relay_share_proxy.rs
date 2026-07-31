@@ -228,6 +228,26 @@ struct TunnelResponse {
     body: String,
 }
 
+fn serialize_tunnel_request<T: Serialize>(request: &T) -> Result<String, String> {
+    serde_json::to_string(request).map_err(|e| format!("Failed to serialize tunnel request: {}", e))
+}
+
+fn tunnel_error_response(id: String, status: StatusCode, message: String) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: status.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD.encode(message),
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum TunnelResponseFrameOutcome {
     Delivered { id: String },
@@ -1108,8 +1128,18 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                     match req {
                         Some((tunnel_req, responder)) => {
                             let id = tunnel_req.id.clone();
-                            pending.write().await.insert(id, responder);
-                            let json = serde_json::to_string(&tunnel_req).unwrap_or_default();
+                            let json = match serialize_tunnel_request(&tunnel_req) {
+                                Ok(json) => json,
+                                Err(e) => {
+                                    let _ = responder.send(tunnel_error_response(
+                                        id,
+                                        StatusCode::BAD_GATEWAY,
+                                        e,
+                                    ));
+                                    continue;
+                                }
+                            };
+                            pending.write().await.insert(id.clone(), responder);
                             let send_result = ws_tx
                                 .send(Message::Text(json.into()))
                                 .await
@@ -2327,6 +2357,63 @@ mod tests {
         let sites = registry.sites.read().await;
         assert!(shares.is_empty());
         assert!(sites.is_empty());
+    }
+
+    #[test]
+    fn serialize_tunnel_request_serializes_valid_request() {
+        let json = serialize_tunnel_request(&TunnelRequest {
+            id: "req-1".to_string(),
+            path: "/drive/token/file.txt".to_string(),
+        })
+        .expect("valid tunnel request should serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["id"].as_str(), Some("req-1"));
+        assert_eq!(parsed["path"].as_str(), Some("/drive/token/file.txt"));
+    }
+
+    struct FailingTunnelRequest;
+
+    impl Serialize for FailingTunnelRequest {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom(
+                "forced tunnel request serialization failure",
+            ))
+        }
+    }
+
+    #[test]
+    fn serialize_tunnel_request_reports_serialization_errors() {
+        let err = serialize_tunnel_request(&FailingTunnelRequest)
+            .expect_err("forced serializer error should be returned");
+
+        assert!(err.contains("Failed to serialize tunnel request"));
+        assert!(err.contains("forced tunnel request serialization failure"));
+    }
+
+    #[test]
+    fn tunnel_error_response_encodes_controlled_error_body() {
+        use base64::Engine;
+
+        let response = tunnel_error_response(
+            "req-2".to_string(),
+            StatusCode::BAD_GATEWAY,
+            "serialize failed".to_string(),
+        );
+
+        assert_eq!(response.id, "req-2");
+        assert_eq!(response.status, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(
+            response.headers.get("content-type").unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(response.body)
+            .unwrap();
+        assert_eq!(body, b"serialize failed");
     }
 
     #[test]
