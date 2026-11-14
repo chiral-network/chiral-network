@@ -1426,3 +1426,173 @@ async fn free_account_final_slot(ledger_wide: bool) {
     rpc_server.abort();
     assert!(rpc_server.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test]
+async fn failed_free_opening_rolls_back_account_root_and_quote_handoff() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, (point, event, contract_field)) in [
+        ("account-insert", "AFTER INSERT ON accounts", "NEW.id"),
+        ("root-insert", "AFTER INSERT ON credentials", "NEW.contract"),
+        ("quote-delete", "AFTER DELETE ON quotes", "OLD.id"),
+    ].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 53_000 + index as u64);
+        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let observed = rpc_calls.clone();
+        let rpc_app = Router::new().fallback(move |request: Request| {
+            let observed = observed.clone();
+            async move {
+                observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        fixture._listeners[0].set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(fixture._listeners[0].try_clone().unwrap()).unwrap();
+        let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+
+        let first = fixture.open_free().await;
+        let (status, document) = fixture.post("/v1/contracts/propose", json!({
+            "offer_id":fixture.provider.offer_id,
+            "consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),"funding_wei":"0"
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{point}: {document}");
+        let other_quote: Signed<Quote> = serde_json::from_value(document).unwrap();
+        let body = serde_json::to_vec(&json!({"quote_id":other_quote.payload.id,"raw_transaction":null})).unwrap();
+        let proof = fixture.proof(OTHER_KEY, "POST", OPEN, &body).await;
+        let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+        assert_eq!(status, StatusCode::OK, "{point}: {document}");
+        let mut accepted = vec![first, serde_json::from_value::<OpenResult>(document).unwrap()];
+        let quote = fixture.quote("0").await;
+        protocol::verify(protocol::QUOTE_DOMAIN, &quote, &fixture.provider.state.wallet).unwrap();
+        let unrelated = fixture.quote("0").await;
+        let body = serde_json::to_vec(&json!({"quote_id":quote.payload.id,"raw_transaction":null})).unwrap();
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let pending = || db.query_row(
+            "SELECT json_array(id,owner,expires,record) FROM quotes WHERE id=?1",
+            [&quote.payload.id], |row| row.get::<_, String>(0)).unwrap();
+        let pending_before = pending();
+        let other_records = || [
+            "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts WHERE id<>?1 ORDER BY id",
+            "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials WHERE contract<>?1 ORDER BY id",
+            "SELECT json_array(id,owner,expires,record) FROM quotes WHERE id<>?1 ORDER BY id",
+        ].map(|query| {
+            let mut hash = Keccak::v256();
+            let mut count = 0_u64;
+            let mut statement = db.prepare(query).unwrap();
+            let mut rows = statement.query([&quote.payload.id]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                hash.update(row.get::<_, String>(0).unwrap().as_bytes());
+                count += 1;
+            }
+            let mut digest = [0; 32];
+            hash.finalize(&mut digest);
+            (count, digest)
+        });
+        let prior_records = other_records();
+        assert_eq!(prior_records.map(|(count, _)| count), [2, 2, 1]);
+        let target_counts = || db.query_row(
+            "SELECT (SELECT COUNT(*) FROM accounts WHERE id=?1),
+                    (SELECT COUNT(*) FROM credentials WHERE contract=?1)",
+            [&quote.payload.id], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))).unwrap();
+
+        // FAIL preserves the failed statement's writes inside its transaction.
+        // AFTER hooks require the production transaction to undo the actual mutation,
+        // including earlier account creation/quote removal before root insertion.
+        db.execute_batch(&format!(
+            "CREATE TRIGGER fail_free_opening {event} WHEN {contract_field}='{}'
+             BEGIN SELECT RAISE(FAIL,'injected free opening persistence failure'); END;",
+            quote.payload.id)).unwrap();
+        for reopened in [false, true] {
+            if reopened {
+                fixture.app = Router::new();
+                let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+                state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+                fixture.app = contracts::router(fixture.provider.state.clone());
+            }
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let (status, error) = fixture.send("POST", OPEN, &proof.headers, body.clone()).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{point}, reopened={reopened}: {error}");
+            assert_eq!(error["error"]["code"], "internal_error", "{point}");
+            assert!(error.get("account").is_none() && error.get("credential").is_none(), "{point}: {error}");
+            fixture.consumed(&proof);
+            fixture.unopened(&quote);
+            assert_eq!(target_counts(), (0, 0), "{point}, reopened={reopened}");
+            assert_eq!(pending(), pending_before, "{point}, reopened={reopened}");
+            assert_eq!(other_records(), prior_records, "{point}, reopened={reopened}");
+
+            // Owner authorization is consumed in its own transaction, not revived
+            // by rolling back first opening or by reopening the provider objects.
+            let (status, replay) = fixture.send("POST", OPEN, &proof.headers, body.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{point}: {replay}");
+            assert_eq!(replay["error"]["code"], "invalid_api_key", "{point}");
+            assert_eq!(target_counts(), (0, 0), "{point}");
+            assert_eq!(pending(), pending_before, "{point}");
+            assert_eq!(other_records(), prior_records, "{point}");
+            for earlier in &accepted {
+                fixture.credentials_usable(&[&earlier.credential]);
+                let (status, account) = fixture.send("GET",
+                    &format!("/v1/contracts/{}", earlier.account.contract_id),
+                    &bearer(&earlier.credential), Vec::new()).await;
+                assert_eq!(status, StatusCode::OK, "{point}: {account}");
+                assert_eq!(account, serde_json::to_value(&earlier.account).unwrap(), "{point}");
+            }
+        }
+
+        // Explicit fixture repair is a positive control, not an automatic retry or
+        // product recovery policy. Open the original quote with new owner authority.
+        db.execute_batch("DROP TRIGGER fail_free_opening").unwrap();
+        let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+        let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+        assert_eq!(status, StatusCode::OK, "{point}: {document}");
+        let opened: OpenResult = serde_json::from_value(document).unwrap();
+        let mut expected_account = accepted[0].account.clone();
+        expected_account.contract_id = quote.payload.id.clone();
+        assert_eq!(serde_json::to_value(&opened.account).unwrap(),
+            serde_json::to_value(expected_account).unwrap(), "{point}");
+        assert_eq!(opened.credential.contract_id, quote.payload.id, "{point}");
+        fixture.consumed(&proof);
+        assert_eq!(target_counts(), (1, 1), "{point}");
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM quotes WHERE id=?1",
+            [&quote.payload.id], |row| row.get::<_, u64>(0)).unwrap(), 0, "{point}");
+        assert_eq!(other_records(), prior_records, "{point}");
+        accepted.push(opened);
+
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        assert_eq!(target_counts(), (1, 1), "{point}");
+        assert_eq!(other_records(), prior_records, "{point}");
+        for retained in [&quote, &unrelated] {
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.quote(&retained.payload.id).unwrap()).unwrap(),
+                serde_json::to_value(retained).unwrap(), "{point}");
+        }
+        // Recover by reading actual issued credentials, never by reopening an
+        // accepted account through the separate root-rotation recovery blocker.
+        for earlier in &accepted {
+            fixture.credentials_usable(&[&earlier.credential]);
+            let (status, account) = fixture.send("GET",
+                &format!("/v1/contracts/{}", earlier.account.contract_id),
+                &bearer(&earlier.credential), Vec::new()).await;
+            assert_eq!(status, StatusCode::OK, "{point}: {account}");
+            assert_eq!(account, serde_json::to_value(&earlier.account).unwrap(), "{point}");
+        }
+        assert_eq!(other_records(), prior_records, "{point}");
+        let paid_rows: (u64, u64, u64, u64, u64) = db.query_row(
+            "SELECT (SELECT COUNT(*) FROM funding_intents),(SELECT COUNT(*) FROM funding_attempts),
+                    (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations),
+                    (SELECT COUNT(*) FROM fee_batches)", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
+        assert_eq!(paid_rows, (0, 0, 0, 0, 0), "{point}");
+        let journal = Connection::open(fixture.provider.state.config.network
+            .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+        let payment_rows: (u64, u64) = journal.query_row(
+            "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)", [],
+            |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(payment_rows, (0, 0), "{point}");
+        assert!(rpc_calls.lock().unwrap().is_empty(), "{point}: free admission must not access provider RPC/engine");
+        rpc_server.abort();
+        assert!(rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
