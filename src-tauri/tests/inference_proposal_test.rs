@@ -1,4 +1,4 @@
-//! Production contracts::router coverage for specify-inference-commercial-terms task 2.4.
+//! Production contracts::router coverage for commercial terms and pending-proposal quotas.
 //! Pre-admitted loopback development offers and real disk-backed ledgers; no engine,
 //! chain simulation, actual funding, readiness-probe or performance-qualification claims.
 use axum::Json;
@@ -288,4 +288,40 @@ async fn proposal_body_limit_accepts_exactly_96_kib_and_rejects_one_more_byte() 
     body.push(b' ');
     reject(fixture.raw(body).await, StatusCode::PAYLOAD_TOO_LARGE, "request_too_large").await;
     fixture.propose("100").await;
+}
+
+#[tokio::test]
+async fn public_pending_quota_follows_the_canonical_named_payer_not_caller_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 30, "1", "2").await;
+    let payer = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let alias = format!("0x{}", payer[2..].to_ascii_uppercase());
+    let mut request = fixture.request("100");
+    let mut accepted = Vec::new();
+    // No owner proof or bearer: both spellings name the same payer and share its eight slots.
+    for index in 0..8 {
+        request["consumer_wallet"] = json!(if index % 2 == 0 { payer } else { &alias });
+        let response = fixture.post(PROPOSE, &request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let signed: Signed<Quote> = response.json().await.unwrap();
+        protocol::verify(QUOTE_DOMAIN, &signed, &fixture.state.wallet).unwrap();
+        assert_eq!(signed.payload.consumer_wallet, payer);
+        accepted.push(signed);
+    }
+    for spelling in [payer, alias.as_str()] {
+        request["consumer_wallet"] = json!(spelling);
+        reject(fixture.post(PROPOSE, &request).await,
+            StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    }
+    // The public caller can name another payer, but cannot thereby open or fund an account.
+    accepted.push(fixture.propose("100").await);
+    let independent = BillingStore::open(&fixture.ledger_path,
+        &fixture.state.config.network.identity).unwrap();
+    for signed in accepted {
+        let saved = independent.quote(&signed.payload.id).unwrap();
+        assert_eq!(saved.payload, signed.payload);
+        assert_eq!(saved.signature, signed.signature);
+        assert!(independent.account(&signed.payload.id).is_err());
+    }
+    assert!(!fixture.submitted.load(Ordering::Acquire));
 }

@@ -7,7 +7,7 @@
 
 ## 2. Add isolated acceptance evidence
 
-- [ ] 2.1 Cover the eight-per-payer pending boundary, payer/model/free-paid attribution, independent ledgers and rejection without storing the new proposal.
+- [x] 2.1 Cover the eight-per-payer pending boundary, payer/model/free-paid attribution, independent ledgers and rejection without storing the new proposal.
 - [ ] 2.2 Cover the 10,000-record storage ceiling with bounded, explicitly storage-level fixtures and controlled time; do not change native TTL/rates, use live databases or fabricate payment evidence.
 - [ ] 2.3 Cover competing connections at the final pending slot and rollback of tentative rate increments when pending admission rejects.
 - [ ] 2.4 Cover exact expiry reclamation and successful/failed first-opening slot transfer with preserved signed agreements. Review and retain existing acknowledged-funding recovery tests; add only missing consumer-visible cases.

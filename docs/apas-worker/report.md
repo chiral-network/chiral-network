@@ -8,7 +8,9 @@ Where: `docs/chiral-book.md`, authorization matrix row for `POST /v1/contracts/p
 
 Current text: “Public proposal for an unexpired local offer, subject to provider funding/admission rules. **This endpoint is not owner-authenticated.** The resulting quote binds its named consumer.”
 
-Source-derived exposure, not a live attack test: `contracts.rs::control` accepts the caller's canonical named payer without owner proof. `BillingStore::store_quote` limits that payer to eight pending quotes. A caller can therefore consume another payer's pending allowance without paying or owning that wallet and can repeatedly obstruct fresh quote issuance by replenishing expired proposals. This does not grant access to an account, credentials or funds. Existing quote/owner-authority tests verify the underlying public/private boundary; targeted exhaustion itself has not yet been exercised.
+Evidence: `contracts.rs::control` accepts the caller's canonical named payer without owner proof, and `BillingStore::store_quote` limits that payer to eight pending quotes. The isolated loopback regression `public_pending_quota_follows_the_canonical_named_payer_not_caller_authority` now demonstrates eight unauthenticated proposals for one payer, shared capacity across address-case aliases, HTTP 429 / `rate_limit` on subsequent proposals and continued admission for another payer. Issued signed agreements remain intact, with no account creation or transaction submission.
+
+A caller can therefore exhaust another payer's fresh-quote allowance without paying or owning the wallet. Replenishing expired proposals to sustain that obstruction remains a source-derived risk, not a tested live-deployment claim. This does not grant access to an account, credentials or funds; existing owner-authorization tests continue to pass. No live attack was performed.
 
 Proposed addition after the authorization matrix:
 
