@@ -47,9 +47,9 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 |---|---|---|
 | Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; conservative size derivation above | Raw syntax/unsupported forms and remaining defensive budget evidence in 2.5; do not manufacture an unreachable valid raw-ceiling control |
 | Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Local 4,096/4,097-byte calldata in 2.4; access-list byte widths/shape have task 2.2.2 acceptance below |
-| Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas remains in 2.3 |
-| Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Exact occurrence-based floor/equality and one-below cases with duplicates in 2.3 |
-| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count and shape local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
+| Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
+| Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
+| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape and gas local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
 
 ## Task 2.2.1 access-list occurrence boundaries
 
@@ -59,7 +59,7 @@ Two new `inference_funding_admission_test` groups use the existing independent s
 
 Each of the twelve isolated cases requires direct local rejection of the over-limit candidate and HTTP 400 `invalid_payment`, no acknowledgement/submission/credit, and the retained quote. Its separately signed valid boundary control is locally validated before the negative request and acknowledged afterward, with exact original hash/signature binding and reopened-ledger assertions. Fixed one-million signed gas is above the structural floor even for these over-limit candidates, and synthetic RPC supplies the current nonce and ample balance, so a low-gas/balance failure cannot stand in for count rejection.
 
-Task 2.2.1 closes count/duplicate coverage only; task 2.2.2 below separately covers malformed shapes and opaque widths. Precise structural-gas boundaries remain in 2.3. No production decoder, native preparation, wallet, settlement or whitepaper behavior changes.
+Task 2.2.1 closes count/duplicate coverage only; task 2.2.2 below separately covers malformed shapes and opaque widths, and task 2.3 covers precise structural-gas boundaries. No production decoder, native preparation, wallet, settlement or whitepaper behavior changes.
 
 ## Task 2.2.2 access-list shape and opaque-width acceptance
 
@@ -74,6 +74,16 @@ Each positive control has one zero-filled 20-byte address and one zero-filled 32
 All malformed candidates are canonically RLP-encoded and comfortably within raw/item/count budgets. The list-valued key is deliberately empty at depth four, so a depth-five refusal cannot masquerade as key-type validation. The existing fixture supplies sufficient signed gas, balance, current nonce and exact quote fields. It requires local `Rejected`, owner-authenticated HTTP 400 `invalid_payment`, reopened-ledger absence of acknowledgement/credit/fees and no submission, then successful acknowledgement of the unchanged valid control under the retained quote.
 
 These tests complete the structural shape/width portion of parent 2.2, not the exact gas, calldata or defensive parser-budget tasks. No source adoption, new production API, live-chain execution or settlement qualification is claimed.
+
+## Task 2.3 exact structural-gas acceptance
+
+Two further `inference_funding_admission_test` groups add nineteen signed one-below/equality pairs. `fresh_intent_enforces_exact_calldata_gas_for_all_envelopes` exercises legacy and both typed envelopes with no access-list occurrences. `fresh_intent_charges_every_access_list_occurrence` exercises eight layouts for each typed envelope: address-only, one address/key pair, repeated addresses without keys, repeated keys in one entry, repeated address/key pairs, repeated keys across repeated entries, and the simultaneous 64-address/256-key caps with distinct or repeated occurrences.
+
+The expected calldata charge is independently calculated as `16 * length - 12 * zero_byte_count` on the actual opening commitment, then added to the 21,000 base and literal access charges in the test matrix. The oracle does not call the production `intrinsic` helper or decode occurrence counts from production output. The opening prefix guarantees both zero and nonzero calldata bytes. Every duplicate case's one-below full-occurrence limit still covers a deduplicated interpretation, so accepting it would expose undercharging.
+
+The control is signed with the exact full floor; the adversarial candidate differs only in its signed gas limit, one unit smaller, and its freshly computed signature. A shared private fixture assertion preserves the previous access-list checks: locally validate the original and reject the candidate, supply ample balance/current nonce, require authenticated HTTP refusal with no acknowledgement/submission/credit/fees, reopen retained state, then acknowledge the unchanged exact-floor original. No existing assertion is dropped or weakened.
+
+This proves the application's structural minimum, not Conflux execution gas sufficiency. Native `eth_estimateGas`, full signed-cost spendability, canonical execution, safe-frontier credit and live qualification remain distinct. Calldata-size and defensive parser-budget tasks remain open.
 
 ## Integration
 

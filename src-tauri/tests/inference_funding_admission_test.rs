@@ -353,13 +353,28 @@ impl Fixture {
     async fn access_list_boundary(&mut self, kind: u8, accepted: &[u8], rejected: &[u8], name: &str) {
         let fields = PaymentFields::opening(&self.quote.payload, 0, 11);
         let original = signed_payment(&fields, &self.owner_key, kind, accepted);
-        let envelope = self.envelope(&original).unwrap();
         let candidate = signed_payment(&fields, &self.owner_key, kind, rejected);
-        assert!(matches!(self.envelope(&candidate), Err(ChainError::Rejected(_))), "{name}");
+        self.rejects_candidate_preserving_original(&original, &candidate, name).await;
+    }
+
+    async fn exact_gas_boundary(&mut self, kind: u8, access_list: &[u8], access_gas: u64, name: &str) {
+        let mut fields = PaymentFields::opening(&self.quote.payload, 0, 11);
+        // Independent oracle: charge every byte 16, then rebate 12 for each zero byte.
+        let zero_bytes = fields.data.iter().filter(|byte| **byte == 0).count() as u64;
+        fields.gas = 21_000 + 16 * fields.data.len() as u64 - 12 * zero_bytes + access_gas;
+        let original = signed_payment(&fields, &self.owner_key, kind, access_list);
+        fields.gas -= 1;
+        let candidate = signed_payment(&fields, &self.owner_key, kind, access_list);
+        self.rejects_candidate_preserving_original(&original, &candidate, name).await;
+    }
+
+    async fn rejects_candidate_preserving_original(&mut self, original: &str, candidate: &str, name: &str) {
+        let envelope = self.envelope(original).unwrap();
+        assert!(matches!(self.envelope(candidate), Err(ChainError::Rejected(_))), "{name}");
         self.rpc.control.lock().unwrap().balance = u128::MAX;
-        self.refuses(&candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
+        self.refuses(candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
         self.rpc.requests.lock().unwrap().clear();
-        self.acknowledges(&original, &envelope, name).await;
+        self.acknowledges(original, &envelope, name).await;
     }
 }
 
@@ -763,6 +778,40 @@ async fn fresh_intent_requires_exact_storage_key_width() {
             let mut fixture = Fixture::new(directory.path(),
                 65_000 + width as u64 * 10 + u64::from(kind), 100).await;
             fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_enforces_exact_calldata_gas_for_all_envelopes() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 66_000 + u64::from(kind), 100).await;
+        fixture.exact_gas_boundary(kind, &[0xc0], 0, name).await;
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_charges_every_access_list_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    // Literal expected access costs keep the oracle separate from the production gas helper.
+    let cases = [
+        (1, 0, false, 2_400),
+        (1, 1, false, 4_300),
+        (2, 0, true, 4_800),
+        (1, 2, true, 6_200),
+        (2, 2, true, 8_600),
+        (2, 4, true, 12_400),
+        (64, 256, false, 640_000),
+        (64, 256, true, 640_000),
+    ];
+    for (index, (addresses, keys, duplicates, access_gas)) in cases.into_iter().enumerate() {
+        let access_list = encoded_access_list(addresses, keys, duplicates).out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let name = format!("{envelope_name}: {addresses} addresses, {keys} keys, duplicate={duplicates}");
+            let mut fixture = Fixture::new(directory.path(),
+                67_000 + index as u64 * 10 + u64::from(kind), 100).await;
+            fixture.exact_gas_boundary(kind, &access_list, access_gas, &name).await;
         }
     }
 }
