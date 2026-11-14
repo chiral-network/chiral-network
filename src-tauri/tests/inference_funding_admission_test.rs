@@ -1,5 +1,5 @@
-//! Fresh funding admission through the production HTTP router and isolated disk ledgers.
-//! RPC observations are synthetic, not live-chain qualification, execution or paid credit.
+//! Local payment-envelope validation and fresh funding admission through production APIs.
+//! HTTP fixtures use isolated ledgers and synthetic RPC, not live execution or paid credit.
 //! All envelopes are independently signed with public test scalars; nothing is broadcast.
 #[path = "support/proposal.rs"]
 mod proposal;
@@ -16,6 +16,7 @@ use chiral_network::{
     billing_store::BillingStore,
     chain_client::{ChainClient, ChainError, ValidatedPaymentEnvelope},
     contracts,
+    network::{NetworkConfig, ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
     protocol::{self, Challenge, FundingIntent, NetworkIdentity, Quote, Signed},
     wallet,
 };
@@ -813,5 +814,49 @@ async fn fresh_intent_charges_every_access_list_occurrence() {
                 67_000 + index as u64 * 10 + u64::from(kind), 100).await;
             fixture.exact_gas_boundary(kind, &access_list, access_gas, &name).await;
         }
+    }
+}
+
+#[test]
+fn local_envelope_enforces_calldata_limit_without_truncation() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = ChainClient::new(NetworkConfig {
+        identity: NetworkIdentity {
+            chain_id: ESPACE_TESTNET_CHAIN_ID,
+            genesis_hash: ESPACE_TESTNET_GENESIS.into(),
+            deployment_id: "calldata-boundary-test".into(),
+        },
+        // The synchronous local API needs no RPC server or funding-route fixture.
+        rpc_url: "http://127.0.0.1:1".into(),
+        rpc_bearer_file: None,
+        faucet_url: None,
+        explorer_url: None,
+        policy_url: None,
+    }, directory.path().into()).unwrap();
+    let key = format!("{:064x}", 68_000);
+    let payer = wallet::address_from_private_key(&key).unwrap();
+    let mut data = Vec::with_capacity(4_097);
+    data.extend((0..=u8::MAX).cycle().take(4_096));
+    let mut fields = PaymentFields {
+        chain_id: ESPACE_TESTNET_CHAIN_ID, nonce: 0, recipient: vec![0x22; 20], value: 100,
+        data, gas: GAS, max_fee: 11, priority_fee: 2,
+    };
+    let payee = format!("0x{}", hex::encode(&fields.recipient));
+    let validate = |raw: &str, data: &[u8]| {
+        client.validate_payment_envelope(raw, &payer, &payee, "100", data)
+    };
+    for (kind, name) in ENVELOPES {
+        fields.data.truncate(4_096);
+        let original = signed_payment(&fields, &key, kind, &[0xc0]);
+        let envelope = validate(&original, &fields.data).unwrap();
+        assert_eq!(envelope.data, fields.data, "{name}: preserve every opaque byte");
+        assert_eq!(envelope.tx_hash, protocol::hash_hex(&hex::decode(&original[2..]).unwrap()), "{name}");
+
+        fields.data.push(0);
+        let candidate = signed_payment(&fields, &key, kind, &[0xc0]);
+        assert!(matches!(validate(&candidate, &fields.data), Err(ChainError::Rejected(_))), "{name}");
+        // Matching only the permitted prefix must not turn clipping into valid payment evidence.
+        assert!(matches!(validate(&candidate, &fields.data[..4_096]), Err(ChainError::Rejected(_))), "{name}");
+        assert_eq!(validate(&original, &fields.data[..4_096]).unwrap(), envelope, "{name}");
     }
 }

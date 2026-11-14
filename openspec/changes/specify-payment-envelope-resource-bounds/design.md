@@ -46,7 +46,7 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
 | Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; conservative size derivation above | Raw syntax/unsupported forms and remaining defensive budget evidence in 2.5; do not manufacture an unreachable valid raw-ceiling control |
-| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Local 4,096/4,097-byte calldata in 2.4; access-list byte widths/shape have task 2.2.2 acceptance below |
+| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Task 2.4 covers local 4,096/4,097-byte calldata below; access-list byte widths/shape have task 2.2.2 acceptance |
 | Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
 | Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape and gas local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
@@ -83,7 +83,15 @@ The expected calldata charge is independently calculated as `16 * length - 12 * 
 
 The control is signed with the exact full floor; the adversarial candidate differs only in its signed gas limit, one unit smaller, and its freshly computed signature. A shared private fixture assertion preserves the previous access-list checks: locally validate the original and reject the candidate, supply ample balance/current nonce, require authenticated HTTP refusal with no acknowledgement/submission/credit/fees, reopen retained state, then acknowledge the unchanged exact-floor original. No existing assertion is dropped or weakened.
 
-This proves the application's structural minimum, not Conflux execution gas sufficiency. Native `eth_estimateGas`, full signed-cost spendability, canonical execution, safe-frontier credit and live qualification remain distinct. Calldata-size and defensive parser-budget tasks remain open.
+This proves the application's structural minimum, not Conflux execution gas sufficiency. Native `eth_estimateGas`, full signed-cost spendability, canonical execution, safe-frontier credit and live qualification remain distinct. Calldata-size acceptance is recorded in task 2.4 below; defensive parser-budget tasks remain open.
+
+## Task 2.4 local calldata-size acceptance
+
+`local_envelope_enforces_calldata_limit_without_truncation` exercises legacy, EIP-2930 and EIP-1559 through the synchronous `validate_payment_envelope` API. It uses an explicit test-network identity, isolated journal directory and the existing unavailable-loopback-RPC convention; no RPC server, signed quote or funding route is needed. The independent fixture signer is reused, without a new production API.
+
+Each 4,096-byte control repeats all byte values, begins with zero and ends with `0xff`. It must validate against the matching expected calldata, preserve every decoded byte and return the hash of the original signed envelope. Appending one zero byte yields a newly signed 4,097-byte candidate. Both full-length expected calldata and the 4,096-byte expected prefix must reject it: testing only the former could miss a decoder that clips before comparing terms. The unchanged original must still return the same complete validated envelope afterward.
+
+Both lengths have ample signed gas, empty access lists and envelopes well below 16 KiB, isolating the calldata rule. No large payload is submitted as an opening commitment: the opening route still requires its exact 38-byte commitment, independently covered by its binding tests. These local results are not acknowledgement, execution, spendability or credit evidence. Raw framing and defensive RLP-budget acceptance remain in 2.5.
 
 ## Integration
 
