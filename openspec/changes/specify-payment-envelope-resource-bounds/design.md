@@ -45,11 +45,11 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
-| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header and malformed-child-length groups in 2.5.1–2.5.3 below; conservative size derivation above | Remaining freshly signed scalar/recipient byte-string encoding, scalar-shape and direct defensive-budget evidence in 2.5–2.6; do not manufacture an unreachable valid raw-ceiling control |
-| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Task 2.4 covers local 4,096/4,097-byte calldata; 2.5.2 adds 55/56-byte controls; access-list widths/shape have 2.2.2 acceptance. The scalar/list shape defect remains blocked in 2.6 |
+| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header, malformed-child-length and freshly signed byte-string groups in 2.5.1–2.5.4 below; conservative size derivation above | Remaining scalar-shape and direct defensive-budget evidence in 2.5–2.6; do not manufacture an unreachable valid raw-ceiling control |
+| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Tasks 2.4 and 2.5.2 cover local calldata boundaries; 2.5.4 covers freshly signed byte-string encodings and 127/128 fee controls; access-list widths/shape have 2.2.2 acceptance. The scalar/list shape defect remains blocked in 2.6 |
 | Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
-| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape, gas, raw-envelope, RLP root/header and malformed-child local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
+| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape, gas, raw-envelope, RLP root/header, malformed-child and byte-string local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
 
 ## Task 2.2.1 access-list occurrence boundaries
 
@@ -129,7 +129,21 @@ Six bounded suffixes cover incomplete eight-byte length headers, an ordinary dec
 
 All 54 pairs require local rejection, authenticated HTTP 400 `invalid_payment`, no retained acknowledgement, credit, funding/fee rows or transaction submission, and successful unchanged-original admission. Complete parent framing distinguishes these from bytes merely appended outside the transaction. Isolated synthetic RPC is not execution, safe-frontier or paid-inference qualification.
 
-These bounded malformed inputs do not isolate the raw byte, immediate-item or depth guards. Direct guard evidence remains blocked where it requires owner-untracked source; do not exploit the scalar/list defect to construct an invalid positive boundary control. Freshly signed scalar/recipient byte-string minimal-encoding acceptance remains separate from that shape defect and these malformed tails. No guard is relaxed and no production test API is added.
+These bounded malformed inputs do not isolate the raw byte, immediate-item or depth guards. Direct guard evidence remains blocked where it requires owner-untracked source; do not exploit the scalar/list defect to construct an invalid positive boundary control. Freshly signed scalar/recipient byte-string minimal-encoding acceptance follows in 2.5.4, separately from that shape defect and these malformed tails. No guard is relaxed and no production test API is added.
+
+## Task 2.5.4 freshly signed byte-string minimal encoding
+
+`fresh_intent_rejects_resigned_nonminimal_byte_strings` adds twelve refusal/original-recovery pairs across legacy, type 1 and type 2:
+
+- Maximum fee value 127 is encoded as `81 7f` instead of the canonical single byte `7f`.
+- Maximum fee value 128 is encoded as `b8 01 80` instead of the canonical `81 80`.
+- The unchanged 20-byte recipient uses long form `b8 14` or a zero-prefixed length `b9 00 14` instead of `94`.
+
+Each candidate is freshly signed over its actual nonminimal field bytes; unchanged numeric values, recipient, commitment, nonce and sufficient signed gas/funds prevent unrelated binding or stale-signature failures from explaining refusal. Valid originals at 127 and 128 exercise both sides of the single-byte encoding boundary, rather than accepting a blanket ban on `81` wrappers.
+
+Every pair requires local rejection, authenticated HTTP 400 `invalid_payment`, no retained acknowledgement, account credit, funding/fee rows or transaction submission, and successful unchanged-original admission. The existing signer and admission fixture are reused; no decoder, dependency or wire requirement changes.
+
+All mutated fields remain byte-string encodings. This is not evidence that a list used as a scalar is rejected: that distinct, previously observed defect still requires an independently committable native fix and its regression. Direct private budget evidence remains open; these synthetic-RPC results do not establish execution, finality or public-release qualification.
 
 ## Integration
 

@@ -1123,3 +1123,50 @@ async fn malformed_nested_child_lengths_preserve_original_admission() {
         }
     }
 }
+
+#[tokio::test]
+async fn fresh_intent_rejects_resigned_nonminimal_byte_strings() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, encoding) in [
+            "wrapped-single-byte", "long-form-single-byte",
+            "long-form-short-recipient", "zero-prefixed-recipient-length",
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 17_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let max_fee = match encoding {
+                "wrapped-single-byte" => 127,
+                "long-form-single-byte" => 128,
+                _ => 11,
+            };
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, max_fee);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let fee_field = usize::from(kind) + 1;
+            let mut replacement = RlpStream::new();
+            let field = match encoding {
+                "wrapped-single-byte" => {
+                    replacement.append_raw(&[0x81, u8::try_from(fields.max_fee).unwrap()], 1);
+                    fee_field
+                }
+                "long-form-single-byte" => {
+                    replacement.append_raw(&[0xb8, 1, u8::try_from(fields.max_fee).unwrap()], 1);
+                    fee_field
+                }
+                _ => {
+                    let length = u8::try_from(fields.recipient.len()).unwrap();
+                    match encoding {
+                        "long-form-short-recipient" => { replacement.append_raw(&[0xb8, length], 0); }
+                        "zero-prefixed-recipient-length" => { replacement.append_raw(&[0xb9, 0, length], 0); }
+                        _ => unreachable!(),
+                    }
+                    replacement.append_raw(&fields.recipient, 1);
+                    fee_field + 2
+                }
+            };
+            // Preserve the value/recipient, but sign the actual nonminimal field bytes.
+            let candidate = resign_field(&original, kind, fields.chain_id, &fixture.owner_key, field, &replacement.out());
+            fixture.rejects_candidate_preserving_original(
+                &original, &candidate, &format!("{envelope_name}: {encoding}"),
+            ).await;
+        }
+    }
+}
