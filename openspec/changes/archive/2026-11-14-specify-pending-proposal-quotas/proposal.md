@@ -8,21 +8,21 @@ The whitepaper makes quote proposal public and subject to provider admission rul
 - Define atomic capacity checking and insertion, rejection without consuming proposal-rate allowance, and isolation between provider ledgers.
 - Define reclamation at durable funding-intent acknowledgement, quote expiry and successful first account opening without deleting acknowledged funding terms, account history, credit or sender/nonce commitments.
 - Preserve unauthenticated public proposal and explicitly distinguish quota attribution from payer ownership. Record its availability exposure for the whitepaper author.
-- Add follow-on regression tasks; this turn changes specifications and APAS notes only.
+- Add isolated regression coverage for capacity, concurrent admission, rejection rollback and retention handoffs without changing production or financial behavior.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `inference-proposal-admission`: Pending-proposal capacity, transactional rejection and lifecycle preservation at the provider ledger boundary.
+None. The acknowledgement-transfer change has already introduced this capability into the main specs.
 
 ### Modified Capabilities
 
-None. This capability supplements the bounded-proposal requirement in the open `specify-inference-commercial-terms` change; it does not replace signed schemas, body-reader limits or funding authorization.
+- `inference-proposal-admission`: Add the pending-proposal capacity, transactional rejection and lifecycle requirements alongside the existing acknowledgement-transfer requirement. These distinct ADDED requirements supplement the bounded-proposal requirement in the open commercial-terms change without replacing signed schemas, body-reader limits or funding authorization.
 
 ## Impact
 
 - Read-only authority: `docs/chiral-book.md`, especially the public proposal authorization matrix, immutable terms and acknowledged-funding recovery contract.
 - Existing implementation: `contracts.rs::control`, `BillingStore::store_quote`, `BillingStore::register_funding_intent`, pending cleanup and `BillingStore::open_account`.
-- Missing evidence: isolated quote-capacity, concurrent admission, rollback and reclamation tests. Existing bounded challenge tests do not cover quote admission.
+- Acceptance evidence: isolated quote-capacity, concurrent admission, rollback, expiry and first-opening tests, plus the actual HTTP named-payer quota regression. The design maps these tests and distinguishes storage fixtures from native issuance or public qualification.
 - Exact proposal-rate windows and budgets remain a separate specification/coverage step. No rate algorithm, public authentication boundary, native 300-second quote lifetime, financial state or deployment changes here.

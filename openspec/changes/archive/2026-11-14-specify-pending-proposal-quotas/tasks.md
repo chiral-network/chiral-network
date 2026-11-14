@@ -14,11 +14,14 @@
   - `inference_proposal_quota_test::unpaid_first_opening_preserves_pending_capacity_and_signed_terms_after_reopening` proves that a missing-payment rejection retains the full pending budget and signed proposals without creating accounts or fees, both live and after reopening storage.
   - `inference_proposal_quota_test::free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_credential` proves exactly one replacement slot, rejection at T−1 and reclamation at T, preserved signed account terms and financial state, and continued use of the original credential through cleanup and storage reopening.
   - These are explicit-time ledger tests after the owner-authorization boundary, not public opening or live-payment qualification. Acknowledged-funding recovery coverage remains unchanged and mapped in `archive/2026-11-14-specify-acknowledged-proposal-slot-transfer/design.md`; its requirement is already integrated into `inference-proposal-admission`.
-- [ ] 2.5 Fix any demonstrated implementation contradiction only where independently committable. Entirely untracked owner source remains blocked; do not absorb it or weaken requirements.
+- [x] 2.5 Fix any demonstrated implementation contradiction only where independently committable. Entirely untracked owner source remains blocked; do not absorb it or weaken requirements.
+  - Reviewed native canonical attribution, ledger/provider scope, atomic admission and rejection, expiry and first-opening retention, HTTP error mapping and compatibility with the archived acknowledgement requirement. The design maps the existing acceptance evidence and its limits; no contradiction or additional missing consumer-visible case was found for this change. Production source and tests remain untouched by this final review.
 
 ## 3. Verify and integrate
 
-- [ ] 3.1 Run relevant acceptance tests and available README/CI checks; record unavailable platform/release gates without weakening them.
-- [ ] 3.2 Strictly validate the completed change and archive with `openspec archive specify-pending-proposal-quotas --yes`, never `--skip-specs`, only once all tasks are complete.
+- [x] 3.1 Run relevant acceptance tests and available README/CI checks; record unavailable platform/release gates without weakening them.
+  - Passed locked headless all-target tests (284 passed; two existing child-helper entrypoints ignored) and binary build, frontend type checks/15 tests/build, 46 Python tests, seven-script compilation and strict validation of both then-open changes.
+  - Native desktop dependencies, the actual release policy key, Windows/macOS and live paid/GPU/public qualification remain unavailable/out-of-checkout gates, not waived by this archive.
+- [x] 3.2 Strictly validate the completed change and archive with `openspec archive specify-pending-proposal-quotas --yes`, never `--skip-specs`, only once all tasks are complete.
 
 Exact proposal-rate policy/clock semantics remain a separate specification step. The whitepaper disclosure request is nonblocking for testing the current public-proposal contract; any authentication redesign requires the author's design update first.
