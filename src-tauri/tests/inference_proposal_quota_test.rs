@@ -576,6 +576,30 @@ fn assert_read_context(ledger: &BillingStore, credential: &protocol::Credential,
     assert_eq!(context.account.funded_wei, "0");
 }
 
+fn race_rate_challenges(path: &std::path::Path, candidates: [&AuthPayload; 2], now: u64) -> usize {
+    // Open both connections before the barrier so an initialization failure cannot strand a worker.
+    let [first, second] = candidates.map(|candidate| BillingStore::open(path, &candidate.network).unwrap());
+    let barrier = std::sync::Barrier::new(2);
+    let attempt = |ledger: BillingStore, candidate: &AuthPayload| {
+        barrier.wait();
+        ledger.create_challenge(candidate, now)
+    };
+    let results = std::thread::scope(|scope| {
+        let first = scope.spawn(|| attempt(first, candidates[0]));
+        let second = scope.spawn(|| attempt(second, candidates[1]));
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let winner = results.iter().position(|result| result.is_ok()).unwrap();
+    let error = results[1 - winner].as_ref().unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    let reopened = BillingStore::open(path, &candidates[0].network).unwrap();
+    assert_eq!(serde_json::to_value(reopened.challenge(&candidates[winner].nonce).unwrap()).unwrap(),
+        serde_json::to_value(candidates[winner]).unwrap());
+    assert!(reopened.challenge(&candidates[1 - winner].nonce).is_err());
+    winner
+}
+
 #[test]
 fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budgets() {
     let directory = tempfile::tempdir().unwrap();
@@ -879,6 +903,145 @@ fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authori
     assert_eq!(request.id, reservation.id);
     assert_eq!(request.status, "reserved");
     assert_eq!(request.max_cost_wei, "0");
+}
+
+#[test]
+fn challenge_wallet_refusals_preserve_the_last_global_unit_and_accepted_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let ledger = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let original = quote(1, 1, &owner, "test/challenge-preservation-free", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    let read = ledger.issue_credential(&original.payload.id, &CredentialIssueRequest {
+        expires_at: NOW + 300, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["read".into()],
+    }, NOW).unwrap();
+
+    // Retain a real signed acknowledgement after the assumed owner/spendability boundary.
+    // The envelope is validated offline: no transaction is broadcast, executed or credited.
+    let key = format!("{:064x}", 1);
+    let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
+    let paid = quote(1, 2, &payer, "test/challenge-preservation-paid", ("1", "2"));
+    ledger.store_quote(&paid, NOW).unwrap();
+    let (raw, envelope) = signed_opening(&paid.payload, directory.path());
+    let ack = ledger.register_funding_intent(&paid, &payer, &raw, &envelope.tx_hash,
+        envelope.nonce, &key, || Ok(NOW), true, &paid.payload.model).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &paid.payload.provider_wallet).unwrap();
+    let protected_state = |store: &BillingStore| serde_json::json!({
+        "account": store.account(&original.payload.id).unwrap(),
+        "credentials": store.credentials(&original.payload.id).unwrap(),
+        "original_terms": store.quote(&original.payload.id).unwrap(),
+        "funding_terms": store.quote(&paid.payload.id).unwrap(),
+        "funding_intent": store.funding_intent(&paid.payload, &raw).unwrap().unwrap(),
+    });
+    let before = protected_state(&ledger);
+    for nonce in 1..=11 {
+        let challenge = rate_challenge(&original.payload, nonce, NOW);
+        ledger.create_challenge(&challenge, NOW).unwrap();
+        consume_rate_challenge(&ledger, &challenge, NOW);
+    }
+    // This twelfth insertion is committed without constructing an HTTP reply or consuming its proof.
+    let undisclosed = rate_challenge(&original.payload, 12, NOW);
+    ledger.create_challenge(&undisclosed, NOW).unwrap();
+    for index in 0..587 {
+        let mut challenge = rate_challenge(&original.payload, 1000 + index, NOW);
+        challenge.wallet = format!("0x{:040x}", 0x10000 + index);
+        ledger.create_challenge(&challenge, NOW).unwrap();
+    }
+    // Twelve owner units plus 587 others leave exactly one ledger unit.
+    let rejected = rate_challenge(&original.payload, 2000, NOW);
+    for _ in 0..2 { assert_challenge_rate_rejected_at(&ledger, &rejected, NOW + 1); }
+    assert_eq!(protected_state(&ledger), before);
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    assert_challenge_rate_rejected_at(&reopened, &rejected, NOW + 1);
+    let mut last = rate_challenge(&original.payload, 2001, NOW);
+    last.wallet = OTHER_PAYER.into();
+    reopened.create_challenge(&last, NOW + 1).unwrap();
+    let mut excess = last.clone();
+    excess.nonce = format!("0x{:064x}", 2002);
+    assert_challenge_rate_rejected_at(&reopened, &excess, NOW + 1);
+    for challenge in [&undisclosed, &last] {
+        assert_eq!(serde_json::to_value(reopened.challenge(&challenge.nonce).unwrap()).unwrap(),
+            serde_json::to_value(challenge).unwrap());
+    }
+    // Cached ledger recovery, not an assertion that exhausted callers can obtain a new owner proof.
+    let replay = reopened.register_funding_intent(&paid, &payer, &raw, &envelope.tx_hash,
+        envelope.nonce, &key, || Ok(NOW + 1), false, &paid.payload.model).unwrap();
+    assert_eq!(replay.payload, ack.payload);
+    assert_eq!(replay.signature, ack.signature);
+    assert_eq!(protected_state(&reopened), before);
+    assert_preserved(&reopened, &paid);
+    assert_read_context(&reopened, &read, &original.payload, NOW + 1);
+    assert_eq!(reopened.authenticate(&opened.credential.bearer, NOW + 1).unwrap().credential_id,
+        opened.credential.id);
+    assert!(reopened.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
+}
+
+#[test]
+fn challenge_wallet_rate_race_commits_one_unit_without_leaking_global_allowance() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let initial = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let terms = quote(1, 1, &owner, "test/challenge-wallet-race", ("0", "0"));
+    initial.store_quote(&terms, NOW).unwrap();
+    for nonce in 1..=11 {
+        let challenge = rate_challenge(&terms.payload, nonce, NOW);
+        initial.create_challenge(&challenge, NOW).unwrap();
+        consume_rate_challenge(&initial, &challenge, NOW);
+    }
+    let candidates = [rate_challenge(&terms.payload, 12, NOW), rate_challenge(&terms.payload, 13, NOW)];
+    drop(initial);
+    // Pending occupancy is zero, so the two writers compete only for the twelfth wallet unit.
+    let winner = race_rate_challenges(&path, [&candidates[0], &candidates[1]], NOW + 1);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    assert_challenge_rate_rejected_at(&reopened, &rate_challenge(&terms.payload, 14, NOW), NOW + 1);
+    // The race loser and subsequent refusal must leave all 588 remaining global units intact.
+    for index in 0..588 {
+        let mut challenge = rate_challenge(&terms.payload, 1000 + index, NOW);
+        challenge.wallet = format!("0x{:040x}", 0x10000 + index);
+        reopened.create_challenge(&challenge, NOW + 1).unwrap();
+    }
+    let mut excess = rate_challenge(&terms.payload, 2000, NOW);
+    excess.wallet = OTHER_PAYER.into();
+    assert_challenge_rate_rejected_at(&reopened, &excess, NOW + 1);
+    assert_eq!(serde_json::to_value(reopened.challenge(&candidates[winner].nonce).unwrap()).unwrap(),
+        serde_json::to_value(&candidates[winner]).unwrap());
+    assert!(reopened.challenge(&candidates[1 - winner].nonce).is_err());
+    assert_preserved(&reopened, &terms);
+}
+
+#[test]
+fn challenge_global_rate_race_commits_only_one_candidate_across_connections() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let initial = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let terms = quote(1, 1, &owner, "test/challenge-global-race", ("0", "0"));
+    initial.store_quote(&terms, NOW).unwrap();
+    for sequence in 1..=599 {
+        let mut challenge = rate_challenge(&terms.payload, sequence, NOW);
+        challenge.wallet = format!("0x{:040x}", 0x10000 + sequence);
+        initial.create_challenge(&challenge, NOW).unwrap();
+    }
+    let retained = initial.challenge(&format!("0x{:064x}", 1)).unwrap();
+    let first = rate_challenge(&terms.payload, 600, NOW);
+    let mut second = rate_challenge(&terms.payload, 601, NOW);
+    second.wallet = OTHER_PAYER.into();
+    drop(initial);
+    // Both wallets have unused individual budgets; 599 pending records cannot reach the 10,000 ceiling.
+    race_rate_challenges(&path, [&first, &second], NOW + 1);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for (index, wallet) in [owner.as_str(), OTHER_PAYER, PAYER].into_iter().enumerate() {
+        let mut excess = rate_challenge(&terms.payload, 602 + index as u64, NOW);
+        excess.wallet = wallet.into();
+        assert_challenge_rate_rejected_at(&reopened, &excess, NOW + 1);
+    }
+    assert_eq!(serde_json::to_value(reopened.challenge(&retained.nonce).unwrap()).unwrap(),
+        serde_json::to_value(&retained).unwrap());
+    assert_preserved(&reopened, &terms);
 }
 
 #[test]
