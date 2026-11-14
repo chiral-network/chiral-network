@@ -54,6 +54,7 @@ enum Reply {
     MistypedExpiry,
     EmptyNonce,
     OversizedNonce,
+    Nonce { unit: &'static str, count: usize, suffix: &'static str },
     Expired,
     FarFuture,
 }
@@ -135,6 +136,13 @@ fn transform(mode: Reply, mut payload: AuthPayload, mut reply: Value) -> Value {
             payload.nonce = if matches!(mode, Reply::EmptyNonce) { String::new() } else { "a".repeat(257) };
             reply["nonce"] = json!(payload.nonce);
         }
+        Reply::Nonce { unit, count, suffix } => {
+            let mut nonce = String::with_capacity(unit.len() * count + suffix.len());
+            for _ in 0..count { nonce.push_str(unit); }
+            nonce.push_str(suffix);
+            payload.nonce = nonce;
+            reply["nonce"] = json!(payload.nonce);
+        }
         Reply::Expired | Reply::FarFuture => {
             payload.expires_at = if matches!(mode, Reply::Expired) { 0 } else { u64::MAX };
             reply["expires_at"] = json!(payload.expires_at);
@@ -154,6 +162,7 @@ struct ControlRequest {
     owner: Option<HeaderValue>,
     nonce: Option<HeaderValue>,
     signature: Option<HeaderValue>,
+    status: Option<StatusCode>,
 }
 
 struct DeliveredChallenge {
@@ -178,17 +187,24 @@ async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next
     let body = to_bytes(body, 96 * 1024).await.unwrap();
     let is_challenge = parts.uri.path() == CHALLENGE;
     let challenge_request = is_challenge.then(|| serde_json::from_slice(&body).unwrap());
-    if !is_challenge && parts.uri.path() != "/v1/contracts/propose" {
-        peer.observations.lock().unwrap().controls.push(ControlRequest {
+    let control_index = if !is_challenge && parts.uri.path() != "/v1/contracts/propose" {
+        let mut observed = peer.observations.lock().unwrap();
+        let index = observed.controls.len();
+        observed.controls.push(ControlRequest {
             method: parts.method.to_string(),
             target: parts.uri.path_and_query().unwrap().as_str().into(),
             body: body.clone(),
             owner: parts.headers.get("x-chiral-owner").cloned(),
             nonce: parts.headers.get("x-chiral-nonce").cloned(),
             signature: parts.headers.get("x-chiral-signature").cloned(),
+            status: None,
         });
-    }
+        Some(index)
+    } else { None };
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
+    if let Some(index) = control_index {
+        peer.observations.lock().unwrap().controls[index].status = Some(response.status());
+    }
     if !is_challenge { return response; }
     assert_eq!(response.status(), StatusCode::OK, "the real issuer must succeed before corruption");
     let (mut parts, body) = response.into_parts();
@@ -302,6 +318,70 @@ async fn native_rejects_invalid_nonce_and_expiry_even_when_signing_bytes_match()
     for (index, mode) in [Reply::EmptyNonce, Reply::OversizedNonce, Reply::Expired, Reply::FarFuture]
         .into_iter().enumerate() {
         rejected(directory.path(), 300 + index as u64, mode).await;
+    }
+}
+
+#[tokio::test]
+async fn native_nonce_byte_boundaries_preserve_proofs_without_granting_provider_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, (mode, bytes)) in [
+        (Reply::Nonce { unit: "a", count: 1, suffix: "" }, 1),
+        (Reply::Nonce { unit: "a", count: 255, suffix: "" }, 255),
+        (Reply::Nonce { unit: "a", count: 256, suffix: "" }, 256),
+        (Reply::Nonce { unit: "é", count: 127, suffix: "a" }, 255),
+        (Reply::Nonce { unit: "é", count: 128, suffix: "" }, 256),
+        (Reply::Nonce { unit: "界", count: 85, suffix: "a" }, 256),
+    ].into_iter().enumerate() {
+        let fixture = Fixture::new(directory.path(), 500 + index as u64, mode).await;
+        let owner = fixture.consumer.address().unwrap();
+        // Receiver acceptance is not provider authority: these substituted nonces were not issued.
+        assert!(fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.is_err());
+        {
+            let observed = fixture.observations.lock().unwrap();
+            assert_eq!(observed.challenges.len(), 1, "{mode:?}");
+            assert_eq!(observed.controls.len(), 1, "{mode:?} must pass native nonce validation");
+            let challenge = &observed.challenges[0];
+            let control = &observed.controls[0];
+            let nonce = challenge.reply["nonce"].as_str().unwrap();
+            assert_eq!(nonce.len(), bytes);
+            assert_eq!(control.method, "POST");
+            assert_eq!(control.target, OPEN);
+            assert_eq!(control.owner.as_ref().unwrap().to_str().unwrap(), owner);
+            // HeaderValue::to_str rejects non-ASCII; compare the actual transported UTF-8 bytes.
+            assert_eq!(control.nonce.as_ref().unwrap().as_bytes(), nonce.as_bytes());
+            assert_eq!(serde_json::from_slice::<Value>(&control.body).unwrap(),
+                json!({"quote_id": fixture.quote.payload.id, "raw_transaction": null}));
+            let digest = protocol::hash_hex(&control.body);
+            assert_eq!(challenge.request, json!({"wallet": owner, "method": "POST",
+                "path": OPEN, "body_hash": digest}));
+            let expected = AuthPayload {
+                network: fixture.quote.payload.network.clone(),
+                provider_wallet: fixture.quote.payload.provider_wallet.clone(),
+                wallet: owner.clone(), method: "POST".into(), path: OPEN.into(),
+                body_hash: digest, nonce: nonce.into(),
+                expires_at: challenge.reply["expires_at"].as_u64().unwrap(),
+            };
+            let signature = control.signature.as_ref().unwrap().to_str().unwrap();
+            assert_eq!(wallet::recover_signer(&auth::challenge_payload(&expected).unwrap(), signature)
+                .unwrap(), owner);
+            assert_eq!(control.status, Some(StatusCode::UNAUTHORIZED));
+        }
+        let persisted = BillingStore::open(&fixture.provider.ledger_path, &fixture.quote.payload.network).unwrap();
+        assert!(persisted.account(&fixture.quote.payload.id).is_err());
+        assert!(fixture.consumer.accounts().unwrap().is_empty());
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn native_nonce_limit_counts_utf8_bytes_rather_than_characters() {
+    let directory = tempfile::tempdir().unwrap();
+    // Each nonce is 257 bytes but far fewer than 256 characters. A character-count guard leaks proof.
+    for (index, mode) in [
+        Reply::Nonce { unit: "é", count: 128, suffix: "a" },
+        Reply::Nonce { unit: "界", count: 85, suffix: "aa" },
+    ].into_iter().enumerate() {
+        rejected(directory.path(), 600 + index as u64, mode).await;
     }
 }
 
