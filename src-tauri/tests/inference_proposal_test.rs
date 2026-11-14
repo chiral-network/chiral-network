@@ -447,3 +447,173 @@ async fn saved_signed_agreements_reject_conflicting_funding_calls_without_remote
     drop(consumer);
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn historical_saved_agreements_recheck_authenticity_before_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 41, "0", "0").await;
+    let config = ConsumerConfig {
+        network: fixture.state.config.network.clone(),
+        data_dir: directory.path().join("consumer"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let mut consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, &format!("{:064x}", 50_041)).unwrap();
+    consumer.wallet_import_file(&import).unwrap();
+    let original = consumer.quote(&fixture.offer, "0").await.unwrap();
+    let account = consumer.fund(&fixture.offer, &original).await.unwrap();
+    let expected_account = serde_json::to_value(&account).unwrap();
+    let id = &original.payload.id;
+    let exported = consumer.credential_export(id, None).unwrap();
+    let saved_path = config.network.scoped_dir(&config.data_dir).join("consumer")
+        .join(consumer.address().unwrap())
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    let native_bytes = std::fs::read(&saved_path).unwrap();
+    let mut record: Value = serde_json::from_slice(&native_bytes).unwrap();
+    let provider_key = fixture.state.private_key.as_str();
+    let other_key = format!("{:064x}", 60_041);
+    let other_wallet = wallet::address_from_private_key(&other_key).unwrap();
+    let now = protocol::now().unwrap();
+
+    for expired in ["neither", "offer", "quote", "both"] {
+        let mut offer = fixture.offer.payload.clone();
+        let mut quote = original.payload.clone();
+        // Controlled ageing of native-written fixture envelopes, not elapsed-time,
+        // provider-retention or paid-settlement evidence. Keep the account/credential
+        // from actual free onboarding; no invented transfer or acknowledgement.
+        match expired {
+            "offer" => {
+                offer.issued_at = now - 3600;
+                offer.expires_at = now - 60;
+                quote.issued_at = now - 120;
+                quote.expires_at = now + 180;
+            }
+            "quote" => {
+                offer.issued_at = now - 1800;
+                offer.expires_at = now + 1800;
+                quote.issued_at = now - 1200;
+                quote.expires_at = now - 900;
+            }
+            "both" => {
+                offer.issued_at = now - 7200;
+                offer.expires_at = now - 3600;
+                quote.issued_at = now - 7000;
+                quote.expires_at = now - 6700;
+            }
+            _ => {}
+        }
+        quote.offer_id = protocol::offer_id(&offer).unwrap();
+        let accepted_offer = protocol::sign(OFFER_DOMAIN, offer, provider_key).unwrap();
+        let accepted_quote = protocol::sign(QUOTE_DOMAIN, quote, provider_key).unwrap();
+        record["offer"] = serde_json::to_value(&accepted_offer).unwrap();
+        record["quote"] = serde_json::to_value(&accepted_quote).unwrap();
+        let historical_bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&saved_path, &historical_bytes).unwrap();
+        drop(consumer);
+        consumer = Consumer::new(config.clone()).unwrap();
+        assert_eq!(serde_json::to_value(consumer.accounts().unwrap()).unwrap(),
+            json!([expected_account.clone()]));
+        assert!(consumer.credential_export(id, None).unwrap() == exported);
+
+        if expired != "neither" {
+            // A distinct ID has no saved agreement: the historical exception must
+            // not leak into fresh onboarding, even for the same payer/provider.
+            let mut fresh = accepted_quote.payload.clone();
+            let digit = if fresh.id.as_bytes()[2] == b'0' { "1" } else { "0" };
+            fresh.id.replace_range(2..3, digit);
+            let fresh = protocol::sign(QUOTE_DOMAIN, fresh, provider_key).unwrap();
+            let requests = fixture.requests.load(Ordering::Acquire);
+            assert!(consumer.fund(&accepted_offer, &fresh).await.is_err(), "{expired}");
+            assert_eq!(fixture.requests.load(Ordering::Acquire), requests);
+            assert!(std::fs::read(&saved_path).unwrap() == historical_bytes);
+            assert!(consumer.pending_accounts().unwrap()["pending"].as_array().unwrap().is_empty());
+        }
+
+        for change in ["offer_signer", "offer_domain", "quote_signer", "quote_domain",
+            "chain", "genesis", "deployment", "account_id", "payer", "provider",
+            "offer_commitment", "model", "price", "funding", "fee_destination",
+            "fee_rate", "concurrency", "validity", "future_issuance", "origin"] {
+            let mut offer = accepted_offer.payload.clone();
+            let mut quote = accepted_quote.payload.clone();
+            match change {
+                "chain" => { offer.network.chain_id += 1; quote.network = offer.network.clone(); }
+                "genesis" => {
+                    offer.network.genesis_hash = format!("0x{}", "55".repeat(32));
+                    quote.network = offer.network.clone();
+                }
+                "deployment" => {
+                    offer.network.deployment_id.push_str("-other");
+                    quote.network = offer.network.clone();
+                }
+                "account_id" => {
+                    let digit = if quote.id.as_bytes()[2] == b'0' { "1" } else { "0" };
+                    quote.id.replace_range(2..3, digit);
+                }
+                "payer" => quote.consumer_wallet = other_wallet.clone(),
+                "provider" => quote.provider_wallet = other_wallet.clone(),
+                "model" => quote.model.context_length += 1,
+                "price" => quote.price.output_wei_per_1k = "1".into(),
+                "funding" => quote.funding_wei = "100".into(),
+                "fee_destination" => quote.platform_wallet = other_wallet.clone(),
+                "fee_rate" => quote.fee_bps += 1,
+                "concurrency" => quote.max_concurrency = 1,
+                "validity" => quote.expires_at = quote.issued_at,
+                "future_issuance" => {
+                    quote.issued_at = now + 86_400;
+                    quote.expires_at = quote.issued_at + 300;
+                }
+                "origin" => offer.endpoint.push_str("/unexpected"),
+                _ => {}
+            }
+            quote.offer_id = protocol::offer_id(&offer).unwrap();
+            if change == "offer_commitment" {
+                let digit = if quote.offer_id.as_bytes()[2] == b'0' { "1" } else { "0" };
+                quote.offer_id.replace_range(2..3, digit);
+            }
+            let offer = protocol::sign(
+                if change == "offer_domain" { QUOTE_DOMAIN } else { OFFER_DOMAIN },
+                offer, if change == "offer_signer" { &other_key } else { provider_key }).unwrap();
+            let quote = protocol::sign(
+                if change == "quote_domain" { OFFER_DOMAIN } else { QUOTE_DOMAIN },
+                quote, if change == "quote_signer" { &other_key } else { provider_key }).unwrap();
+            record["offer"] = serde_json::to_value(offer).unwrap();
+            record["quote"] = serde_json::to_value(quote).unwrap();
+            let invalid_bytes = serde_json::to_vec(&record).unwrap();
+            std::fs::write(&saved_path, &invalid_bytes).unwrap();
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            let requests = fixture.requests.load(Ordering::Acquire);
+            assert!(consumer.accounts().is_err(), "{expired}/{change}: account listing");
+            assert!(consumer.credential_export(id, None).is_err(),
+                "{expired}/{change}: credential export");
+            assert!(consumer.resume(id).await.is_err(), "{expired}/{change}: recovery");
+            assert_eq!(fixture.requests.load(Ordering::Acquire), requests,
+                "{expired}/{change}: must reject before contacting provider or RPC");
+            // A refused read/recovery must not erase or silently repair evidence.
+            // Do not print protected bytes or credentials on assertion failure.
+            assert!(std::fs::read(&saved_path).unwrap() == invalid_bytes,
+                "{expired}/{change}: persisted evidence changed");
+        }
+        std::fs::write(&saved_path, &historical_bytes).unwrap();
+        drop(consumer);
+        consumer = Consumer::new(config.clone()).unwrap();
+        assert_eq!(serde_json::to_value(consumer.resume(id).await.unwrap()).unwrap(), expected_account);
+        assert!(consumer.credential_export(id, None).unwrap() == exported);
+        let recovered: Value = serde_json::from_slice(&std::fs::read(&saved_path).unwrap()).unwrap();
+        assert!(recovered == serde_json::from_slice::<Value>(&historical_bytes).unwrap());
+    }
+    std::fs::write(&saved_path, &native_bytes).unwrap();
+    assert_eq!(serde_json::to_value(consumer.resume(id).await.unwrap()).unwrap(), expected_account);
+    assert!(consumer.credential_export(id, None).unwrap() == exported);
+    let stored = fixture.state.ledger.quote(id).unwrap();
+    assert_eq!(stored.payload, original.payload);
+    assert_eq!(stored.signature, original.signature);
+    let authenticated = fixture.state.ledger.authenticate(
+        exported["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(authenticated.account).unwrap(), expected_account);
+    assert!(fixture.state.ledger.funding_history(id).unwrap().is_empty());
+    assert!(!fixture.submitted.load(Ordering::Acquire));
+    drop(consumer);
+    fixture.stop().await;
+}

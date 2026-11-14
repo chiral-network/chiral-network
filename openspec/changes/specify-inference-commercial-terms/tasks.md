@@ -23,7 +23,7 @@
       - [x] 2.4.2.2.1 Prove the production control router's five-second reader deadline, global 64-reader non-queuing bound, streamed byte cap and permit recovery after cancellation, read/parse/size errors and timeout using deterministic virtual time in an isolated integration binary.
       - [ ] 2.4.2.2.2 Complete pending-proposal capacity coverage through `specify-pending-proposal-quotas`; separately specify/test proposal-rate policy and complete saved-agreement/historical recovery coverage after reviewing existing tests. Keep source-ownership and explicit-time restrictions.
         - [x] 2.4.2.2.2.1 Cover saved-agreement conflict refusal through real zero-funded provider onboarding and native `Consumer::fund`, before and after consumer recreation. Require validly re-signed replacement declarations to preserve the protected record and credential without remote calls; original-term resumption must remain usable without rotation.
-        - [ ] 2.4.2.2.2.2 Finish the remaining historical-expiry/signature/acknowledgement recovery correspondence review and add only missing consumer-visible cases. Reuse existing recovery tests; keep proposal-rate native corrections and source-ownership restrictions separate.
+        - [x] 2.4.2.2.2.2 Finish the remaining historical-expiry/signature/acknowledgement recovery correspondence review and add only missing consumer-visible cases. Reuse existing recovery tests; keep proposal-rate native corrections and source-ownership restrictions separate.
 - [ ] 2.5 Confirm existing evidence-only renewal tests cover the complete unchanged-term requirement and retain historical funding recovery checks; add only missing consumer-visible edge coverage.
 
 ## 3. Verify and integrate
