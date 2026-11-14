@@ -1,0 +1,23 @@
+## 1. Specify the pre-credit opening contract
+
+- [x] 1.1 Compare the unchanged whitepaper, existing wire/commercial/owner-control/proposal-retention requirements and actual consumer, journal, HTTP and ledger paths; distinguish new admission, cached recovery and safe-credit settlement.
+- [x] 1.2 Define original preparation, strict acknowledgement binding/time, current full-cost spendability, active-intent leases, atomic permanent ownership, exact cached recovery and acknowledgement-before-client-broadcast ordering; record evidence limits and the pre-issuance time gap.
+- [x] 1.3 Pass strict noninteractive change validation and available project checks; preserve the whitepaper and unrelated owner work. All five open changes validated; 400 existing tests, type checks, frontend/headless builds and CI script compilation passed. Document references and the unchanged whitepaper checksum passed; implementation acceptance tasks remain open.
+
+## 2. Complete implementation and acceptance
+
+- [ ] 2.1 Inventory existing message/binding tests and add only missing strict funding-intent request/acknowledgement field/type and original-identity acceptance in worker-owned tests. Reuse real signatures and existing network/domain/quote/hash substitutions; do not mistake deserialization alone for full acknowledgement acceptance.
+- [ ] 2.2 Confirm the fresh HTTP owner/envelope/current-nonce/full-gas/qualification matrix against the requirement, adding missing consumer-visible cases only. Preserve exact full-cost boundaries, nonce/head instability, unsupported/malformed envelopes, no submission/credit on refusal and qualification recheck after RPC; synthetic RPC evidence is not live-chain qualification.
+- [ ] 2.3 Confirm active-intent capacity, original lease expiry, cached recovery under draining/unavailable RPC, permanent transaction/sender-nonce conflicts, exact raw-string replay and two-writer admission. Reuse archived retention tests; add missing rollback or post-commit response-loss observations without claiming power-loss certification or fabricating payment.
+- [ ] 2.4 Reject new registration when the transaction-sampled time precedes quote issuance, with deterministic lower/upper-bound and lock-wait-expiry regressions. BLOCKED: production ledger and unit tests are entirely owner-untracked. Commit the native fix and regression together when independently committable; no fabricated timestamp, sleep or weaker consumer guard.
+- [ ] 2.5 Verify client acknowledgement/start-state persistence before submission, including invalid/lost acknowledgement and persistence failures. Cover a saved broadcast-start marker without acknowledgement and exact original bytes at the submission boundary; reuse existing checkpoint assertions rather than event-order-only tests.
+- [ ] 2.6 Add valid-signed-original missing-journal and inconsistent-journal recovery cases; confirm journal-before-local-copy recovery, expired unaccepted preparation, repeated fund/resume and ambiguous original submission. Preserve the saved account's exported credential; do not treat a lost unsaved opening response as covered by that narrower guarantee.
+- [ ] 2.7 Complete exact native acknowledgement-time boundary acceptance without clock races. BLOCKED where this requires the private owner-untracked consumer time seam; keep the 30-second guard and quote interval intact rather than substituting broad far-future rejection or sleeps.
+- [ ] 2.8 Confirm paid opening never implicitly registers or credits acknowledgement alone, and free opening requires no fake payment/intent. Reuse existing owner-control/commercial cases; full chain acceptance, cancellation, top-ups, fees and credential lifecycle remain separate specifications, not implicitly completed tasks.
+
+## 3. Verify and integrate
+
+- [ ] 3.1 Record final requirement/scenario-to-source/test correspondence and operator/client consequences, distinguishing isolated preparation/acknowledgement evidence from unavailable financial/platform qualification and the separate HTTP root-recovery blocker.
+- [ ] 3.2 Run available project checks and strict validation after implementation; archive with `openspec archive specify-opening-funding-intent --yes` only when all tasks are complete. Never use `--skip-specs` or absorb owner source to manufacture completion.
+
+The public named-payer availability report remains open and nonblocking. No live payments, deployment/account changes, authentication redesign, automatic replacement, monetary schema migration or whitepaper edits are authorized by this change.
