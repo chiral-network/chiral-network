@@ -860,6 +860,16 @@ fn local_envelope_enforces_calldata_limit_without_truncation() {
         assert!(matches!(validate(&candidate, &fields.data[..4_096]), Err(ChainError::Rejected(_))), "{name}");
         assert_eq!(validate(&original, &fields.data[..4_096]).unwrap(), envelope, "{name}");
     }
+    // Both sides of RLP's short/long byte-string boundary remain valid calldata.
+    for length in [56, 55] {
+        fields.data.truncate(length);
+        for (kind, name) in ENVELOPES {
+            let raw = signed_payment(&fields, &key, kind, &[0xc0]);
+            let envelope = validate(&raw, &fields.data).unwrap();
+            assert_eq!(envelope.data, fields.data, "{name}: {length}-byte calldata");
+            assert_eq!(envelope.tx_hash, protocol::hash_hex(&hex::decode(&raw[2..]).unwrap()), "{name}");
+        }
+    }
 }
 
 #[tokio::test]
@@ -936,6 +946,104 @@ async fn hex_letter_case_preserves_payment_identity_and_retained_spelling() {
             assert_eq!(fixture.envelope(&candidate).unwrap(), envelope, "{name}");
             fixture.rpc.control.lock().unwrap().balance = u128::MAX;
             fixture.acknowledges(&candidate, &envelope, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_rlp_roots_preserve_fresh_funding_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, shape) in [
+            "byte-string-root", "missing-field", "extra-field",
+            "zero-prefixed-root-length", "truncated-root-length", "overflowing-root-length",
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 12_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let bytes = hex::decode(&original[2..]).unwrap();
+            let payload = &bytes[usize::from(kind != 0)..];
+            // Recipient plus commitment already exceed the short-list budget.
+            assert!((0xf8..=0xfe).contains(&payload[0]));
+            let rlp = Rlp::new(payload);
+            let count = rlp.item_count().unwrap();
+            let mut malformed = RlpStream::new();
+            match shape {
+                "byte-string-root" => { malformed.append(&payload); }
+                "missing-field" => {
+                    malformed.begin_list(count - 1);
+                    for field in 0..count - 1 {
+                        malformed.append_raw(rlp.at(field).unwrap().as_raw(), 1);
+                    }
+                }
+                "extra-field" => {
+                    malformed.begin_list(count + 1);
+                    for field in 0..count {
+                        malformed.append_raw(rlp.at(field).unwrap().as_raw(), 1);
+                    }
+                    // The valid signed prefix must not authorize an ignored trailer.
+                    malformed.append(&0_u8);
+                }
+                "zero-prefixed-root-length" => {
+                    malformed.append_raw(&[payload[0] + 1, 0], 0);
+                    malformed.append_raw(&payload[1..], 1);
+                }
+                "truncated-root-length" => { malformed.append_raw(&[0xff, 1, 0], 1); }
+                "overflowing-root-length" => {
+                    let header = 1 + usize::from(payload[0] - 0xf7);
+                    // Eight maximal length bytes overflow either decoding or header addition.
+                    malformed.append_raw(&[0xff; 9], 0);
+                    malformed.append_raw(&payload[header..], 1);
+                }
+                _ => unreachable!(),
+            }
+            let encoded = hex::encode(malformed.out());
+            let candidate = if kind == 0 { format!("0x{encoded}") } else { format!("0x{kind:02x}{encoded}") };
+            fixture.rejects_candidate_preserving_original(
+                &original, &candidate, &format!("{envelope_name}: {shape}"),
+            ).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn nonminimal_nested_access_list_headers_preserve_original() {
+    let directory = tempfile::tempdir().unwrap();
+    let accepted = encoded_access_list(1, 1, false).out();
+    let rlp = Rlp::new(&accepted);
+    let entry = rlp.at(0).unwrap();
+    let address = entry.at(0).unwrap();
+    let key = entry.at(1).unwrap().at(0).unwrap();
+    // The entry has 55 payload bytes; the outer list has 56, exercising both canonical headers.
+    assert_eq!(entry.as_raw()[0], 0xf7);
+    assert_eq!(&accepted[..2], &[0xf8, 56]);
+    for (index, encoding) in [
+        "zero-prefixed-list-length", "long-form-short-entry", "long-form-short-key",
+    ].into_iter().enumerate() {
+        let mut malformed = RlpStream::new();
+        match encoding {
+            "zero-prefixed-list-length" => {
+                malformed.append_raw(&[0xf9, 0], 0);
+                malformed.append_raw(&accepted[1..], 1);
+            }
+            "long-form-short-entry" => {
+                malformed.begin_list(1);
+                // Count the split header and body as one entry, without repairing its header.
+                malformed.append_raw(&[0xf8, 55], 0);
+                malformed.append_raw(&entry.as_raw()[1..], 1);
+            }
+            "long-form-short-key" => {
+                let mut keys = RlpStream::new_list(1);
+                keys.append_raw(&[0xb8, 32], 0);
+                keys.append_raw(&key.as_raw()[1..], 1);
+                malformed = single_access_entry(address.as_raw(), &keys.out());
+            }
+            _ => unreachable!(),
+        }
+        let rejected = malformed.out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let mut fixture = Fixture::new(directory.path(), 14_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            fixture.access_list_boundary(kind, &accepted, &rejected, &format!("{envelope_name}: {encoding}")).await;
         }
     }
 }
