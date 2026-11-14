@@ -1,6 +1,6 @@
-//! Account reads and credential mutations through the production control router and isolated disk ledgers.
-//! Free accounts are opened over HTTP; scoped credentials and cancelled requests are ledger prerequisites.
-//! No engine, chain RPC, paid funding, or simulated inference output.
+//! Account reads and mutations through the production control router and isolated disk ledgers.
+//! Free accounts open over HTTP. Paid account prerequisites begin AFTER the chain verification boundary.
+//! Synthetic accepted-block inputs are not chain qualification; no RPC, broadcast or engine is used.
 #[path = "support/proposal.rs"]
 mod proposal;
 
@@ -13,13 +13,17 @@ use axum::{
 use chiral_network::{
     auth::{self, AuthPayload},
     billing_store::{BillingStore, CredentialIssueRequest, RequestView},
+    chain_client::{ValidatedPaymentEnvelope, VerifiedPayment},
     contracts,
-    protocol::{self, Challenge, Credential, OpenResult, Quote, Signed, TokenUsage, UsageReceipt, RECEIPT_DOMAIN},
+    protocol::{self, Challenge, Credential, FundingIntent, OpenResult, Quote, Signed, TokenUsage, UsageReceipt, RECEIPT_DOMAIN},
     wallet,
 };
 use proposal::PreparedProvider;
+use rlp::RlpStream;
+use secp256k1::{Message, Secp256k1, SecretKey};
 use serde_json::{json, Value};
-use std::{net::TcpListener, path::Path};
+use std::{net::TcpListener, path::Path, sync::atomic::Ordering};
+use tiny_keccak::{Hasher, Keccak};
 use tower::Service;
 
 // Public fixture scalars, never funded or used outside isolated test state.
@@ -142,13 +146,17 @@ impl Fixture {
         OwnerProof { headers, nonce: challenge.nonce }
     }
 
-    async fn open_free(&mut self) -> OpenResult {
+    async fn quote(&mut self, funding: &str) -> Signed<Quote> {
         let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
         let (status, value) = self.post("/v1/contracts/propose", json!({
-            "offer_id": self.provider.offer_id, "consumer_wallet": owner, "funding_wei": "0"
+            "offer_id": self.provider.offer_id, "consumer_wallet": owner, "funding_wei": funding
         })).await;
         assert_eq!(status, StatusCode::OK, "{value}");
-        let quote: Signed<Quote> = serde_json::from_value(value).unwrap();
+        serde_json::from_value(value).unwrap()
+    }
+
+    async fn open_free(&mut self) -> OpenResult {
+        let quote = self.quote("0").await;
         let body = serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": null})).unwrap();
         let proof = self.proof(OWNER_KEY, "POST", OPEN, &body).await;
         let (status, value) = self.send("POST", OPEN, &proof.headers, body).await;
@@ -162,11 +170,8 @@ impl Fixture {
         let other = self.open_free().await;
         let now = protocol::now().unwrap();
         let ledger = &self.provider.state.ledger;
-        let issue = |scope: &str| ledger.issue_credential(&target.account.contract_id,
-            &CredentialIssueRequest { expires_at: now + 3600, spend_cap_wei: None,
-                max_concurrency: 1, scopes: vec![scope.into()] }, now).unwrap();
-        let read = issue("read");
-        let infer = issue("infer");
+        let read = self.scoped_credential(&target.account.contract_id, "read");
+        let infer = self.scoped_credential(&target.account.contract_id, "infer");
         let cancelled = |opened: &OpenResult| {
             let reservation = ledger.reserve(&opened.account.contract_id, &opened.credential.id,
                 REQUEST_KEY, 1, 1, now, &opened.account.model).unwrap();
@@ -263,6 +268,110 @@ impl Fixture {
             assert!(ledger.credentials(&previous.contract_id).unwrap().iter()
                 .find(|credential| credential.id == previous.id).unwrap().revoked);
         }
+    }
+
+    fn scoped_credential(&self, account: &str, scope: &str) -> Credential {
+        let now = protocol::now().unwrap();
+        self.provider.state.ledger.issue_credential(account,
+            &CredentialIssueRequest { expires_at: now + 3600, spend_cap_wei: None,
+                max_concurrency: 1, scopes: vec![scope.into()] }, now).unwrap()
+    }
+
+    async fn paid_quote(&mut self) -> Signed<Quote> {
+        // New signed prices do not rewrite the previously opened free agreements or their credentials.
+        let mut offer = self.provider.offer.payload.clone();
+        offer.revision += 1;
+        offer.price.input_wei_per_1k = "1".into();
+        offer.price.output_wei_per_1k = "2".into();
+        self.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, offer, &self.provider.state.private_key).unwrap();
+        self.provider.offer_id = self.provider.state.offers.insert(self.provider.offer.clone()).unwrap();
+        self.quote("100").await
+    }
+
+    fn signed_payment(&self, data: &[u8], value: u64, nonce: u64) -> (String, ValidatedPaymentEnvelope) {
+        // Independent EIP-155 fixture construction; never expose the runtime's private signer.
+        let chain_id = self.provider.offer.payload.network.chain_id;
+        let to = hex::decode(self.provider.state.wallet.strip_prefix("0x").unwrap()).unwrap();
+        let fields = |stream: &mut RlpStream| {
+            stream.append(&nonce).append(&1_u64).append(&1_000_000_u64)
+                .append(&to.as_slice()).append(&value).append(&data);
+        };
+        let mut unsigned = RlpStream::new_list(9);
+        fields(&mut unsigned);
+        unsigned.append(&chain_id).append(&0_u8).append(&0_u8);
+        let mut hash = [0_u8; 32];
+        let mut keccak = Keccak::v256();
+        keccak.update(&unsigned.out());
+        keccak.finalize(&mut hash);
+        let key = SecretKey::from_slice(&hex::decode(OWNER_KEY).unwrap()).unwrap();
+        let (recovery, signature) = Secp256k1::signing_only()
+            .sign_ecdsa_recoverable(&Message::from_digest_slice(&hash).unwrap(), &key).serialize_compact();
+        let mut signed = RlpStream::new_list(9);
+        fields(&mut signed);
+        signed.append(&(chain_id * 2 + 35 + recovery.to_i32() as u64));
+        for limb in [&signature[..32], &signature[32..]] {
+            let first = limb.iter().position(|byte| *byte != 0).unwrap_or(limb.len());
+            signed.append(&&limb[first..]);
+        }
+        let raw = format!("0x{}", hex::encode(signed.out()));
+        let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
+        let envelope = self.provider.state.chain.validate_payment_envelope(
+            &raw, &owner, &self.provider.state.wallet, &value.to_string(), data).unwrap();
+        (raw, envelope)
+    }
+
+    fn acknowledge_fixture(&self, quote: &Signed<Quote>, raw: &str,
+        envelope: &ValidatedPaymentEnvelope) -> Signed<FundingIntent> {
+        // Admission/spendability is a fixture prerequisite, not an observed chain result.
+        self.provider.state.ledger.register_funding_intent(quote, &quote.payload.consumer_wallet,
+            raw, &envelope.tx_hash, envelope.nonce, &self.provider.state.private_key,
+            protocol::now, true, &quote.payload.model).unwrap()
+    }
+
+    async fn paid_account(&mut self) -> (OpenResult, String) {
+        let quote = self.paid_quote().await;
+        let (raw, envelope) = self.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 100, 0);
+        self.acknowledge_fixture(&quote, &raw, &envelope);
+        // Like billing_store_tests, inject an accepted payment AFTER verification for ledger setup only.
+        let payment = VerifiedPayment {
+            network: quote.payload.network.clone(), tx_hash: envelope.tx_hash,
+            from: envelope.from, to: envelope.to, value_wei: envelope.value_wei, data: envelope.data,
+            block_hash: protocol::hash_hex(b"isolated owner-control accepted-block fixture"),
+            block_number: 1, raw_transaction: raw.clone(),
+        };
+        let opened = self.provider.state.ledger.open_account(&quote, Some(&payment), protocol::now().unwrap()).unwrap();
+        assert_eq!(opened.account.status, "active");
+        assert_eq!(opened.account.funded_wei, "100");
+        (opened, raw)
+    }
+
+    fn consumed(&self, proof: &OwnerProof) {
+        let persisted = BillingStore::open(&self.provider.ledger_path, &self.provider.offer.payload.network).unwrap();
+        assert!(persisted.challenge(&proof.nonce).is_err());
+    }
+
+    fn unopened(&self, quote: &Signed<Quote>) {
+        let ledger = &self.provider.state.ledger;
+        assert!(ledger.account(&quote.payload.id).unwrap_err().starts_with("not_found:"));
+        assert_eq!(serde_json::to_value(ledger.quote(&quote.payload.id).unwrap()).unwrap(),
+            serde_json::to_value(quote).unwrap());
+    }
+
+    async fn payment_denials(&mut self, path: &str, body: &[u8], credentials: [&Credential; 4]) {
+        self.credentials_usable(&credentials);
+        denied(self.send("POST", path, &HeaderMap::new(), body.to_vec()).await, StatusCode::UNAUTHORIZED);
+        for credential in credentials {
+            denied(self.send("POST", path, &bearer(credential), body.to_vec()).await, StatusCode::UNAUTHORIZED);
+        }
+        let mut incomplete = bearer(credentials[0]);
+        incomplete.insert("x-chiral-owner", wallet::address_from_private_key(OWNER_KEY).unwrap().parse().unwrap());
+        denied(self.send("POST", path, &incomplete, body.to_vec()).await, StatusCode::UNAUTHORIZED);
+        let mut wrong_owner = self.proof(OTHER_KEY, "POST", path, body).await;
+        wrong_owner.headers.extend(bearer(credentials[0]));
+        denied(self.send("POST", path, &wrong_owner.headers, body.to_vec()).await, StatusCode::FORBIDDEN);
+        self.consumed(&wrong_owner);
+        denied(self.send("POST", path, &wrong_owner.headers, body.to_vec()).await, StatusCode::UNAUTHORIZED);
+        self.credentials_usable(&credentials);
     }
 }
 
@@ -490,5 +599,161 @@ async fn credential_business_refusals_consume_proof_without_partial_mutations() 
         assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
         fixture.check_mutation(mutation, &accounts.read, value);
         fixture.credentials_usable(&[&accounts.target.credential, &accounts.infer, &accounts.other.credential]);
+    }
+}
+
+#[tokio::test]
+async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creation() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 1900 + index as u64);
+        let accounts = fixture.accounts().await;
+        let before = fixture.credential_state(&accounts.target.account.contract_id);
+        let quote = if paid { fixture.paid_quote().await } else { fixture.quote("0").await };
+        let raw = paid.then(|| fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 100, 0).0);
+        let body = serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": raw})).unwrap();
+        fixture.payment_denials(OPEN, &body,
+            [&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]).await;
+        fixture.unopened(&quote);
+        let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+        let response = fixture.send("POST", OPEN, &proof.headers, body.clone()).await;
+        if paid {
+            assert_eq!(response.1["error"]["code"], "funding_intent_required");
+            denied(response, StatusCode::CONFLICT);
+            fixture.unopened(&quote);
+            assert!(fixture.provider.state.ledger.funding_intent(&quote.payload, raw.as_deref().unwrap()).unwrap().is_none());
+        } else {
+            assert_eq!(response.0, StatusCode::OK, "{}", response.1);
+            let opened: OpenResult = serde_json::from_value(response.1).unwrap();
+            assert_eq!(opened.account.contract_id, quote.payload.id);
+            assert_eq!(opened.account.consumer_wallet, quote.payload.consumer_wallet);
+            assert_eq!(opened.account.status, "free");
+            assert_eq!(opened.account.funded_wei, "0");
+            fixture.credentials_usable(&[&opened.credential]);
+        }
+        fixture.consumed(&proof);
+        denied(fixture.send("POST", OPEN, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+        if paid {
+            let fresh = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let response = fixture.send("POST", OPEN, &fresh.headers, body).await;
+            assert_eq!(response.1["error"]["code"], "funding_intent_required");
+            denied(response, StatusCode::CONFLICT);
+            fixture.consumed(&fresh);
+            fixture.unopened(&quote);
+        }
+        assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), before);
+        fixture.credentials_usable(&[&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]);
+    }
+}
+
+#[tokio::test]
+async fn funding_intent_authority_is_required_before_new_admission_and_cached_acknowledgement() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, registered) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 2000 + index as u64);
+        let accounts = fixture.accounts().await;
+        let before = fixture.credential_state(&accounts.target.account.contract_id);
+        let quote = fixture.paid_quote().await;
+        let (raw, envelope) = fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 100, 0);
+        let ack = registered.then(|| fixture.acknowledge_fixture(&quote, &raw, &envelope));
+        fixture.provider.state.accepting.store(false, Ordering::Release);
+        let path = format!("/v1/contracts/{}/funding-intent", quote.payload.id);
+        let body = serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap();
+        fixture.payment_denials(&path, &body,
+            [&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]).await;
+        // A lost acknowledgement response is recoverable with fresh proofs and identical signed bytes.
+        for _ in 0..2 {
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let response = fixture.send("POST", &path, &proof.headers, body.clone()).await;
+            if let Some(expected) = &ack {
+                assert_eq!(response.0, StatusCode::OK, "{}", response.1);
+                let recovered: Signed<FundingIntent> = serde_json::from_value(response.1).unwrap();
+                protocol::verify(protocol::INTENT_DOMAIN, &recovered, &quote.payload.provider_wallet).unwrap();
+                assert_eq!(serde_json::to_value(recovered).unwrap(), serde_json::to_value(expected).unwrap());
+            } else {
+                assert_eq!(response.1["error"]["code"], "provider_draining");
+                denied(response, StatusCode::SERVICE_UNAVAILABLE);
+            }
+            fixture.consumed(&proof);
+            denied(fixture.send("POST", &path, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+            fixture.unopened(&quote);
+        }
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_intent(&quote.payload, &raw).unwrap()).unwrap(),
+            serde_json::to_value(ack).unwrap());
+        assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), before);
+        fixture.credentials_usable(&[&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]);
+    }
+}
+
+#[tokio::test]
+async fn existing_free_and_paid_openings_cannot_be_reentered_using_bearers_or_another_owner() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 2100 + index as u64);
+        let accounts = fixture.accounts().await;
+        let paid_opening = if paid { Some(fixture.paid_account().await) } else { None };
+        let target = paid_opening.as_ref().map(|(opened, _)| opened).unwrap_or(&accounts.target);
+        let raw = paid_opening.as_ref().map(|(_, raw)| raw.as_str());
+        let id = &target.account.contract_id;
+        let read = fixture.scoped_credential(id, "read");
+        let infer = fixture.scoped_credential(id, "infer");
+        let before = fixture.credential_state(id);
+        let funding = serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap();
+        let body = serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": raw})).unwrap();
+        fixture.payment_denials(OPEN, &body, [&read, &infer, &target.credential, &accounts.other.credential]).await;
+        assert_eq!(fixture.credential_state(id), before);
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap(), funding);
+        fixture.credentials_usable(&[&read, &infer, &target.credential, &accounts.other.credential]);
+    }
+}
+
+#[tokio::test]
+async fn topups_require_account_owner_and_business_refusals_consume_only_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 2200 + index as u64);
+        let accounts = fixture.accounts().await;
+        let paid_opening = if paid { Some(fixture.paid_account().await) } else { None };
+        let target = paid_opening.as_ref().map(|(opened, _)| opened).unwrap_or(&accounts.target);
+        let id = &target.account.contract_id;
+        let read = fixture.scoped_credential(id, "read");
+        let infer = fixture.scoped_credential(id, "infer");
+        let before = fixture.credential_state(id);
+        let other_before = fixture.credential_state(&accounts.other.account.contract_id);
+        let history = serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap();
+        let path = format!("/v1/contracts/{id}/topup");
+        let (raw, _) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 100, 1);
+        let body = serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap();
+        fixture.payment_denials(&path, &body, [&read, &infer, &target.credential, &accounts.other.credential]).await;
+        assert_eq!(fixture.credential_state(id), before);
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap(), history);
+
+        // Correct authority cannot make a different account's signed payment commitment acceptable.
+        // The mismatch is rejected before any RPC; free accounts reject top-ups before verification.
+        let (wrong_raw, rejected) = fixture.signed_payment(
+            &protocol::topup_data(&accounts.other.account.contract_id).unwrap(), 100, 1);
+        let wrong_body = serde_json::to_vec(&json!({"raw_transaction": wrong_raw})).unwrap();
+        for _ in 0..2 {
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &wrong_body).await;
+            let response = fixture.send("POST", &path, &proof.headers, wrong_body.clone()).await;
+            assert_eq!(response.1["error"]["code"], if paid { "funding_rejected" } else { "account_frozen" });
+            denied(response, if paid { StatusCode::BAD_REQUEST } else { StatusCode::CONFLICT });
+            fixture.consumed(&proof);
+            denied(fixture.send("POST", &path, &proof.headers, wrong_body.clone()).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(fixture.credential_state(id), before);
+        }
+        let after = fixture.provider.state.ledger.funding_history(id).unwrap();
+        if paid {
+            let attempt = after.iter().find(|entry| entry.tx_hash == rejected.tx_hash).unwrap();
+            assert_eq!(attempt.contract_id, *id);
+            assert_eq!(attempt.status, "rejected");
+            assert!(attempt.value_wei.is_none() && attempt.fee_wei.is_none());
+            assert_eq!(serde_json::to_value(after.iter().filter(|entry| entry.tx_hash != rejected.tx_hash)
+                .collect::<Vec<_>>()).unwrap(), history);
+        } else {
+            assert_eq!(serde_json::to_value(after).unwrap(), history);
+        }
+        assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
+        fixture.credentials_usable(&[&read, &infer, &target.credential, &accounts.other.credential]);
     }
 }
