@@ -422,3 +422,82 @@ async fn native_recovery_refuses_missing_or_inconsistent_original_journal() {
         fixture.unchanged_provider();
     }
 }
+
+#[tokio::test]
+async fn native_broadcast_started_without_acknowledgement_refuses_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, omitted) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 46_000 + index as u64).await;
+        assert!(fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.is_err());
+        {
+            let attempts = fixture.rpc.attempts.lock().unwrap();
+            assert!(!attempts.is_empty(), "genuine acknowledgement must reach the refusal-only RPC");
+            assert!(attempts.iter().all(|attempt| attempt.method != "eth_sendRawTransaction"));
+        }
+        let saved_before = std::fs::read(&fixture.account_path).unwrap();
+        let expected_saved: Value = serde_json::from_slice(&saved_before).unwrap();
+        assert_eq!(expected_saved["funding_intent"], serde_json::to_value(&fixture.acknowledgement).unwrap());
+        assert_eq!(expected_saved["funding_broadcast_started"], true);
+        assert_eq!(expected_saved["raw_transaction"], fixture.raw);
+        assert_eq!(expected_saved["tx_hash"], fixture.acknowledgement.payload.tx_hash);
+        let journal = Connection::open(&fixture.journal_path).unwrap();
+        let records = || {
+            let mut statement = journal.prepare(
+                "SELECT sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at
+                 FROM transactions ORDER BY sender,operation").unwrap();
+            let rows = statement.query_map([], |row| Ok((
+                row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?,
+                row.get::<_, u64>(8)?,
+            ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            rows
+        };
+        let original_records = records();
+        let mut damaged = expected_saved.clone();
+        if omitted {
+            damaged.as_object_mut().unwrap().remove("funding_intent").unwrap();
+        } else {
+            damaged["funding_intent"] = Value::Null;
+        }
+        let damaged_bytes = serde_json::to_vec(&damaged).unwrap();
+        // Deliberately corrupt only this owner-private fixture file, retaining
+        // genuine signed terms, raw/hash, journal original and the start marker.
+        std::fs::write(&fixture.account_path, &damaged_bytes).unwrap();
+        fixture.peer.exchanges.lock().unwrap().clear();
+        fixture.rpc.attempts.lock().unwrap().clear();
+
+        for repeat_fund in [false, true] {
+            fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+            let result = if repeat_fund {
+                fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await
+            } else {
+                fixture.consumer.resume(&fixture.quote.payload.id).await
+            };
+            let name = format!("omitted={omitted}, repeat_fund={repeat_fund}");
+            assert!(result.is_err(), "{name}");
+            assert!(fixture.rpc.attempts.lock().unwrap().is_empty(), "{name}: no payment reconciliation or submission");
+            assert!(fixture.peer.exchanges.lock().unwrap().is_empty(), "{name}: invalid saved state must not re-register");
+            assert_eq!(std::fs::read(&fixture.account_path).unwrap(), damaged_bytes, "{name}");
+            assert_eq!(records(), original_records, "{name}: original nonce ownership must remain intact");
+            fixture.unchanged_provider();
+        }
+
+        // Explicit test repair, not a product fallback: the genuine saved
+        // acknowledgement must still authorize progress for this exact original.
+        std::fs::write(&fixture.account_path, &saved_before).unwrap();
+        fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+        assert!(fixture.consumer.resume(&fixture.quote.payload.id).await.is_err(), "RPC remains unavailable");
+        let attempts = fixture.rpc.attempts.lock().unwrap();
+        assert!(!attempts.is_empty(), "restored acknowledgement must permit local recovery");
+        for attempt in attempts.iter() {
+            assert_ne!(attempt.method, "eth_sendRawTransaction");
+            assert_eq!(attempt.saved.as_ref().unwrap(), &expected_saved);
+        }
+        assert!(fixture.peer.exchanges.lock().unwrap().is_empty(), "reuse the saved acknowledgement");
+        assert_eq!(std::fs::read(&fixture.account_path).unwrap(), saved_before);
+        assert_eq!(records(), original_records);
+        fixture.unchanged_provider();
+    }
+}

@@ -1,23 +1,23 @@
 # APAS progress
 
-## 2026-11-14 — Valid-original native journal refusal
+## 2026-11-14 — Broadcast-start acknowledgement prerequisite
 
 - The read-only book, README and CI hashes match their preceding complete reads; no standard whitepaper candidate or new author answer appeared. Book SHA-256 remains `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`.
-- Added opening-funding-intent task 2.6.1's worker-owned native acceptance for a valid saved payment whose journal is absent or contains another correctly signed opening at nonce one. Existing synthetic `0x00` coverage alone did not establish this boundary.
-- Both `resume` and repeated `fund` run after consumer reopening and must refuse before chain RPC or another acknowledgement, preserving saved bytes, all journal fields and original provider evidence. Explicit isolated-fixture repair provides a same-original progress control against the refusal-only RPC.
-- Production source and whitepaper remain untouched. The test does not implement automatic journal repair or prove fresh spendability, successful submission/settlement, physical crash durability, broadcast-start-without-acknowledgement or quota mitigation. Parent tasks and the author report remain open.
+- Added opening-funding-intent task 2.5.1's worker-owned acceptance for a true saved broadcast-start marker with either an omitted or null acknowledgement. Genuine signed terms, original transaction/hash and journal ownership remain intact; the existing `load_account` guard is exercised, not changed.
+- Reopened `resume` and repeated `fund` must refuse before chain RPC or another acknowledgement request and preserve both saved bytes and every journal field. Explicit fixture restoration of the genuine acknowledgement provides a same-original progression control; it is not automatic product repair.
+- Production source and whitepaper remain untouched. This does not prove acknowledgement/start-state persistence failures, lost-response recovery, actual submission/settlement, physical crash durability or quote-quota mitigation. Parent tasks and the author report remain open.
 
 ## Verification
 
-- Passed strict validation of `specify-opening-funding-intent` and the unchanged-whitepaper checksum; 374 all-target headless Rust tests (two existing child helpers ignored), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts: 435 passing tests total. The new test covers four native journal refusals and two repaired-original progression controls. Stale Browserslist data remains a build warning; no dependency update. Known blocked regressions were not rerun.
+- Passed strict validation of `specify-opening-funding-intent` and the unchanged-whitepaper checksum; 375 all-target headless Rust tests (two existing child helpers ignored), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts: 436 passing tests total. The new test covers four prerequisite refusals and two restored-acknowledgement progression controls. Stale Browserslist data remains a build warning; no dependency update. Known blocked regressions were not rerun.
 - WebKit and the configured release policy authority remain unavailable. Release/native-desktop, Windows/macOS and live paid/GPU/public qualification remain unrun gates; no installation or deployment.
 
 ## Next steps, in order
 
 1. Native non-reserving cutover (parent 3.1–3.5) and proposal-rate clock/adoption work (2.4–2.5) remain **blocked by entirely owner-untracked ledger/handler/consumer source**. Do not adopt that migration, introduce unused helpers or commit expected-failing regressions alone. Clear both public wallet gates together and migrate affected tests; keep pre-signing work separate from committed issuance.
-2. After verifying 2.6.1, valid-original missing/mismatching-journal refusal is covered through both native entry points. **Next: opening 2.5's saved broadcast-start marker without an acknowledgement**, using the existing worker-owned native fixture and unchanged originals; then missing persistence-failure and ambiguous-submission acceptance. Do not duplicate existing crash checkpoints or adopt private owner source.
+2. After verifying 2.5.1, missing saved acknowledgements with a true broadcast-start marker are covered through both native entry points. **Next: inventory missing acknowledgement/start-state persistence-failure acceptance in opening 2.5**, then ambiguous-submission recovery. Prefer deterministic isolated filesystem faults at the real native boundary; if a private seam is required, record that blocker instead of adopting owner source or weakening persistence.
 3. Then complete independently reachable final-capacity, committed-response-loss and free-opening acceptance (opening 2.3.3–2.3.4, 2.8), and finish the remaining 2.6 inventory. Exact expiry/restart or new resource-gate assertions needing private native seams remain blocked with their fixes. Preserve safe-frontier prerequisites; isolated fixtures do not qualify live settlement or power-loss recovery.
-4. Prioritize any independently committable failing check, then retained code/spec gaps below. Earlier cost/nonce/schema/rollback and exact-raw-string evidence remains valid within its recorded limits; native journal refusal does not prove the unimplemented quote-policy cutover.
+4. Prioritize any independently committable failing check, then retained code/spec gaps below. Earlier cost/nonce/schema/rollback, exact-raw-string and valid-journal evidence remains valid within its recorded limits; current prerequisite refusal is not non-reserving-quota mitigation.
 5. After the bounded pre-credit contract, specify safe-credit/reorg accounting, explicit cancellation, top-ups and fees before broader discovery, credential lifecycle, runtime/performance and consumer/reputation alignment. Keep incomplete changes open; never archive with `--skip-specs`.
 
 ## Other retained blockers
