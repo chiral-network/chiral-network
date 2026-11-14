@@ -20,6 +20,8 @@
   - [ ] 2.4.2 Complete actual provider proposal/readiness and remaining saved-agreement/historical recovery coverage. An isolated response fixture does not verify the production issuer or settlement lifecycle.
     - [x] 2.4.2.1 Exercise the production control router with real ledger persistence: signed issuance, unauthenticated proposal versus owner authority, request/funding validation, local-offer selection, new-funding gates and the 96 KiB body boundary. Keep development-state fixtures distinct from native runtime/readiness qualification.
     - [ ] 2.4.2.2 Complete remaining control-reader deadline/saturation, proposal quota and saved-agreement/historical recovery coverage; review existing tests first and retain explicit-time/ownership restrictions.
+      - [x] 2.4.2.2.1 Prove the production control router's five-second reader deadline, global 64-reader non-queuing bound, streamed byte cap and permit recovery after cancellation, read/parse/size errors and timeout using deterministic virtual time in an isolated integration binary.
+      - [ ] 2.4.2.2.2 Complete proposal quota and saved-agreement/historical recovery coverage after reviewing existing tests; keep source-ownership and explicit-time restrictions.
 - [ ] 2.5 Confirm existing evidence-only renewal tests cover the complete unchanged-term requirement and retain historical funding recovery checks; add only missing consumer-visible edge coverage.
 
 ## 3. Verify and integrate
