@@ -290,6 +290,16 @@ After provider/native reopening, fresh funding/qualification gates close and pro
 
 This extends lost-response recovery under the two storage/admission ceilings, not public quote-budget mitigation, elapsed expiry, work/issuance-clock acceptance, actual settlement or process/power-loss qualification. Parent 2.3.4 remains open for deterministic expiry; other exhausted quote-budget and accepted-account/settlement recovery acceptance remains in its own tasks.
 
+## Task 2.8.1.1 final owned free-account slot
+
+`independent_free_openings_compete_for_the_last_owned_account_slot` creates seven free accounts for one owner and an unrelated owner's free account through genuine proposal, challenge and opening routes. Two further signed, zero-price/zero-funding quotes compete for the first owner's eighth slot. Both owner proofs are obtained before a rendezvous; separate provider state, ledger connection and chain-client objects share the same provider identity and base wallet-journal directory.
+
+Exactly one opening must return an actual free account/root credential and one must return 429/`rate_limit`. The total account count remains far below 10,000, isolating the owner bound. The winning quote alone leaves pending storage; every losing quote column survives, with no partial losing account or credential. Full account/credential columns preserve all earlier agreements and token hashes, including the unrelated owner. Another genuine public quote remains issuable at eight owned accounts, below the separate legacy quote ceilings: an account bound is not a public reservation.
+
+Freshly authenticated refusal before and after reopening both ledger/chain objects must preserve the account cap, pending records and every accepted account/credential column. Real issued bearers authenticate against both reopened stores and read the actual account route; accepted accounts are not reopened through the separately blocked root-rotation path.
+
+A refusal-only listener observes the configured provider RPC/engine endpoint throughout the scenario. No request, provider wallet transaction/cancellation, paid intent/attempt, funding credit or fee record is permitted. These are provider-side observations, not proof that native consumer code never prepares a payment. Task 2.8.1 remains open for ledger-wide final-slot competition, persistence rollback and native free-opening preparation/submission acceptance. No elapsed expiry, process/power-loss, public quote-policy mitigation or live-chain qualification is claimed.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.
