@@ -154,6 +154,12 @@ fn encoded_access_list(addresses: usize, keys: usize, duplicates: bool) -> RlpSt
     list
 }
 
+fn single_access_entry(encoded_address: &[u8], encoded_keys: &[u8]) -> RlpStream {
+    let mut list = RlpStream::new_list(1);
+    list.begin_list(2).append_raw(encoded_address, 1).append_raw(encoded_keys, 1);
+    list
+}
+
 fn payment_digest(kind: u8, payload: &[u8]) -> [u8; 32] {
     let mut digest = [0_u8; 32];
     let mut keccak = Keccak::v256();
@@ -674,6 +680,89 @@ async fn fresh_intent_enforces_aggregate_storage_key_occurrence_limit() {
                     62_000 + index as u64 * 100 + u64::from(duplicates) * 10 + u64::from(kind), 100).await;
                 fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_malformed_access_list_shapes() {
+    let directory = tempfile::tempdir().unwrap();
+    let accepted = encoded_access_list(1, 1, true).out();
+    let address = rlp::encode(&[0_u8; 20].as_slice());
+    let key = rlp::encode(&[0_u8; 32].as_slice());
+    let mut keys = RlpStream::new_list(1);
+    keys.append_raw(&key, 1);
+    let keys = keys.out();
+    for (index, shape) in [
+        "list-empty-bytes", "list-encoded-as-bytes", "entry-bytes", "entry-empty",
+        "entry-address-only", "entry-extra-field", "address-list", "keys-empty-bytes",
+        "keys-flat-bytes", "key-list",
+    ].into_iter().enumerate() {
+        let mut malformed = RlpStream::new();
+        match shape {
+            "list-empty-bytes" => { malformed.append_raw(&[0x80], 1); }
+            "list-encoded-as-bytes" => { malformed.append(&&accepted[..]); }
+            "entry-bytes" => { malformed.begin_list(1).append_raw(&address, 1); }
+            "entry-empty" => { malformed.begin_list(1).begin_list(0); }
+            "entry-address-only" => { malformed.begin_list(1).begin_list(1).append_raw(&address, 1); }
+            "entry-extra-field" => {
+                malformed.begin_list(1).begin_list(3).append_raw(&address, 1)
+                    .append_raw(&keys, 1).append_raw(&[0x80], 1);
+            }
+            "address-list" => { malformed = single_access_entry(&[0xc0], &keys); }
+            "keys-empty-bytes" => { malformed = single_access_entry(&address, &[0x80]); }
+            "keys-flat-bytes" => { malformed = single_access_entry(&address, &key); }
+            "key-list" => {
+                let mut nested = RlpStream::new_list(1);
+                // An empty key-list is at depth four: the depth guard cannot mask its wrong type.
+                nested.begin_list(0);
+                malformed = single_access_entry(&address, &nested.out());
+            }
+            _ => unreachable!(),
+        }
+        let rejected = malformed.out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let name = format!("{envelope_name}: {shape}");
+            let mut fixture = Fixture::new(directory.path(),
+                63_000 + index as u64 * 10 + u64::from(kind), 100).await;
+            fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_requires_exact_access_list_address_width() {
+    let directory = tempfile::tempdir().unwrap();
+    let accepted = encoded_access_list(1, 1, true).out();
+    let mut keys = RlpStream::new_list(1);
+    keys.append(&[0_u8; 32].as_slice());
+    let keys = keys.out();
+    for width in [0, 19, 21] {
+        let address = rlp::encode(&&[0_u8; 21][..width]);
+        let rejected = single_access_entry(&address, &keys).out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let name = format!("{envelope_name}: {width}-byte access-list address");
+            let mut fixture = Fixture::new(directory.path(),
+                64_000 + width as u64 * 10 + u64::from(kind), 100).await;
+            fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_requires_exact_storage_key_width() {
+    let directory = tempfile::tempdir().unwrap();
+    let accepted = encoded_access_list(1, 1, true).out();
+    let address = rlp::encode(&[0_u8; 20].as_slice());
+    for width in [0, 31, 33] {
+        let mut keys = RlpStream::new_list(1);
+        keys.append(&&[0_u8; 33][..width]);
+        let rejected = single_access_entry(&address, &keys.out()).out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let name = format!("{envelope_name}: {width}-byte storage key");
+            let mut fixture = Fixture::new(directory.path(),
+                65_000 + width as u64 * 10 + u64::from(kind), 100).await;
+            fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
         }
     }
 }

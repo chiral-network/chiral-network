@@ -46,10 +46,10 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
 | Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; conservative size derivation above | Raw syntax/unsupported forms and remaining defensive budget evidence in 2.5; do not manufacture an unreachable valid raw-ceiling control |
-| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Local 4,096/4,097-byte calldata in 2.4; malformed access-list byte widths/shape remain in 2.2 |
-| Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | New task 2.2.1 count cases below; malformed shapes still need separate acceptance, not inferred from count rejection |
+| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Local 4,096/4,097-byte calldata in 2.4; access-list byte widths/shape have task 2.2.2 acceptance below |
+| Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas remains in 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Exact occurrence-based floor/equality and one-below cases with duplicates in 2.3 |
-| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | New access-list local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
+| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count and shape local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
 
 ## Task 2.2.1 access-list occurrence boundaries
 
@@ -59,7 +59,21 @@ Two new `inference_funding_admission_test` groups use the existing independent s
 
 Each of the twelve isolated cases requires direct local rejection of the over-limit candidate and HTTP 400 `invalid_payment`, no acknowledgement/submission/credit, and the retained quote. Its separately signed valid boundary control is locally validated before the negative request and acknowledged afterward, with exact original hash/signature binding and reopened-ledger assertions. Fixed one-million signed gas is above the structural floor even for these over-limit candidates, and synthetic RPC supplies the current nonce and ample balance, so a low-gas/balance failure cannot stand in for count rejection.
 
-This closes count/duplicate coverage only. Wrong entry/list shape and wrong opaque byte widths remain in parent 2.2; precise structural-gas boundaries remain in 2.3. No production decoder, native preparation, wallet, settlement or whitepaper behavior changes.
+Task 2.2.1 closes count/duplicate coverage only; task 2.2.2 below separately covers malformed shapes and opaque widths. Precise structural-gas boundaries remain in 2.3. No production decoder, native preparation, wallet, settlement or whitepaper behavior changes.
+
+## Task 2.2.2 access-list shape and opaque-width acceptance
+
+Three further `inference_funding_admission_test` groups add 32 independently signed refusal/control pairs across EIP-2930 and EIP-1559:
+
+- `fresh_intent_rejects_malformed_access_list_shapes`: empty bytes or a byte-string-encoded access list instead of a list; a byte-string entry; entries with zero, one or three fields; a list instead of address bytes; empty bytes or a flat key instead of the key list; and a list instead of key bytes. These ten shapes exercise all list/opaque-byte boundaries rather than relying on a count overflow.
+- `fresh_intent_requires_exact_access_list_address_width`: zero-, 19- and 21-byte addresses, with a correctly shaped single 32-byte key.
+- `fresh_intent_requires_exact_storage_key_width`: zero-, 31- and 33-byte keys, with a correctly shaped 20-byte address.
+
+Each positive control has one zero-filled 20-byte address and one zero-filled 32-byte key, proving those opaque values are admissible rather than subject to integer normalization. Existing empty-list, empty-key-list and duplicate/budget controls remain unchanged. A small private RLP builder composes the malformed entry fields; the existing signer signs their actual payload, not stale signatures over a different control.
+
+All malformed candidates are canonically RLP-encoded and comfortably within raw/item/count budgets. The list-valued key is deliberately empty at depth four, so a depth-five refusal cannot masquerade as key-type validation. The existing fixture supplies sufficient signed gas, balance, current nonce and exact quote fields. It requires local `Rejected`, owner-authenticated HTTP 400 `invalid_payment`, reopened-ledger absence of acknowledgement/credit/fees and no submission, then successful acknowledgement of the unchanged valid control under the retained quote.
+
+These tests complete the structural shape/width portion of parent 2.2, not the exact gas, calldata or defensive parser-budget tasks. No source adoption, new production API, live-chain execution or settlement qualification is claimed.
 
 ## Integration
 
