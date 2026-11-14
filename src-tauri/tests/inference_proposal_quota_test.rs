@@ -336,6 +336,200 @@ fn assert_rate_rejected_at(ledger: &BillingStore, rejected: &Signed<Quote>, now:
     assert!(ledger.quote(&rejected.payload.id).unwrap_err().starts_with("not_found:"));
 }
 
+#[test]
+fn payer_rate_refusals_preserve_the_last_shared_unit_for_another_payer() {
+    let ledger = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    for offset in 0..12 {
+        let now = NOW + offset;
+        let mut payload = quote_payload(&provider, offset + 1, PAYER,
+            "test/rate-refusal", ("1", "2"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1; // Reclaim pending slots, not rate units.
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+    }
+    let now = NOW + 12;
+    // Twelve payer admissions plus 587 other payers leave one shared unit.
+    for index in 0..587 {
+        let payer = format!("0x{:040x}", 0x10000 + index);
+        let payload = quote_payload(&provider, 1000 + index, &payer,
+            "test/rate-refusal", ("1", "2"));
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+    }
+    let retained = ledger.quote(&format!("0x{:064x}", 1000)).unwrap();
+    let rejected = quote(1, 2000, PAYER, "test/rate-refusal", ("1", "2"));
+    for _ in 0..2 { assert_rate_rejected_at(&ledger, &rejected, now); }
+    let last = quote(1, 2001, OTHER_PAYER, "test/rate-refusal", ("1", "2"));
+    ledger.store_quote(&last, now).unwrap();
+    assert_preserved(&ledger, &last);
+    assert_preserved(&ledger, &retained);
+    assert_rate_rejected_at(&ledger,
+        &quote(1, 2002, OTHER_PAYER, "test/rate-refusal", ("1", "2")), now);
+}
+
+#[test]
+fn failed_insertion_rolls_back_rate_windows_counters_and_pending_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let control = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let exercised = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let original = quote(1, 1, PAYER, "test/insertion", ("1", "2"));
+    let mut payload = quote_payload(&original.payload.provider_wallet, 2, OTHER_PAYER,
+        "test/insertion", ("1", "2"));
+    payload.expires_at = NOW + 1;
+    let expiring = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+    for store in [&control, &exercised] {
+        store.store_quote(&original, NOW).unwrap();
+        store.store_quote(&expiring, NOW).unwrap();
+    }
+    // The original remains valid, but its ID is already stored. Its rejected insertion
+    // must not retain a future-minute reset or the tentative deletion of expiring.
+    assert!(exercised.store_quote(&original, NOW + 60).is_err());
+    assert_preserved(&exercised, &original);
+    assert_preserved(&exercised, &expiring);
+    drop(exercised);
+    let exercised = BillingStore::open(&path, &network()).unwrap();
+    assert_preserved(&exercised, &original);
+    assert_preserved(&exercised, &expiring);
+
+    // No newer minute was committed: each payer still has eleven units in the original
+    // window, exactly as in the untouched control. Successful probes may now clean expiry.
+    for (owner_index, payer) in [PAYER, OTHER_PAYER].into_iter().enumerate() {
+        for offset in 0..11 {
+            let now = NOW + 1 + owner_index as u64 * 12 + offset;
+            let mut payload = quote_payload(&original.payload.provider_wallet,
+                100 + owner_index as u64 * 20 + offset, payer, "test/insertion", ("1", "2"));
+            payload.issued_at = now;
+            payload.expires_at = now + 1;
+            let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+            assert!(matching_admission(&control, &exercised, &signed, now));
+        }
+        let rejected = quote(1, 111 + owner_index as u64 * 20, payer,
+            "test/insertion", ("1", "2"));
+        assert!(!matching_admission(&control, &exercised, &rejected,
+            NOW + 12 + owner_index as u64 * 12));
+    }
+    // Twenty-four committed proposals leave exactly 576 shared units in both ledgers.
+    let now = NOW + 25;
+    for index in 0..576 {
+        let payer = format!("0x{:040x}", 0x10000 + index);
+        let payload = quote_payload(&original.payload.provider_wallet, 1000 + index, &payer,
+            "test/insertion", ("1", "2"));
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        assert!(matching_admission(&control, &exercised, &signed, now));
+    }
+    let excess = quote(1, 2000, &format!("0x{:040x}", 0x20000),
+        "test/insertion", ("1", "2"));
+    assert!(!matching_admission(&control, &exercised, &excess, now));
+    for store in [&control, &exercised] { assert_preserved(store, &original); }
+}
+
+#[test]
+fn competing_connections_share_the_final_payer_rate_unit_without_leaking_global_units() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let initial = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    for offset in 0..11 {
+        let now = NOW + offset;
+        let mut payload = quote_payload(&provider, offset + 1, PAYER,
+            "test/payer-rate-race", ("1", "2"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1;
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        initial.store_quote(&signed, now).unwrap();
+    }
+    drop(initial);
+    let race_at = NOW + 11;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers = [12, 13].map(|sequence| {
+        let ledger = BillingStore::open(&path, &network()).unwrap();
+        let signed = quote(1, sequence, PAYER, "test/payer-rate-race", ("1", "2"));
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let result = ledger.store_quote(&signed, race_at);
+            (signed, result)
+        })
+    });
+    let outcomes = workers.map(|worker| worker.join().unwrap());
+    assert_eq!(outcomes.iter().filter(|(_, result)| result.is_ok()).count(), 1);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for (signed, result) in outcomes {
+        match result {
+            Ok(()) => assert_preserved(&reopened, &signed),
+            Err(error) => {
+                assert!(error.starts_with("rate_limit:"), "{error}");
+                assert!(reopened.quote(&signed.payload.id).unwrap_err().starts_with("not_found:"));
+            }
+        }
+    }
+    assert_rate_rejected_at(&reopened,
+        &quote(1, 14, PAYER, "test/payer-rate-race", ("1", "2")), race_at);
+    // The losing writer and later refusal must leave all 588 shared units intact.
+    for index in 0..588 {
+        let payer = format!("0x{:040x}", 0x10000 + index);
+        let payload = quote_payload(&provider, 1000 + index, &payer,
+            "test/payer-rate-race", ("1", "2"));
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        reopened.store_quote(&signed, race_at).unwrap();
+        assert_preserved(&reopened, &signed);
+    }
+    assert_rate_rejected_at(&reopened,
+        &quote(1, 2000, OTHER_PAYER, "test/payer-rate-race", ("1", "2")), race_at);
+}
+
+#[test]
+fn competing_connections_admit_only_one_quote_at_the_global_rate_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let initial = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    for sequence in 1..=599 {
+        let payer = format!("0x{:040x}", 0x10000 + sequence);
+        let payload = quote_payload(&provider, sequence, &payer,
+            "test/global-rate-race", ("1", "2"));
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        initial.store_quote(&signed, NOW).unwrap();
+    }
+    let retained = initial.quote(&format!("0x{:064x}", 1)).unwrap();
+    drop(initial);
+    let race_at = NOW + 1;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers = [(600, PAYER), (601, OTHER_PAYER)].map(|(sequence, payer)| {
+        let ledger = BillingStore::open(&path, &network()).unwrap();
+        let signed = quote(1, sequence, payer, "test/global-rate-race", ("1", "2"));
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let result = ledger.store_quote(&signed, race_at);
+            (signed, result)
+        })
+    });
+    let outcomes = workers.map(|worker| worker.join().unwrap());
+    assert_eq!(outcomes.iter().filter(|(_, result)| result.is_ok()).count(), 1);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for (signed, result) in outcomes {
+        match result {
+            Ok(()) => assert_preserved(&reopened, &signed),
+            Err(error) => {
+                assert!(error.starts_with("rate_limit:"), "{error}");
+                assert!(reopened.quote(&signed.payload.id).unwrap_err().starts_with("not_found:"));
+            }
+        }
+    }
+    assert_preserved(&reopened, &retained);
+    // Either race payer still has individual allowance, so only the global budget rejects.
+    assert_rate_rejected_at(&reopened,
+        &quote(1, 602, PAYER, "test/global-rate-race", ("1", "2")), race_at);
+}
+
 fn rate_challenge(quote: &Quote, nonce: u64, now: u64) -> chiral_network::auth::AuthPayload {
     chiral_network::auth::AuthPayload {
         network: quote.network.clone(),
