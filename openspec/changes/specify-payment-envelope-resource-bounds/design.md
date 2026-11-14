@@ -45,11 +45,11 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
-| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope and independent root/header groups in 2.5.1–2.5.2 below; conservative size derivation above | Remaining scalar-shape, nested declared-length and defensive-budget evidence in 2.5–2.6; do not manufacture an unreachable valid raw-ceiling control |
+| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header and malformed-child-length groups in 2.5.1–2.5.3 below; conservative size derivation above | Remaining freshly signed scalar/recipient byte-string encoding, scalar-shape and direct defensive-budget evidence in 2.5–2.6; do not manufacture an unreachable valid raw-ceiling control |
 | Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Task 2.4 covers local 4,096/4,097-byte calldata; 2.5.2 adds 55/56-byte controls; access-list widths/shape have 2.2.2 acceptance. The scalar/list shape defect remains blocked in 2.6 |
 | Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
-| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape, gas, raw-envelope and independent RLP root/header local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
+| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape, gas, raw-envelope, RLP root/header and malformed-child local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
 
 ## Task 2.2.1 access-list occurrence boundaries
 
@@ -103,7 +103,7 @@ Both lengths have ample signed gas, empty access lists and envelopes well below 
 
 All 39 refusal pairs require local `ChainError::Rejected`, authenticated HTTP 400 `invalid_payment`, no cached acknowledgement, account credit, funding/fee rows or transaction submission, followed by acknowledgement of the unchanged original. These isolated synthetic-RPC observations cover local parsing and fresh admission, not execution, chain finality or paid inference.
 
-Independent root/header acceptance follows in 2.5.2. Scalar-shape, nested declared-length and defensive byte/item/depth evidence remains open in 2.5–2.6. Malformed framing is not an otherwise-valid 16 KiB equality control and does not isolate a private parser budget; the size derivation and owner-source restrictions still apply.
+Independent root/header and malformed-child-length acceptance follows in 2.5.2–2.5.3. Scalar-shape and direct defensive byte/item/depth evidence remains open in 2.5–2.6. Malformed framing is not an otherwise-valid 16 KiB equality control and does not isolate a private parser budget; the size derivation and owner-source restrictions still apply.
 
 ## Task 2.5.2 independent RLP root/header acceptance
 
@@ -116,7 +116,20 @@ All 24 pairs require local rejection, authenticated HTTP 400 `invalid_payment`, 
 
 The existing local calldata test additionally accepts 55 and 56 bytes under every supported envelope, checking exact bytes and original transaction hash in six controls. Its complete 4,096/4,097-byte and clipped-expected-data checks remain unchanged. No non-opening payload is submitted as an opening commitment; the earlier all-byte-value payload remains the opacity evidence.
 
-The previously failing, freshly signed legacy list-scalar reproduction remains in APAS progress and requires an independently committable native fix with its regression. Do not infer scalar-shape correctness from these passing header controls. Nested inconsistent/overflowing declared lengths and direct defensive-budget evidence also remain open; root overflow is not allocation instrumentation or private guard isolation. No public test seam or relaxed limit is introduced.
+The previously failing, freshly signed legacy list-scalar reproduction remains in APAS progress and requires an independently committable native fix with its regression. Do not infer scalar-shape correctness from these passing header controls. Malformed child lengths are covered below; direct defensive-budget evidence remains open. Root overflow is not allocation instrumentation or private guard isolation. No public test seam or relaxed limit is introduced.
+
+## Task 2.5.3 malformed child lengths and complete consumption
+
+The locked `rlp` 0.5.2 dependency checks payload-length addition and bounds before slicing, but its iterator stops on a child error and `item_count` counts that valid prefix. `canonical_rlp` must therefore reject unconsumed bytes rather than accepting an otherwise valid payment prefix. The tests assert production behavior, not the dependency's iterator count or error wording.
+
+Six bounded suffixes cover incomplete eight-byte length headers, an ordinary declared 256-byte payload with no body, and eight maximal length bytes, for both strings and lists. `append_list_with_malformed_tail` copies only valid original children and includes every actual byte in the enclosing list length before appending the malformed child. It does not parse or repair that child.
+
+- `malformed_root_child_lengths_cannot_authorize_a_valid_prefix` covers eighteen refusal/control pairs across all three supported envelopes. The original fields and signature stay intact before the invalid extra child inside the root list.
+- `malformed_nested_child_lengths_preserve_original_admission` covers thirty-six pairs across both typed envelopes, with the child appended after the valid access-list, entry or key-list prefix. Enclosing lists are rebuilt with correct actual lengths and the full malformed access-list bytes are freshly signed. These positions extend through depth four without relying on an over-depth tree or oversized occurrence budget.
+
+All 54 pairs require local rejection, authenticated HTTP 400 `invalid_payment`, no retained acknowledgement, credit, funding/fee rows or transaction submission, and successful unchanged-original admission. Complete parent framing distinguishes these from bytes merely appended outside the transaction. Isolated synthetic RPC is not execution, safe-frontier or paid-inference qualification.
+
+These bounded malformed inputs do not isolate the raw byte, immediate-item or depth guards. Direct guard evidence remains blocked where it requires owner-untracked source; do not exploit the scalar/list defect to construct an invalid positive boundary control. Freshly signed scalar/recipient byte-string minimal-encoding acceptance remains separate from that shape defect and these malformed tails. No guard is relaxed and no production test API is added.
 
 ## Integration
 

@@ -33,6 +33,14 @@ use tower::Service;
 
 const GAS: u64 = 1_000_000;
 const ENVELOPES: [(u8, &str); 3] = [(0, "legacy"), (1, "EIP-2930"), (2, "EIP-1559")];
+const MALFORMED_RLP_CHILDREN: [(&str, &[u8]); 6] = [
+    ("incomplete-string-length", &[0xbf, 1, 0]),
+    ("incomplete-list-length", &[0xff, 1, 0]),
+    ("truncated-string-payload", &[0xb9, 1, 0]),
+    ("truncated-list-payload", &[0xf9, 1, 0]),
+    ("overflowing-string-length", &[0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+    ("overflowing-list-length", &[0xff; 9]),
+];
 
 #[derive(Clone, Copy)]
 struct ChainView {
@@ -159,6 +167,16 @@ fn single_access_entry(encoded_address: &[u8], encoded_keys: &[u8]) -> RlpStream
     let mut list = RlpStream::new_list(1);
     list.begin_list(2).append_raw(encoded_address, 1).append_raw(encoded_keys, 1);
     list
+}
+
+fn append_list_with_malformed_tail(stream: &mut RlpStream, valid_list: &Rlp<'_>, tail: &[u8]) {
+    let count = valid_list.item_count().unwrap();
+    stream.begin_list(count + 1);
+    for index in 0..count {
+        stream.append_raw(valid_list.at(index).unwrap().as_raw(), 1);
+    }
+    // Include every actual byte in the enclosing length; only the appended child is malformed.
+    stream.append_raw(tail, 1);
 }
 
 fn payment_digest(kind: u8, payload: &[u8]) -> [u8; 32] {
@@ -1044,6 +1062,64 @@ async fn nonminimal_nested_access_list_headers_preserve_original() {
         for &(kind, envelope_name) in &ENVELOPES[1..] {
             let mut fixture = Fixture::new(directory.path(), 14_000 + u64::from(kind) * 100 + index as u64, 100).await;
             fixture.access_list_boundary(kind, &accepted, &rejected, &format!("{envelope_name}: {encoding}")).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_root_child_lengths_cannot_authorize_a_valid_prefix() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, (encoding, tail)) in MALFORMED_RLP_CHILDREN.into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 15_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let bytes = hex::decode(&original[2..]).unwrap();
+            let valid_list = Rlp::new(&bytes[usize::from(kind != 0)..]);
+            let mut malformed = RlpStream::new();
+            // The original fields and signature remain intact before the invalid extra child.
+            append_list_with_malformed_tail(&mut malformed, &valid_list, tail);
+            let encoded = hex::encode(malformed.out());
+            let candidate = if kind == 0 { format!("0x{encoded}") } else { format!("0x{kind:02x}{encoded}") };
+            fixture.rejects_candidate_preserving_original(
+                &original, &candidate, &format!("{envelope_name}: root child {encoding}"),
+            ).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_nested_child_lengths_preserve_original_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    let accepted = encoded_access_list(1, 1, false).out();
+    let access_list = Rlp::new(&accepted);
+    let entry = access_list.at(0).unwrap();
+    let address = entry.at(0).unwrap();
+    let keys = entry.at(1).unwrap();
+    for (level, parent) in ["access-list", "entry", "key-list"].into_iter().enumerate() {
+        for (index, (encoding, tail)) in MALFORMED_RLP_CHILDREN.into_iter().enumerate() {
+            let mut malformed = RlpStream::new();
+            match parent {
+                "access-list" => append_list_with_malformed_tail(&mut malformed, &access_list, tail),
+                "entry" => {
+                    malformed.begin_list(1);
+                    append_list_with_malformed_tail(&mut malformed, &entry, tail);
+                }
+                "key-list" => {
+                    malformed.begin_list(1).begin_list(2).append_raw(address.as_raw(), 1);
+                    append_list_with_malformed_tail(&mut malformed, &keys, tail);
+                }
+                _ => unreachable!(),
+            }
+            let rejected = malformed.out();
+            for &(kind, envelope_name) in &ENVELOPES[1..] {
+                let mut fixture = Fixture::new(directory.path(),
+                    16_000 + u64::from(kind) * 100 + level as u64 * 10 + index as u64, 100).await;
+                // Re-sign the full malformed access list, not merely its valid prefix.
+                fixture.access_list_boundary(
+                    kind, &accepted, &rejected, &format!("{envelope_name}: {parent} child {encoding}"),
+                ).await;
+            }
         }
     }
 }
