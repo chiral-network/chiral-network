@@ -336,6 +336,150 @@ fn assert_rate_rejected_at(ledger: &BillingStore, rejected: &Signed<Quote>, now:
     assert!(ledger.quote(&rejected.payload.id).unwrap_err().starts_with("not_found:"));
 }
 
+fn rate_challenge(quote: &Quote, nonce: u64, now: u64) -> chiral_network::auth::AuthPayload {
+    chiral_network::auth::AuthPayload {
+        network: quote.network.clone(),
+        provider_wallet: quote.provider_wallet.clone(),
+        wallet: quote.consumer_wallet.clone(),
+        method: "GET".into(),
+        path: format!("/v1/contracts/{}/balance", quote.id),
+        body_hash: protocol::hash_hex(b""),
+        nonce: format!("0x{nonce:064x}"),
+        expires_at: now + 60,
+    }
+}
+
+#[test]
+fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budgets() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let original = quote(1, 1, PAYER, "test/global-rate-free", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    // Challenge issuance must not consume one of the ledger's 600 proposal units.
+    let before = rate_challenge(&original.payload, 1, NOW);
+    ledger.create_challenge(&before, NOW).unwrap();
+
+    let terms = [
+        ("test/global-rate-a", ("0", "0")), ("test/global-rate-b", ("1", "0")),
+        ("test/global-rate-a", ("0", "2")), ("test/global-rate-b", ("1", "2")),
+    ];
+    let mut accepted = Vec::with_capacity(599);
+    for sequence in 2..=600 {
+        // Distinct payers and only 599 pending records isolate the global rate boundary.
+        let payer = format!("0x{:040x}", 0x10000 + sequence);
+        let (model, rates) = terms[(sequence as usize - 2) % terms.len()];
+        let mut payload = quote_payload(&original.payload.provider_wallet, sequence, &payer,
+            model, rates);
+        if rates != ("0", "0") { payload.funding_wei = (100 + sequence).to_string(); }
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, NOW).unwrap();
+        accepted.push(signed);
+    }
+    let rejected: Vec<_> = terms.iter().enumerate().map(|(index, (_, rates))| {
+        quote(1, 601 + index as u64, OTHER_PAYER, "test/global-rate-new", *rates)
+    }).collect();
+    for signed in &rejected { assert_rate_rejected_at(&ledger, signed, NOW); }
+
+    // Exhausted proposal rates must not consume the ability to authenticate or reserve
+    // inference on an accepted account. This is admission only: no engine or settlement.
+    let after = rate_challenge(&original.payload, 2, NOW);
+    ledger.create_challenge(&after, NOW).unwrap();
+    for challenge in [&before, &after] {
+        assert_eq!(serde_json::to_value(ledger.challenge(&challenge.nonce).unwrap()).unwrap(),
+            serde_json::to_value(challenge).unwrap());
+    }
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+        "after-global-proposal-exhaustion", 1, 1, NOW, &original.payload.model).unwrap();
+    let request = ledger.request_view(&original.payload.id,
+        "after-global-proposal-exhaustion").unwrap();
+    assert_eq!(request.id, reservation.id);
+    assert_eq!(request.status, "reserved");
+    assert_eq!(request.max_cost_wei, "0");
+
+    let independent = BillingStore::open(&directory.path().join("other-provider.sqlite"),
+        &network()).unwrap();
+    let other_provider = quote(2, 601, OTHER_PAYER, "test/global-rate-new", ("1", "2"));
+    independent.store_quote(&other_provider, NOW).unwrap();
+    assert_preserved(&independent, &other_provider);
+
+    // Other operations cannot reset the exhausted budget, including after storage reopening.
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for signed in &rejected { assert_rate_rejected_at(&reopened, signed, NOW + 1); }
+    for signed in &accepted { assert_preserved(&reopened, signed); }
+    let saved = reopened.quote(&original.payload.id).unwrap();
+    assert_eq!(saved.payload, original.payload);
+    assert_eq!(saved.signature, original.signature);
+    let authenticated = reopened.authenticate(&opened.credential.bearer, NOW + 1).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.id);
+    assert_eq!(authenticated.account.contract_id, original.payload.id);
+    assert_eq!(authenticated.account.funded_wei, "0");
+    assert!(reopened.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
+}
+
+#[test]
+fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets() {
+    let ledger = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let original = quote(1, 1, PAYER, "test/payer-scope-free", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    let before = rate_challenge(&original.payload, 1, NOW);
+    ledger.create_challenge(&before, NOW).unwrap();
+    // A live reservation must neither spend a proposal unit nor prevent fresh proposals.
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+        "before-payer-proposal-exhaustion", 1, 1, NOW, &original.payload.model).unwrap();
+    let terms = [
+        ("test/payer-scope-a", ("0", "0")), ("test/payer-scope-b", ("1", "0")),
+        ("test/payer-scope-a", ("0", "2")), ("test/payer-scope-b", ("1", "2")),
+    ];
+    for offset in 1..=11 {
+        let now = NOW + offset;
+        let (model, rates) = terms[(offset as usize - 1) % terms.len()];
+        let mut payload = quote_payload(&original.payload.provider_wallet, offset + 1, PAYER,
+            model, rates);
+        payload.issued_at = now;
+        payload.expires_at = now + 1; // Storage fixture, not the native issuance TTL.
+        if rates != ("0", "0") { payload.funding_wei = (100 + offset).to_string(); }
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+        assert_preserved(&ledger, &signed);
+    }
+    let now = NOW + 12;
+    let rejected: Vec<_> = terms.iter().enumerate().map(|(index, (_, rates))| {
+        quote(1, 100 + index as u64, PAYER, "test/payer-scope-new", *rates)
+    }).collect();
+    for signed in &rejected { assert_rate_rejected_at(&ledger, signed, now); }
+
+    let after = rate_challenge(&original.payload, 2, now);
+    ledger.create_challenge(&after, now).unwrap();
+    for challenge in [&before, &after] {
+        assert_eq!(serde_json::to_value(ledger.challenge(&challenge.nonce).unwrap()).unwrap(),
+            serde_json::to_value(challenge).unwrap());
+    }
+    let other_payer = quote(1, 200, OTHER_PAYER, "test/payer-scope-a", ("1", "2"));
+    ledger.store_quote(&other_payer, now).unwrap();
+    assert_preserved(&ledger, &other_payer);
+    let independent = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let other_provider = quote(2, 100, PAYER, "test/payer-scope-new", ("0", "0"));
+    independent.store_quote(&other_provider, now).unwrap();
+    assert_preserved(&independent, &other_provider);
+    for signed in &rejected { assert_rate_rejected_at(&ledger, signed, now); }
+    let request = ledger.request_view(&original.payload.id,
+        "before-payer-proposal-exhaustion").unwrap();
+    assert_eq!(request.id, reservation.id);
+    assert_eq!(request.status, "reserved");
+    assert_eq!(request.max_cost_wei, "0");
+    let authenticated = ledger.authenticate(&opened.credential.bearer, now).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.id);
+    assert_eq!(authenticated.account.contract_id, original.payload.id);
+    assert_eq!(authenticated.account.funded_wei, "0");
+    assert!(ledger.prepare_fee_batches(now, true).unwrap().is_empty());
+}
+
 #[test]
 fn payer_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries() {
     let directory = tempfile::tempdir().unwrap();
