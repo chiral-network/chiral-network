@@ -4,7 +4,7 @@
 
 A provider SHALL admit at most eight simultaneously pending proposals for one canonical named consumer wallet and at most 10,000 simultaneously pending proposals in one provider ledger. The ceilings SHALL be shared across models, offer revisions, funding amounts and free/paid proposals within that ledger. Different provider ledgers SHALL retain independent budgets under their existing persistence scopes; this policy SHALL NOT be represented as a network-wide or cross-host global limiter.
 
-A pending proposal SHALL mean a retained proposal record awaiting removal by quote-expiry maintenance or successful first account opening. A copy retained only as an account agreement or funding-intent acknowledgement SHALL NOT count as a pending proposal merely because that historical copy exists. An acknowledgement that still coexists with a pending proposal record SHALL NOT cause double counting or independently free that pending slot.
+A pending proposal SHALL mean a retained standalone proposal awaiting durable funding-intent acknowledgement, successful first account opening or quote-expiry maintenance. Successful acknowledgement SHALL transfer the signed agreement into durable funding-intent retention and free its matching pending-proposal slot atomically; successful first opening SHALL likewise free any remaining matching pending slot. A copy retained only as an account agreement or funding-intent acknowledgement SHALL NOT count as a pending proposal merely because that historical copy exists. Funding-intent admission capacity SHALL remain a separate budget rather than continuing to occupy the transferred proposal slot.
 
 #### Scenario: One payer reaches its pending ceiling
 
@@ -48,7 +48,7 @@ A provider SHALL evaluate pending capacity and insert the new signed proposal at
 
 Before evaluating pending capacity for a new ledger admission, the provider SHALL exclude or remove pending proposal records whose `expires_at` is at or before the admission's ledger time. Proposals expiring later SHALL remain pending. This SHALL NOT require a background cleanup timer or permit eviction of still-live proposals.
 
-Removing an expired pending record SHALL NOT erase a separately retained account agreement, funding-intent acknowledgement, raw transaction evidence, accepted balance, fee obligation or original sender/nonce commitment. Expiry-based capacity reclamation SHALL NOT authorize a refund, credit reversal, credential rotation or changed commercial terms.
+Pending-state cleanup and capacity reclamation SHALL NOT erase a separately retained account agreement, funding-intent acknowledgement, raw transaction evidence, accepted balance, fee obligation or original sender/nonce commitment. Expiry-based capacity reclamation SHALL NOT authorize a refund, credit reversal, credential rotation or changed commercial terms.
 
 #### Scenario: Exact expiry boundary restores proposal capacity
 
@@ -59,14 +59,14 @@ Removing an expired pending record SHALL NOT erase a separately retained account
 
 #### Scenario: Acknowledged agreement survives pending cleanup
 
-- **GIVEN** a pending proposal also has a durably retained funding-intent acknowledgement
-- **WHEN** quote expiry allows its pending record to be reclaimed
+- **GIVEN** a quote was durably acknowledged before its expiry and its standalone pending slot was freed
+- **WHEN** pending-state maintenance runs after quote expiry
 - **THEN** the original signed agreement and acknowledgement remain recoverable
 - **AND** sender/nonce ownership and the accepted funding/recovery contract are not weakened by freeing the proposal slot
 
 ### Requirement: Successful first opening frees a pending slot while preserving the agreement
 
-Successful first account opening SHALL retain the complete original signed agreement with the account and remove its pending-proposal record in the same atomic account-creation operation. A failed opening SHALL NOT free that pending slot as though an account had been created. Freeing a proposal slot SHALL NOT bypass independent account, funding-intent, credential or inference limits.
+Successful first account opening SHALL retain the complete original signed agreement with the account and remove any remaining matching pending-proposal record in the same atomic account-creation operation. A failed opening SHALL NOT free a still-pending slot as though an account had been created. An agreement already retained by funding-intent acknowledgement SHALL NOT need a standalone pending record recreated before opening. Freeing a proposal slot SHALL NOT bypass independent account, funding-intent, credential or inference limits.
 
 #### Scenario: Account creation transfers retention responsibility
 
