@@ -79,6 +79,21 @@ A throwaway executable linked to the built core observed both `{"raw_transaction
 
 Task 2.1.2 requires a native object-only guard plus regression when the owner-untracked parser/protocol source is independently committable. The probe is decoder evidence, not an HTTP exploit or financial acceptance result. It was removed; no permanent test blesses sequence acceptance, no specification is weakened and the request-object cases above do not claim this missing guarantee. Parent task 2.1 stays open.
 
+## Task 2.1.3.1 native acknowledgement object-member acceptance
+
+`inference_funding_acknowledgement_test` adds a native `Consumer::fund` fixture around the production provider router. It uses a real quote, an independently signed/offline-validated original EIP-155 opening and a real ledger-signed cached acknowledgement. One prepared journal row and prior post-spendability registration are explicit prerequisites; this fixture does not observe initial transaction preparation or fresh chain admission. The provider is draining, so recovery must use the original acknowledgement rather than create a replacement.
+
+Adversarial middleware changes only successful acknowledgement replies after real owner authentication. Four test groups cover 33 malformed documents: unknown members at envelope/payload/network levels; each of the eleven required members missing; each member mistyped plus five additional invalid timestamp types; and identical duplicate members at all three object levels. The timestamp numeric-text case preserves the original value to catch permissive coercion. Duplicate cases preserve otherwise valid signed content, rather than relying on signature mismatch to reject them.
+
+Each refused reply must leave the protected native acknowledgement absent and broadcast-start marker false, preserve the exact quote/raw/hash and one prepared original journal operation, and make no request to the separate consumer RPC endpoint. Reopened provider storage must retain its original quote/acknowledgement without an account, credited funding or fee obligations. The native consumer is then reopened and the genuine reply restored: it must recover the same original, persist the exact acknowledgement and start marker before reaching RPC. The RPC handler snapshots that local state and always returns HTTP 503; no transaction submission, successful chain response, paid account or inference is fabricated.
+
+The isolated loopback test groups are `native_acknowledgement_rejects_unknown_object_members_before_chain_access`, `native_acknowledgement_rejects_missing_object_members_before_chain_access`, `native_acknowledgement_rejects_mistyped_object_members_before_chain_access` and `native_acknowledgement_rejects_duplicate_object_members_before_chain_access`. Existing native signed-identity substitution tests remain relevant; this slice is not exact freshness-boundary, initial spendability, power-loss durability or live-payment qualification.
+
+### Acknowledgement container mismatch
+
+A separate throwaway built-core probe observed that positional sequences for the signed envelope, funding-intent payload and nested network all deserialize and verify the original provider signature after projection into typed objects. These are decoder/signature observations, not native funding or broadcast observations. The production native decoder uses `serde_json::from_slice` directly. Task 2.1.2 therefore includes those response-object guards as well as the known request-object guard; parent 2.1.3 remains open until they are enforced with regressions. The probe was removed; no permanent test endorses the mismatch and no requirement is weakened.
+
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.
@@ -91,7 +106,7 @@ Task 2.1.2 requires a native object-only guard plus regression when the owner-un
 
 ## Ownership, verification and integration
 
-The change began with a specification and executable acceptance plan; subsequent worker-owned acceptance is recorded above. The production parser/protocol, ledger, consumer, chain client and their native unit tests are owner-untracked migration work. The object-only request guard, pre-issuance admission fix and any private time/fault seam remain blocked until independently committable; do not commit a failing regression alone, normalize away a flaw or adopt the migration wholesale. Independent worker-owned acceptance can proceed.
+The change began with a specification and executable acceptance plan; subsequent worker-owned acceptance is recorded above. The production parser/protocol, ledger, consumer, chain client and their native unit tests are owner-untracked migration work. Required request/acknowledgement object containers, the pre-issuance admission fix and any private time/fault seam remain blocked until independently committable; do not commit a failing regression alone, normalize away a flaw or adopt the migration wholesale. Independent worker-owned acceptance can proceed.
 
 Run strict noninteractive validation and all available README/CI checks. Keep platform dependencies, the actual release policy key, real paid-chain/SDK/GPU/public failure/load evidence as separate unavailable/out-of-checkout gates. No deployments, wallet/account changes, installs or whitepaper edits.
 
