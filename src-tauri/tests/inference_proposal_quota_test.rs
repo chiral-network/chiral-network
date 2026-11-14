@@ -464,3 +464,118 @@ fn rejected_acknowledgements_preserve_pending_capacity_and_allow_original_regist
     assert_preserved(&ledger, &replacement);
     assert!(ledger.prepare_fee_batches(NOW, true).unwrap().is_empty());
 }
+
+#[test]
+fn unpaid_first_opening_preserves_pending_capacity_and_signed_terms_after_reopening() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let pending: Vec<_> = (1..=8)
+        .map(|id| quote(1, id, PAYER, "test/unpaid", ("1", "2"))).collect();
+    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let replacement = quote(1, 9, PAYER, "test/replacement", ("0", "0"));
+    assert_capacity_rejected(&ledger, &replacement);
+
+    // Owner authorization is a ledger-call precondition; no payment evidence is invented.
+    let error = ledger.open_account(&pending[0], None, NOW).unwrap_err();
+    assert!(error.starts_with("invalid_payment:"), "{error}");
+    for restart in [false, true] {
+        if restart {
+            drop(ledger);
+            ledger = BillingStore::open(&path, &network()).unwrap();
+        }
+        for signed in &pending { assert_preserved(&ledger, signed); }
+        assert_capacity_rejected(&ledger, &replacement);
+        assert!(ledger.prepare_fee_batches(NOW, true).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_credential() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let pending: Vec<_> = (1..=8).map(|id| {
+        let rates = if id == 1 { ("0", "0") } else { ("1", "2") };
+        quote(1, id, PAYER, "test/opening", rates)
+    }).collect();
+    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original = &pending[0];
+    let replacement = quote(1, 9, PAYER, "test/replacement", ("1", "2"));
+    assert_capacity_rejected(&ledger, &replacement);
+
+    let opened = ledger.open_account(original, None, NOW).unwrap();
+    assert_eq!(opened.account.contract_id, original.payload.id);
+    assert_eq!(opened.account.model, original.payload.model);
+    assert_eq!(opened.account.price, original.payload.price);
+    for amount in [&opened.account.funded_wei, &opened.account.fee_wei,
+        &opened.account.spent_wei, &opened.account.reserved_wei,
+        &opened.account.available_wei, &opened.account.reversed_wei,
+        &opened.account.provider_loss_wei, &opened.account.waived_wei] {
+        assert_eq!(amount, "0");
+    }
+    let expected_account = serde_json::to_value(&opened.account).unwrap();
+    let original_scopes = ledger.authenticate(&opened.credential.bearer, NOW).unwrap().scopes;
+    let assert_recovery = |store: &BillingStore, now| {
+        let saved = store.quote(&original.payload.id).unwrap();
+        assert_eq!(saved.payload, original.payload);
+        assert_eq!(saved.signature, original.signature);
+        let authenticated = store.authenticate(&opened.credential.bearer, now).unwrap();
+        assert_eq!(authenticated.credential_id, opened.credential.id);
+        assert_eq!(authenticated.scopes, original_scopes);
+        assert_eq!(serde_json::to_value(authenticated.account).unwrap(), expected_account);
+        assert!(store.prepare_fee_batches(now, true).unwrap().is_empty());
+    };
+    ledger.store_quote(&replacement, NOW).unwrap();
+    assert_capacity_rejected(&ledger, &quote(1, 10, PAYER, "test/excess", ("1", "2")));
+    for signed in pending.iter().skip(1) { assert_preserved(&ledger, signed); }
+    assert_preserved(&ledger, &replacement);
+    assert_recovery(&ledger, NOW);
+
+    // Reopen storage, not the account: another owner-authorized open command rotates its root.
+    drop(ledger);
+    ledger = BillingStore::open(&path, &network()).unwrap();
+    assert_recovery(&ledger, NOW + 1);
+    let expiry = original.payload.expires_at;
+    let provider_key = format!("{:064x}", 1);
+    let fresh_quote = |id, issued_at| {
+        let mut payload = quote_payload(&original.payload.provider_wallet, id, PAYER,
+            "test/cleanup", ("1", "2"));
+        payload.issued_at = issued_at;
+        payload.expires_at = issued_at + 300;
+        protocol::sign(QUOTE_DOMAIN, payload, &provider_key).unwrap()
+    };
+    let fresh = fresh_quote(11, expiry - 1);
+    let error = ledger.store_quote(&fresh, expiry - 1).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.quote(&fresh.payload.id).unwrap_err().starts_with("not_found:"));
+    for signed in pending.iter().skip(1) { assert_preserved(&ledger, signed); }
+    assert_preserved(&ledger, &replacement);
+    assert_recovery(&ledger, expiry - 1);
+
+    // Expiry may exclude or delete standalone records. Assert reusable capacity, not deletion.
+    ledger.store_quote(&fresh, expiry).unwrap();
+    let mut renewed = Vec::with_capacity(8);
+    renewed.push(fresh);
+    for id in 12..=18 {
+        let signed = fresh_quote(id, expiry);
+        ledger.store_quote(&signed, expiry).unwrap();
+        renewed.push(signed);
+    }
+    let excess = fresh_quote(19, expiry);
+    let error = ledger.store_quote(&excess, expiry).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));
+    for expired in pending.iter().skip(1).chain(std::iter::once(&replacement)) {
+        assert!(ledger.account(&expired.payload.id).unwrap_err().starts_with("not_found:"));
+    }
+    for signed in &renewed { assert_preserved(&ledger, signed); }
+    assert_recovery(&ledger, expiry);
+    drop(ledger);
+    ledger = BillingStore::open(&path, &network()).unwrap();
+    for signed in &renewed { assert_preserved(&ledger, signed); }
+    let error = ledger.store_quote(&excess, expiry + 1).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));
+    assert_recovery(&ledger, expiry + 1);
+}
