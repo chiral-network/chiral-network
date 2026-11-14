@@ -106,6 +106,20 @@ Existing evidence was inspected before adding cases: `chain_client_tests::signed
 
 After every attempt, reopened storage must retain the original signed quote and show no paid account, credited funding or fee obligation. Refused attempts have no acknowledgement; exact-cost acceptance is durably recoverable with the original signed acknowledgement. Observed RPC traffic must contain no submission. These tests neither fabricate `VerifiedPayment` nor treat an acknowledgement as credit, and they do not replace the remaining malformed-envelope, nonce/head-instability or qualification acceptance inventory in parent 2.2.
 
+## Task 2.2.2 nonce and head admission acceptance
+
+The existing nonce-regression test concerns native journal allocation after reconciliation, not provider funding-intent admission. Existing core tests cover future/spent and competing-pending admission; the HTTP test covers a future legacy nonce. The additional `inference_funding_admission_test` groups exercise the missing complete route-level eligibility and post-balance comparisons while retaining the earlier full-cost tests and their assertions.
+
+The fixture now has one locked RPC control snapshot with latest/pending nonce, head height/hash and an optional one-shot replacement applied at the balance response boundary. This gives deterministic before/after observations without sleeps or a production clock seam. Signers accept an explicit nonce; all previous callers were migrated. Shared refusal and acknowledgement assertions preserve the original signature/binding, reopened-storage, no-credit and no-submission checks rather than replacing them with event-order-only checks.
+
+`fresh_intent_refuses_noncurrent_exhausted_and_competing_nonces` covers five observations for each of the three envelope kinds: future, spent and exhausted originals return `invalid_payment`; another pending nonce returns `funding_pending`; pending below latest returns `settlement_unavailable`, not fabricated orphan/execution evidence. Every refusal must reach the nonce observation, retain its quote and leave no acknowledgement or paid accounting. Restoring consistent current nonce permits the same signed original without repricing or replacement. A signed `u64::MAX` nonce remains ineligible and has no successful same-original control.
+
+`fresh_intent_rechecks_nonce_and_head_after_balance_then_recovers_the_original` changes latest/pending nonce together, pending nonce alone, head height downward, or head hash at the same height after the balance observation. Each of the twelve cases must return `funding_pending` without acknowledgement/credit/submission, then acknowledge the same bytes once the fixture restores stability. The regressed head remains consistent with the safe frontier, distinguishing cross-observation regression from an internally unhealthy view.
+
+`fresh_intent_allows_healthy_head_advancement_after_balance` accepts a higher healthy head with unchanged nonce for all three envelope kinds. Together, the new groups comprise 27 refusal observations and 27 successful acknowledgement controls across 30 isolated fixtures; they reject both omitted rechecks and an over-strict ban on normal head advancement.
+
+All RPC evidence remains synthetic and loopback-only. This slice does not prove live-chain safety, restart preservation of an earlier unrelated acknowledgement, wallet replacement policy, monetary settlement or exact clock boundaries. Envelope/schema/qualification inventory remains in parent 2.2, and durable conflict/rollback recovery remains in 2.3.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.

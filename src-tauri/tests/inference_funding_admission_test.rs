@@ -32,17 +32,39 @@ use tower::Service;
 const GAS: u64 = 1_000_000;
 const ENVELOPES: [(u8, &str); 3] = [(0, "legacy"), (1, "EIP-2930"), (2, "EIP-1559")];
 
+#[derive(Clone, Copy)]
+struct ChainView {
+    latest_nonce: u64,
+    pending_nonce: u64,
+    head_height: u64,
+    head_hash: u64,
+}
+
+impl Default for ChainView {
+    fn default() -> Self {
+        Self { latest_nonce: 0, pending_nonce: 0, head_height: 10, head_hash: 10 }
+    }
+}
+
+#[derive(Default)]
+struct RpcControl {
+    balance: u128,
+    view: ChainView,
+    after_balance: Option<ChainView>,
+}
+
 struct SpendabilityRpc {
     network: NetworkIdentity,
     payer: String,
     observed_at: u64,
-    balance: Mutex<u128>,
+    control: Mutex<RpcControl>,
     requests: Mutex<Vec<Value>>,
 }
 
 async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Json<Value>) -> Json<Value> {
     state.requests.lock().unwrap().push(request.clone());
     let args = &request["params"];
+    let mut control = state.control.lock().unwrap();
     let result = match request["method"].as_str().unwrap() {
         "eth_chainId" => json!(format!("0x{:x}", state.network.chain_id)),
         "eth_syncing" => json!(false),
@@ -51,7 +73,7 @@ async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Jso
             let (number, hash, timestamp) = match args[0].as_str().unwrap() {
                 "0x0" => (0_u64, state.network.genesis_hash.clone(), 0),
                 "safe" => (9, format!("0x{:064x}", 9), state.observed_at),
-                "latest" => (10, format!("0x{:064x}", 10), state.observed_at),
+                "latest" => (control.view.head_height, format!("0x{:064x}", control.view.head_hash), state.observed_at),
                 tag => panic!("unexpected fixture block selector: {tag}"),
             };
             json!({"number":format!("0x{number:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
@@ -59,11 +81,15 @@ async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Jso
         "eth_getTransactionCount" => {
             assert_eq!(args[0], state.payer);
             assert!(matches!(args[1].as_str(), Some("latest" | "pending")));
-            json!("0x0")
+            let nonce = if args[1] == "latest" { control.view.latest_nonce } else { control.view.pending_nonce };
+            json!(format!("0x{nonce:x}"))
         }
         "eth_getBalance" => {
             assert_eq!(args, &json!([state.payer, "latest"]));
-            json!(format!("0x{:x}", *state.balance.lock().unwrap()))
+            let balance = control.balance;
+            // Deterministic transition at the balance RPC, before its reply reaches admission.
+            if let Some(next) = control.after_balance.take() { control.view = next; }
+            json!(format!("0x{balance:x}"))
         }
         _ => return Json(json!({"jsonrpc":"2.0","id":request["id"],
             "error":{"code":-32601,"message":"unexpected method at isolated admission RPC"}})),
@@ -77,14 +103,14 @@ fn append_uint(stream: &mut RlpStream, value: u128) {
     stream.append(&&bytes[start..]);
 }
 
-fn signed_opening(quote: &Signed<Quote>, key: &str, kind: u8, max_fee: u128) -> String {
+fn signed_opening(quote: &Signed<Quote>, key: &str, kind: u8, nonce: u64, max_fee: u128) -> String {
     let chain = quote.payload.network.chain_id;
     let recipient = hex::decode(quote.payload.provider_wallet.strip_prefix("0x").unwrap()).unwrap();
     let value: u128 = quote.payload.funding_wei.parse().unwrap();
     let data = protocol::opening_data(&quote.payload).unwrap();
     let fields = |stream: &mut RlpStream| {
         if kind != 0 { stream.append(&chain); }
-        stream.append(&0_u64);
+        stream.append(&nonce);
         // Type-2 priority is deliberately smaller than maxFeePerGas.
         if kind == 2 { stream.append(&2_u64); }
         append_uint(stream, max_fee);
@@ -149,7 +175,7 @@ impl Fixture {
         let owner_key = format!("{:064x}", 70_000 + case);
         let payer = wallet::address_from_private_key(&owner_key).unwrap();
         let rpc = Arc::new(SpendabilityRpc { network: provider.offer.payload.network.clone(),
-            payer: payer.clone(), observed_at: protocol::now().unwrap(), balance: Mutex::new(0),
+            payer: payer.clone(), observed_at: protocol::now().unwrap(), control: Mutex::new(RpcControl::default()),
             requests: Mutex::new(Vec::new()) });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         // Override only the unsigned RPC transport before sharing the provider state.
@@ -169,8 +195,8 @@ impl Fixture {
         Self { provider, app, owner_key, quote, rpc, server, _listeners: [public, admin] }
     }
 
-    fn original(&self, kind: u8, max_fee: u128) -> (String, ValidatedPaymentEnvelope) {
-        let raw = signed_opening(&self.quote, &self.owner_key, kind, max_fee);
+    fn original(&self, kind: u8, nonce: u64, max_fee: u128) -> (String, ValidatedPaymentEnvelope) {
+        let raw = signed_opening(&self.quote, &self.owner_key, kind, nonce, max_fee);
         // A malformed/signature-rejected fixture must not masquerade as a balance refusal.
         let envelope = self.provider.state.chain.validate_payment_envelope(&raw,
             &self.quote.payload.consumer_wallet, &self.quote.payload.provider_wallet,
@@ -201,10 +227,10 @@ impl Fixture {
         request(&mut self.app, &path, &headers, body).await
     }
 
-    fn observed_balance_without_submission(&self) {
+    fn observed_without_submission(&self, method: &str) {
         let requests = self.rpc.requests.lock().unwrap();
-        assert!(requests.iter().any(|request| request["method"] == "eth_getBalance"),
-            "the request must reach spendability rather than fail earlier");
+        assert!(requests.iter().any(|request| request["method"] == method),
+            "the request must reach {method} rather than fail earlier");
         assert!(requests.iter().all(|request| request["method"] != "eth_sendRawTransaction"),
             "admission must not broadcast");
     }
@@ -221,12 +247,28 @@ impl Fixture {
         ledger
     }
 
-    async fn refuses_cost(&mut self, raw: &str, name: &str) {
+    async fn refuses(&mut self, raw: &str, name: &str, expected: (StatusCode, &str), observation: &str) {
         let (status, document) = self.submit_intent(raw).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {document}");
-        assert_eq!(document["error"]["code"], "invalid_payment", "{name}");
-        self.observed_balance_without_submission();
+        assert_eq!(status, expected.0, "{name}: {document}");
+        assert_eq!(document["error"]["code"], expected.1, "{name}");
+        self.observed_without_submission(observation);
         assert!(self.persisted_without_credit().funding_intent(&self.quote.payload, raw).unwrap().is_none(), "{name}");
+    }
+
+    async fn acknowledges(&mut self, raw: &str, envelope: &ValidatedPaymentEnvelope, name: &str) {
+        let (status, document) = self.submit_intent(raw).await;
+        assert_eq!(status, StatusCode::OK, "{name}: {document}");
+        let ack: Signed<FundingIntent> = serde_json::from_value(document).unwrap();
+        protocol::verify(protocol::INTENT_DOMAIN, &ack, &self.quote.payload.provider_wallet).unwrap();
+        assert_eq!(ack.payload.network, self.quote.payload.network, "{name}");
+        assert_eq!(ack.payload.provider_wallet, self.quote.payload.provider_wallet, "{name}");
+        assert_eq!(ack.payload.consumer_wallet, self.quote.payload.consumer_wallet, "{name}");
+        assert_eq!(ack.payload.quote_id, self.quote.payload.id, "{name}");
+        assert_eq!(ack.payload.tx_hash, envelope.tx_hash, "{name}");
+        assert!((self.quote.payload.issued_at..self.quote.payload.expires_at).contains(&ack.payload.registered_at), "{name}");
+        self.observed_without_submission("eth_getBalance");
+        assert_eq!(serde_json::to_value(self.persisted_without_credit()
+            .funding_intent(&self.quote.payload, raw).unwrap()).unwrap(), serde_json::to_value(&ack).unwrap(), "{name}");
     }
 }
 
@@ -235,26 +277,14 @@ async fn fresh_intent_requires_exact_full_signed_cost_for_all_envelopes() {
     let directory = tempfile::tempdir().unwrap();
     for (kind, name) in ENVELOPES {
         let mut fixture = Fixture::new(directory.path(), 50_000 + u64::from(kind), 100).await;
-        let (raw, envelope) = fixture.original(kind, 11);
+        let (raw, envelope) = fixture.original(kind, 0, 11);
         let needed = 100 + u128::from(GAS) * 11;
-        *fixture.rpc.balance.lock().unwrap() = needed - 1;
-        fixture.refuses_cost(&raw, name).await;
+        fixture.rpc.control.lock().unwrap().balance = needed - 1;
+        fixture.refuses(&raw, name, (StatusCode::BAD_REQUEST, "invalid_payment"), "eth_getBalance").await;
         // Same quote and original bytes, now with exactly enough observed balance and fresh authority.
-        *fixture.rpc.balance.lock().unwrap() = needed;
+        fixture.rpc.control.lock().unwrap().balance = needed;
         fixture.rpc.requests.lock().unwrap().clear();
-        let (status, document) = fixture.submit_intent(&raw).await;
-        assert_eq!(status, StatusCode::OK, "{name}: {document}");
-        let ack: Signed<FundingIntent> = serde_json::from_value(document).unwrap();
-        protocol::verify(protocol::INTENT_DOMAIN, &ack, &fixture.quote.payload.provider_wallet).unwrap();
-        assert_eq!(ack.payload.network, fixture.quote.payload.network, "{name}");
-        assert_eq!(ack.payload.provider_wallet, fixture.quote.payload.provider_wallet, "{name}");
-        assert_eq!(ack.payload.consumer_wallet, fixture.quote.payload.consumer_wallet, "{name}");
-        assert_eq!(ack.payload.quote_id, fixture.quote.payload.id, "{name}");
-        assert_eq!(ack.payload.tx_hash, envelope.tx_hash, "{name}");
-        assert!((fixture.quote.payload.issued_at..fixture.quote.payload.expires_at).contains(&ack.payload.registered_at), "{name}");
-        fixture.observed_balance_without_submission();
-        assert_eq!(serde_json::to_value(fixture.persisted_without_credit()
-            .funding_intent(&fixture.quote.payload, &raw).unwrap()).unwrap(), serde_json::to_value(&ack).unwrap(), "{name}");
+        fixture.acknowledges(&raw, &envelope, name).await;
     }
 }
 
@@ -263,9 +293,9 @@ async fn fresh_intent_rejects_gas_product_above_u128_without_wrapping() {
     let directory = tempfile::tempdir().unwrap();
     for (kind, name) in ENVELOPES {
         let mut fixture = Fixture::new(directory.path(), 51_000 + u64::from(kind), 100).await;
-        let (raw, _) = fixture.original(kind, u128::MAX);
-        *fixture.rpc.balance.lock().unwrap() = u128::MAX;
-        fixture.refuses_cost(&raw, name).await;
+        let (raw, _) = fixture.original(kind, 0, u128::MAX);
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        fixture.refuses(&raw, name, (StatusCode::BAD_REQUEST, "invalid_payment"), "eth_getBalance").await;
     }
 }
 
@@ -277,8 +307,88 @@ async fn fresh_intent_rejects_value_plus_gas_one_above_u128_without_wrapping() {
     let funding = u128::MAX % u128::from(GAS) + 1;
     for (kind, name) in ENVELOPES {
         let mut fixture = Fixture::new(directory.path(), 52_000 + u64::from(kind), funding).await;
-        let (raw, _) = fixture.original(kind, max_fee);
-        *fixture.rpc.balance.lock().unwrap() = u128::MAX;
-        fixture.refuses_cost(&raw, name).await;
+        let (raw, _) = fixture.original(kind, 0, max_fee);
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        fixture.refuses(&raw, name, (StatusCode::BAD_REQUEST, "invalid_payment"), "eth_getBalance").await;
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_refuses_noncurrent_exhausted_and_competing_nonces() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases = [
+        ("future", 1, 0, 0, (StatusCode::BAD_REQUEST, "invalid_payment")),
+        ("spent", 0, 1, 1, (StatusCode::BAD_REQUEST, "invalid_payment")),
+        ("exhausted", u64::MAX, u64::MAX, u64::MAX, (StatusCode::BAD_REQUEST, "invalid_payment")),
+        ("competing pending", 0, 0, 1, (StatusCode::CONFLICT, "funding_pending")),
+        ("inconsistent pending", 1, 1, 0, (StatusCode::SERVICE_UNAVAILABLE, "settlement_unavailable")),
+    ];
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, (case, nonce, latest, pending, expected)) in cases.into_iter().enumerate() {
+            let name = format!("{envelope_name}: {case}");
+            let mut fixture = Fixture::new(directory.path(), 53_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let (raw, envelope) = fixture.original(kind, nonce, 11);
+            assert_eq!(envelope.nonce, nonce, "{name}");
+            {
+                let mut control = fixture.rpc.control.lock().unwrap();
+                control.balance = u128::MAX;
+                control.view.latest_nonce = latest;
+                control.view.pending_nonce = pending;
+            }
+            fixture.refuses(&raw, &name, expected, "eth_getTransactionCount").await;
+            // Exhaustion cannot become admissible without changing the original, which is forbidden here.
+            if nonce != u64::MAX {
+                {
+                    let mut control = fixture.rpc.control.lock().unwrap();
+                    control.view.latest_nonce = nonce;
+                    control.view.pending_nonce = nonce;
+                }
+                fixture.rpc.requests.lock().unwrap().clear();
+                fixture.acknowledges(&raw, &envelope, &name).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rechecks_nonce_and_head_after_balance_then_recovers_the_original() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases = [
+        ("latest nonce changes", ChainView { latest_nonce: 1, pending_nonce: 1, ..ChainView::default() }),
+        ("pending nonce changes", ChainView { pending_nonce: 1, ..ChainView::default() }),
+        // Safe remains height/hash 9, so the regressed second view is internally healthy.
+        ("head regresses", ChainView { head_height: 9, head_hash: 9, ..ChainView::default() }),
+        ("same-height hash changes", ChainView { head_hash: 11, ..ChainView::default() }),
+    ];
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, (case, changed)) in cases.into_iter().enumerate() {
+            let name = format!("{envelope_name}: {case}");
+            let mut fixture = Fixture::new(directory.path(), 54_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let (raw, envelope) = fixture.original(kind, 0, 11);
+            {
+                let mut control = fixture.rpc.control.lock().unwrap();
+                control.balance = u128::MAX;
+                control.after_balance = Some(changed);
+            }
+            fixture.refuses(&raw, &name, (StatusCode::CONFLICT, "funding_pending"), "eth_getBalance").await;
+            fixture.rpc.control.lock().unwrap().view = ChainView::default();
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.acknowledges(&raw, &envelope, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_allows_healthy_head_advancement_after_balance() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 55_000 + u64::from(kind), 100).await;
+        let (raw, envelope) = fixture.original(kind, 0, 11);
+        {
+            let mut control = fixture.rpc.control.lock().unwrap();
+            control.balance = u128::MAX;
+            control.after_balance = Some(ChainView { head_height: 11, head_hash: 11, ..ChainView::default() });
+        }
+        fixture.acknowledges(&raw, &envelope, name).await;
     }
 }
