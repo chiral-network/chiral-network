@@ -1375,6 +1375,41 @@ async fn failed_intent_persistence_rolls_back_the_entire_retention_handoff() {
     }
 }
 
+fn restore_retained_intents(db: &mut Connection, fixture: &Fixture, count: u64) {
+    // Restore complete signed originals, not observed historical owner/spendability
+    // admissions. Each envelope is independently validated before fixture insertion.
+    let retained_key = format!("{:064x}", 123_456);
+    let retained_payer = wallet::address_from_private_key(&retained_key).unwrap();
+    assert_ne!(retained_payer, fixture.quote.payload.consumer_wallet);
+    let tx = db.transaction().unwrap();
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").unwrap();
+        for sequence in 1..=count {
+            let mut payload = fixture.quote.payload.clone();
+            payload.id = format!("0x{:064x}", 0xfeed_0000 + sequence);
+            payload.nonce = format!("0x{:064x}", 0xcafe_0000 + sequence);
+            payload.consumer_wallet = retained_payer.clone();
+            let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
+            let raw = signed_payment(&PaymentFields::opening(&quote.payload, sequence, 11),
+                &retained_key, 0, &[0xc0]);
+            let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
+                &retained_payer, &quote.payload.provider_wallet, &quote.payload.funding_wei,
+                &protocol::opening_data(&quote.payload).unwrap()).unwrap();
+            let ack = protocol::sign(protocol::INTENT_DOMAIN, FundingIntent {
+                network: quote.payload.network.clone(), provider_wallet: quote.payload.provider_wallet.clone(),
+                consumer_wallet: retained_payer.clone(), quote_id: quote.payload.id.clone(),
+                tx_hash: envelope.tx_hash.clone(), registered_at: quote.payload.issued_at,
+            }, &fixture.provider.state.private_key).unwrap();
+            insert.execute(params![quote.payload.id, envelope.tx_hash, raw,
+                serde_json::to_string(&ack).unwrap(), serde_json::to_string(&quote).unwrap(),
+                retained_payer, sequence.to_string(), quote.payload.expires_at]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
     let directory = tempfile::tempdir().unwrap();
@@ -1382,40 +1417,7 @@ async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
     let unrelated_quote = fixture.quote.clone();
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
 
-    // Restore 9,999 complete, internally consistent accepted originals in one fixture
-    // transaction. Their historical spendability/owner admission is assumed, not replayed.
-    // Unlike capacity-only placeholder rows, every quote, payment and acknowledgement is signed.
-    let retained_key = format!("{:064x}", 123_456);
-    let retained_payer = wallet::address_from_private_key(&retained_key).unwrap();
-    {
-        let tx = db.transaction().unwrap();
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").unwrap();
-            for sequence in 1..=9_999_u64 {
-                let mut payload = unrelated_quote.payload.clone();
-                payload.id = format!("0x{:064x}", 0xfeed_0000 + sequence);
-                payload.nonce = format!("0x{:064x}", 0xcafe_0000 + sequence);
-                payload.consumer_wallet = retained_payer.clone();
-                let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
-                let raw = signed_payment(&PaymentFields::opening(&quote.payload, sequence, 11),
-                    &retained_key, 0, &[0xc0]);
-                let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
-                    &retained_payer, &quote.payload.provider_wallet, &quote.payload.funding_wei,
-                    &protocol::opening_data(&quote.payload).unwrap()).unwrap();
-                let ack = protocol::sign(protocol::INTENT_DOMAIN, FundingIntent {
-                    network: quote.payload.network.clone(), provider_wallet: quote.payload.provider_wallet.clone(),
-                    consumer_wallet: retained_payer.clone(), quote_id: quote.payload.id.clone(),
-                    tx_hash: envelope.tx_hash.clone(), registered_at: quote.payload.issued_at,
-                }, &fixture.provider.state.private_key).unwrap();
-                insert.execute(params![quote.payload.id, envelope.tx_hash, raw,
-                    serde_json::to_string(&ack).unwrap(), serde_json::to_string(&quote).unwrap(),
-                    retained_payer, sequence.to_string(), quote.payload.expires_at]).unwrap();
-            }
-        }
-        tx.commit().unwrap();
-    }
+    restore_retained_intents(&mut db, &fixture, 9_999);
 
     // Issue both competing quotes after fixture restoration. Keep the unrelated signed
     // proposal intact, and do not mistake seed generation time for a fresh chain observation.
@@ -1918,6 +1920,100 @@ async fn native_lost_fresh_acknowledgement_recovers_after_provider_and_client_re
         drop(consumer);
         stop.send(()).unwrap();
         server.await.unwrap();
+        // Restore later resource pressure only after the real acknowledgement was
+        // committed and lost. These are complete signed fixture prerequisites, not
+        // 9,999 observed admissions or public issuances within one rate window.
+        {
+            let mut pressure_db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            restore_retained_intents(&mut pressure_db, &fixture, 9_999);
+            let tx = pressure_db.transaction().unwrap();
+            {
+                let mut insert = tx.prepare(
+                    "INSERT INTO quotes(id,owner,expires,record) VALUES(?1,?2,?3,?4)").unwrap();
+                for sequence in 1..=9_999_u64 {
+                    let mut payload = unrelated.payload.clone();
+                    payload.id = format!("0x{:064x}", 0xbeef_0000 + sequence);
+                    payload.nonce = format!("0x{:064x}", 0xface_0000 + sequence);
+                    payload.consumer_wallet = format!("0x{:040x}", 0x90000 + sequence);
+                    let pending = protocol::sign(protocol::QUOTE_DOMAIN, payload,
+                        &fixture.provider.state.private_key).unwrap();
+                    insert.execute(params![pending.payload.id, pending.payload.consumer_wallet,
+                        pending.payload.expires_at, serde_json::to_string(&pending).unwrap()]).unwrap();
+                }
+            }
+            tx.commit().unwrap();
+        }
+        // Stream every persisted column, including exact signed JSON/raw strings,
+        // without retaining all 20,000 records in Rust memory.
+        let resource_snapshot = || [
+            "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
+             FROM funding_intents ORDER BY contract",
+            "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        ].map(|query| {
+            let mut hash = Keccak::v256();
+            let mut count = 0_u64;
+            let mut statement = db.prepare(query).unwrap();
+            let mut rows = statement.query([]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                hash.update(row.get::<_, String>(0).unwrap().as_bytes());
+                count += 1;
+            }
+            let mut digest = [0; 32];
+            hash.finalize(&mut digest);
+            (count, digest)
+        });
+        let assert_full_resources = || {
+            let counts: (u64, u64) = db.query_row(
+                "SELECT (SELECT COUNT(*) FROM funding_intents WHERE admission_until>?1
+                         AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract)),
+                        (SELECT COUNT(*) FROM quotes WHERE expires>?1)",
+                [protocol::now().unwrap()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(counts, (10_000, 10_000), "both fresh resources must still be full at recovery");
+        };
+        let pressure_before = resource_snapshot();
+        assert_eq!((pressure_before[0].0, pressure_before[1].0), (10_000, 10_000));
+        assert_full_resources();
+        assert_eq!(retained(), retained_before);
+        assert_eq!(pending(&unrelated.payload.id), unrelated_before);
+
+        // Both fresh gates remain open here. Real refusals must be caused by the
+        // independent storage/admission bounds, not later draining or stopped RPC.
+        let (status, refused) = request(&mut fixture.app, "/v1/contracts/propose", &HeaderMap::new(),
+            serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,
+                "consumer_wallet":quote.payload.consumer_wallet,"funding_wei":"102"})).unwrap()).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+        assert_eq!(refused["error"]["code"], "rate_limit");
+        let candidate_raw = signed_payment(&PaymentFields::opening(&unrelated.payload, 1, 11),
+            &fixture.owner_key, 0, &[0xc0]);
+        let candidate = fixture.provider.state.chain.validate_payment_envelope(&candidate_raw,
+            &unrelated.payload.consumer_wallet, &unrelated.payload.provider_wallet,
+            &unrelated.payload.funding_wei, &protocol::opening_data(&unrelated.payload).unwrap()).unwrap();
+        // Synthetic next-nonce observations are not proof the original executed.
+        fixture.rpc.observed_at.store(protocol::now().unwrap(), Ordering::Release);
+        fixture.rpc.control.lock().unwrap().view = ChainView {
+            latest_nonce: 1, pending_nonce: 1, head_height: 11, head_hash: 11,
+        };
+        let (status, refused) = authorized_intent(&mut fixture.app, &unrelated,
+            &fixture.owner_key, &candidate_raw).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+        assert_eq!(refused["error"]["code"], "rate_limit");
+        let calls = fixture.rpc.requests.lock().unwrap();
+        let fresh_calls = &calls[provider_calls..];
+        assert_eq!(fresh_calls.iter().filter(|call| call["method"] == "eth_getBalance").count(), 1);
+        assert_eq!(fresh_calls.iter().filter(|call| call["method"] == "eth_getTransactionCount").count(), 4);
+        assert!(calls.iter().all(|call| call["method"] != "eth_sendRawTransaction"));
+        let provider_calls = calls.len();
+        drop(calls);
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM funding_intents WHERE contract=?1 OR tx_hash=?2 OR (sender=?3 AND nonce='1')",
+            params![unrelated.payload.id, candidate.tx_hash, unrelated.payload.consumer_wallet],
+            |row| row.get::<_, u64>(0)).unwrap(), 0);
+        assert_eq!(resource_snapshot(), pressure_before, "fresh refusals cannot evict or partially accept records");
+        assert_full_resources();
+        assert!(client_calls.lock().unwrap().is_empty());
+        assert_eq!(std::fs::read(&account_path).unwrap(), prepared_bytes);
+        assert_eq!(journal_rows(), journal_before);
+
         fixture.app = Router::new();
         {
             let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
@@ -1934,6 +2030,8 @@ async fn native_lost_fresh_acknowledgement_recovers_after_provider_and_client_re
         let consumer = Consumer::new(config.clone()).unwrap();
         assert_eq!(std::fs::read(&account_path).unwrap(), prepared_bytes);
         assert_eq!(retained(), retained_before);
+        assert_full_resources();
+        assert_eq!(resource_snapshot(), pressure_before);
         if repeat_fund {
             consumer.fund(&fixture.provider.offer, quote).await
                 .expect_err("recovered acceptance cannot fabricate healthy chain evidence");
@@ -1965,7 +2063,9 @@ async fn native_lost_fresh_acknowledgement_recovers_after_provider_and_client_re
         assert_eq!(retained(), retained_before, "no renewed lease or rewritten acknowledgement");
         assert_eq!(pending(&unrelated.payload.id), unrelated_before);
         let ledger = BillingStore::open(&fixture.provider.ledger_path, &quote.payload.network).unwrap();
-        assert_eq!(ledger.admin_summary().unwrap()["active_funding_intents"], 1);
+        assert_eq!(ledger.admin_summary().unwrap()["active_funding_intents"], 10_000);
+        assert_full_resources();
+        assert_eq!(resource_snapshot(), pressure_before, "cached recovery cannot consume or rewrite either resource");
         assert_eq!(serde_json::to_value(ledger.quote(&quote.payload.id).unwrap()).unwrap(), serde_json::to_value(quote).unwrap());
         assert_eq!(serde_json::to_value(ledger.funding_intent(&quote.payload, &raw).unwrap()).unwrap(), accepted["funding_intent"]);
         let accounts: (u64, u64, u64, u64) = db.query_row(
