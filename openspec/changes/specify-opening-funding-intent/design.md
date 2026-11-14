@@ -134,6 +134,20 @@ All 22 candidates must return HTTP 400 `invalid_payment`, retain the signed quot
 
 Negative cases do not require or prohibit incidental read-only RPC ordering; an optional positive observation is still required for every existing full-cost/nonce/head case and every successful control. Synthetic healthy RPC state, ample balance and unchanged qualification isolate the payment boundary. These tests do not prove live-chain execution or replace the remaining malformed raw-envelope, signature/canonicality, size-boundary and qualification inventory in parent 2.2.
 
+## Task 2.2.4 canonical numeric and signature acceptance
+
+Existing direct decoder tests reject noncanonical integers, excessive widths and high-s signatures; the wallet personal-sign test also flips recovery parity for its alternate signature. The route-level boundary additionally checks the quoted payer, so an adversarial transaction with an accidentally changed recovered payer could be refused even if a canonicality check were missing. This slice isolates numeric/signature rejection from that alternative explanation.
+
+The fixture factors its existing independent signer into raw-field signing and a shared digest calculation, retaining all previous valid controls. `resign_field` replaces one unsigned RLP field and signs the resulting encoding itself; it does not reuse a stale signature. The original control is encoded and independently validated before constructing the candidate.
+
+`fresh_intent_rejects_resigned_noncanonical_and_oversized_integers` covers integer zero encoded as a zero byte, a leading-zero nonzero nonce, nonce/gas beyond 64 bits and value/maximum price beyond 128 bits for legacy, EIP-2930 and EIP-1559. Wider values retain otherwise admissible low bits, exposing truncation rather than relying on a different quoted value or insufficient low-bit balance. The leading-zero nonce control uses stable latest/pending nonce one. All eighteen candidates are signed over their actual encoded fields.
+
+`fresh_intent_rejects_high_s_even_when_the_same_payer_is_recovered` transforms each valid signature's `s` to the curve order minus `s` and flips recovery parity, preserving every unsigned field. Independent secp256k1 recovery must produce the original public key before the HTTP refusal is checked. This prevents an unrelated payer mismatch from masquerading as canonical-signature enforcement.
+
+All 21 cases require HTTP 400 `invalid_payment`, the retained signed quote, no acknowledgement or paid accounting in reopened storage and no submission. Each then acknowledges the unchanged valid original, demonstrating that the rejected encoding did not consume its quote/sender-nonce commitment. Existing cost, nonce/head and signed-field/gas/fee evidence remains intact.
+
+This is synthetic loopback admission evidence, not execution, automatic replacement or live-chain qualification. Raw hexadecimal syntax, unsupported envelope types, other RLP/access-list structures, exact decoded-byte limits and remaining qualification inventory are not claimed by these two groups.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.

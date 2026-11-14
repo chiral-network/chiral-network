@@ -20,9 +20,10 @@ use chiral_network::{
     wallet,
 };
 use proposal::PreparedProvider;
-use rlp::RlpStream;
+use primitive_types::U256;
+use rlp::{Rlp, RlpStream};
 use rusqlite::Connection;
-use secp256k1::{Message, Secp256k1, SecretKey};
+use secp256k1::{ecdsa::{RecoverableSignature, RecoveryId}, Message, PublicKey, Secp256k1, SecretKey};
 use serde_json::{json, Value};
 use std::{net::TcpListener, path::Path, sync::{Arc, Mutex}};
 use tiny_keccak::{Hasher, Keccak};
@@ -130,6 +131,15 @@ impl PaymentFields {
     }
 }
 
+fn payment_digest(kind: u8, payload: &[u8]) -> [u8; 32] {
+    let mut digest = [0_u8; 32];
+    let mut keccak = Keccak::v256();
+    if kind != 0 { keccak.update(&[kind]); }
+    keccak.update(payload);
+    keccak.finalize(&mut digest);
+    digest
+}
+
 fn signed_payment(payment: &PaymentFields, key: &str, kind: u8) -> String {
     let fields = |stream: &mut RlpStream| {
         if kind != 0 { stream.append(&payment.chain_id); }
@@ -141,27 +151,39 @@ fn signed_payment(payment: &PaymentFields, key: &str, kind: u8) -> String {
         stream.append(&payment.data.as_slice());
         if kind != 0 { stream.begin_list(0); }
     };
+    sign_payment_fields(kind, payment.chain_id, key, fields)
+}
+
+fn sign_payment_fields(kind: u8, chain_id: u64, key: &str, fields: impl Fn(&mut RlpStream)) -> String {
     let mut unsigned = RlpStream::new_list(match kind { 0 | 2 => 9, 1 => 8, _ => unreachable!() });
     fields(&mut unsigned);
-    if kind == 0 { unsigned.append(&payment.chain_id).append(&0_u8).append(&0_u8); }
-    let mut digest = [0_u8; 32];
-    let mut keccak = Keccak::v256();
-    if kind != 0 { keccak.update(&[kind]); }
-    keccak.update(&unsigned.out());
-    keccak.finalize(&mut digest);
+    if kind == 0 { unsigned.append(&chain_id).append(&0_u8).append(&0_u8); }
+    let digest = payment_digest(kind, &unsigned.out());
     let key = SecretKey::from_slice(&hex::decode(key).unwrap()).unwrap();
     let (recovery, signature) = Secp256k1::signing_only()
         .sign_ecdsa_recoverable(&Message::from_digest_slice(&digest).unwrap(), &key).serialize_compact();
     let mut signed = RlpStream::new_list(match kind { 0 => 9, 1 => 11, 2 => 12, _ => unreachable!() });
     fields(&mut signed);
     let parity = recovery.to_i32() as u64;
-    signed.append(&if kind == 0 { payment.chain_id * 2 + 35 + parity } else { parity });
+    signed.append(&if kind == 0 { chain_id * 2 + 35 + parity } else { parity });
     for limb in [&signature[..32], &signature[32..]] {
         let start = limb.iter().position(|byte| *byte != 0).unwrap_or(limb.len());
         signed.append(&&limb[start..]);
     }
     let encoded = hex::encode(signed.out());
     if kind == 0 { format!("0x{encoded}") } else { format!("0x{kind:02x}{encoded}") }
+}
+
+fn resign_field(raw: &str, kind: u8, chain_id: u64, key: &str, index: usize, encoded: &[u8]) -> String {
+    let bytes = hex::decode(&raw[2..]).unwrap();
+    let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+    let unsigned_fields = rlp.item_count().unwrap() - 3;
+    assert!(index < unsigned_fields);
+    sign_payment_fields(kind, chain_id, key, |stream| {
+        for field in 0..unsigned_fields {
+            stream.append_raw(if field == index { encoded } else { rlp.at(field).unwrap().as_raw() }, 1);
+        }
+    })
 }
 
 async fn request(app: &mut Router, path: &str, headers: &HeaderMap, body: Vec<u8>) -> (StatusCode, Value) {
@@ -488,4 +510,99 @@ async fn fresh_intent_rejects_priority_fee_above_signed_maximum() {
         (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
     fixture.rpc.requests.lock().unwrap().clear();
     fixture.acknowledges(&original, &envelope, "EIP-1559 valid priority control").await;
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_resigned_noncanonical_and_oversized_integers() {
+    let directory = tempfile::tempdir().unwrap();
+    let cases = ["zero nonce byte", "leading-zero nonce", "oversized nonce",
+        "oversized gas", "oversized value", "oversized maximum price"];
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, case) in cases.into_iter().enumerate() {
+            let name = format!("{envelope_name}: {case}");
+            let mut fixture = Fixture::new(directory.path(), 59_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let nonce = u64::from(case == "leading-zero nonce");
+            let fields = PaymentFields::opening(&fixture.quote.payload, nonce, 11);
+            let (original, envelope) = fixture.original(kind, &fields);
+            let nonce_field = usize::from(kind != 0);
+            let fee_field = usize::from(kind) + 1;
+            let mut encoded = [0_u8; 18];
+            let (field, length) = match case {
+                // Canonical integer zero is empty bytes, not a zero byte.
+                "zero nonce byte" => (nonce_field, 1),
+                "leading-zero nonce" => {
+                    encoded[0] = 0x82;
+                    encoded[2] = 1;
+                    (nonce_field, 3)
+                }
+                _ => {
+                    let (field, width, value) = match case {
+                        "oversized nonce" => (nonce_field, 8, u128::from(fields.nonce)),
+                        "oversized gas" => (fee_field + 1, 8, u128::from(fields.gas)),
+                        "oversized value" => (fee_field + 3, 16, fields.value),
+                        "oversized maximum price" => (fee_field, 16, fields.max_fee),
+                        _ => unreachable!(),
+                    };
+                    // A high byte beyond the accepted width, with otherwise admissible low bits.
+                    encoded[0] = 0x80 + (width + 1) as u8;
+                    encoded[1] = 1;
+                    encoded[2..width + 2].copy_from_slice(&value.to_be_bytes()[16 - width..]);
+                    (field, width + 2)
+                }
+            };
+            let candidate = resign_field(&original, kind, fields.chain_id, &fixture.owner_key,
+                field, &encoded[..length]);
+            {
+                let mut control = fixture.rpc.control.lock().unwrap();
+                control.balance = u128::MAX;
+                control.view.latest_nonce = nonce;
+                control.view.pending_nonce = nonce;
+            }
+            fixture.refuses(&candidate, &name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.acknowledges(&original, &envelope, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_high_s_even_when_the_same_payer_is_recovered() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 60_000 + u64::from(kind), 100).await;
+        let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+        let (original, envelope) = fixture.original(kind, &fields);
+        let bytes = hex::decode(&original[2..]).unwrap();
+        let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+        let unsigned_fields = rlp.item_count().unwrap() - 3;
+        let mut unsigned = RlpStream::new_list(if kind == 0 { 9 } else { unsigned_fields });
+        for field in 0..unsigned_fields { unsigned.append_raw(rlp.at(field).unwrap().as_raw(), 1); }
+        if kind == 0 { unsigned.append(&fields.chain_id).append(&0_u8).append(&0_u8); }
+        let digest = payment_digest(kind, &unsigned.out());
+        let base = if kind == 0 { fields.chain_id * 2 + 35 } else { 0 };
+        let parity = ((rlp.val_at::<u64>(unsigned_fields).unwrap() - base) as u8) ^ 1;
+        let order = U256::from_big_endian(&secp256k1::constants::CURVE_ORDER);
+        let mut signature = [0_u8; 64];
+        U256::from_big_endian(rlp.at(unsigned_fields + 1).unwrap().data().unwrap())
+            .to_big_endian(&mut signature[..32]);
+        let high_s = order - U256::from_big_endian(rlp.at(unsigned_fields + 2).unwrap().data().unwrap());
+        high_s.to_big_endian(&mut signature[32..]);
+        let malleated = RecoverableSignature::from_compact(&signature, RecoveryId::from_i32(i32::from(parity)).unwrap()).unwrap();
+        let secp = Secp256k1::new();
+        let key = SecretKey::from_slice(&hex::decode(&fixture.owner_key).unwrap()).unwrap();
+        // This is a mathematically valid alternate signature, not a payer-mismatch test.
+        assert_eq!(secp.recover_ecdsa(&Message::from_digest_slice(&digest).unwrap(), &malleated).unwrap(),
+            PublicKey::from_secret_key(&secp, &key), "{name}");
+        let mut signed = RlpStream::new_list(unsigned_fields + 3);
+        for field in 0..unsigned_fields { signed.append_raw(rlp.at(field).unwrap().as_raw(), 1); }
+        signed.append(&(base + u64::from(parity)));
+        signed.append_raw(rlp.at(unsigned_fields + 1).unwrap().as_raw(), 1);
+        signed.append(&&signature[32..]);
+        let encoded = hex::encode(signed.out());
+        let candidate = if kind == 0 { format!("0x{encoded}") } else { format!("0x{kind:02x}{encoded}") };
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        fixture.refuses(&candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
+        fixture.rpc.requests.lock().unwrap().clear();
+        fixture.acknowledges(&original, &envelope, name).await;
+    }
 }
