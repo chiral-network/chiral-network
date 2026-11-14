@@ -1216,3 +1216,77 @@ async fn fresh_intent_rechecks_provider_funding_gates_after_balance() {
         }
     }
 }
+
+#[tokio::test]
+async fn failed_intent_persistence_rolls_back_the_entire_retention_handoff() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, (point, event, contract_field)) in [
+            ("intent-insert", "AFTER INSERT ON funding_intents", "NEW.contract"),
+            ("proposal-delete", "AFTER DELETE ON quotes", "OLD.id"),
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 19_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+            let accepted_quote = fixture.quote.clone();
+            let fields = PaymentFields::opening(&accepted_quote.payload, 0, 11);
+            let (accepted_raw, accepted_envelope) = fixture.original(kind, &fields);
+            fixture.acknowledges(&accepted_raw, &accepted_envelope, "earlier acceptance").await;
+            let accepted_ack = fixture.provider.state.ledger
+                .funding_intent(&accepted_quote.payload, &accepted_raw).unwrap().unwrap();
+
+            let (status, document) = request(&mut fixture.app, "/v1/contracts/propose", &HeaderMap::new(),
+                serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,
+                    "consumer_wallet":accepted_quote.payload.consumer_wallet,"funding_wei":"100"})).unwrap()).await;
+            assert_eq!(status, StatusCode::OK, "{document}");
+            fixture.quote = serde_json::from_value(document).unwrap();
+            // Synthetic nonce advancement is not execution or credit of the earlier intent.
+            fixture.rpc.control.lock().unwrap().view = ChainView {
+                latest_nonce: 1, pending_nonce: 1, ..ChainView::default()
+            };
+            let fields = PaymentFields::opening(&fixture.quote.payload, 1, 11);
+            let (raw, envelope) = fixture.original(kind, &fields);
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let pending_before = db.query_row("SELECT record FROM quotes WHERE id=?1",
+                [&fixture.quote.payload.id], |row| row.get::<_, String>(0)).unwrap();
+            let retained_records = || {
+                let mut statement = db.prepare(
+                    "SELECT contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until
+                     FROM funding_intents ORDER BY contract").unwrap();
+                let records = statement.query_map([], |row| Ok((
+                    row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?, row.get::<_, u64>(7)?,
+                ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+                records
+            };
+            let retained_before = retained_records();
+            // FAIL leaves this statement's writes in the transaction. The production
+            // transaction must roll them back, not rely on SQLite undoing the statement.
+            db.execute_batch(&format!(
+                "CREATE TRIGGER fail_registration {event} WHEN {contract_field}='{}'
+                 BEGIN SELECT RAISE(FAIL,'injected registration persistence failure'); END;",
+                fixture.quote.payload.id)).unwrap();
+            fixture.rpc.requests.lock().unwrap().clear();
+            let name = format!("{envelope_name}: {point}");
+            fixture.refuses(&raw, &name, (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+                Some("eth_getBalance")).await;
+            let pending_after = db.query_row("SELECT record FROM quotes WHERE id=?1",
+                [&fixture.quote.payload.id], |row| row.get::<_, String>(0)).unwrap();
+            assert_eq!(pending_after, pending_before, "{name}");
+            assert_eq!(retained_records(), retained_before, "{name}");
+            let reopened = fixture.persisted_without_credit();
+            let recovered = reopened.funding_intent(&accepted_quote.payload, &accepted_raw).unwrap().unwrap();
+            assert_eq!(recovered.payload, accepted_ack.payload, "{name}");
+            assert_eq!(recovered.signature, accepted_ack.signature, "{name}");
+
+            db.execute_batch("DROP TRIGGER fail_registration").unwrap();
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.acknowledges(&raw, &envelope, &name).await;
+            assert!(retained_records().contains(&retained_before[0]), "{name}");
+            let pending_count: u64 = db.query_row("SELECT COUNT(*) FROM quotes WHERE id=?1",
+                [&fixture.quote.payload.id], |row| row.get(0)).unwrap();
+            assert_eq!(pending_count, 0, "{name}");
+        }
+    }
+}
