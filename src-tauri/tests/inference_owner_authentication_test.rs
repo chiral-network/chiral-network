@@ -1,4 +1,4 @@
-//! Provider owner-proof acceptance through the production authentication and ledger APIs.
+//! Provider challenge-rate and owner-proof acceptance through production authentication and ledger APIs.
 //! Explicit time, isolated disk state and public fixture keys; no HTTP business operation or payment.
 use axum::http::HeaderMap;
 use chiral_network::{
@@ -39,6 +39,19 @@ fn proof(payload: &AuthPayload, key: &str) -> HeaderMap {
     headers.insert("x-chiral-nonce", payload.nonce.parse().unwrap());
     headers.insert("x-chiral-signature", signature.parse().unwrap());
     headers
+}
+
+fn consume_owner_challenge(ledger: &BillingStore, payload: &AuthPayload, body: &[u8], now: u64) {
+    assert_eq!(auth::authenticate_owner(ledger, &proof(payload, OWNER_KEY),
+        &payload.network, &payload.provider_wallet, &payload.method, &payload.path, body, now).unwrap(),
+        payload.wallet);
+    assert!(ledger.challenge(&payload.nonce).is_err());
+}
+
+fn assert_challenge_rate_refusal(ledger: &BillingStore, payload: &AuthPayload, now: u64) {
+    let error = ledger.create_challenge(payload, now).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.challenge(&payload.nonce).is_err());
 }
 
 struct Fixture {
@@ -233,4 +246,110 @@ fn stale_validated_proof_cannot_consume_a_replacement_payload() {
     assert_eq!(fixture.authenticate(&current_proof, "GET", &replacement.path, b"", 103).unwrap(),
         replacement.wallet);
     assert!(fixture.ledger.challenge(&replacement.nonce).is_err());
+}
+
+#[test]
+fn wallet_challenge_rate_spans_operations_and_survives_consumption_and_reopening() {
+    let mut fixture = Fixture::new(payload());
+    let mut body: &[u8] = BODY;
+    // The fixture's real insertion at t=100 is the first of twelve in Unix minute 1.
+    for sequence in 1..=12 {
+        if sequence > 1 {
+            let (method, path, raw_body): (&str, String, &[u8]) = match sequence % 4 {
+                0 => ("DELETE", format!("/v1/contracts/0x{sequence:064x}/credentials/0x{sequence:064x}"), b""),
+                1 => ("POST", OPEN.into(), RESERIALIZED_BODY),
+                2 => ("GET", format!("{READ}?after={sequence}&limit=1"), b""),
+                _ => ("POST", format!("/v1/contracts/0x{sequence:064x}/credentials"), br#"{"scopes":["read"]}"#),
+            };
+            fixture.payload.method = method.into();
+            fixture.payload.path = path;
+            fixture.payload.body_hash = protocol::hash_hex(raw_body);
+            fixture.payload.nonce = format!("0x{sequence:064x}");
+            body = raw_body;
+            fixture.ledger.create_challenge(&fixture.payload, 100).unwrap();
+        }
+        if sequence < 12 {
+            // Real signatures release occupancy, never letting the eight-slot gate mask the rate.
+            consume_owner_challenge(&fixture.ledger, &fixture.payload, body, 100);
+        }
+    }
+
+    let Fixture { ledger, payload, path, _directory } = fixture;
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &payload.network).unwrap();
+    let mut thirteenth = payload.clone();
+    thirteenth.nonce = format!("0x{:064x}", 13);
+    thirteenth.method = "GET".into();
+    thirteenth.path = format!("{READ}?after=999&limit=1");
+    thirteenth.body_hash = protocol::hash_hex(b"");
+    assert_challenge_rate_refusal(&reopened, &thirteenth, 119);
+
+    // Exhaustion neither invalidates the retained proof nor refunds its unit when it is consumed.
+    consume_owner_challenge(&reopened, &payload, body, 119);
+    assert_challenge_rate_refusal(&reopened, &thirteenth, 119);
+}
+
+#[test]
+fn wallet_challenge_rate_survives_expiry_cleanup_and_reopening() {
+    // Short-lived valid storage fixtures isolate expiry from a minute boundary.
+    // They do not represent the HTTP issuer's normal 120-second lifetime.
+    let mut fixture = Fixture::new(AuthPayload { expires_at: 101, ..payload() });
+    for sequence in 2..=12 {
+        let now = 99 + sequence;
+        let expired_nonce = std::mem::replace(&mut fixture.payload.nonce, format!("0x{sequence:064x}"));
+        fixture.payload.expires_at = now + 1;
+        fixture.ledger.create_challenge(&fixture.payload, now).unwrap();
+        assert!(fixture.ledger.challenge(&expired_nonce).is_err());
+    }
+
+    let Fixture { ledger, payload, path, _directory } = fixture;
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &payload.network).unwrap();
+    let mut thirteenth = payload.clone();
+    thirteenth.nonce = format!("0x{:064x}", 13);
+    thirteenth.expires_at = 232;
+    assert_challenge_rate_refusal(&reopened, &thirteenth, 112);
+
+    // An independent named wallet commits cleanup in the same minute; no rate window is advanced.
+    let mut cleanup = thirteenth.clone();
+    cleanup.wallet = payload.provider_wallet.clone();
+    cleanup.nonce = format!("0x{:064x}", 14);
+    reopened.create_challenge(&cleanup, 112).unwrap();
+    assert!(reopened.challenge(&payload.nonce).is_err());
+    drop(reopened);
+    let reopened = BillingStore::open(&path, &payload.network).unwrap();
+    assert_challenge_rate_refusal(&reopened, &thirteenth, 119);
+}
+
+#[test]
+fn wallet_challenge_rate_uses_fixed_forward_minutes_without_accumulating_allowance() {
+    let mut fixture = Fixture::new(payload());
+    consume_owner_challenge(&fixture.ledger, &fixture.payload, BODY, 100);
+    fixture.payload.expires_at = 239;
+    for sequence in 2..=12 {
+        fixture.payload.nonce = format!("0x{sequence:064x}");
+        fixture.ledger.create_challenge(&fixture.payload, 119).unwrap();
+        consume_owner_challenge(&fixture.ledger, &fixture.payload, BODY, 119);
+    }
+    fixture.payload.nonce = format!("0x{:064x}", 13);
+    assert_challenge_rate_refusal(&fixture.ledger, &fixture.payload, 119);
+
+    // t=120 is a fixed boundary, not a rolling minute from the first issuance at t=100.
+    for now in [120, 600] {
+        fixture.payload.expires_at = now + 120;
+        for sequence in 1..=12 {
+            fixture.payload.nonce = format!("0x{:064x}", now + sequence);
+            fixture.ledger.create_challenge(&fixture.payload, now).unwrap();
+            consume_owner_challenge(&fixture.ledger, &fixture.payload, BODY, now);
+        }
+        fixture.payload.nonce = format!("0x{:064x}", now + 13);
+        assert_challenge_rate_refusal(&fixture.ledger, &fixture.payload, now + 59);
+        if now == 120 {
+            // Leave eleven units unused in minute 3, then skip ahead to minute 10.
+            fixture.payload.nonce = format!("0x{:064x}", 180);
+            fixture.payload.expires_at = 300;
+            fixture.ledger.create_challenge(&fixture.payload, 180).unwrap();
+            consume_owner_challenge(&fixture.ledger, &fixture.payload, BODY, 180);
+        }
+    }
 }
