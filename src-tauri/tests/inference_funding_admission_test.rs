@@ -12,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use chiral_network::{
+    app::ProviderState,
     auth::{self, AuthPayload},
     billing_store::BillingStore,
     chain_client::{ChainClient, ChainError, ValidatedPaymentEnvelope},
@@ -26,7 +27,7 @@ use rlp::{Rlp, RlpStream};
 use rusqlite::Connection;
 use secp256k1::{ecdsa::{RecoverableSignature, RecoveryId}, Message, PublicKey, Secp256k1, SecretKey};
 use serde_json::{json, Value};
-use std::{net::TcpListener, path::Path, sync::{Arc, Mutex}};
+use std::{net::TcpListener, path::Path, sync::{atomic::Ordering, Arc, Mutex}};
 use tiny_keccak::{Hasher, Keccak};
 use tokio::task::JoinHandle;
 use tower::Service;
@@ -56,11 +57,28 @@ impl Default for ChainView {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FundingGate {
+    Accepting,
+    Ready,
+}
+
+impl FundingGate {
+    fn set(self, provider: &ProviderState, enabled: bool) {
+        let gate = match self {
+            Self::Accepting => &provider.accepting,
+            Self::Ready => &provider.funding_ready,
+        };
+        gate.store(enabled, Ordering::Release);
+    }
+}
+
 #[derive(Default)]
 struct RpcControl {
     balance: u128,
     view: ChainView,
     after_balance: Option<ChainView>,
+    after_balance_gate: Option<(Arc<ProviderState>, FundingGate)>,
 }
 
 struct SpendabilityRpc {
@@ -99,6 +117,7 @@ async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Jso
             let balance = control.balance;
             // Deterministic transition at the balance RPC, before its reply reaches admission.
             if let Some(next) = control.after_balance.take() { control.view = next; }
+            if let Some((provider, gate)) = control.after_balance_gate.take() { gate.set(&provider, false); }
             json!(format!("0x{balance:x}"))
         }
         _ => return Json(json!({"jsonrpc":"2.0","id":request["id"],
@@ -1167,6 +1186,33 @@ async fn fresh_intent_rejects_resigned_nonminimal_byte_strings() {
             fixture.rejects_candidate_preserving_original(
                 &original, &candidate, &format!("{envelope_name}: {encoding}"),
             ).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rechecks_provider_funding_gates_after_balance() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, (gate, gate_name)) in [
+            (FundingGate::Accepting, "draining"),
+            (FundingGate::Ready, "funding-readiness-lost"),
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 18_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let (raw, envelope) = fixture.original(kind, &fields);
+            {
+                let mut control = fixture.rpc.control.lock().unwrap();
+                control.balance = u128::MAX;
+                control.after_balance_gate = Some((fixture.provider.state.clone(), gate));
+            }
+            let name = format!("{envelope_name}: {gate_name}");
+            // Both gates passed initially; close exactly one before the balance reply returns.
+            fixture.refuses(&raw, &name, (StatusCode::SERVICE_UNAVAILABLE, "provider_draining"),
+                Some("eth_getBalance")).await;
+            gate.set(&fixture.provider.state, true);
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.acknowledges(&raw, &envelope, &name).await;
         }
     }
 }
