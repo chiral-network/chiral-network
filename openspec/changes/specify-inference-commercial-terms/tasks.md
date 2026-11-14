@@ -7,6 +7,8 @@
 ## 2. Complete acceptance coverage and native enforcement
 
 - [ ] 2.1 Add missing isolated offer/model/profile schema and consistency boundary tests, retaining existing coverage and avoiding real-time edge flakiness or synthetic qualification claims.
+  - [x] 2.1.1 Cover strict offer/model/profile schemas and pure model/profile validation with standalone deterministic integration tests.
+  - [ ] 2.1.2 Complete remaining offer-receiver admission cases, especially signed-but-invalid metadata and exact time/size/concurrency boundaries, without flaky wall-clock assumptions or absorbing uncommitted owner source.
 - [ ] 2.2 Add a regression at the direct native provider configuration boundary for embedding zero output price, then enforce the whitepaper's input-only rule there without normalizing invalid rates or relying solely on provisioning. Do not commit the owner's surrounding uncommitted source; if separable ownership is unavailable, record the blocker and leave this task open.
 - [ ] 2.3 Exercise the managed embedding inventory boundary and reject a selected generation chat template; retain exact artifact/digest checks and demonstrate a valid template-free embedding inventory without launching a real engine. Apply the same source-ownership restriction as task 2.2.
 - [ ] 2.4 Add missing public proposal and native quote-acceptance cases: exact selected terms and requested funding, free/paid boundaries, malformed declarations, readiness refusal, and preservation of existing saved/acknowledged terms.
