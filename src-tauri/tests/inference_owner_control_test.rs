@@ -13,7 +13,7 @@ use axum::{
 use chiral_network::{
     app::ProviderState,
     auth::{self, AuthPayload},
-    billing_store::{BillingStore, CredentialIssueRequest, RequestView},
+    billing_store::{BillingStore, CredentialIssueRequest, CredentialView, RequestView},
     chain_client::{ChainClient, ValidatedPaymentEnvelope, VerifiedPayment},
     contracts,
     protocol::{self, Challenge, Credential, FundingIntent, OpenResult, Quote, Signed, TokenUsage, UsageReceipt, RECEIPT_DOMAIN},
@@ -1140,10 +1140,68 @@ fn failed_challenge_insertion_rolls_back_expiry_cleanup_and_budget_changes() {
     assert!(reopened.challenge(&next.nonce).is_err());
 }
 
+fn restore_free_accounts(db: &mut Connection, fixture: &Fixture, seed: &OpenResult, count: u64) -> Vec<OpenResult> {
+    // These complete signed account/root records are storage prerequisites, not
+    // observed historical proposal, owner-authentication or opening admissions.
+    let original_quote = fixture.provider.state.ledger.quote(&seed.account.contract_id).unwrap();
+    let (created, root): (u64, String) = db.query_row(
+        "SELECT accounts.created,credentials.record FROM accounts
+         JOIN credentials ON credentials.contract=accounts.id
+         WHERE accounts.id=?1 AND credentials.id=?2",
+        params![seed.account.contract_id, seed.credential.id],
+        |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    let original_root: CredentialView = serde_json::from_str(&root).unwrap();
+    assert!(original_root.root && !original_root.revoked);
+    let mut samples = Vec::with_capacity(3);
+    let tx = db.transaction().unwrap();
+    {
+        let mut insert_account = tx.prepare(
+            "INSERT INTO accounts(id,owner,quote,account,sequence,created) VALUES(?1,?2,?3,?4,0,?5)").unwrap();
+        let mut insert_credential = tx.prepare(
+            "INSERT INTO credentials(id,contract,token_hash,record,revoked) VALUES(?1,?2,?3,?4,0)").unwrap();
+        for index in 0..count {
+            let mut payload = original_quote.payload.clone();
+            payload.id = protocol::random_id();
+            payload.nonce = protocol::random_id();
+            payload.consumer_wallet = format!("0x{:040x}", 0x10000 + index);
+            let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
+            protocol::verify(protocol::QUOTE_DOMAIN, &quote, &fixture.provider.state.wallet).unwrap();
+            let mut account = seed.account.clone();
+            account.contract_id = quote.payload.id.clone();
+            account.consumer_wallet = quote.payload.consumer_wallet.clone();
+            let mut root = original_root.clone();
+            root.id = protocol::random_id();
+            root.contract_id = account.contract_id.clone();
+            let credential = Credential {
+                id: root.id.clone(), contract_id: account.contract_id.clone(),
+                bearer: format!("chiral_{}", &protocol::random_id()[2..]), expires_at: root.expires_at,
+            };
+            insert_account.execute(params![account.contract_id, account.consumer_wallet,
+                serde_json::to_string(&quote).unwrap(), serde_json::to_string(&account).unwrap(), created]).unwrap();
+            insert_credential.execute(params![root.id, root.contract_id,
+                protocol::hash_hex(credential.bearer.as_bytes()), serde_json::to_string(&root).unwrap()]).unwrap();
+            if index == 0 || index == count / 2 || index + 1 == count {
+                samples.push(OpenResult { account, credential });
+            }
+        }
+    }
+    tx.commit().unwrap();
+    samples
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
+    free_account_final_slot(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_free_openings_compete_for_the_last_ledger_account_slot() {
+    free_account_final_slot(true).await;
+}
+
+async fn free_account_final_slot(ledger_wide: bool) {
     let directory = tempfile::tempdir().unwrap();
-    let mut fixture = Fixture::new(directory.path(), 52_000);
+    let mut fixture = Fixture::new(directory.path(), if ledger_wide { 52_001 } else { 52_000 });
     let rpc_calls = Arc::new(Mutex::new(Vec::new()));
     let observed = rpc_calls.clone();
     let rpc_app = Router::new().fallback(move |request: Request| {
@@ -1159,8 +1217,9 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
 
     // Establish actual free accounts/credentials through the production owner route,
     // not constructed quota rows or synthetic paid-account prerequisites.
-    let mut earlier = Vec::with_capacity(8);
-    for _ in 0..7 { earlier.push(fixture.open_free().await); }
+    let initial_owned: u64 = if ledger_wide { 1 } else { 7 };
+    let mut earlier = Vec::with_capacity(if ledger_wide { 6 } else { 9 });
+    for _ in 0..initial_owned { earlier.push(fixture.open_free().await); }
     let other_wallet = wallet::address_from_private_key(OTHER_KEY).unwrap();
     let (status, document) = fixture.post("/v1/contracts/propose", json!({
         "offer_id":fixture.provider.offer_id,"consumer_wallet":other_wallet,"funding_wei":"0"
@@ -1172,29 +1231,60 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
     let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
     assert_eq!(status, StatusCode::OK, "{document}");
     earlier.push(serde_json::from_value::<OpenResult>(document).unwrap());
-    let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
-    let quotes = [fixture.quote("0").await, fixture.quote("0").await];
-    for quote in &quotes {
+    let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    db.pragma_update(None, "foreign_keys", true).unwrap();
+    if ledger_wide {
+        earlier.extend(restore_free_accounts(&mut db, &fixture, &earlier[0], 9_997));
+    }
+    let keys = [OWNER_KEY, if ledger_wide { OTHER_KEY } else { OWNER_KEY }];
+    let owners = keys.map(|key| wallet::address_from_private_key(key).unwrap());
+    let first_quote = fixture.quote("0").await;
+    let (status, document) = fixture.post("/v1/contracts/propose", json!({
+        "offer_id":fixture.provider.offer_id,"consumer_wallet":owners[1],"funding_wei":"0"
+    })).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let quotes = [first_quote, serde_json::from_value::<Signed<Quote>>(document).unwrap()];
+    for (quote, owner) in quotes.iter().zip(&owners) {
         protocol::verify(protocol::QUOTE_DOMAIN, quote, &fixture.provider.state.wallet).unwrap();
-        assert_eq!(quote.payload.consumer_wallet, owner);
+        assert_eq!(&quote.payload.consumer_wallet, owner);
         assert_eq!(quote.payload.funding_wei, "0");
         assert_eq!(quote.payload.price.input_wei_per_1k, "0");
         assert_eq!(quote.payload.price.output_wei_per_1k, "0");
     }
-    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
     let counts = || db.query_row(
-        "SELECT (SELECT COUNT(*) FROM accounts WHERE owner=?1),(SELECT COUNT(*) FROM accounts)",
-        [&owner], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))).unwrap();
-    assert_eq!(counts(), (7, 8), "only the owner's last slot, not global account capacity, is contested");
+        "SELECT (SELECT COUNT(*) FROM accounts WHERE owner=?1),
+                (SELECT COUNT(*) FROM accounts WHERE owner=?2),(SELECT COUNT(*) FROM accounts)",
+        params![owners[0], other_wallet],
+        |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?))).unwrap();
+    let before_total = if ledger_wide { 9_999 } else { 8 };
+    assert_eq!(counts(), (initial_owned, 1, before_total));
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get::<_, u64>(0)).unwrap(), 2,
+        "account capacity is isolated from pending-quote retention");
+    if ledger_wide {
+        let max_owned: u64 = db.query_row(
+            "SELECT MAX(owned) FROM (SELECT COUNT(*) AS owned FROM accounts GROUP BY owner)",
+            [], |row| row.get(0)).unwrap();
+        assert_eq!(max_owned, 1, "neither contender nor a restored owner is at the owned-account bound");
+    }
+    // Stream every persisted column; do not retain 10,000 signed records in memory.
     let records_except = |excluded: &str| [
         "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts WHERE id<>?1 ORDER BY id",
         "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials WHERE contract<>?1 ORDER BY id",
     ].map(|query| {
+        let mut hash = Keccak::v256();
+        let mut count = 0_u64;
         let mut statement = db.prepare(query).unwrap();
-        statement.query_map([excluded], |row| row.get::<_, String>(0)).unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        let mut rows = statement.query([excluded]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            hash.update(row.get::<_, String>(0).unwrap().as_bytes());
+            count += 1;
+        }
+        let mut digest = [0; 32];
+        hash.finalize(&mut digest);
+        (count, digest)
     });
     let earlier_records = records_except(&quotes[0].payload.id);
+    assert_eq!((earlier_records[0].0, earlier_records[1].0), (before_total, before_total));
     let pending = |id: &str| db.query_row(
         "SELECT json_array(id,owner,expires,record) FROM quotes WHERE id=?1",
         [id], |row| row.get::<_, String>(0)).unwrap();
@@ -1202,8 +1292,8 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
     let bodies = quotes.each_ref().map(|quote|
         serde_json::to_vec(&json!({"quote_id":quote.payload.id,"raw_transaction":null})).unwrap());
     let proofs = [
-        fixture.proof(OWNER_KEY, "POST", OPEN, &bodies[0]).await,
-        fixture.proof(OWNER_KEY, "POST", OPEN, &bodies[1]).await,
+        fixture.proof(keys[0], "POST", OPEN, &bodies[0]).await,
+        fixture.proof(keys[1], "POST", OPEN, &bodies[1]).await,
     ];
     assert_ne!(proofs[0].nonce, proofs[1].nonce);
 
@@ -1243,17 +1333,19 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
     let winner = match (results[0].0, results[1].0) {
         (StatusCode::OK, StatusCode::TOO_MANY_REQUESTS) => 0,
         (StatusCode::TOO_MANY_REQUESTS, StatusCode::OK) => 1,
-        other => panic!("one free owner slot must admit exactly one opening: {other:?}, {results:?}"),
+        other => panic!("one free account slot must admit exactly one opening: {other:?}, {results:?}"),
     };
     let loser = 1 - winner;
     assert_eq!(results[loser].1["error"]["code"], "rate_limit");
     for proof in &proofs { fixture.consumed(proof); }
-    assert_eq!(counts(), (8, 9));
+    let after_counts = (initial_owned + u64::from(!ledger_wide || winner == 0),
+        1 + u64::from(ledger_wide && winner == 1), before_total + 1);
+    assert_eq!(counts(), after_counts);
     let opened: OpenResult = serde_json::from_value(results[winner].1.clone()).unwrap();
     assert_eq!(opened.account.contract_id, quotes[winner].payload.id);
     assert_eq!(opened.account.network, quotes[winner].payload.network);
     assert_eq!(opened.account.provider_wallet, quotes[winner].payload.provider_wallet);
-    assert_eq!(opened.account.consumer_wallet, owner);
+    assert_eq!(opened.account.consumer_wallet, owners[winner]);
     assert_eq!(opened.account.model, quotes[winner].payload.model);
     assert_eq!(opened.account.price, quotes[winner].payload.price);
     assert_eq!(opened.account.status, "free");
@@ -1272,16 +1364,16 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
         [&quotes[loser].payload.id], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))).unwrap();
     assert_eq!(losing_records(), (0, 0));
     let opened_records = records_except(&quotes[loser].payload.id);
-    assert_eq!(opened_records[0].len(), 9);
-    assert_eq!(opened_records[1].len(), 9, "one root per actual opening, none for the refused quote");
+    assert_eq!(opened_records[0].0, before_total + 1);
+    assert_eq!(opened_records[1].0, before_total + 1, "one root per account, none for the refused quote");
 
     // Account exhaustion is not a public-quote reservation. This stays below the
     // separate, still-unmigrated named-wallet quote ceilings and claims no mitigation.
     let overbooked = fixture.quote("0").await;
     let overbooked_before = pending(&overbooked.payload.id);
-    assert_eq!(counts(), (8, 9));
+    assert_eq!(counts(), after_counts);
     assert_eq!(records_except(&quotes[loser].payload.id), opened_records);
-    let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &bodies[loser]).await;
+    let proof = fixture.proof(keys[loser], "POST", OPEN, &bodies[loser]).await;
     let refused = fixture.send("POST", OPEN, &proof.headers, bodies[loser].clone()).await;
     assert_eq!(refused.0, StatusCode::TOO_MANY_REQUESTS, "{}", refused.1);
     assert_eq!(refused.1["error"]["code"], "rate_limit");
@@ -1294,17 +1386,17 @@ async fn independent_free_openings_compete_for_the_last_owned_account_slot() {
         state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
     }
     fixture.app = contracts::router(fixture.provider.state.clone());
-    let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &bodies[loser]).await;
+    let proof = fixture.proof(keys[loser], "POST", OPEN, &bodies[loser]).await;
     let refused = fixture.send("POST", OPEN, &proof.headers, bodies[loser].clone()).await;
     assert_eq!(refused.0, StatusCode::TOO_MANY_REQUESTS, "{}", refused.1);
     assert_eq!(refused.1["error"]["code"], "rate_limit");
     fixture.consumed(&proof);
-    assert_eq!(counts(), (8, 9));
+    assert_eq!(counts(), after_counts);
     assert_eq!(losing_records(), (0, 0));
     assert_eq!(pending(&quotes[loser].payload.id), pending_before[loser]);
     assert_eq!(pending(&overbooked.payload.id), overbooked_before);
-    // Read with the actual issued bearers, never reopen an accepted account:
-    // the separately blocked HTTP root-rotation recovery path is not this proof.
+    // Read genuine issued bearers and representative restored credentials, never
+    // reopen accepted accounts through the separately blocked root-rotation path.
     earlier.push(opened);
     for accepted in &earlier {
         for ledger in [&fixture.provider.state.ledger, &second_state.ledger] {
