@@ -1,4 +1,4 @@
-//! Explicit-time contracts for pending-proposal quotas and acknowledgement slot transfer.
+//! Explicit-time contracts for proposal capacity, rate budgets and lifecycle retention.
 //! Ledger tests assume prior owner/spendability admission; offline signatures are not settlement.
 use chiral_network::{
     billing_store::BillingStore,
@@ -328,6 +328,146 @@ fn rejected_pending_proposals_preserve_other_payers_shared_rate_allowance() {
     }
     assert!(admitted > 0, "the control must admit another payer");
     assert!(refused, "the control must remain bounded");
+}
+
+fn assert_rate_rejected_at(ledger: &BillingStore, rejected: &Signed<Quote>, now: u64) {
+    let error = ledger.store_quote(rejected, now).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.quote(&rejected.payload.id).unwrap_err().starts_with("not_found:"));
+}
+
+#[test]
+fn payer_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    let fresh = |id, issued_at, expires_at| {
+        let mut payload = quote_payload(&provider, id, PAYER, "test/payer-rate", ("1", "2"));
+        payload.issued_at = issued_at;
+        payload.expires_at = expires_at;
+        protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap()
+    };
+
+    // Starting halfway through a minute distinguishes UTC buckets from elapsed/rolling time.
+    // The last phase skips minutes: unused windows must not accumulate extra allowance.
+    for (phase, start) in [NOW + 30, NOW + 60, NOW + 5 * 60].into_iter().enumerate() {
+        for offset in 0..12 {
+            let now = start + offset;
+            // Storage-only one-second lifetimes keep pending occupancy below eight.
+            // Expiry may reclaim that slot, but must not refund its committed rate unit.
+            let signed = fresh(phase as u64 * 100 + offset + 1, now, now + 1);
+            ledger.store_quote(&signed, now).unwrap();
+            assert_preserved(&ledger, &signed);
+            if offset == 5 {
+                drop(ledger);
+                ledger = BillingStore::open(&path, &network()).unwrap();
+            }
+        }
+        let next_minute = (start / 60 + 1) * 60;
+        let rejected = fresh(phase as u64 * 100 + 13, start + 12, next_minute + 1);
+        assert_rate_rejected_at(&ledger, &rejected, start + 12);
+        drop(ledger);
+        ledger = BillingStore::open(&path, &network()).unwrap();
+        assert_rate_rejected_at(&ledger, &rejected, next_minute - 1);
+        // The next phase's first committed quote exercises the exact forward boundary,
+        // then a later skipped-to window, with all twelve units available again.
+    }
+}
+
+#[test]
+fn acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
+    let original = quote(1, 1, &payer, "test/rate-acknowledgement", ("1", "2"));
+    ledger.store_quote(&original, NOW).unwrap();
+    for offset in 1..=10 {
+        let now = NOW + offset;
+        let mut payload = quote_payload(&original.payload.provider_wallet, offset + 1, &payer,
+            "test/rate-acknowledgement", ("1", "2"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1; // Reclaim storage capacity without crossing a rate minute.
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+    }
+    let now = NOW + 11;
+    let (raw, envelope) = signed_opening(&original.payload, directory.path());
+    let ack = ledger.register_funding_intent(&original, &payer, &raw, &envelope.tx_hash,
+        envelope.nonce, &key, || Ok(now), true, &original.payload.model).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &original.payload.provider_wallet).unwrap();
+
+    // Eleven committed quotes leave exactly one rate unit, regardless of the transferred slot.
+    let twelfth = quote(1, 12, &payer, "test/rate-acknowledgement", ("1", "2"));
+    ledger.store_quote(&twelfth, now).unwrap();
+    let rejected = quote(1, 13, &payer, "test/rate-acknowledgement", ("1", "2"));
+    for restart in [false, true] {
+        if restart {
+            drop(ledger);
+            ledger = BillingStore::open(&path, &network()).unwrap();
+        }
+        // Exhausting fresh issuance must not prevent acknowledgement recovery.
+        let replay = ledger.register_funding_intent(&original, &payer, &raw,
+            &envelope.tx_hash, envelope.nonce, &key, || Ok(now + 1), false,
+            &original.payload.model).unwrap();
+        assert_eq!(replay.payload, ack.payload);
+        assert_eq!(replay.signature, ack.signature);
+        assert_rate_rejected_at(&ledger, &rejected, now + 1);
+        assert_preserved(&ledger, &original);
+        assert_preserved(&ledger, &twelfth);
+        assert!(ledger.prepare_fee_batches(now + 1, true).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn free_opening_preserves_rate_allowance_and_credentials_at_exhaustion() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let original = quote(1, 1, PAYER, "test/rate-opening", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    for offset in 1..=10 {
+        let now = NOW + offset;
+        let mut payload = quote_payload(&original.payload.provider_wallet, offset + 1, PAYER,
+            "test/rate-opening", ("0", "0"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1; // Only the original and latest probe occupy pending slots.
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+    }
+    let now = NOW + 11;
+    // Ledger-call owner authorization is a precondition; free opening needs no chain evidence.
+    let opened = ledger.open_account(&original, None, now).unwrap();
+    let twelfth = quote(1, 12, PAYER, "test/rate-opening", ("0", "0"));
+    ledger.store_quote(&twelfth, now).unwrap();
+    let rejected = quote(1, 13, PAYER, "test/rate-opening", ("0", "0"));
+    assert_rate_rejected_at(&ledger, &rejected, now);
+    // First opening is still allowed when fresh proposal allowance is already exhausted.
+    let last_opened = ledger.open_account(&twelfth, None, now).unwrap();
+
+    for restart in [false, true] {
+        if restart {
+            drop(ledger);
+            ledger = BillingStore::open(&path, &network()).unwrap();
+        }
+        assert_rate_rejected_at(&ledger, &rejected, now + 1);
+        for (signed, account) in [(&original, &opened), (&twelfth, &last_opened)] {
+            let saved = ledger.quote(&signed.payload.id).unwrap();
+            assert_eq!(saved.payload, signed.payload);
+            assert_eq!(saved.signature, signed.signature);
+            let authenticated = ledger.authenticate(&account.credential.bearer, now + 1).unwrap();
+            assert_eq!(authenticated.credential_id, account.credential.id);
+            assert_eq!(authenticated.account.contract_id, signed.payload.id);
+            assert_eq!(authenticated.account.funded_wei, "0");
+            assert_eq!(serde_json::to_value(&authenticated.account).unwrap(),
+                serde_json::to_value(&account.account).unwrap());
+        }
+        assert!(ledger.prepare_fee_batches(now + 1, true).unwrap().is_empty());
+    }
 }
 
 // An independently encoded EIP-155 opening, signed with public test scalar 2.

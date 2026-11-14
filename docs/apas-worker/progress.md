@@ -1,28 +1,28 @@
 # APAS progress
 
-## 2026-11-14 — Specify durable proposal-rate budgets
+## 2026-11-14 — Payer-rate acceptance coverage
 
-- Created `specify-proposal-rate-budgets` for the existing `inference-proposal-admission` capability: 12 committed proposals per canonical named payer and 600 per provider ledger per effective minute, shared across models and free/paid terms. Pending occupancy limits remain separate.
-- Chose a durable non-regressing minute, `max(floor(admission_now / 60), last_committed_proposal_minute)`, with atomic quote/counter/window commitment, rollback on rejection, no lifecycle refunds, protected cleanup and preservation of retained pre-watermark counters. This is fixed-minute admission, not rolling-window or throughput certification.
-- Current source resets counts on any differing minute and lets shared cleanup remove quote-rate rows. [INFERENCE] Older or reordered timestamps can replenish allowance. The handler samples time before the write transaction; no runtime clock exploit was demonstrated. The proposal explicitly requires a native correction rather than describing current code as compliant.
-- Native fix/regression tasks 2.4–2.5 are blocked because `billing_store.rs` is entirely untracked owner source. Numerical, forward-boundary, scope and transaction acceptance work can proceed independently. No production/test edits or archive this turn; do not absorb owner work or commit failing clock regressions.
-- Whitepaper and report remain untouched, with no author answer. `docs/chiral-book.md` SHA-256 remains `f61bb0cf3926303745f06bf47f211a1169d768480f548a7750f320e5ca4d70c3`. **Public proposals can exhaust a named payer's quota** remains open and nonblocking; these clock/rate details require no author decision.
+- Completed proposal-rate task 2.1 with three passing explicit-time ledger cases in `inference_proposal_quota_test.rs`.
+- The payer case exercises twelve admissions and rejection of the thirteenth, partial/exhausted-budget reopening, expiry without rate refund, the exact UTC-minute boundary and skipped minutes without accumulated allowance. One-second signed storage fixtures keep the eight-slot pending limit from masking the rate edge; they do not change native issuance TTL.
+- The acknowledgement case leaves exactly one rate unit after eleven proposals, transfers the original pending slot without charging/refunding a rate unit, then retains exhaustion and exact acknowledgement recovery through reopening. It uses the existing real offline envelope helper, never settlement or fabricated chain evidence.
+- The free-opening case likewise preserves the final rate unit, allows another accepted free quote to open when proposal rates are exhausted, and retains both original signed agreements/accounts/credentials through reopening. Owner authorization remains a ledger-call precondition, not an authentication claim.
+- Production source and whitepaper are untouched. The non-regressing clock/pruning/bootstrap fix remains blocked in entirely untracked owner `billing_store.rs`; these forward-time tests do not establish clock-regression safety. No archive while other tasks remain.
+- Whitepaper/report fingerprints are unchanged, with no author answer. Whitepaper SHA-256: `f61bb0cf3926303745f06bf47f211a1169d768480f548a7750f320e5ca4d70c3`. **Public proposals can exhaust a named payer's quota** remains open and nonblocking.
 
 ## Verification
 
-- Passed strict non-interactive validation of the new rate change and commercial-terms change, 46 Python tests, CI's seven-script compilation and the whitepaper checksum check.
-- Passed frontend type checks (zero errors/warnings), 15 frontend tests and the frontend build (stale Browserslist warning only).
-- Passed `cargo test --locked --no-default-features --manifest-path src-tauri/Cargo.toml --all-targets` (284 tests; two existing child-helper entrypoints ignored), followed by the corresponding headless `cargo build ... --bins`. No checks failed or were weakened. These unchanged-code checks do not prove the new clock requirement.
+- Passed frontend type checks (zero errors/warnings), 15 frontend tests, frontend build (stale Browserslist warning only), 46 Python tests, CI's seven-script compilation, strict non-interactive validation of both open changes and the whitepaper checksum check.
+- Passed `cargo test --locked --no-default-features --manifest-path src-tauri/Cargo.toml --all-targets` (287 tests, including all three new cases; two existing child-helper entrypoints ignored), followed by the corresponding headless `cargo build ... --bins`. No check failed or was weakened.
 - Native desktop dependencies, actual release `CHIRAL_POLICY_PUBLIC_KEY`, Windows/macOS and live paid/GPU/public qualification remain unavailable/out-of-checkout gates. No installs or deployment actions; keep Rust invocations sequential.
 
 ## Blocked fixes and next steps
 
 1. Prioritize failures attributable to committed code. Existing localhost-alias, embedding output-price and embedding-template fixes remain blocked in entirely untracked owner source (commercial 2.1.4, 2.2, 2.3). Exact now-relative offer/qualification boundaries (2.1.3.2) require a safe explicit-time seam; no sleeps or weakened requirements.
-2. Next: proposal-rate task 2.1, deterministic payer 12/13 admission, forward-minute boundary, reclamation without rate refund and reopening. Use short-lived signed storage fixtures to avoid the eight-slot pending cap masking the rate edge; do not change or claim native issuance TTL.
-3. Continue rate tasks 2.2–2.3 for 600/601 ledger admission, scopes and transactional competition/conservation. Reuse archived pending-quota rollback and HTTP evidence. Clock/pruning/bootstrap implementation and adversarial-time evidence remain blocked under 2.4–2.5; leave them unticked and keep the change open.
+2. Next: proposal-rate task 2.2, 600/601 ledger admission, other eligible payers, shared model/free-paid attribution and independent provider ledgers. Preserve separate challenge/inference budgets; reuse existing HTTP 429/canonical-named-payer evidence.
+3. Then rate task 2.3: both-bucket rollback, final-unit competition and failed insertion. Reuse existing pending-capacity rollback cases rather than duplicating them. Clock/pruning/bootstrap implementation and adversarial-time evidence remain blocked under 2.4–2.5; leave them unticked and keep the change open.
 4. Review commercial saved-agreement/historical recovery and renewal coverage (2.4.2.2.2 and 2.5). Preserve existing acknowledgement/nonce/recovery evidence and isolated process-global reader tests. Never archive incomplete tasks or use `--skip-specs`.
 5. The author owns any public-proposal authentication redesign or whitepaper disclosure. Broader funding acknowledgement/nonce/recovery and exact accounting specifications remain future work beyond these admission/retention contracts, then discovery/authorization, runtime/performance and consumer/reputation. Full three-layer alignment is not established.
 
 ## Checkout discipline
 
-Initial checkout: zero staged files, 194 unstaged paths and 50 untracked paths, including the owner's modified whitepaper and extensive native migration. Commit only this worker's new proposal-rate change and these notes. Preserve all other work; no push. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
+Initial checkout: zero staged files, 194 unstaged paths and 50 untracked paths, including the owner's modified whitepaper and extensive native migration. Commit only the worker's quota-test additions, proposal-rate task update and these notes. Preserve all other work; no push. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.

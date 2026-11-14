@@ -6,7 +6,8 @@
 
 ## 2. Complete implementation and acceptance
 
-- [ ] 2.1 Add isolated 12/13 payer-budget, forward minute-boundary, reclamation-without-rate-refund and reopening cases using real signed quotes and explicit storage time. Keep the eight-slot cap from masking the rate edge; do not change native TTL or fabricate payment success.
+- [x] 2.1 Add isolated 12/13 payer-budget, forward minute-boundary, reclamation-without-rate-refund and reopening cases using real signed quotes and explicit storage time. Keep the eight-slot cap from masking the rate edge; do not change native TTL or fabricate payment success.
+  Evidence in `src-tauri/tests/inference_proposal_quota_test.rs`: `payer_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries`, `acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate` and `free_opening_preserves_rate_allowance_and_credentials_at_exhaustion`. All three passed with the complete headless suite; backward-time safety remains unimplemented under 2.4–2.5.
 - [ ] 2.2 Cover 600/601 ledger-budget admission, eligible other payers, shared model/free-paid attribution and independent provider ledgers. Preserve separate challenge/inference budgets and reuse deterministic HTTP error mapping evidence.
 - [ ] 2.3 Cover both-bucket rollback, refusal without consuming another payer's shared allowance, failed insertion and competing connections at the final rate unit; reuse existing pending-capacity rejection evidence where it already covers a case.
 - [ ] 2.4 Implement durable non-regressing proposal-minute selection, quote-specific cleanup protection and preservation of retained pre-watermark counters. BLOCKED: `billing_store.rs` is entirely untracked owner source; do not copy it, introduce an unused helper or commit the surrounding migration. Keep financial schema/state and other rate policies unchanged.
