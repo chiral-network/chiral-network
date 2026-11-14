@@ -1,8 +1,9 @@
-//! Explicit-time ledger contracts for specify-pending-proposal-quotas tasks 2.1 through 2.3.
-//! Storage-level signed fixtures, not native issuance, chain evidence or engine qualification.
+//! Explicit-time contracts for pending-proposal quotas and acknowledgement slot transfer.
+//! Ledger tests assume prior owner/spendability admission; offline signatures are not settlement.
 use chiral_network::{
     billing_store::BillingStore,
-    network::{ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
+    chain_client::{ChainClient, ValidatedPaymentEnvelope},
+    network::{NetworkConfig, ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
     protocol::{self, ModelSpec, NetworkIdentity, PriceSchedule, Quote, Signed, QUOTE_DOMAIN},
     wallet,
 };
@@ -327,4 +328,139 @@ fn rejected_pending_proposals_preserve_other_payers_shared_rate_allowance() {
     }
     assert!(admitted > 0, "the control must admit another payer");
     assert!(refused, "the control must remain bounded");
+}
+
+// An independently encoded EIP-155 opening, signed with public test scalar 2.
+// Only offline envelope validation runs: no RPC, spendability observation or broadcast.
+fn signed_opening(quote: &Quote, directory: &std::path::Path)
+    -> (String, ValidatedPaymentEnvelope) {
+    use rlp::RlpStream;
+    use secp256k1::{Message, Secp256k1, SecretKey};
+    use tiny_keccak::{Hasher, Keccak};
+
+    let data = protocol::opening_data(quote).unwrap();
+    let recipient = hex::decode(&quote.provider_wallet[2..]).unwrap();
+    let append_terms = |rlp: &mut RlpStream| {
+        rlp.append(&0u64); // Original operation's nonce.
+        rlp.append(&1_000_000_000u64); // Fixture gas price, not a live estimate.
+        rlp.append(&100_000u64); // Covers the fixture's intrinsic gas.
+        rlp.append(&recipient.as_slice());
+        rlp.append(&quote.funding_wei.parse::<u64>().unwrap());
+        rlp.append(&data.as_slice());
+    };
+    let mut unsigned = RlpStream::new_list(9);
+    append_terms(&mut unsigned);
+    unsigned.append(&quote.network.chain_id).append(&0u8).append(&0u8);
+    let mut digest = [0u8; 32];
+    let mut hasher = Keccak::v256();
+    hasher.update(unsigned.as_raw());
+    hasher.finalize(&mut digest);
+    let key = SecretKey::from_slice(&hex::decode(format!("{:064x}", 2)).unwrap()).unwrap();
+    let (recovery, signature) = Secp256k1::new()
+        .sign_ecdsa_recoverable(&Message::from_digest_slice(&digest).unwrap(), &key)
+        .serialize_compact();
+    let mut signed = RlpStream::new_list(9);
+    append_terms(&mut signed);
+    signed.append(&(quote.network.chain_id * 2 + 35 + recovery.to_i32() as u64));
+    for scalar in signature.chunks_exact(32) {
+        let first = scalar.iter().position(|byte| *byte != 0).unwrap();
+        signed.append(&&scalar[first..]);
+    }
+    let raw = format!("0x{}", hex::encode(signed.out()));
+    let chain = ChainClient::new(NetworkConfig {
+        identity: quote.network.clone(),
+        rpc_url: "http://127.0.0.1:9".into(), // Unused by offline validation.
+        rpc_bearer_file: None, faucet_url: None, explorer_url: None, policy_url: None,
+    }, directory.to_path_buf()).unwrap();
+    let envelope = chain.validate_payment_envelope(&raw, &quote.consumer_wallet,
+        &quote.provider_wallet, &quote.funding_wei, &data).unwrap();
+    assert_eq!(envelope.nonce, 0);
+    (raw, envelope)
+}
+
+#[test]
+fn acknowledgement_frees_exactly_one_slot_and_replay_preserves_its_replacement() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
+    let pending: Vec<_> = (1..=8)
+        .map(|id| quote(1, id, &payer, "test/acknowledgement", ("1", "2"))).collect();
+    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let replacement = quote(1, 9, &payer, "test/replacement", ("0", "0"));
+    let excess = quote(1, 10, &payer, "test/excess", ("1", "2"));
+    assert_capacity_rejected(&ledger, &replacement);
+
+    let original = &pending[0];
+    let (raw, envelope) = signed_opening(&original.payload, directory.path());
+    let ack = ledger.register_funding_intent(original, &payer, &raw, &envelope.tx_hash,
+        envelope.nonce, &key, || Ok(NOW), true, &original.payload.model).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &original.payload.provider_wallet).unwrap();
+    assert_eq!(ack.payload.quote_id, original.payload.id);
+    assert_eq!(ack.payload.tx_hash, envelope.tx_hash);
+    ledger.store_quote(&replacement, NOW).unwrap();
+    assert_capacity_rejected(&ledger, &excess);
+
+    for restart in [false, true] {
+        if restart {
+            drop(ledger);
+            ledger = BillingStore::open(&path, &network()).unwrap();
+        }
+        // Recovery remains available when fresh funding is disabled. Its later request
+        // time must not replace the original signed acknowledgement or consume a slot.
+        let replay = ledger.register_funding_intent(original, &payer, &raw,
+            &envelope.tx_hash, envelope.nonce, &key, || Ok(NOW + 1), false,
+            &original.payload.model).unwrap();
+        assert_eq!(replay.payload, ack.payload);
+        assert_eq!(replay.signature, ack.signature);
+        let recovered = ledger.funding_intent(&original.payload, &raw).unwrap().unwrap();
+        assert_eq!(recovered.payload, ack.payload);
+        assert_eq!(recovered.signature, ack.signature);
+        for signed in &pending { assert_preserved(&ledger, signed); }
+        assert_preserved(&ledger, &replacement);
+        assert_capacity_rejected(&ledger, &excess);
+        assert!(ledger.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn rejected_acknowledgements_preserve_pending_capacity_and_allow_original_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let mut ledger = BillingStore::open(&path, &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let wrong_key = format!("{:064x}", 3);
+    let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
+    let pending: Vec<_> = (1..=8)
+        .map(|id| quote(1, id, &payer, "test/rejection", ("1", "2"))).collect();
+    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original = &pending[0];
+    let replacement = quote(1, 9, &payer, "test/replacement", ("0", "0"));
+    let (raw, envelope) = signed_opening(&original.payload, directory.path());
+    // Exercise both early admission rejection and failure to authenticate the provider's
+    // newly signed acknowledgement, after immutable terms and nonce checks have passed.
+    for (accepting, signing_key) in [(false, &key), (true, &wrong_key)] {
+        assert!(ledger.register_funding_intent(original, &payer, &raw, &envelope.tx_hash,
+            envelope.nonce, signing_key, || Ok(NOW), accepting, &original.payload.model).is_err());
+        for signed in &pending { assert_preserved(&ledger, signed); }
+        assert!(ledger.funding_intent(&original.payload, &raw).unwrap().is_none());
+        assert_capacity_rejected(&ledger, &replacement);
+        assert!(ledger.prepare_fee_batches(NOW, true).unwrap().is_empty());
+        drop(ledger);
+        ledger = BillingStore::open(&path, &network()).unwrap();
+        for signed in &pending { assert_preserved(&ledger, signed); }
+        assert!(ledger.funding_intent(&original.payload, &raw).unwrap().is_none());
+        assert_capacity_rejected(&ledger, &replacement);
+    }
+    // Failed registration must not poison this original transaction or sender/nonce.
+    let ack = ledger.register_funding_intent(original, &payer, &raw, &envelope.tx_hash,
+        envelope.nonce, &key, || Ok(NOW), true, &original.payload.model).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &original.payload.provider_wallet).unwrap();
+    ledger.store_quote(&replacement, NOW).unwrap();
+    assert_capacity_rejected(&ledger,
+        &quote(1, 10, &payer, "test/excess", ("1", "2")));
+    for signed in &pending { assert_preserved(&ledger, signed); }
+    assert_preserved(&ledger, &replacement);
+    assert!(ledger.prepare_fee_batches(NOW, true).unwrap().is_empty());
 }

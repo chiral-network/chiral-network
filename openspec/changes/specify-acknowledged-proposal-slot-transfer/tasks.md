@@ -6,7 +6,10 @@
 
 ## 2. Complete acceptance evidence
 
-- [ ] 2.1 Add missing consumer-visible acknowledgement quota coverage: freeing exactly one full-budget slot, replay after replacement, and failed registration preserving pending capacity and signed terms.
+- [x] 2.1 Add missing consumer-visible acknowledgement quota coverage: freeing exactly one full-budget slot, replay after replacement, and failed registration preserving pending capacity and signed terms.
+  - `inference_proposal_quota_test::acknowledgement_frees_exactly_one_slot_and_replay_preserves_its_replacement` covers exact replacement capacity and original-acknowledgement recovery live and after reopening.
+  - `inference_proposal_quota_test::rejected_acknowledgements_preserve_pending_capacity_and_allow_original_registration` covers draining-provider and acknowledgement-signing identity rejection, durable absence of a partial acknowledgement, retained full capacity and subsequent success of the original operation.
+  - These explicit-time ledger tests use real offline-signed opening envelopes, not RPC/payment-success fixtures. Prior owner/spendability admission is a precondition, not a new public-path qualification claim.
 - [ ] 2.2 Retain and map existing expiry/restart, original-transaction and sender/nonce recovery tests; add only missing cases, with no fabricated payment success or live qualification claim.
 - [ ] 2.3 Resolve any demonstrated implementation contradiction only where independently committable. Preserve the owner's untracked native source and mark inseparable fixes blocked.
 
