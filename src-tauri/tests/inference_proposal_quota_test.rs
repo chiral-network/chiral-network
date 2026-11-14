@@ -1,4 +1,4 @@
-//! Explicit-time ledger contracts for specify-pending-proposal-quotas tasks 2.1 and 2.2.
+//! Explicit-time ledger contracts for specify-pending-proposal-quotas tasks 2.1 through 2.3.
 //! Storage-level signed fixtures, not native issuance, chain evidence or engine qualification.
 use chiral_network::{
     billing_store::BillingStore,
@@ -177,4 +177,154 @@ fn ledger_wide_pending_ceiling_rejects_new_payers_without_evicting_signed_terms(
     assert_preserved(&independent, &rejected);
     // Check every original record, including its signature: no live quote may be silently evicted.
     for signed in &accepted { assert_preserved(&ledger, signed); }
+}
+
+#[test]
+fn competing_connections_admit_only_one_quote_into_the_final_payer_slot() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let initial = BillingStore::open(&path, &network()).unwrap();
+    let mut accepted = Vec::with_capacity(7);
+    for sequence in 1..=7 {
+        let signed = quote(1, sequence, PAYER, "test/race", ("1", "2"));
+        initial.store_quote(&signed, NOW).unwrap();
+        accepted.push(signed);
+    }
+    drop(initial);
+
+    // Pre-open independent connections and sign before releasing the shared start barrier.
+    // A fresh rate window leaves admission governed by the final pending slot.
+    let race_at = NOW + 60;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers = [8, 9].map(|sequence| {
+        let ledger = BillingStore::open(&path, &network()).unwrap();
+        let signed = quote(1, sequence, PAYER, "test/race", ("1", "2"));
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let result = ledger.store_quote(&signed, race_at);
+            (signed, result)
+        })
+    });
+    let outcomes = workers.map(|worker| worker.join().unwrap());
+    assert_eq!(outcomes.iter().filter(|(_, result)| result.is_ok()).count(), 1);
+
+    // All writer connections have closed: inspect durable outcomes through a new connection.
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for (signed, result) in outcomes {
+        match result {
+            Ok(()) => assert_preserved(&reopened, &signed),
+            Err(error) => {
+                assert!(error.starts_with("rate_limit:"), "{error}");
+                assert!(reopened.quote(&signed.payload.id).unwrap_err().starts_with("not_found:"));
+            }
+        }
+    }
+    for signed in &accepted { assert_preserved(&reopened, signed); }
+    let excess = quote(1, 10, PAYER, "test/race", ("1", "2"));
+    let error = reopened.store_quote(&excess, race_at).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(reopened.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));
+}
+
+fn rejection_control_pair() -> (BillingStore, BillingStore, u64) {
+    let control = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let exercised = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    let reject_at = NOW + 8 * 60;
+    let mut accepted = Vec::with_capacity(8);
+    for index in 0..8 {
+        let mut payload = quote_payload(&provider, index + 1, PAYER, "test/rollback", ("1", "2"));
+        // Storage-only lifetimes keep eight pending records across distinct rate windows.
+        // No successful proposal has consumed allowance in the later rejection window.
+        payload.issued_at = NOW + index * 60;
+        payload.expires_at = reject_at + 1;
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        control.store_quote(&signed, signed.payload.issued_at).unwrap();
+        exercised.store_quote(&signed, signed.payload.issued_at).unwrap();
+        accepted.push(signed);
+    }
+    let mut payload = quote_payload(&provider, 100, PAYER, "test/rollback", ("1", "2"));
+    payload.issued_at = reject_at;
+    payload.expires_at = reject_at + 300;
+    let rejected = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+    for _ in 0..1024 {
+        let error = exercised.store_quote(&rejected, reject_at).unwrap_err();
+        assert!(error.starts_with("rate_limit:"), "{error}");
+    }
+    assert!(exercised.quote(&rejected.payload.id).unwrap_err().starts_with("not_found:"));
+    for signed in &accepted {
+        assert_preserved(&control, signed);
+        assert_preserved(&exercised, signed);
+    }
+    (control, exercised, reject_at + 1)
+}
+
+fn matching_admission(control: &BillingStore, exercised: &BillingStore,
+    signed: &Signed<Quote>, now: u64) -> bool {
+    let expected = control.store_quote(signed, now);
+    let observed = exercised.store_quote(signed, now);
+    match expected {
+        Ok(()) => {
+            observed.expect("quota rejections must not consume later admission allowance");
+            assert_preserved(control, signed);
+            assert_preserved(exercised, signed);
+            true
+        }
+        Err(error) => {
+            assert!(error.starts_with("rate_limit:"), "{error}");
+            let observed = observed.unwrap_err();
+            assert!(observed.starts_with("rate_limit:"), "{observed}");
+            for ledger in [control, exercised] {
+                assert!(ledger.quote(&signed.payload.id).unwrap_err().starts_with("not_found:"));
+            }
+            false
+        }
+    }
+}
+
+#[test]
+fn rejected_pending_proposals_preserve_the_payers_rate_allowance() {
+    let (control, exercised, start) = rejection_control_pair();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    let mut admitted = 0;
+    // All probes stay in the rejection window. One-second storage fixtures reclaim pending
+    // slots between probes, so the eight-slot cap cannot hide a lost rate allowance.
+    for offset in 0..59 {
+        let now = start + offset;
+        let mut payload = quote_payload(&provider, 200 + offset, PAYER, "test/rollback", ("1", "2"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1;
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        if !matching_admission(&control, &exercised, &signed, now) { break; }
+        admitted += 1;
+    }
+    assert!(admitted > 0, "the control must have fresh-window rate allowance");
+}
+
+#[test]
+fn rejected_pending_proposals_preserve_other_payers_shared_rate_allowance() {
+    let (control, exercised, now) = rejection_control_pair();
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    let mut admitted = 0;
+    let mut refused = false;
+    // Distinct payers avoid individual caps. The pending ceiling bounds this trace even if
+    // the separate rate policy changes; no numerical rate limit is asserted here.
+    for index in 0..=10_000 {
+        let payer = format!("0x{:040x}", 0x10000 + index);
+        let mut payload = quote_payload(&provider, 200 + index, &payer, "test/rollback", ("1", "2"));
+        payload.issued_at = now;
+        payload.expires_at = now + 300;
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        if !matching_admission(&control, &exercised, &signed, now) {
+            refused = true;
+            break;
+        }
+        admitted += 1;
+    }
+    assert!(admitted > 0, "the control must admit another payer");
+    assert!(refused, "the control must remain bounded");
 }
