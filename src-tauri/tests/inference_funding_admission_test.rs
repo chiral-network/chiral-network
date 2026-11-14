@@ -24,12 +24,12 @@ use chiral_network::{
 use proposal::PreparedProvider;
 use primitive_types::U256;
 use rlp::{Rlp, RlpStream};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use secp256k1::{ecdsa::{RecoverableSignature, RecoveryId}, Message, PublicKey, Secp256k1, SecretKey};
 use serde_json::{json, Value};
-use std::{net::TcpListener, path::Path, sync::{atomic::Ordering, Arc, Mutex}};
+use std::{net::TcpListener, path::Path, sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex}};
 use tiny_keccak::{Hasher, Keccak};
-use tokio::task::JoinHandle;
+use tokio::{sync::Barrier, task::JoinHandle};
 use tower::Service;
 
 const GAS: u64 = 1_000_000;
@@ -79,12 +79,13 @@ struct RpcControl {
     view: ChainView,
     after_balance: Option<ChainView>,
     after_balance_gate: Option<(Arc<ProviderState>, FundingGate)>,
+    balance_barrier: Option<Arc<Barrier>>,
 }
 
 struct SpendabilityRpc {
     network: NetworkIdentity,
     payer: String,
-    observed_at: u64,
+    observed_at: AtomicU64,
     control: Mutex<RpcControl>,
     requests: Mutex<Vec<Value>>,
 }
@@ -92,6 +93,10 @@ struct SpendabilityRpc {
 async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Json<Value>) -> Json<Value> {
     state.requests.lock().unwrap().push(request.clone());
     let args = &request["params"];
+    let barrier = if request["method"] == "eth_getBalance" {
+        state.control.lock().unwrap().balance_barrier.take()
+    } else { None };
+    if let Some(barrier) = barrier { barrier.wait().await; }
     let mut control = state.control.lock().unwrap();
     let result = match request["method"].as_str().unwrap() {
         "eth_chainId" => json!(format!("0x{:x}", state.network.chain_id)),
@@ -100,8 +105,8 @@ async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Jso
             assert_eq!(args[1], false);
             let (number, hash, timestamp) = match args[0].as_str().unwrap() {
                 "0x0" => (0_u64, state.network.genesis_hash.clone(), 0),
-                "safe" => (9, format!("0x{:064x}", 9), state.observed_at),
-                "latest" => (control.view.head_height, format!("0x{:064x}", control.view.head_hash), state.observed_at),
+                "safe" => (9, format!("0x{:064x}", 9), state.observed_at.load(Ordering::Acquire)),
+                "latest" => (control.view.head_height, format!("0x{:064x}", control.view.head_hash), state.observed_at.load(Ordering::Acquire)),
                 tag => panic!("unexpected fixture block selector: {tag}"),
             };
             json!({"number":format!("0x{number:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
@@ -264,6 +269,29 @@ async fn request(app: &mut Router, path: &str, headers: &HeaderMap, body: Vec<u8
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+async fn authorized_intent(app: &mut Router, quote: &Signed<Quote>, key: &str, raw: &str) -> (StatusCode, Value) {
+    let path = format!("/v1/contracts/{}/funding-intent", quote.payload.id);
+    let body = serde_json::to_vec(&json!({"raw_transaction":raw})).unwrap();
+    let body_hash = protocol::hash_hex(&body);
+    let (status, document) = request(app, "/v1/auth/challenge", &HeaderMap::new(),
+        serde_json::to_vec(&json!({"wallet":quote.payload.consumer_wallet,
+            "method":"POST","path":path,"body_hash":body_hash})).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let challenge: Challenge = serde_json::from_value(document).unwrap();
+    let proof = AuthPayload { network: quote.payload.network.clone(),
+        provider_wallet: quote.payload.provider_wallet.clone(), wallet: quote.payload.consumer_wallet.clone(),
+        method: "POST".into(), path: path.clone(), body_hash,
+        nonce: challenge.nonce.clone(), expires_at: challenge.expires_at };
+    let payload = auth::challenge_payload(&proof).unwrap();
+    assert_eq!(hex::decode(challenge.payload_hex.strip_prefix("0x").unwrap()).unwrap(), payload);
+    let signature = wallet::sign_message(key, &payload).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-chiral-owner", proof.wallet.parse().unwrap());
+    headers.insert("x-chiral-nonce", proof.nonce.parse().unwrap());
+    headers.insert("x-chiral-signature", signature.parse().unwrap());
+    request(app, &path, &headers, body).await
+}
+
 struct Fixture {
     provider: PreparedProvider,
     app: Router,
@@ -287,7 +315,7 @@ impl Fixture {
         let owner_key = format!("{:064x}", 70_000 + case);
         let payer = wallet::address_from_private_key(&owner_key).unwrap();
         let rpc = Arc::new(SpendabilityRpc { network: provider.offer.payload.network.clone(),
-            payer: payer.clone(), observed_at: protocol::now().unwrap(), control: Mutex::new(RpcControl::default()),
+            payer: payer.clone(), observed_at: AtomicU64::new(protocol::now().unwrap()), control: Mutex::new(RpcControl::default()),
             requests: Mutex::new(Vec::new()) });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         // Override only the unsigned RPC transport before sharing the provider state.
@@ -321,26 +349,7 @@ impl Fixture {
     }
 
     async fn submit_intent(&mut self, raw: &str) -> (StatusCode, Value) {
-        let path = format!("/v1/contracts/{}/funding-intent", self.quote.payload.id);
-        let body = serde_json::to_vec(&json!({"raw_transaction":raw})).unwrap();
-        let body_hash = protocol::hash_hex(&body);
-        let (status, document) = request(&mut self.app, "/v1/auth/challenge", &HeaderMap::new(),
-            serde_json::to_vec(&json!({"wallet":self.quote.payload.consumer_wallet,
-                "method":"POST","path":path,"body_hash":body_hash})).unwrap()).await;
-        assert_eq!(status, StatusCode::OK, "{document}");
-        let challenge: Challenge = serde_json::from_value(document).unwrap();
-        let proof = AuthPayload { network: self.quote.payload.network.clone(),
-            provider_wallet: self.quote.payload.provider_wallet.clone(), wallet: self.quote.payload.consumer_wallet.clone(),
-            method: "POST".into(), path: path.clone(), body_hash,
-            nonce: challenge.nonce.clone(), expires_at: challenge.expires_at };
-        let payload = auth::challenge_payload(&proof).unwrap();
-        assert_eq!(hex::decode(challenge.payload_hex.strip_prefix("0x").unwrap()).unwrap(), payload);
-        let signature = wallet::sign_message(&self.owner_key, &payload).unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert("x-chiral-owner", proof.wallet.parse().unwrap());
-        headers.insert("x-chiral-nonce", proof.nonce.parse().unwrap());
-        headers.insert("x-chiral-signature", signature.parse().unwrap());
-        request(&mut self.app, &path, &headers, body).await
+        authorized_intent(&mut self.app, &self.quote, &self.owner_key, raw).await
     }
 
     fn observed_without_submission(&self, method: Option<&str>) {
@@ -1360,5 +1369,241 @@ async fn failed_intent_persistence_rolls_back_the_entire_retention_handoff() {
                 [&fixture.quote.payload.id], |row| row.get(0)).unwrap();
             assert_eq!(pending_count, 0, "{name}");
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 50_000, 100).await;
+    let unrelated_quote = fixture.quote.clone();
+    let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+
+    // Restore 9,999 complete, internally consistent accepted originals in one fixture
+    // transaction. Their historical spendability/owner admission is assumed, not replayed.
+    // Unlike capacity-only placeholder rows, every quote, payment and acknowledgement is signed.
+    let retained_key = format!("{:064x}", 123_456);
+    let retained_payer = wallet::address_from_private_key(&retained_key).unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").unwrap();
+            for sequence in 1..=9_999_u64 {
+                let mut payload = unrelated_quote.payload.clone();
+                payload.id = format!("0x{:064x}", 0xfeed_0000 + sequence);
+                payload.nonce = format!("0x{:064x}", 0xcafe_0000 + sequence);
+                payload.consumer_wallet = retained_payer.clone();
+                let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
+                let raw = signed_payment(&PaymentFields::opening(&quote.payload, sequence, 11),
+                    &retained_key, 0, &[0xc0]);
+                let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
+                    &retained_payer, &quote.payload.provider_wallet, &quote.payload.funding_wei,
+                    &protocol::opening_data(&quote.payload).unwrap()).unwrap();
+                let ack = protocol::sign(protocol::INTENT_DOMAIN, FundingIntent {
+                    network: quote.payload.network.clone(), provider_wallet: quote.payload.provider_wallet.clone(),
+                    consumer_wallet: retained_payer.clone(), quote_id: quote.payload.id.clone(),
+                    tx_hash: envelope.tx_hash.clone(), registered_at: quote.payload.issued_at,
+                }, &fixture.provider.state.private_key).unwrap();
+                insert.execute(params![quote.payload.id, envelope.tx_hash, raw,
+                    serde_json::to_string(&ack).unwrap(), serde_json::to_string(&quote).unwrap(),
+                    retained_payer, sequence.to_string(), quote.payload.expires_at]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+
+    // Issue both competing quotes after fixture restoration. Keep the unrelated signed
+    // proposal intact, and do not mistake seed generation time for a fresh chain observation.
+    fixture.rpc.observed_at.store(protocol::now().unwrap(), Ordering::Release);
+    let (status, document) = request(&mut fixture.app, "/v1/contracts/propose", &HeaderMap::new(),
+        serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,
+            "consumer_wallet":fixture.rpc.payer,"funding_wei":"100"})).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    fixture.quote = serde_json::from_value(document).unwrap();
+    let second_key = format!("{:064x}", 120_001);
+    let second_payer = wallet::address_from_private_key(&second_key).unwrap();
+    assert_ne!(second_payer, fixture.rpc.payer);
+    let second_rpc = Arc::new(SpendabilityRpc {
+        network: fixture.quote.payload.network.clone(), payer: second_payer.clone(),
+        observed_at: AtomicU64::new(protocol::now().unwrap()),
+        control: Mutex::new(RpcControl::default()), requests: Mutex::new(Vec::new()),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let source = &fixture.provider.state;
+    let mut config = (*source.config).clone();
+    config.network.rpc_url = format!("http://{}", listener.local_addr().unwrap());
+    let mut second_state = Arc::new(ProviderState {
+        chain: Arc::new(ChainClient::new(config.network.clone(), config.data_dir.clone()).unwrap()),
+        ledger: Arc::new(BillingStore::open(&fixture.provider.ledger_path, &config.network.identity).unwrap()),
+        config: Arc::new(config), private_key: source.private_key.clone(), wallet: source.wallet.clone(),
+        offers: source.offers.clone(), accepting: AtomicBool::new(true), funding_ready: AtomicBool::new(true),
+        qualified_models: std::sync::RwLock::new(source.qualified_models.read().unwrap().clone()),
+        model_slots: source.model_slots.clone(), managed_engines: source.managed_engines.clone(),
+    });
+    let rpc_app = Router::new().route("/", post(rpc_reply)).with_state(second_rpc.clone());
+    let second_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+    let mut second_app = contracts::router(second_state.clone());
+    let (status, document) = request(&mut second_app, "/v1/contracts/propose", &HeaderMap::new(),
+        serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,
+            "consumer_wallet":second_payer,"funding_wei":"100"})).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let second_quote: Signed<Quote> = serde_json::from_value(document).unwrap();
+    let (first_raw, first_envelope) = fixture.original(0, &PaymentFields::opening(&fixture.quote.payload, 0, 11));
+    let second_raw = signed_payment(&PaymentFields::opening(&second_quote.payload, 0, 11), &second_key, 2, &[0xc0]);
+    let second_envelope = second_state.chain.validate_payment_envelope(&second_raw, &second_payer,
+        &second_quote.payload.provider_wallet, &second_quote.payload.funding_wei,
+        &protocol::opening_data(&second_quote.payload).unwrap()).unwrap();
+
+    // Hash every retained column in sorted order without keeping 10,000 large records
+    // in Rust memory. Candidate rows are checked individually below, not excluded from proof.
+    let retained_digest = || {
+        let mut hash = Keccak::v256();
+        let mut count = 0;
+        let mut statement = db.prepare(
+            "SELECT contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until
+             FROM funding_intents WHERE contract NOT IN (?1,?2) ORDER BY contract").unwrap();
+        let mut rows = statement.query(params![fixture.quote.payload.id, second_quote.payload.id]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let record = (row.get::<_, String>(0).unwrap(), row.get::<_, String>(1).unwrap(),
+                row.get::<_, String>(2).unwrap(), row.get::<_, String>(3).unwrap(),
+                row.get::<_, String>(4).unwrap(), row.get::<_, String>(5).unwrap(),
+                row.get::<_, String>(6).unwrap(), row.get::<_, u64>(7).unwrap());
+            hash.update(&serde_json::to_vec(&record).unwrap());
+            count += 1;
+        }
+        let mut digest = [0; 32];
+        hash.finalize(&mut digest);
+        (count, digest)
+    };
+    let retained_before = retained_digest();
+    assert_eq!(retained_before.0, 9_999);
+    assert_eq!(fixture.provider.state.ledger.admin_summary().unwrap()["active_funding_intents"], 9_999);
+    let pending = |id: &str| db.query_row("SELECT record FROM quotes WHERE id=?1", [id],
+        |row| row.get::<_, String>(0)).unwrap();
+    let pending_before = [pending(&fixture.quote.payload.id), pending(&second_quote.payload.id)];
+
+    // Independent Tokio tasks and independent SQLite/chain clients; neither request
+    // can finish spendability before the other reaches its balance observation.
+    let barrier = Arc::new(Barrier::new(2));
+    for rpc in [&fixture.rpc, &second_rpc] {
+        let mut control = rpc.control.lock().unwrap();
+        control.balance = u128::MAX;
+        control.balance_barrier = Some(barrier.clone());
+    }
+    let first = tokio::spawn({
+        let mut app = fixture.app.clone();
+        let quote = fixture.quote.clone();
+        let key = fixture.owner_key.clone();
+        let raw = first_raw.clone();
+        async move { authorized_intent(&mut app, &quote, &key, &raw).await }
+    });
+    let second = tokio::spawn({
+        let mut app = second_app.clone();
+        let quote = second_quote.clone();
+        let key = second_key.clone();
+        let raw = second_raw.clone();
+        async move { authorized_intent(&mut app, &quote, &key, &raw).await }
+    });
+    let (first, second) = tokio::join!(first, second);
+    let results = [first.unwrap(), second.unwrap()];
+    let winner = match (results[0].0, results[1].0) {
+        (StatusCode::OK, StatusCode::TOO_MANY_REQUESTS) => 0,
+        (StatusCode::TOO_MANY_REQUESTS, StatusCode::OK) => 1,
+        other => panic!("exactly one final lease must commit: {other:?}, {results:?}"),
+    };
+    let loser = 1 - winner;
+    assert_eq!(results[loser].1["error"]["code"], "rate_limit");
+    for rpc in [&fixture.rpc, &second_rpc] {
+        let requests = rpc.requests.lock().unwrap();
+        assert_eq!(requests.iter().filter(|call| call["method"] == "eth_getBalance").count(), 1);
+        assert_eq!(requests.iter().filter(|call| call["method"] == "eth_getTransactionCount").count(), 4,
+            "both originals must pass initial and post-balance nonce observations");
+        assert!(requests.iter().all(|call| call["method"] != "eth_sendRawTransaction"));
+    }
+    let quotes = [&fixture.quote, &second_quote];
+    let raws = [&first_raw, &second_raw];
+    let envelopes = [&first_envelope, &second_envelope];
+    let ack: Signed<FundingIntent> = serde_json::from_value(results[winner].1.clone()).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &quotes[winner].payload.provider_wallet).unwrap();
+    assert_eq!(ack.payload.network, quotes[winner].payload.network);
+    assert_eq!(ack.payload.provider_wallet, quotes[winner].payload.provider_wallet);
+    assert_eq!(ack.payload.consumer_wallet, quotes[winner].payload.consumer_wallet);
+    assert_eq!(ack.payload.quote_id, quotes[winner].payload.id);
+    assert_eq!(ack.payload.tx_hash, envelopes[winner].tx_hash);
+    assert!((quotes[winner].payload.issued_at..quotes[winner].payload.expires_at).contains(&ack.payload.registered_at));
+    let read_winner = || db.query_row(
+        "SELECT tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until FROM funding_intents WHERE contract=?1",
+        [&quotes[winner].payload.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,
+            row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)));
+    let winner_record: (String, String, String, String, String, String, u64) = read_winner().unwrap();
+    assert_eq!(winner_record, (envelopes[winner].tx_hash.clone(), raws[winner].clone(),
+        serde_json::to_string(&ack).unwrap(), serde_json::to_string(quotes[winner]).unwrap(),
+        quotes[winner].payload.consumer_wallet.clone(), "0".into(), quotes[winner].payload.expires_at));
+    assert_eq!(pending(&quotes[loser].payload.id), pending_before[loser]);
+    let loser_rows: u64 = db.query_row(
+        "SELECT COUNT(*) FROM funding_intents WHERE contract=?1 OR tx_hash=?2 OR (sender=?3 AND nonce='0')",
+        params![quotes[loser].payload.id, envelopes[loser].tx_hash, quotes[loser].payload.consumer_wallet],
+        |row| row.get(0)).unwrap();
+    assert_eq!(loser_rows, 0, "full refusal must not assign any part of the losing original");
+    let winner_pending: u64 = db.query_row("SELECT COUNT(*) FROM quotes WHERE id=?1",
+        [&quotes[winner].payload.id], |row| row.get(0)).unwrap();
+    assert_eq!(winner_pending, 0, "only the winner's standalone proposal transfers to retained acceptance");
+    assert_eq!(retained_digest(), retained_before);
+
+    // A fresh proof cannot turn the losing quote into acceptance while capacity is full.
+    let refused = if loser == 0 {
+        authorized_intent(&mut fixture.app, &fixture.quote, &fixture.owner_key, &first_raw).await
+    } else {
+        authorized_intent(&mut second_app, &second_quote, &second_key, &second_raw).await
+    };
+    assert_eq!(refused.0, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.1["error"]["code"], "rate_limit");
+    assert_eq!(pending(&quotes[loser].payload.id), pending_before[loser]);
+
+    // Reopen both ledger/chain objects and routers with all fresh-admission gates closed.
+    fixture.app = Router::new();
+    drop(second_app);
+    for state in [&mut fixture.provider.state, &mut second_state] {
+        let state = Arc::get_mut(state).unwrap();
+        state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+        state.accepting.store(false, Ordering::Release);
+        state.funding_ready.store(false, Ordering::Release);
+        state.qualified_models.write().unwrap().clear();
+    }
+    fixture.app = contracts::router(fixture.provider.state.clone());
+    let mut second_app = contracts::router(second_state.clone());
+    fixture.server.abort();
+    second_server.abort();
+    let rpc_counts = [fixture.rpc.requests.lock().unwrap().len(), second_rpc.requests.lock().unwrap().len()];
+    let recovered = if winner == 0 {
+        authorized_intent(&mut fixture.app, &fixture.quote, &fixture.owner_key, &first_raw).await
+    } else {
+        authorized_intent(&mut second_app, &second_quote, &second_key, &second_raw).await
+    };
+    assert_eq!(recovered, (StatusCode::OK, results[winner].1.clone()));
+    assert_eq!(read_winner().unwrap(), winner_record, "reopening and cached recovery preserve every accepted field");
+    assert_eq!([fixture.rpc.requests.lock().unwrap().len(), second_rpc.requests.lock().unwrap().len()], rpc_counts);
+    assert_eq!(retained_digest(), retained_before);
+    let ledger = BillingStore::open(&fixture.provider.ledger_path, &fixture.quote.payload.network).unwrap();
+    assert_eq!(ledger.admin_summary().unwrap()["active_funding_intents"], 10_000);
+    assert_eq!(serde_json::to_value(ledger.quote(&unrelated_quote.payload.id).unwrap()).unwrap(),
+        serde_json::to_value(&unrelated_quote).unwrap());
+    for index in 0..2 {
+        assert_eq!(serde_json::to_value(ledger.quote(&quotes[index].payload.id).unwrap()).unwrap(),
+            serde_json::to_value(quotes[index]).unwrap());
+        let stored = ledger.funding_intent(&quotes[index].payload, raws[index]).unwrap();
+        assert_eq!(serde_json::to_value(stored).unwrap(),
+            if index == winner { results[winner].1.clone() } else { Value::Null });
+    }
+    let accounts: (u64, u64, u64, u64) = db.query_row(
+        "SELECT (SELECT COUNT(*) FROM accounts),(SELECT COUNT(*) FROM credentials),
+                (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations)", [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
+    assert_eq!(accounts, (0, 0, 0, 0));
+    for rpc in [&fixture.rpc, &second_rpc] {
+        assert!(rpc.requests.lock().unwrap().iter().all(|call| call["method"] != "eth_sendRawTransaction"));
     }
 }
