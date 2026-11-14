@@ -969,20 +969,92 @@ async fn unsupported_typed_prefixes_do_not_admit_type_two_shaped_payments() {
 async fn hex_letter_case_preserves_payment_identity_and_retained_spelling() {
     let directory = tempfile::tempdir().unwrap();
     for (kind, envelope_name) in ENVELOPES {
-        for (index, mixed) in [false, true].into_iter().enumerate() {
+        for (index, spelling_name) in ["lowercase", "uppercase", "mixed-case"].into_iter().enumerate() {
             let mut fixture = Fixture::new(directory.path(), 11_000 + u64::from(kind) * 100 + index as u64, 100).await;
             let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
             let (original, envelope) = fixture.original(kind, &fields);
-            let mut candidate = original;
-            candidate[2..].make_ascii_uppercase();
-            if mixed {
-                let first_letter = candidate[2..].find(|ch: char| ch.is_ascii_uppercase()).unwrap() + 2;
-                candidate[first_letter..first_letter + 1].make_ascii_lowercase();
+            let mut uppercase = original.clone();
+            uppercase[2..].make_ascii_uppercase();
+            let mut mixed = uppercase.clone();
+            let first_letter = mixed[2..].find(|ch: char| ch.is_ascii_uppercase()).unwrap() + 2;
+            mixed[first_letter..first_letter + 1].make_ascii_lowercase();
+            let spellings = [original, uppercase, mixed];
+            let accepted = &spellings[index];
+            let name = format!("{envelope_name}: {spelling_name}");
+            for spelling in &spellings {
+                assert_eq!(fixture.envelope(spelling).unwrap(), envelope, "{name}");
             }
-            let name = format!("{envelope_name}: {}", if mixed { "mixed-case" } else { "uppercase" });
-            assert_eq!(fixture.envelope(&candidate).unwrap(), envelope, "{name}");
             fixture.rpc.control.lock().unwrap().balance = u128::MAX;
-            fixture.acknowledges(&candidate, &envelope, &name).await;
+            fixture.acknowledges(accepted, &envelope, &name).await;
+            let acknowledgement = serde_json::to_value(fixture.provider.state.ledger
+                .funding_intent(&fixture.quote.payload, accepted).unwrap().unwrap()).unwrap();
+
+            // Recovery must not delete an unrelated standalone quote or treat it
+            // as another admission. No superseded named-wallet quota is an oracle.
+            let (status, document) = request(&mut fixture.app, "/v1/contracts/propose", &HeaderMap::new(),
+                serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,
+                    "consumer_wallet":fixture.quote.payload.consumer_wallet,"funding_wei":"100"})).unwrap()).await;
+            assert_eq!(status, StatusCode::OK, "{name}: {document}");
+            let pending: Signed<Quote> = serde_json::from_value(document).unwrap();
+            assert_ne!(pending.payload.id, fixture.quote.payload.id, "{name}");
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let retained_records = || {
+                let mut statement = db.prepare(
+                    "SELECT contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until
+                     FROM funding_intents ORDER BY contract").unwrap();
+                let records = statement.query_map([], |row| Ok((
+                    row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?, row.get::<_, u64>(7)?,
+                ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+                records
+            };
+            let pending_record = || db.query_row("SELECT record FROM quotes WHERE id=?1",
+                [&pending.payload.id], |row| row.get::<_, String>(0)).unwrap();
+            let retained_before = retained_records();
+            let pending_before = pending_record();
+            fixture.rpc.requests.lock().unwrap().clear();
+
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.server.abort();
+                    assert!((&mut fixture.server).await.unwrap_err().is_cancelled());
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(
+                        &fixture.provider.ledger_path, &fixture.quote.payload.network).unwrap());
+                    state.chain = Arc::new(ChainClient::new(
+                        state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+                    state.accepting.store(false, Ordering::Release);
+                    state.funding_ready.store(false, Ordering::Release);
+                    state.qualified_models.write().unwrap().clear();
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                for (alternate_index, alternate) in spellings.iter().enumerate() {
+                    if alternate_index == index { continue; }
+                    assert_ne!(alternate, accepted, "{name}");
+                    let label = format!("{name}: alternate {alternate_index}, reopened {reopened}");
+                    // Every attempt uses a fresh owner proof bound to its actual
+                    // body. Equivalent bytes/hash do not authorize another string.
+                    let (status, document) = fixture.submit_intent(alternate).await;
+                    assert_eq!(status, StatusCode::CONFLICT, "{label}: {document}");
+                    assert_eq!(document["error"]["code"], "conflict", "{label}");
+                    assert_eq!(retained_records(), retained_before, "{label}");
+                    assert_eq!(pending_record(), pending_before, "{label}");
+                    assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{label}");
+
+                    let (status, document) = fixture.submit_intent(accepted).await;
+                    assert_eq!(status, StatusCode::OK, "{label}: {document}");
+                    assert_eq!(document, acknowledgement, "{label}");
+                    assert_eq!(retained_records(), retained_before, "{label}");
+                    assert_eq!(pending_record(), pending_before, "{label}");
+                    let ledger = fixture.persisted_without_credit();
+                    assert_eq!(serde_json::to_value(ledger.quote(&pending.payload.id).unwrap()).unwrap(),
+                        serde_json::to_value(&pending).unwrap(), "{label}");
+                    assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{label}");
+                }
+            }
         }
     }
 }

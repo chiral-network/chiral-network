@@ -52,7 +52,7 @@ The provider receives broadcastable signed bytes before the consumer sees an ack
 
 ## Source and existing test correspondence
 
-These are inspected source/test assertions, not a claim that the listed tests exhaust the new capability. Unit targets live in owner-untracked files. Completed checks recorded below are historical observations from those acceptance slices; this specification-only alignment adds no runtime acceptance claim.
+These are inspected source/test assertions, not a claim that the listed tests exhaust the new capability. Unit targets live in owner-untracked files. Completed checks recorded below belong to their individual acceptance slices; specification alignment alone adds no runtime acceptance claim.
 
 |Area|Production path|Existing test evidence|
 |---|---|---|
@@ -189,7 +189,17 @@ The authenticated request must reach balance observation and return HTTP 500 `in
 
 After removing only the trigger, fresh owner authority must admit the exact original bytes at the same nonce. Its signed acknowledgement is durable, its matching standalone proposal is gone and the earlier retained intent remains intact. This is explicit test recovery, not an automatic paid retry or replacement policy.
 
-This slice proves rollback of uncommitted SQLite writes and preservation across an independent ledger open, not commit-I/O faults, process/power-loss durability or live settlement. Parent 2.3 still retains its capacity, lease/conflict, exact replay and post-commit response-loss acceptance inventory.
+This slice proves rollback of uncommitted SQLite writes and preservation across an independent ledger open, not commit-I/O faults, process/power-loss durability or live settlement. Parent 2.3 still retains its capacity, lease/conflict and post-commit response-loss acceptance inventory; exact raw-string recovery is covered separately below.
+
+## Task 2.3.5 exact raw-string acknowledgement recovery
+
+`inference_funding_admission_test::hex_letter_case_preserves_payment_identity_and_retained_spelling` extends the initial case-acceptance coverage to cached recovery. Each legacy, EIP-2930 and EIP-1559 envelope is independently signed, then represented in lowercase, uppercase and mixed-case hexadecimal with the required lowercase `0x` prefix. All representations must locally decode to the identical validated envelope and hash. Each spelling is the accepted original in its own isolated ledger.
+
+After real-router admission, the test retains another standalone quote and captures every intent field. For each of the other two spellings, fresh body-bound owner authority must receive 409/`conflict`; another fresh proof for the verbatim accepted string must recover the complete original acknowledgement unchanged. Both attempts preserve raw/hash, signed quote/acknowledgement, sender/nonce, lease and unrelated quote storage without any RPC access, account, funding credit or fee obligation.
+
+The same refusal/recovery pairs run after reopening the ledger, router and chain client, stopping the isolated RPC listener, closing both fresh-funding gates and clearing qualification. Nine original-admission controls give 36 alternate-spelling refusals and 36 exact recovery controls across the two states. This detects replacing verbatim identity with decoded-byte equality, changing retained evidence or acknowledgement payload/signature, or incorrectly applying fresh admission to cached recovery.
+
+The fixture performs no paid execution or native-client submission and neither expires nor fills capacity. It is not post-commit response-loss, native journal/broadcast, power-loss, full-capacity or non-reserving-quota mitigation evidence; those tasks remain open.
 
 ## Acceptance gaps and evidence limits
 

@@ -1,25 +1,23 @@
 # APAS progress
 
-## 2026-11-14 — Opening and commercial non-reserving alignment
+## 2026-11-14 — Exact raw-string acknowledgement recovery
 
-- Authority, README and CI hashes match the preceding complete reads; the report has no new answer. Book SHA-256 remains `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`. The author-approved non-reserving decision is read-only.
-- Completed task 2.2 of `specify-non-reserving-quotes`: aligned the opening-intent and commercial proposal/design/delta/task files with provider-wide quote resources, authenticated paid/free opening capacity and accepted-original recovery.
-- Preserved signed terms, original acknowledgements/transactions/nonces, safe-credit prerequisites and historical evidence. Replaced stale wallet-quota authority and follow-on tasks; added explicit pending acceptance for final-lease competition, definite full refusal, lost-response recovery and authenticated free opening. Earlier eight/twelve-unit tests remain historical exposure, not mitigation.
-- Native source/tests remain unchanged. The author report and all incomplete changes stay open for native cutover and acceptance; no new author-only decision is needed.
+- The read-only book and README hashes match their preceding complete reads; no standard whitepaper candidate or new author answer appeared. Book SHA-256 remains `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`. CI commands are unchanged.
+- Completed opening-funding-intent task 2.3.5 by extending the existing letter-case integration test rather than duplicating initial admission coverage. Nine lowercase/uppercase/mixed-case originals across legacy, EIP-2930 and EIP-1559 passed 36 alternate-spelling refusals and 36 exact-original acknowledgement recovery controls.
+- The test repeats recovery after reopening ledger/router/chain state with both fresh-funding gates closed, qualification cleared and RPC stopped. It preserves complete intent evidence, unrelated standalone quotes and absence of credit without using superseded wallet quotas as an oracle.
+- Production source and whitepaper remain untouched. This is worker-owned acceptance, not native non-reserving cutover, expiry/full-capacity/lost-response recovery, client broadcast or live settlement evidence. The author report and incomplete changes stay open.
 
 ## Verification
 
-- Passed strict validation of `specify-opening-funding-intent`, `specify-inference-commercial-terms` and `specify-non-reserving-quotes`, plus the unchanged-whitepaper checksum.
-- Passed 373 all-target headless Rust tests (two existing child helpers ignored by the ordinary runner), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts: 434 passing tests total. These checks exercise the existing implementation, not mitigation of the revised quote policy; known blocked regression failures were not rerun.
-- Stale Browserslist data remains a frontend build warning; no dependency update was attempted.
-- Current probes confirm no WebKit desktop dependency or configured release policy authority. Release/native-desktop, Windows/macOS and live paid/GPU/public qualification remain unrun gates. No installation or deployment; keep Rust invocations sequential.
+- Passed strict validation of `specify-opening-funding-intent` and the unchanged-whitepaper checksum; 373 all-target headless Rust tests (two existing child helpers ignored), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts: 434 passing tests total. Stale Browserslist data remains a build warning; no dependency update. Known blocked regressions were not rerun, and old-policy tests are not mitigation evidence.
+- WebKit and the configured release policy authority remain unavailable. Release/native-desktop, Windows/macOS and live paid/GPU/public qualification remain unrun gates; no installation or deployment.
 
 ## Next steps, in order
 
 1. Native non-reserving cutover (parent 3.1–3.5) and proposal-rate clock/adoption work (2.4–2.5) remain **blocked by entirely owner-untracked ledger/handler/consumer source**. Do not adopt that migration, introduce unused helpers or commit expected-failing regressions alone. Clear both public wallet gates together and migrate affected tests; keep pre-signing work separate from committed issuance.
-2. **Next unblocked acceptance slice: opening-funding-intent 2.3's exact raw-string cached recovery.** Initial uppercase/mixed-case acceptance does not prove that a different spelling of the same decoded signed bytes/hash is refused after registration. Require conflict for alternate spellings and unchanged original acknowledgement recovery after reopening with fresh funding/qualification gates closed and RPC unavailable; preserve unrelated standalone quote storage, nonce/lease evidence and absence of credit. Do not use old payer-slot counts as an oracle.
-3. Then complete independently reachable final-capacity, lost-response and native journal/broadcast recovery acceptance (opening 2.3.3–2.3.4, 2.5–2.6, 2.8). Exact expiry/restart or new resource-gate assertions needing private native seams remain blocked with their fixes. Preserve safe-frontier prerequisites; isolated fixtures do not qualify live settlement or power-loss recovery.
-4. Prioritize any independently committable failing check, then retained code/spec gaps below. Prior committed cost/nonce/schema-member and rollback evidence remains valid within its recorded limits, not proof of the unimplemented quote-policy cutover.
+2. Exact raw-string refusal/recovery is now covered independently of the blocked quota cutover. **Next: inventory remaining independently reachable native journal/broadcast acceptance in opening 2.5–2.6**, including a saved broadcast-start marker without acknowledgement and valid-original missing/inconsistent-journal recovery. Extend worker-owned integration coverage where public interfaces permit it; do not adopt private owner source or duplicate existing checkpoints.
+3. Then complete independently reachable final-capacity, committed-response-loss and free-opening acceptance (opening 2.3.3–2.3.4, 2.8). Exact expiry/restart or new resource-gate assertions needing private native seams remain blocked with their fixes. Preserve safe-frontier prerequisites; isolated fixtures do not qualify live settlement or power-loss recovery.
+4. Prioritize any independently committable failing check, then retained code/spec gaps below. Earlier cost/nonce/schema-member and rollback evidence remains valid within its recorded limits; the current raw-string slice does not prove the unimplemented quote-policy cutover.
 5. After the bounded pre-credit contract, specify safe-credit/reorg accounting, explicit cancellation, top-ups and fees before broader discovery, credential lifecycle, runtime/performance and consumer/reputation alignment. Keep incomplete changes open; never archive with `--skip-specs`.
 
 ## Other retained blockers
@@ -32,4 +30,4 @@
 
 ## Checkout discipline
 
-Entry had no staged files and extensive owner migration changes; all candidate OpenSpec and APAS files were clean. Commit only this step's opening/commercial proposal/design/delta/tasks, the parent's task list and APAS progress/report. Exclude the owner's whitepaper and all source/tests; preserve the complete author `Answer:` and unrelated changes. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
+Entry had no staged files and extensive owner migration changes; the candidate test, OpenSpec and APAS files were clean. Commit only this step's `inference_funding_admission_test.rs`, opening-intent design/tasks and APAS progress/report. Exclude the owner's whitepaper and production migration; preserve the complete author `Answer:` and unrelated changes. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
