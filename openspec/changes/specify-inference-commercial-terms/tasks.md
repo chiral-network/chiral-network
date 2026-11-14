@@ -18,6 +18,8 @@
 - [ ] 2.4 Add missing public proposal and native quote-acceptance cases: exact selected terms and requested funding, free/paid boundaries, malformed declarations, readiness refusal, and preservation of existing saved/acknowledged terms.
   - [x] 2.4.1 Exercise fresh quote acceptance through the public native consumer API: complete signed terms, requested funding, free/paid boundaries, signer/domain checks, malformed responses, and evidence-only renewal versus exact quote copying.
   - [ ] 2.4.2 Complete actual provider proposal/readiness and remaining saved-agreement/historical recovery coverage. An isolated response fixture does not verify the production issuer or settlement lifecycle.
+    - [x] 2.4.2.1 Exercise the production control router with real ledger persistence: signed issuance, unauthenticated proposal versus owner authority, request/funding validation, local-offer selection, new-funding gates and the 96 KiB body boundary. Keep development-state fixtures distinct from native runtime/readiness qualification.
+    - [ ] 2.4.2.2 Complete remaining control-reader deadline/saturation, proposal quota and saved-agreement/historical recovery coverage; review existing tests first and retain explicit-time/ownership restrictions.
 - [ ] 2.5 Confirm existing evidence-only renewal tests cover the complete unchanged-term requirement and retain historical funding recovery checks; add only missing consumer-visible edge coverage.
 
 ## 3. Verify and integrate
