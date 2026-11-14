@@ -14,7 +14,7 @@
 
 ## 3. Verify and integrate
 
-- [ ] 3.1 Record requirement-to-source/test correspondence and operator/client consequences, including the fresh-proof availability cost of named-wallet exhaustion and clock correction; keep payment recovery and credential lifecycle separate.
+- [x] 3.1 Record requirement-to-source/test correspondence and operator/client consequences, including the fresh-proof availability cost of named-wallet exhaustion and clock correction; keep payment recovery and credential lifecycle separate. Evidence: the design's three-requirement/thirteen-scenario map, executable target references and usage notes distinguish accepted numeric/transactional behavior from blocked clock guarantees and unperformed HTTP/chain/engine qualification. No requirement or runtime change.
 - [ ] 3.2 Run all available project checks and strict validation after implementation, then archive with `openspec archive specify-challenge-rate-budgets --yes` only when every task is complete; never use `--skip-specs`.
 
 The existing public named-wallet availability report is nonblocking. No new owner-authentication design, automatic retry, real payment, deployment, account/server change or whitepaper edit is authorized by this change.
