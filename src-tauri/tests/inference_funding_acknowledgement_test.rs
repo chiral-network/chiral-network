@@ -85,13 +85,13 @@ async fn refuse_rpc(State(rpc): State<Arc<RefusingRpc>>, body: Bytes) -> Respons
     (StatusCode::SERVICE_UNAVAILABLE, "deliberately unavailable fixture RPC").into_response()
 }
 
-fn signed_opening(quote: &Signed<Quote>, key: &str) -> String {
+fn signed_opening(quote: &Signed<Quote>, key: &str, nonce: u64) -> String {
     // Independent EIP-155 construction, following the existing router fixture convention.
     let data = protocol::opening_data(&quote.payload).unwrap();
     let to = hex::decode(quote.payload.provider_wallet.strip_prefix("0x").unwrap()).unwrap();
     let value: u64 = quote.payload.funding_wei.parse().unwrap();
     let fields = |stream: &mut RlpStream| {
-        stream.append(&0_u64).append(&1_u64).append(&1_000_000_u64)
+        stream.append(&nonce).append(&1_u64).append(&1_000_000_u64)
             .append(&to.as_slice()).append(&value).append(&data.as_slice());
     };
     let chain_id = quote.payload.network.chain_id;
@@ -160,7 +160,7 @@ impl Fixture {
         wallet::save_private_key(&import, &key).unwrap();
         consumer.wallet_import_file(&import).unwrap();
         let quote = consumer.quote(&provider.offer, "100").await.unwrap();
-        let raw = signed_opening(&quote, &key);
+        let raw = signed_opening(&quote, &key, 0);
         let envelope = provider.state.chain.validate_payment_envelope(&raw,
             &quote.payload.consumer_wallet, &quote.payload.provider_wallet,
             &quote.payload.funding_wei, &protocol::opening_data(&quote.payload).unwrap()).unwrap();
@@ -315,5 +315,110 @@ async fn native_acknowledgement_rejects_duplicate_object_members_before_chain_ac
             let member = format!("\"{field}\":{}", document.pointer(path).unwrap()[field]);
             serde_json::to_string(&document).unwrap().replacen(&member, &format!("{member},{member}"), 1).into_bytes()
         }).await;
+    }
+}
+
+#[tokio::test]
+async fn native_recovery_refuses_missing_or_inconsistent_original_journal() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, missing) in [true, false].into_iter().enumerate() {
+        let case = 45_000 + index as u64;
+        let mut fixture = Fixture::new(directory.path(), case).await;
+        // Obtain a genuine cached acknowledgement and let the unavailable RPC
+        // stop the native workflow after durable acknowledgement/start state.
+        assert!(fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.is_err());
+        assert!(!fixture.rpc.attempts.lock().unwrap().is_empty());
+        let saved_before = std::fs::read(&fixture.account_path).unwrap();
+        let expected_saved: Value = serde_json::from_slice(&saved_before).unwrap();
+        assert_eq!(expected_saved["raw_transaction"], fixture.raw);
+        assert_eq!(expected_saved["tx_hash"], fixture.acknowledgement.payload.tx_hash);
+        assert_eq!(expected_saved["funding_intent"], serde_json::to_value(&fixture.acknowledgement).unwrap());
+        assert_eq!(expected_saved["funding_broadcast_started"], true);
+        let journal = Connection::open(&fixture.journal_path).unwrap();
+        let records = || {
+            let mut statement = journal.prepare(
+                "SELECT sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at
+                 FROM transactions ORDER BY sender,operation").unwrap();
+            let rows = statement.query_map([], |row| Ok((
+                row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?,
+                row.get::<_, u64>(8)?,
+            ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            rows
+        };
+        let original_records = records();
+        assert_eq!(original_records.len(), 1);
+        let original = &original_records[0];
+        assert_eq!(original.0, fixture.quote.payload.consumer_wallet);
+        assert_eq!(original.1, format!("open:{}", fixture.quote.payload.id));
+        assert_eq!(original.2, "0");
+        assert_eq!(original.3, fixture.acknowledgement.payload.tx_hash);
+        assert_eq!(original.4, fixture.raw);
+        if missing {
+            assert_eq!(journal.execute("DELETE FROM transactions WHERE sender=?1 AND operation=?2",
+                params![original.0, original.1]).unwrap(), 1);
+        } else {
+            // This competing journal original is correctly signed for the same
+            // payer/quote and internally consistent, not malformed-byte refusal.
+            let key = format!("{:064x}", 70_000 + case);
+            let different = signed_opening(&fixture.quote, &key, 1);
+            let envelope = fixture.provider.state.chain.validate_payment_envelope(&different,
+                &fixture.quote.payload.consumer_wallet, &fixture.quote.payload.provider_wallet,
+                &fixture.quote.payload.funding_wei,
+                &protocol::opening_data(&fixture.quote.payload).unwrap()).unwrap();
+            assert_eq!(envelope.nonce, 1);
+            assert_ne!(different, fixture.raw);
+            assert_ne!(envelope.tx_hash, fixture.acknowledgement.payload.tx_hash);
+            assert_eq!(journal.execute(
+                "UPDATE transactions SET nonce=?3,tx_hash=?4,raw=?5 WHERE sender=?1 AND operation=?2",
+                params![original.0, original.1, envelope.nonce.to_string(), envelope.tx_hash, different]).unwrap(), 1);
+        }
+        let damaged_records = records();
+        fixture.peer.exchanges.lock().unwrap().clear();
+        fixture.rpc.attempts.lock().unwrap().clear();
+
+        for repeat_fund in [false, true] {
+            fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+            let result = if repeat_fund {
+                fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await
+            } else {
+                fixture.consumer.resume(&fixture.quote.payload.id).await
+            };
+            let name = format!("missing={missing}, repeat_fund={repeat_fund}");
+            assert!(result.is_err(), "{name}");
+            assert!(fixture.rpc.attempts.lock().unwrap().is_empty(), "{name}: journal refusal must precede RPC");
+            assert!(fixture.peer.exchanges.lock().unwrap().is_empty(), "{name}: no replacement acknowledgement");
+            assert_eq!(std::fs::read(&fixture.account_path).unwrap(), saved_before, "{name}");
+            assert_eq!(records(), damaged_records, "{name}: no recreated or overwritten journal operation");
+            fixture.unchanged_provider();
+        }
+
+        // Explicit isolated-fixture repair, not an automatic recovery strategy:
+        // restoring the original record must make that same payment usable again.
+        if missing {
+            journal.execute(
+                "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![original.0, original.1, original.2, original.3, original.4,
+                    original.5, original.6, original.7, original.8]).unwrap();
+        } else {
+            journal.execute(
+                "UPDATE transactions SET nonce=?3,tx_hash=?4,raw=?5 WHERE sender=?1 AND operation=?2",
+                params![original.0, original.1, original.2, original.3, original.4]).unwrap();
+        }
+        fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+        assert!(fixture.consumer.resume(&fixture.quote.payload.id).await.is_err(), "RPC remains unavailable");
+        let attempts = fixture.rpc.attempts.lock().unwrap();
+        assert!(!attempts.is_empty(), "restored original must pass local recovery and reach RPC");
+        for attempt in attempts.iter() {
+            assert_ne!(attempt.method, "eth_sendRawTransaction");
+            assert_eq!(attempt.saved.as_ref().unwrap(), &expected_saved);
+        }
+        assert!(fixture.peer.exchanges.lock().unwrap().is_empty(), "saved acknowledgement must be reused");
+        assert_eq!(std::fs::read(&fixture.account_path).unwrap(), saved_before);
+        assert_eq!(records(), original_records);
+        fixture.unchanged_provider();
     }
 }
