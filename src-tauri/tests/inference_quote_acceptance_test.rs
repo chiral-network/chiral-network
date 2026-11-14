@@ -1,4 +1,4 @@
-//! Public Consumer::quote contracts for specify-inference-commercial-terms task 2.4.
+//! Public Consumer::quote contracts for specify-inference-commercial-terms tasks 2.1 and 2.4.
 //! Isolated loopback counterparties return complete signed quotes, including adversarial terms.
 //! Public test scalars only; no funding, chain simulation, external services or qualification claims.
 //! Fresh timestamps keep fixtures admissible; no sleeps or current-time boundary assertions.
@@ -178,6 +178,20 @@ impl Fixture {
         Self { consumer, offer, quote, provider_key, replies, server, _directory: directory }
     }
 
+    fn select_offer(&mut self, payload: InferenceOffer) {
+        self.offer = protocol::sign(OFFER_DOMAIN, payload, &self.provider_key).unwrap();
+        let offer = &self.offer.payload;
+        self.quote.network = offer.network.clone();
+        self.quote.offer_id = protocol::offer_id(offer).unwrap();
+        self.quote.provider_wallet = offer.provider_wallet.clone();
+        self.quote.model = offer.model.clone();
+        self.quote.price = offer.price.clone();
+        self.quote.platform_wallet = offer.platform_wallet.clone();
+        self.quote.fee_bps = offer.fee_bps;
+        self.quote.max_concurrency = offer.max_concurrency;
+        self.reply(self.quote.clone());
+    }
+
     fn reply(&self, quote: Quote) -> Signed<Quote> {
         let signed = protocol::sign(QUOTE_DOMAIN, quote, &self.provider_key).unwrap();
         self.reply_raw(serde_json::to_value(&signed).unwrap());
@@ -353,4 +367,153 @@ async fn signed_quote_identifiers_money_and_unknown_fields_are_not_silently_norm
         fixture.reply_raw(extended);
         assert!(fixture.request("100").await.is_err(), "unknown field at {path:?}");
     }
+}
+
+#[tokio::test]
+async fn signed_invalid_offer_metadata_is_rejected_before_proposal() {
+    let fixture = Fixture::paid(200).await;
+    let cases: &[(&str, fn(&mut InferenceOffer))] = &[
+        ("chain ID", |o| o.network.chain_id += 1),
+        ("genesis hash", |o| o.network.genesis_hash = format!("0x{}", "ef".repeat(32))),
+        ("network deployment", |o| o.network.deployment_id.push_str("-foreign")),
+        ("provider wallet case", |o| {
+            o.provider_wallet = format!("0x{}", o.provider_wallet[2..].to_ascii_uppercase());
+        }),
+        ("platform wallet case", |o| o.platform_wallet = format!("0x{}", "AB".repeat(20))),
+        ("peer identity", |o| o.peer_id = "not-a-peer".into()),
+        ("empty provider deployment", |o| o.deployment_id.clear()),
+        ("overlong provider deployment", |o| o.deployment_id = "a".repeat(129)),
+        ("provider deployment separator", |o| o.deployment_id = "provider/other".into()),
+        ("non-ASCII provider deployment", |o| o.deployment_id = "déployment".into()),
+        ("zero revision", |o| o.revision = 0),
+        ("zero unprofiled concurrency", |o| {
+            o.model.serving = None;
+            o.max_concurrency = 0;
+        }),
+        ("excessive unprofiled concurrency", |o| {
+            o.model.serving = None;
+            o.max_concurrency = 257;
+        }),
+        ("profile concurrency mismatch", |o| o.max_concurrency = 3),
+        ("absent platform fee", |o| o.fee_bps = 0),
+        ("different platform fee", |o| o.fee_bps = 51),
+        ("empty model identifier", |o| o.model.id.clear()),
+        ("duplicate capability", |o| o.model.capabilities.push("chat".into())),
+        ("unsupported profile engine", |o| {
+            o.model.serving.as_mut().unwrap().engine = "vllm".into();
+        }),
+        ("noncanonical input price", |o| o.price.input_wei_per_1k = "01".into()),
+        ("noncanonical output price", |o| o.price.output_wei_per_1k = "+2".into()),
+        ("overflowing minimum funding", |o| {
+            o.min_funding_wei = "340282366920938463463374607431768211456".into();
+        }),
+    ];
+    for (case, mutate) in cases {
+        let mut payload = fixture.offer.payload.clone();
+        mutate(&mut payload);
+        let signed = protocol::sign(OFFER_DOMAIN, payload, &fixture.provider_key).unwrap();
+        assert!(fixture.consumer.quote(&signed, "100").await.is_err(), "{case}");
+        assert!(fixture.replies.requests.lock().unwrap().is_empty(), "{case} reached proposal");
+    }
+    // The same consumer and counterparty remain usable after rejecting every malformed offer.
+    assert_eq!(fixture.request("100").await.unwrap().payload, fixture.quote);
+}
+
+#[tokio::test]
+async fn valid_offer_namespace_revision_and_capacity_boundaries_remain_usable() {
+    let mut fixture = Fixture::paid(201).await;
+    let original = fixture.offer.payload.clone();
+    let cases: &[(&str, fn(&mut InferenceOffer))] = &[
+        ("one-character provider deployment", |o| o.deployment_id = "_".into()),
+        ("maximum provider deployment", |o| o.deployment_id = "A0_-".repeat(32)),
+        ("maximum revision", |o| o.revision = u64::MAX),
+        ("minimum matching concurrency", |o| {
+            o.max_concurrency = 1;
+            o.model.serving.as_mut().unwrap().max_concurrency = 1;
+        }),
+        ("maximum matching concurrency", |o| {
+            o.max_concurrency = 256;
+            o.model.serving.as_mut().unwrap().max_concurrency = 256;
+        }),
+    ];
+    for (case, mutate) in cases {
+        let mut payload = original.clone();
+        mutate(&mut payload);
+        fixture.select_offer(payload);
+        let returned = fixture.request("100").await.unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(returned.payload, fixture.quote, "{case}");
+    }
+}
+
+#[tokio::test]
+async fn offer_size_limit_counts_the_complete_signed_envelope() {
+    const LIMIT: usize = 16 * 1024;
+    // Control the legal wire spelling, independently of the local signer's output convention.
+    fn prefix_signature(offer: &mut Signed<InferenceOffer>) {
+        if !offer.signature.starts_with("0x") {
+            offer.signature.insert_str(0, "0x");
+        }
+    }
+    let mut fixture = Fixture::paid(202).await;
+    let mut declaration = fixture.offer.clone();
+    prefix_signature(&mut declaration);
+    let profile = declaration.payload.model.serving.as_mut().unwrap();
+    let template = profile.devices[0].clone();
+    // Valid synthetic multi-device metadata supplies enough bounded text to reach the wire limit.
+    // This is not an inventory, a native launch configuration or a qualification report.
+    profile.devices = (0..32)
+        .map(|index| {
+            let mut device = template.clone();
+            device.id = format!("test-device-{index}");
+            device.engine_device = format!("CUDA{index}");
+            device
+        })
+        .collect();
+    profile.split_mode = "layer".into();
+    profile.tensor_split = vec![1; 32];
+    // The existing signature supplies its encoded width; select_offer re-signs before any use.
+    let mut remaining = LIMIT.checked_sub(serde_json::to_vec(&declaration).unwrap().len()).unwrap();
+    for device in &mut declaration.payload.model.serving.as_mut().unwrap().devices {
+        for field in [&mut device.name, &mut device.driver_version] {
+            let added = remaining.min(256 - field.len());
+            field.extend(std::iter::repeat_n('x', added));
+            remaining -= added;
+        }
+    }
+    assert_eq!(remaining, 0, "fixture must be able to fill the envelope without invalid fields");
+    fixture.select_offer(declaration.payload);
+    prefix_signature(&mut fixture.offer);
+    assert_eq!(serde_json::to_vec(&fixture.offer).unwrap().len(), LIMIT);
+    assert_eq!(fixture.request("100").await.unwrap().payload, fixture.quote);
+
+    let mut oversized = fixture.offer.payload.clone();
+    let field = oversized.model.serving.as_mut().unwrap().devices.iter_mut()
+        .flat_map(|device| [&mut device.name, &mut device.driver_version])
+        .find(|field| field.len() < 256)
+        .unwrap();
+    field.push('x');
+    fixture.select_offer(oversized);
+    prefix_signature(&mut fixture.offer);
+    assert_eq!(serde_json::to_vec(&fixture.offer).unwrap().len(), LIMIT + 1);
+    assert!(serde_json::to_vec(&fixture.offer.payload).unwrap().len() < LIMIT);
+    assert!(fixture.consumer.quote(&fixture.offer, "100").await.is_err());
+    assert!(fixture.replies.requests.lock().unwrap().is_empty());
+
+    // The wire foundation also accepts unprefixed signatures. Removing only "0x" puts the
+    // identical, still-valid payload below the envelope limit; no metadata rejection may mask it.
+    fixture.offer.signature = fixture.offer.signature.strip_prefix("0x").unwrap().to_owned();
+    assert_eq!(serde_json::to_vec(&fixture.offer).unwrap().len(), LIMIT - 1);
+    assert_eq!(fixture.request("100").await.unwrap().payload, fixture.quote);
+}
+
+#[tokio::test]
+async fn offer_lifetime_bound_is_enforced_without_a_now_relative_edge() {
+    let mut fixture = Fixture::paid(203).await;
+    assert_eq!(fixture.offer.payload.expires_at - fixture.offer.payload.issued_at, 3600);
+    assert_eq!(fixture.request("100").await.unwrap().payload, fixture.quote);
+    let mut payload = fixture.offer.payload.clone();
+    payload.expires_at += 1;
+    fixture.select_offer(payload);
+    assert!(fixture.consumer.quote(&fixture.offer, "100").await.is_err());
+    assert!(fixture.replies.requests.lock().unwrap().is_empty());
 }
