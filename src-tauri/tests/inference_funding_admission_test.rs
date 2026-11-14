@@ -181,18 +181,19 @@ fn signed_payment(payment: &PaymentFields, key: &str, kind: u8, access_list: &[u
         stream.append(&payment.data.as_slice());
         if kind != 0 { stream.append_raw(access_list, 1); }
     };
-    sign_payment_fields(kind, payment.chain_id, key, fields)
+    let unsigned_fields = match kind { 0 => 6, 1 => 8, 2 => 9, _ => unreachable!() };
+    sign_payment_fields(kind, payment.chain_id, key, unsigned_fields, fields)
 }
 
-fn sign_payment_fields(kind: u8, chain_id: u64, key: &str, fields: impl Fn(&mut RlpStream)) -> String {
-    let mut unsigned = RlpStream::new_list(match kind { 0 | 2 => 9, 1 => 8, _ => unreachable!() });
+fn sign_payment_fields(kind: u8, chain_id: u64, key: &str, unsigned_fields: usize, fields: impl Fn(&mut RlpStream)) -> String {
+    let mut unsigned = RlpStream::new_list(unsigned_fields + if kind == 0 { 3 } else { 0 });
     fields(&mut unsigned);
     if kind == 0 { unsigned.append(&chain_id).append(&0_u8).append(&0_u8); }
     let digest = payment_digest(kind, &unsigned.out());
     let key = SecretKey::from_slice(&hex::decode(key).unwrap()).unwrap();
     let (recovery, signature) = Secp256k1::signing_only()
         .sign_ecdsa_recoverable(&Message::from_digest_slice(&digest).unwrap(), &key).serialize_compact();
-    let mut signed = RlpStream::new_list(match kind { 0 => 9, 1 => 11, 2 => 12, _ => unreachable!() });
+    let mut signed = RlpStream::new_list(unsigned_fields + 3);
     fields(&mut signed);
     let parity = recovery.to_i32() as u64;
     signed.append(&if kind == 0 { chain_id * 2 + 35 + parity } else { parity });
@@ -209,7 +210,7 @@ fn resign_field(raw: &str, kind: u8, chain_id: u64, key: &str, index: usize, enc
     let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
     let unsigned_fields = rlp.item_count().unwrap() - 3;
     assert!(index < unsigned_fields);
-    sign_payment_fields(kind, chain_id, key, |stream| {
+    sign_payment_fields(kind, chain_id, key, unsigned_fields, |stream| {
         for field in 0..unsigned_fields {
             stream.append_raw(if field == index { encoded } else { rlp.at(field).unwrap().as_raw() }, 1);
         }
@@ -858,5 +859,83 @@ fn local_envelope_enforces_calldata_limit_without_truncation() {
         // Matching only the permitted prefix must not turn clipping into valid payment evidence.
         assert!(matches!(validate(&candidate, &fields.data[..4_096]), Err(ChainError::Rejected(_))), "{name}");
         assert_eq!(validate(&original, &fields.data[..4_096]).unwrap(), envelope, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn malformed_raw_envelopes_preserve_fresh_funding_admission() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, malformed) in [
+            "empty-string", "missing-prefix", "uppercase-prefix", "empty-payload",
+            "odd-payload", "non-hex", "leading-whitespace", "trailing-whitespace",
+            "trailing-byte", "concatenated-envelope", "truncated-byte", "zero-tag",
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 9_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let candidate = match malformed {
+                "empty-string" => String::new(),
+                "missing-prefix" => original[2..].to_owned(),
+                "uppercase-prefix" => format!("0X{}", &original[2..]),
+                "empty-payload" => "0x".to_owned(),
+                "odd-payload" => format!("{original}0"),
+                "non-hex" => format!("0xg{}", &original[3..]),
+                "leading-whitespace" => format!("\t{original}"),
+                "trailing-whitespace" => format!("{original} \n"),
+                "trailing-byte" => format!("{original}00"),
+                "concatenated-envelope" => format!("{original}{}", &original[2..]),
+                "truncated-byte" => original[..original.len() - 2].to_owned(),
+                "zero-tag" => format!("0x00{}", &original[2..]),
+                _ => unreachable!(),
+            };
+            fixture.rejects_candidate_preserving_original(
+                &original, &candidate, &format!("{envelope_name}: {malformed}"),
+            ).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn unsupported_typed_prefixes_do_not_admit_type_two_shaped_payments() {
+    let directory = tempfile::tempdir().unwrap();
+    for tag in [3_u8, 4, 0x7f] {
+        let mut fixture = Fixture::new(directory.path(), 10_000 + u64::from(tag), 100).await;
+        let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+        let original = signed_payment(&fields, &fixture.owner_key, 2, &[0xc0]);
+        let bytes = hex::decode(&original[2..]).unwrap();
+        let rlp = Rlp::new(&bytes[1..]);
+        // Sign the unsupported prefix itself, not a stale type-2 digest. These
+        // type-2-shaped payloads are not valid blob or authorization transactions.
+        let candidate = sign_payment_fields(tag, fields.chain_id, &fixture.owner_key, 9, |stream| {
+            for index in 0..9 {
+                stream.append_raw(rlp.at(index).unwrap().as_raw(), 1);
+            }
+        });
+        fixture.rejects_candidate_preserving_original(
+            &original, &candidate, &format!("unsupported typed prefix 0x{tag:02x}"),
+        ).await;
+    }
+}
+
+#[tokio::test]
+async fn hex_letter_case_preserves_payment_identity_and_retained_spelling() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, mixed) in [false, true].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 11_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let (original, envelope) = fixture.original(kind, &fields);
+            let mut candidate = original;
+            candidate[2..].make_ascii_uppercase();
+            if mixed {
+                let first_letter = candidate[2..].find(|ch: char| ch.is_ascii_uppercase()).unwrap() + 2;
+                candidate[first_letter..first_letter + 1].make_ascii_lowercase();
+            }
+            let name = format!("{envelope_name}: {}", if mixed { "mixed-case" } else { "uppercase" });
+            assert_eq!(fixture.envelope(&candidate).unwrap(), envelope, "{name}");
+            fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+            fixture.acknowledges(&candidate, &envelope, &name).await;
+        }
     }
 }
