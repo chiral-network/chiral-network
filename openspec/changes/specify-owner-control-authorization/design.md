@@ -42,7 +42,7 @@ Persist before returning a challenge, and never accept stateless signature-only 
 |Local reconstruction and safe signing|`consumer::owner_request`, `consumer::validate_challenge`|`inference_owner_consumer_test` exercises public native calls with altered real-provider challenge replies and verifies actual transmitted signatures/bodies for POST, GET and DELETE. Dedicated cases cover nonce byte boundaries; existing helper tests retain selected freshness coverage and exact remaining time boundaries stay in task 2.2.3.|
 |Payload binding and rejection without consumption|`auth::authenticate_owner`, `auth::challenge_payload`|`signature_binds_every_control_field_and_raw_body` compares framed bytes; the existing funding-intent test exercises real signatures and identity mismatches. `inference_owner_authentication_test` adds actual method/query/body and signature rejection, unknown nonces, subsequent usable authority, and exact expiry.|
 |Atomic durable consumption|`BillingStore::challenge`, `BillingStore::consume_challenge`|The existing two-connection test races direct consumption; the public-issuer test recovers an unconsumed real proof after restart. `inference_owner_authentication_test` additionally races full signature authentication, checks consumed replay after reopening, and verifies complete-payload comparison and a stale-reader replacement interleaving.|
-|Pending capacity and expiry|`BillingStore::create_challenge` and `cleanup_pending`|`wallet_hex_aliases_share_the_same_pending_challenge_allowance` proves both wallet spellings share eight slots without excluding another wallet. Existing `one_use_challenges_are_expiring_and_pending_state_is_bounded` covers expiry cleanup and expired consumption; global/transactional scenarios remain open.|
+|Pending capacity and expiry|`BillingStore::create_challenge` and `cleanup_pending`|`wallet_hex_aliases_share_the_same_pending_challenge_allowance` covers canonical wallet slots. Six capacity cases in `inference_owner_control_test` cover independent quote/challenge allowances, consumption and exact-expiry release, HTTP global refusal, final-slot races, collision refusal and transactional rollback while preserving accepted state; see the task 2.5 evidence boundary below.|
 |Quote/account authority and read scope|`contracts::authorize_read`, `authorize_owner`, opening/funding-intent/top-up/credential branches|`inference_owner_control_test` covers all six GET routes, credential mutation authorization and the free/paid opening, acknowledgement and top-up authority matrix. Wrong-owner and business refusals consume proofs without granting balances or credentials. Existing-root preservation on an authenticated opening retry remains blocked task 2.4.3.|
 
 These sources were read; correspondence is not a claim that the unchecked acceptance tasks have passed. Reuse existing tests before adding deterministic consumer-visible regressions. Do not test only wiring or implementation text.
@@ -115,6 +115,20 @@ Top-up refusals distinguish authorization from business validity. Missing/wrong 
 
 Fixing that behavior and covering native/HTTP recovery must preserve accepted balances and leave explicit issuance/rotation reachable. The ledger and dependent native implementation are owner-untracked work, so this fix remains blocked rather than being absorbed into a test commit. Parent 2.4 cannot be closed or the change archived while this mismatch remains.
 
+
+### Task 2.5 pending-challenge capacity acceptance
+
+`inference_owner_control_test` adds six isolated acceptance cases:
+
+- Fill eight challenge slots and eight standalone proposal slots for the same owner in both orders, alongside a separately retained acknowledgement/admission. Refused ninth admissions preserve pending records and issuance budgets. Consumption and exact expiry each release a challenge slot without evicting other valid challenges. Subsequent expiry cleanup retains the signed acknowledged agreement, raw-transaction recovery and unrelated accounts/credentials.
+- Exercise the production HTTP challenge route against a restored 10,000-record pending snapshot: return HTTP 429 without eviction or budget debit, then admit a new challenge after storage consumption releases one slot.
+- Race two independent SQLite-backed ledger connections for the last wallet slot and the last global slot. Exactly one wins; the other receives a capacity refusal and can retry after consumption. Compare budget state with one successful admission in a control ledger, rather than fixing rate-policy constants.
+- Reject a nonce collision carrying changed wallet/request fields, retain the original signed-proof authentication path and budget, then admit a distinct nonce.
+- Inject an SQLite `AFTER INSERT` failure. A separately reopened ledger must observe no partial insertion, expiry cleanup or budget changes; removing the fault permits the identical candidate and normal expiry cleanup.
+
+The global ceiling is conditional restored-state acceptance, not a claim that native issuance can accumulate 10,000 challenges within its 120-second lifetime and rate limits. These two tests load deterministic records, at most eight per wallet, with future storage-snapshot expiries; native lifetime validation remains covered by task 2.1. They do not move the clock backwards or claim native signing approval of those snapshot expiries.
+
+Slot-release tests use the trusted ledger consumption API where authentication has already been established independently by task 2.3. The collision test additionally verifies a real owner signature. Financial prerequisites use real free HTTP accounts, a locally signed payment envelope and the public acknowledgement-registration boundary after spendability verification; no chain result is fabricated or credited. Challenge rate-window policy and the existing blocked recovery/native-clock fixes remain separate.
 
 ## Risks and rollout
 

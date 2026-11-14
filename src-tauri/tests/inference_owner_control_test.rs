@@ -1,4 +1,4 @@
-//! Account reads and mutations through the production control router and isolated disk ledgers.
+//! Owner control and challenge capacity through production routes and isolated disk ledgers.
 //! Free accounts open over HTTP. Paid account prerequisites begin AFTER the chain verification boundary.
 //! Synthetic accepted-block inputs are not chain qualification; no RPC, broadcast or engine is used.
 #[path = "support/proposal.rs"]
@@ -20,9 +20,10 @@ use chiral_network::{
 };
 use proposal::PreparedProvider;
 use rlp::RlpStream;
+use rusqlite::{params, Connection};
 use secp256k1::{Message, Secp256k1, SecretKey};
 use serde_json::{json, Value};
-use std::{net::TcpListener, path::Path, sync::atomic::Ordering};
+use std::{net::TcpListener, path::Path, sync::{atomic::Ordering, Barrier}, thread};
 use tiny_keccak::{Hasher, Keccak};
 use tower::Service;
 
@@ -31,6 +32,14 @@ const OWNER_KEY: &str = "0000000000000000000000000000000000000000000000000000000
 const OTHER_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000008";
 const REQUEST_KEY: &str = "read-proof-request";
 const OPEN: &str = "/v1/contracts/open";
+
+fn rate_records(path: &Path) -> Vec<(String, u64, u64)> {
+    let db = Connection::open(path).unwrap();
+    let mut statement = db.prepare("SELECT bucket,window,count FROM rate_limits ORDER BY bucket").unwrap();
+    let records = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    records
+}
 
 #[derive(Clone, Copy, Debug)]
 enum ReadRoute { Account, Receipt, Funding, Requests, Request, Credentials }
@@ -372,6 +381,81 @@ impl Fixture {
         self.consumed(&wrong_owner);
         denied(self.send("POST", path, &wrong_owner.headers, body.to_vec()).await, StatusCode::UNAUTHORIZED);
         self.credentials_usable(&credentials);
+    }
+
+    fn pending_challenge(&self, wallet: &str, sequence: u64, expires_at: u64) -> AuthPayload {
+        AuthPayload {
+            network: self.provider.offer.payload.network.clone(),
+            provider_wallet: self.provider.state.wallet.clone(), wallet: wallet.into(),
+            method: "GET".into(), path: OPEN.into(), body_hash: protocol::hash_hex(b""),
+            nonce: format!("0x{sequence:064x}"), expires_at,
+        }
+    }
+
+    fn seed_challenge_snapshot(&self, count: usize) {
+        // Conditional restored-state ceiling, not 10,000 native issuances in one rate/TTL window.
+        // Far-future snapshot expiries avoid wall-clock races; native lifetime is tested separately.
+        let mut db = Connection::open(&self.provider.ledger_path).unwrap();
+        let tx = db.transaction().unwrap();
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO challenges(nonce,wallet,expires,record) VALUES(?1,?2,?3,?4)").unwrap();
+            for index in 0..count {
+                let wallet = format!("0x{:040x}", 0x10000 + index / 8);
+                let payload = self.pending_challenge(&wallet, 100_000 + index as u64, i64::MAX as u64);
+                insert.execute(params![payload.nonce, payload.wallet, payload.expires_at,
+                    serde_json::to_string(&payload).unwrap()]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+    }
+
+    fn challenge_records(&self) -> Vec<(String, String, u64, String)> {
+        let db = Connection::open(&self.provider.ledger_path).unwrap();
+        let mut statement = db.prepare(
+            "SELECT nonce,wallet,expires,record FROM challenges ORDER BY nonce").unwrap();
+        let records = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        records
+    }
+
+    fn race_challenges(&self, candidates: [&AuthPayload; 2], now: u64) -> usize {
+        let network = &self.provider.offer.payload.network;
+        self.provider.state.ledger.bind_provider(&self.provider.state.wallet).unwrap();
+        let before_rates = rate_records(&self.provider.ledger_path);
+        let barrier = Barrier::new(2);
+        let results = thread::scope(|scope| {
+            let handles = candidates.map(|candidate| {
+                let barrier = &barrier;
+                let path = &self.provider.ledger_path;
+                scope.spawn(move || {
+                    let ledger = BillingStore::open(path, network).unwrap();
+                    barrier.wait();
+                    ledger.create_challenge(candidate, now)
+                })
+            });
+            handles.map(|handle| handle.join().unwrap())
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let winner = results.iter().position(|result| result.is_ok()).unwrap();
+        let error = results[1 - winner].as_ref().unwrap_err();
+        assert!(error.starts_with("rate_limit:"), "{error}");
+        assert_eq!(serde_json::to_value(self.provider.state.ledger.challenge(&candidates[winner].nonce).unwrap()).unwrap(),
+            serde_json::to_value(candidates[winner]).unwrap());
+        assert!(self.provider.state.ledger.challenge(&candidates[1 - winner].nonce).is_err());
+
+        // Compare with one successful admission, without pinning rate ceilings or window lengths.
+        let control_path = self.provider.ledger_path.with_file_name("challenge-rate-control.sqlite");
+        let control = BillingStore::open(&control_path, network).unwrap();
+        control.bind_provider(&self.provider.state.wallet).unwrap();
+        let db = Connection::open(&control_path).unwrap();
+        for (bucket, window, count) in before_rates {
+            db.execute("INSERT INTO rate_limits(bucket,window,count) VALUES(?1,?2,?3)",
+                params![bucket, window, count]).unwrap();
+        }
+        control.create_challenge(candidates[winner], now).unwrap();
+        assert_eq!(rate_records(&self.provider.ledger_path), rate_records(&control_path));
+        winner
     }
 }
 
@@ -756,4 +840,230 @@ async fn topups_require_account_owner_and_business_refusals_consume_only_authori
         assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
         fixture.credentials_usable(&[&read, &infer, &target.credential, &accounts.other.credential]);
     }
+}
+
+#[tokio::test]
+async fn global_pending_challenge_ceiling_returns_429_without_eviction_or_budget_debit() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 2300);
+    fixture.seed_challenge_snapshot(10_000);
+    let before = fixture.challenge_records();
+    let rates = rate_records(&fixture.provider.ledger_path);
+    let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
+    let request = json!({"wallet": owner, "method": "GET", "path": OPEN, "body_hash": protocol::hash_hex(b"")});
+    let response = fixture.post("/v1/auth/challenge", request.clone()).await;
+    assert_eq!(response.1["error"]["code"], "rate_limit");
+    denied(response, StatusCode::TOO_MANY_REQUESTS);
+    let after = fixture.challenge_records();
+    assert_eq!(after.len(), 10_000);
+    for (expected, actual) in before.iter().zip(&after) { assert_eq!(actual, expected); }
+    assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
+
+    // Storage consumption follows authentication (covered in 2.3) and releases exactly one slot.
+    let consumed: AuthPayload = serde_json::from_str(&before[0].3).unwrap();
+    fixture.provider.state.ledger.consume_challenge(&consumed.nonce, &consumed, protocol::now().unwrap()).unwrap();
+    let (status, value) = fixture.post("/v1/auth/challenge", request).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let admitted: Challenge = serde_json::from_value(value).unwrap();
+    let saved = fixture.provider.state.ledger.challenge(&admitted.nonce).unwrap();
+    assert_eq!(saved.wallet, owner);
+    assert_eq!(saved.expires_at, admitted.expires_at);
+    assert!(fixture.provider.state.ledger.challenge(&consumed.nonce).is_err());
+    let remaining = fixture.challenge_records();
+    assert_eq!(remaining.len(), 10_000);
+    for (expected, actual) in before.iter().skip(1).zip(remaining.iter().filter(|row| row.0 != admitted.nonce)) {
+        assert_eq!(actual, expected);
+    }
+}
+
+#[tokio::test]
+async fn challenge_slots_are_separate_from_proposals_and_cleanup_preserves_accepted_state() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, challenges_first) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 2310 + index as u64);
+        let accounts = fixture.accounts().await;
+        let quote = fixture.paid_quote().await;
+        // Freeze the last native proposal's issuance time for all subsequent storage operations.
+        let now = quote.payload.issued_at;
+        let ledger = &fixture.provider.state.ledger;
+        let (raw, envelope) = fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 100, 0);
+        let ack = ledger.register_funding_intent(&quote, &quote.payload.consumer_wallet,
+            &raw, &envelope.tx_hash, envelope.nonce, &fixture.provider.state.private_key,
+            || Ok(now), true, &quote.payload.model).unwrap();
+        let account_before = fixture.credential_state(&accounts.target.account.contract_id);
+        let other_before = fixture.credential_state(&accounts.other.account.contract_id);
+        let proposal = |sequence: u64, issued_at: u64| {
+            let mut payload = quote.payload.clone();
+            payload.id = format!("0x{:064x}", 10_000 + sequence);
+            payload.nonce = format!("0x{:064x}", 20_000 + sequence);
+            payload.issued_at = issued_at;
+            payload.expires_at = issued_at + 300;
+            protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap()
+        };
+        let proposals: Vec<_> = (1..=8).map(|sequence| proposal(sequence, now)).collect();
+        let challenges: Vec<_> = (1..=8).map(|sequence| fixture.pending_challenge(
+            &quote.payload.consumer_wallet, sequence, now + if sequence == 1 { 119 } else { 120 })).collect();
+        for challenge_phase in [challenges_first, !challenges_first] {
+            if challenge_phase {
+                for payload in &challenges { ledger.create_challenge(payload, now).unwrap(); }
+            } else {
+                for proposed in &proposals { ledger.store_quote(proposed, now).unwrap(); }
+            }
+        }
+        // Acknowledgement freed its proposal slot; eight standalone proposals fill the allowance.
+        let rejected_quote = proposal(9, now);
+        assert!(ledger.store_quote(&rejected_quote, now).unwrap_err().starts_with("rate_limit:"));
+        assert!(ledger.quote(&rejected_quote.payload.id).is_err());
+        let replacement = fixture.pending_challenge(&quote.payload.consumer_wallet, 9, now + 120);
+        let before = fixture.challenge_records();
+        let rates = rate_records(&fixture.provider.ledger_path);
+        assert!(ledger.create_challenge(&replacement, now).unwrap_err().starts_with("rate_limit:"));
+        assert_eq!(fixture.challenge_records(), before);
+        assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
+        for proposed in &proposals {
+            assert_eq!(serde_json::to_value(ledger.quote(&proposed.payload.id).unwrap()).unwrap(),
+                serde_json::to_value(proposed).unwrap());
+        }
+
+        ledger.consume_challenge(&challenges[1].nonce, &challenges[1], now).unwrap();
+        ledger.create_challenge(&replacement, now).unwrap();
+        let after_expiry = fixture.pending_challenge(&quote.payload.consumer_wallet, 10, now + 239);
+        ledger.create_challenge(&after_expiry, now + 119).unwrap();
+        assert!(ledger.challenge(&challenges[0].nonce).is_err());
+        assert!(ledger.challenge(&challenges[1].nonce).is_err());
+        for expected in challenges.iter().skip(2).chain([&replacement, &after_expiry]) {
+            assert_eq!(serde_json::to_value(ledger.challenge(&expected.nonce).unwrap()).unwrap(),
+                serde_json::to_value(expected).unwrap());
+        }
+        assert_eq!(fixture.challenge_records().len(), 8);
+
+        // Expiring the acknowledged admission releases resources, not its durable agreement.
+        let cleanup_at = now + 300;
+        let fresh = fixture.pending_challenge(&wallet::address_from_private_key(OTHER_KEY).unwrap(), 11, cleanup_at + 120);
+        ledger.create_challenge(&fresh, cleanup_at).unwrap();
+        assert_eq!(serde_json::to_value(ledger.funding_intent(&quote.payload, &raw).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(&ack).unwrap());
+        fixture.unopened(&quote);
+        let fresh_quote = proposal(9, cleanup_at);
+        ledger.store_quote(&fresh_quote, cleanup_at).unwrap();
+        assert_eq!(ledger.quote(&fresh_quote.payload.id).unwrap().payload, fresh_quote.payload);
+        assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), account_before);
+        assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
+        for opened in [&accounts.target, &accounts.other] {
+            assert_eq!(ledger.authenticate(&opened.credential.bearer, cleanup_at).unwrap().account.contract_id,
+                opened.account.contract_id);
+        }
+    }
+}
+
+#[test]
+fn competing_connections_share_the_last_wallet_challenge_slot_without_budget_leakage() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 2400);
+    let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
+    let ledger = &fixture.provider.state.ledger;
+    ledger.bind_provider(&fixture.provider.state.wallet).unwrap();
+    let initial: Vec<_> = (1..=7).map(|sequence| fixture.pending_challenge(&owner, sequence, 240)).collect();
+    for payload in &initial { ledger.create_challenge(payload, 120).unwrap(); }
+    let candidates = [fixture.pending_challenge(&owner, 8, 240), fixture.pending_challenge(&owner, 9, 240)];
+    let winner = fixture.race_challenges([&candidates[0], &candidates[1]], 120);
+    for expected in &initial {
+        assert_eq!(serde_json::to_value(ledger.challenge(&expected.nonce).unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap());
+    }
+    ledger.consume_challenge(&initial[0].nonce, &initial[0], 120).unwrap();
+    ledger.create_challenge(&candidates[1 - winner], 120).unwrap();
+    assert_eq!(serde_json::to_value(ledger.challenge(&candidates[1 - winner].nonce).unwrap()).unwrap(),
+        serde_json::to_value(&candidates[1 - winner]).unwrap());
+    assert_eq!(fixture.challenge_records().len(), 8);
+}
+
+#[test]
+fn competing_wallets_share_the_last_global_challenge_slot_without_budget_leakage() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 2401);
+    fixture.seed_challenge_snapshot(9_999);
+    let before = fixture.challenge_records();
+    let candidates = [
+        fixture.pending_challenge(&wallet::address_from_private_key(OWNER_KEY).unwrap(), 1, 240),
+        fixture.pending_challenge(&wallet::address_from_private_key(OTHER_KEY).unwrap(), 2, 240),
+    ];
+    let winner = fixture.race_challenges([&candidates[0], &candidates[1]], 120);
+    let after = fixture.challenge_records();
+    assert_eq!(after.len(), 10_000);
+    for (expected, actual) in before.iter().zip(after.iter().filter(|row| row.0 != candidates[winner].nonce)) {
+        assert_eq!(actual, expected);
+    }
+    let consumed: AuthPayload = serde_json::from_str(&before[0].3).unwrap();
+    fixture.provider.state.ledger.consume_challenge(&consumed.nonce, &consumed, 120).unwrap();
+    fixture.provider.state.ledger.create_challenge(&candidates[1 - winner], 120).unwrap();
+    assert_eq!(serde_json::to_value(fixture.provider.state.ledger.challenge(&candidates[1 - winner].nonce).unwrap()).unwrap(),
+        serde_json::to_value(&candidates[1 - winner]).unwrap());
+    assert_eq!(fixture.challenge_records().len(), 10_000);
+}
+
+#[test]
+fn nonce_collision_preserves_the_original_challenge_and_issuance_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 2500);
+    let ledger = &fixture.provider.state.ledger;
+    ledger.bind_provider(&fixture.provider.state.wallet).unwrap();
+    let original = fixture.pending_challenge(&wallet::address_from_private_key(OWNER_KEY).unwrap(), 1, 240);
+    ledger.create_challenge(&original, 120).unwrap();
+    let before = fixture.challenge_records();
+    let rates = rate_records(&fixture.provider.ledger_path);
+    let mut collision = fixture.pending_challenge(&wallet::address_from_private_key(OTHER_KEY).unwrap(), 1, 239);
+    collision.method = "DELETE".into();
+    collision.body_hash = protocol::hash_hex(b"{}");
+    assert!(ledger.create_challenge(&collision, 120).is_err());
+    assert_eq!(fixture.challenge_records(), before);
+    assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
+    let mut headers = HeaderMap::new();
+    headers.insert("x-chiral-owner", original.wallet.parse().unwrap());
+    headers.insert("x-chiral-nonce", original.nonce.parse().unwrap());
+    headers.insert("x-chiral-signature",
+        wallet::sign_message(OWNER_KEY, &auth::challenge_payload(&original).unwrap()).unwrap().parse().unwrap());
+    assert_eq!(auth::authenticate_owner(ledger, &headers, &original.network, &original.provider_wallet,
+        "GET", OPEN, b"", 120).unwrap(), original.wallet);
+    collision.nonce = format!("0x{:064x}", 2);
+    ledger.create_challenge(&collision, 120).unwrap();
+    assert_eq!(serde_json::to_value(ledger.challenge(&collision.nonce).unwrap()).unwrap(),
+        serde_json::to_value(collision).unwrap());
+}
+
+#[test]
+fn failed_challenge_insertion_rolls_back_expiry_cleanup_and_budget_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 2501);
+    let ledger = &fixture.provider.state.ledger;
+    ledger.bind_provider(&fixture.provider.state.wallet).unwrap();
+    let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
+    let expiring = fixture.pending_challenge(&owner, 1, 121);
+    let survivor = fixture.pending_challenge(&owner, 2, 240);
+    for payload in [&expiring, &survivor] { ledger.create_challenge(payload, 120).unwrap(); }
+    let next = fixture.pending_challenge(&owner, 3, 241);
+    let before = fixture.challenge_records();
+    let rates = rate_records(&fixture.provider.ledger_path);
+    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    db.execute_batch(&format!(
+        "CREATE TRIGGER refuse_challenge AFTER INSERT ON challenges WHEN NEW.nonce='{}'
+         BEGIN SELECT RAISE(ABORT,'injected challenge insertion failure'); END;", next.nonce)).unwrap();
+    let error = ledger.create_challenge(&next, 121).unwrap_err();
+    assert!(error.contains("injected challenge insertion failure"), "{error}");
+    assert_eq!(fixture.challenge_records(), before);
+    assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
+    let reopened = BillingStore::open(&fixture.provider.ledger_path, &next.network).unwrap();
+    assert!(reopened.challenge(&next.nonce).is_err());
+    assert_eq!(serde_json::to_value(reopened.challenge(&expiring.nonce).unwrap()).unwrap(),
+        serde_json::to_value(&expiring).unwrap());
+    assert!(reopened.consume_challenge(&expiring.nonce, &expiring, 121).is_err());
+    db.execute_batch("DROP TRIGGER refuse_challenge").unwrap();
+    reopened.create_challenge(&next, 121).unwrap();
+    assert!(reopened.challenge(&expiring.nonce).is_err());
+    for expected in [&survivor, &next] {
+        assert_eq!(serde_json::to_value(reopened.challenge(&expected.nonce).unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap());
+    }
+    reopened.consume_challenge(&next.nonce, &next, 121).unwrap();
+    assert!(reopened.challenge(&next.nonce).is_err());
 }
