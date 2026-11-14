@@ -120,6 +120,20 @@ The fixture now has one locked RPC control snapshot with latest/pending nonce, h
 
 All RPC evidence remains synthetic and loopback-only. This slice does not prove live-chain safety, restart preservation of an earlier unrelated acknowledgement, wallet replacement policy, monetary settlement or exact clock boundaries. Envelope/schema/qualification inventory remains in parent 2.2, and durable conflict/rollback recovery remains in 2.3.
 
+## Task 2.2.3 signed payment binding and gas/fee acceptance
+
+The core `envelope_validation_is_local_and_binds_every_payment_field` test checks legacy payment bindings and typed positive controls; `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence` checks cross-chain and several malformed envelopes directly. Those tests remain intact. The new route-level cases complete the signed-field substitution and gas/fee portion of “Every signed payment field must match”, including persistent refusal effects and an independently validated successful control.
+
+The existing independent RLP signer now accepts explicit `PaymentFields`, initially derived from the issued quote. Tests encode and locally validate a valid control before altering fields. Recipient/value mutations do not recompute opening calldata, and every adversarial candidate is signed over its own payload rather than leaving a stale signature that could mask a missing field check. All old signer callers were migrated without a compatibility wrapper.
+
+`fresh_intent_rejects_signed_payment_substitutions` covers a different chain, recovered payer, 20-byte recipient, value or opening commitment for legacy, EIP-2930 and EIP-1559, for fifteen refusals. Correct quote-owner HTTP authorization remains in place even when the payment signer differs.
+
+`fresh_intent_rejects_insufficient_signed_gas_and_zero_maximum_fee` covers transfer-only gas below the nonempty opening calldata's structural minimum and zero maximum gas price for all three envelope kinds. The zero-price type-2 case also sets priority to zero so it does not accidentally test the priority-above-maximum rule. `fresh_intent_rejects_priority_fee_above_signed_maximum` separately covers that inconsistent type-2 fee condition.
+
+All 22 candidates must return HTTP 400 `invalid_payment`, retain the signed quote, leave no acknowledgement or paid accounting in reopened storage and make no submission. Each then admits the unchanged valid control encoded before the candidate, proving the failed request did not poison the quote or consume its sender/nonce slot. This is a fixture-controlled adversarial request sequence, not an automatic replacement-payment policy in the native client.
+
+Negative cases do not require or prohibit incidental read-only RPC ordering; an optional positive observation is still required for every existing full-cost/nonce/head case and every successful control. Synthetic healthy RPC state, ample balance and unchanged qualification isolate the payment boundary. These tests do not prove live-chain execution or replace the remaining malformed raw-envelope, signature/canonicality, size-boundary and qualification inventory in parent 2.2.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.
