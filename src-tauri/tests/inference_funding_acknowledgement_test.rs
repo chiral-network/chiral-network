@@ -1,6 +1,7 @@
 //! Native funding recovery against real cached provider acknowledgements on isolated loopback.
 //! The original transaction/acknowledgement are fixture prerequisites, not observed spendability.
-//! The separate RPC endpoint only refuses requests: no synthetic chain success or live payment.
+//! RPC normally refuses all requests. The ambiguity test supplies synthetic pending observations,
+//! never execution/credit, and faults only submission replies after recording the original bytes.
 #[path = "support/proposal.rs"]
 mod proposal;
 
@@ -11,13 +12,14 @@ use axum::{
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
+    Json, Router,
 };
 use chiral_network::{
     billing_store::BillingStore,
+    chain_client::{ChainClient, ChainError},
     consumer::{Consumer, ConsumerConfig},
     contracts,
-    protocol::{self, FundingIntent, Quote, Signed},
+    protocol::{self, FundingIntent, NetworkIdentity, Quote, Signed},
     wallet,
 };
 use proposal::PreparedProvider;
@@ -25,7 +27,7 @@ use rlp::RlpStream;
 use rusqlite::{params, Connection};
 use secp256k1::{Message, Secp256k1, SecretKey};
 use serde_json::{json, Value};
-use std::{path::{Path, PathBuf}, sync::{atomic::Ordering, Arc, Mutex}};
+use std::{path::{Path, PathBuf}, sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex}};
 use tiny_keccak::{Hasher, Keccak};
 use tokio::{net::TcpListener, task::JoinHandle};
 
@@ -39,13 +41,15 @@ struct Exchange {
 struct Counterparty {
     replacement: Mutex<Option<Vec<u8>>>,
     ack_commit_obstruction: Mutex<Option<(PathBuf, PathBuf)>>,
+    allow_open: AtomicBool,
     exchanges: Mutex<Vec<Exchange>>,
     unexpected: Mutex<Vec<String>>,
 }
 
 async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next: Next) -> Response {
     if !request.uri().path().ends_with("/funding-intent") {
-        if !matches!(request.uri().path(), "/v1/auth/challenge" | "/v1/contracts/propose") {
+        if !matches!(request.uri().path(), "/v1/auth/challenge" | "/v1/contracts/propose")
+            && !(request.uri().path() == "/v1/contracts/open" && peer.allow_open.load(Ordering::Acquire)) {
             peer.unexpected.lock().unwrap().push(request.uri().path().into());
         }
         return next.run(request).await;
@@ -74,24 +78,101 @@ async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next
 
 struct RpcAttempt {
     method: String,
+    params: Value,
     saved: Option<Value>,
+    journal: Option<Value>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SubmissionReply {
+    RemoteError,
+    WrongHash,
+    Disconnected,
+    ExpectedHash,
+}
+
+struct PendingRpc {
+    network: NetworkIdentity,
+    journal_path: PathBuf,
+    reply: SubmissionReply,
 }
 
 #[derive(Default)]
-struct RefusingRpc {
+struct RpcPeer {
     account_path: Mutex<Option<PathBuf>>,
     attempts: Mutex<Vec<RpcAttempt>>,
+    pending: Mutex<Option<PendingRpc>>,
 }
 
-async fn refuse_rpc(State(rpc): State<Arc<RefusingRpc>>, body: Bytes) -> Response {
+fn journal_state(path: &Path) -> Value {
+    let connection = Connection::open(path).unwrap();
+    let mut statement = connection.prepare(
+        "SELECT sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at
+         FROM transactions ORDER BY sender,operation").unwrap();
+    let transactions = statement.query_map([], |row| Ok(json!({
+        "sender": row.get::<_, String>(0)?, "operation": row.get::<_, String>(1)?,
+        "nonce": row.get::<_, String>(2)?, "tx_hash": row.get::<_, String>(3)?,
+        "raw": row.get::<_, String>(4)?, "status": row.get::<_, String>(5)?,
+        "error": row.get::<_, Option<String>>(6)?, "evidence": row.get::<_, Option<String>>(7)?,
+        "created_at": row.get::<_, u64>(8)?,
+    }))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    let cancellations: u64 = connection.query_row(
+        "SELECT COUNT(*) FROM cancellations", [], |row| row.get(0)).unwrap();
+    json!({"transactions": transactions, "cancellations": cancellations})
+}
+
+async fn fixture_rpc(State(rpc): State<Arc<RpcPeer>>, body: Bytes) -> Response {
     let request: Value = serde_json::from_slice(&body).unwrap();
     let saved = rpc.account_path.lock().unwrap().as_ref()
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let pending = rpc.pending.lock().unwrap();
+    let method = request["method"].as_str().unwrap();
+    let journal = pending.as_ref().filter(|_| method == "eth_sendRawTransaction")
+        .map(|plan| journal_state(&plan.journal_path));
     rpc.attempts.lock().unwrap().push(RpcAttempt {
-        method: request["method"].as_str().unwrap().into(), saved,
+        method: method.into(), params: request["params"].clone(), saved, journal,
     });
-    (StatusCode::SERVICE_UNAVAILABLE, "deliberately unavailable fixture RPC").into_response()
+    let Some(plan) = pending.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "deliberately unavailable fixture RPC").into_response();
+    };
+    let result = match method {
+        "eth_chainId" => json!(format!("0x{:x}", plan.network.chain_id)),
+        "eth_syncing" => json!(false),
+        "eth_getBlockByNumber" => {
+            assert_eq!(request["params"][1], false);
+            let (height, hash) = match request["params"][0].as_str().unwrap() {
+                "0x0" => (0, plan.network.genesis_hash.clone()),
+                "safe" => (10, format!("0x{}", "33".repeat(32))),
+                "latest" => (12, format!("0x{}", "11".repeat(32))),
+                tag => panic!("unexpected pending-only block observation: {tag}"),
+            };
+            json!({"number": format!("0x{height:x}"), "hash": hash,
+                "timestamp": format!("0x{:x}", protocol::now().unwrap())})
+        }
+        "eth_getTransactionReceipt" => Value::Null,
+        "eth_getTransactionCount" => {
+            assert_eq!(request["params"][1], "latest");
+            json!("0x0")
+        }
+        "eth_sendRawTransaction" => match plan.reply {
+            SubmissionReply::RemoteError => return Json(json!({
+                "jsonrpc": "2.0", "id": request["id"],
+                "error": {"code": -32000, "message": "submission outcome unavailable"},
+            })).into_response(),
+            SubmissionReply::WrongHash => json!(format!("0x{}", "ff".repeat(32))),
+            SubmissionReply::Disconnected => return Response::new(Body::from_stream(
+                futures_util::stream::once(async {
+                    Err::<Bytes, _>(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
+                }))),
+            SubmissionReply::ExpectedHash => {
+                let raw = request["params"][0].as_str().unwrap();
+                json!(protocol::hash_hex(&hex::decode(&raw[2..]).unwrap()))
+            }
+        },
+        other => panic!("unexpected pending-only RPC: {other}"),
+    };
+    Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result})).into_response()
 }
 
 fn signed_opening(quote: &Signed<Quote>, key: &str, nonce: u64) -> String {
@@ -131,10 +212,11 @@ struct Fixture {
     quote: Signed<Quote>,
     acknowledgement: Signed<FundingIntent>,
     raw: String,
+    key: String,
     account_path: PathBuf,
     journal_path: PathBuf,
     peer: Arc<Counterparty>,
-    rpc: Arc<RefusingRpc>,
+    rpc: Arc<RpcPeer>,
     servers: [JoinHandle<()>; 2],
     _admin: TcpListener,
 }
@@ -153,10 +235,14 @@ impl Fixture {
         let provider = PreparedProvider::new(directory, case, "1", "2",
             listener.local_addr().unwrap(), admin.local_addr().unwrap());
         let peer = Arc::new(Counterparty::default());
-        let app = contracts::router(provider.state.clone()).layer(from_fn_with_state(peer.clone(), intercept));
+        let rpc = Arc::new(RpcPeer::default());
+        let app = contracts::router(provider.state.clone())
+            .layer(from_fn_with_state(peer.clone(), intercept))
+            // The provider's configured RPC origin is its reserved loopback listener.
+            // Add the isolated RPC fixture outside the production control middleware.
+            .route("/", post(fixture_rpc).with_state(rpc.clone()));
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        let rpc = Arc::new(RefusingRpc::default());
-        let rpc_app = Router::new().route("/", post(refuse_rpc)).with_state(rpc.clone());
+        let rpc_app = Router::new().route("/", post(fixture_rpc)).with_state(rpc.clone());
         let mut network = provider.state.config.network.clone();
         network.rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
         let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc_app).await.unwrap(); });
@@ -188,7 +274,7 @@ impl Fixture {
         let account_path = config.network.scoped_dir(&config.data_dir).join("consumer")
             .join(&quote.payload.consumer_wallet).join(format!("{}.json", hex::encode(protocol::digest(quote.payload.id.as_bytes()))));
         *rpc.account_path.lock().unwrap() = Some(account_path.clone());
-        Self { consumer, config, provider, quote, acknowledgement, raw, account_path,
+        Self { consumer, config, provider, quote, acknowledgement, raw, key, account_path,
             journal_path, peer, rpc, servers: [server, rpc_server], _admin: admin }
     }
 
@@ -600,5 +686,92 @@ async fn native_acknowledgement_commit_failure_preserves_original_recovery() {
         assert_eq!(fixture.saved(), expected_saved);
         assert_eq!(records(), original_records);
         fixture.unchanged_provider();
+    }
+}
+
+#[tokio::test]
+async fn native_ambiguous_submission_recovers_only_the_durable_original() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, reply) in [SubmissionReply::RemoteError, SubmissionReply::WrongHash,
+        SubmissionReply::Disconnected].into_iter().enumerate() {
+        for repeat_fund in [false, true] {
+            let case = 48_000 + 2 * index as u64 + u64::from(repeat_fund);
+            let mut fixture = Fixture::new(directory.path(), case).await;
+            let original_journal = journal_state(&fixture.journal_path);
+            let assert_journal = |mut observed: Value, status: &str| {
+                assert_eq!(observed["transactions"].as_array().unwrap().len(), 1);
+                let record = &mut observed["transactions"][0];
+                assert_eq!(record["status"], status);
+                if status == "pending" {
+                    assert!(!record["error"].as_str().unwrap().is_empty());
+                } else {
+                    assert!(record["error"].is_null());
+                }
+                record["status"] = json!("prepared");
+                record["error"] = Value::Null;
+                assert_eq!(observed, original_journal, "all original fields and nonce ownership survive");
+            };
+            *fixture.rpc.pending.lock().unwrap() = Some(PendingRpc {
+                network: fixture.quote.payload.network.clone(),
+                journal_path: fixture.journal_path.clone(), reply,
+            });
+            fixture.peer.allow_open.store(true, Ordering::Release);
+
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+                }
+                if attempt == 2 {
+                    // A normal hash reply is still not execution or safe-frontier credit.
+                    fixture.rpc.pending.lock().unwrap().as_mut().unwrap().reply = SubmissionReply::ExpectedHash;
+                }
+                let result = if attempt == 0 || repeat_fund {
+                    fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await
+                } else {
+                    fixture.consumer.resume(&fixture.quote.payload.id).await
+                };
+                assert!(result.unwrap_err().contains("funding_pending"),
+                    "{reply:?}, repeat_fund={repeat_fund}: provider must still require canonical credit evidence");
+                let expected_saved = fixture.saved();
+                assert_eq!(expected_saved["quote"], serde_json::to_value(&fixture.quote).unwrap());
+                assert_eq!(expected_saved["funding_intent"], serde_json::to_value(&fixture.acknowledgement).unwrap());
+                assert_eq!(expected_saved["funding_broadcast_started"], true);
+                assert_eq!(expected_saved["raw_transaction"], fixture.raw);
+                assert_eq!(expected_saved["tx_hash"], fixture.acknowledgement.payload.tx_hash);
+                assert!(expected_saved["account"].is_null());
+                assert_eq!(expected_saved["credentials"], json!([]));
+                {
+                    let attempts = fixture.rpc.attempts.lock().unwrap();
+                    let submissions: Vec<_> = attempts.iter()
+                        .filter(|call| call.method == "eth_sendRawTransaction").collect();
+                    assert_eq!(submissions.len(), attempt + 1, "one send per explicit native attempt, never an automatic retry");
+                    let submission = submissions.last().unwrap();
+                    assert_eq!(submission.params, json!([fixture.raw]));
+                    assert_eq!(submission.saved.as_ref().unwrap(), &expected_saved,
+                        "verified acknowledgement and start marker must be durable at submission");
+                    assert_journal(submission.journal.clone().unwrap(), if attempt == 0 { "prepared" } else { "pending" });
+                }
+                assert_journal(journal_state(&fixture.journal_path), if attempt == 2 { "submitted" } else { "pending" });
+                let exchanges = fixture.peer.exchanges.lock().unwrap();
+                assert_eq!(exchanges.len(), 1, "restart must reuse the saved acknowledgement, not register again");
+                assert_eq!(exchanges[0].request, json!({"raw_transaction": fixture.raw}));
+                assert_eq!(exchanges[0].original, expected_saved["funding_intent"]);
+                drop(exchanges);
+                fixture.unchanged_provider();
+
+                if attempt == 0 {
+                    let saved_bytes = std::fs::read(&fixture.account_path).unwrap();
+                    let chain = ChainClient::new(fixture.config.network.clone(), fixture.config.data_dir.clone()).unwrap();
+                    assert!(matches!(chain.prepare_payment_once("different-opening", &fixture.key,
+                        &fixture.quote.payload.provider_wallet, &fixture.quote.payload.funding_wei,
+                        &protocol::opening_data(&fixture.quote.payload).unwrap()).await,
+                        Err(ChainError::Pending(_))), "an ambiguous original must block fresh wallet preparation");
+                    assert_journal(journal_state(&fixture.journal_path), "pending");
+                    assert_eq!(std::fs::read(&fixture.account_path).unwrap(), saved_bytes);
+                    assert_eq!(fixture.rpc.attempts.lock().unwrap().iter()
+                        .filter(|call| call.method == "eth_sendRawTransaction").count(), 1);
+                }
+            }
+        }
     }
 }
