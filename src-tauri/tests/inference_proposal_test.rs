@@ -1,10 +1,11 @@
-//! Production contracts::router coverage for commercial terms and pending-proposal quotas.
+//! Production control and native consumer coverage for commercial terms and proposal quotas.
 //! Pre-admitted loopback development offers and real disk-backed ledgers; no engine,
 //! chain simulation, actual funding, readiness-probe or performance-qualification claims.
 use axum::Json;
 use chiral_network::{
     app::ProviderState,
     billing_store::BillingStore,
+    consumer::{Consumer, ConsumerConfig},
     contracts,
     protocol::{self, InferenceOffer, Quote, Signed, OFFER_DOMAIN, QUOTE_DOMAIN},
     wallet,
@@ -13,7 +14,7 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc},
     time::Duration,
 };
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
@@ -33,6 +34,7 @@ struct Fixture {
     base: String,
     client: reqwest::Client,
     submitted: Arc<AtomicBool>,
+    requests: Arc<AtomicUsize>,
     shutdown: Option<oneshot::Sender<()>>,
     server: Option<JoinHandle<()>>,
 }
@@ -54,6 +56,8 @@ impl Fixture {
         let base = offer.payload.endpoint.clone();
         let submitted = Arc::new(AtomicBool::new(false));
         let observed = submitted.clone();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed_requests = requests.clone();
         let router = contracts::router(state.clone()).fallback(move |Json(value): Json<Value>| {
             let observed = observed.clone();
             async move {
@@ -64,7 +68,12 @@ impl Fixture {
                 }
                 axum::http::StatusCode::SERVICE_UNAVAILABLE
             }
-        });
+        }).layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                observed_requests.fetch_add(1, Ordering::AcqRel);
+                async move { next.run(request).await }
+            },
+        ));
         let (shutdown, stopped) = oneshot::channel();
         let server = tokio::spawn(async move {
             axum::serve(listener, router)
@@ -72,7 +81,7 @@ impl Fixture {
         });
         let client = reqwest::Client::builder().no_proxy()
             .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10)).build().unwrap();
-        Self { state, offer, offer_id, ledger_path, base, client, submitted,
+        Self { state, offer, offer_id, ledger_path, base, client, submitted, requests,
             shutdown: Some(shutdown), server: Some(server) }
     }
 
@@ -324,4 +333,117 @@ async fn public_pending_quota_follows_the_canonical_named_payer_not_caller_autho
         assert!(independent.account(&signed.payload.id).is_err());
     }
     assert!(!fixture.submitted.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn saved_signed_agreements_reject_conflicting_funding_calls_without_remote_side_effects() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 40, "0", "0").await;
+    let config = ConsumerConfig {
+        network: fixture.state.config.network.clone(),
+        data_dir: directory.path().join("consumer"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let mut consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, &format!("{:064x}", 50_040)).unwrap();
+    consumer.wallet_import_file(&import).unwrap();
+    let original = consumer.quote(&fixture.offer, "0").await.unwrap();
+    let opened = consumer.fund(&fixture.offer, &original).await.unwrap();
+    let id = &original.payload.id;
+    assert_eq!(opened.contract_id, *id);
+    assert_eq!(opened.status, "free");
+    assert_eq!(opened.funded_wei, "0");
+    let expected_account = serde_json::to_value(&opened).unwrap();
+    let exported = consumer.credential_export(id, None).unwrap();
+    // Inspect bytes produced by the native writer, never seed or edit the protected record.
+    let saved_path = config.network.scoped_dir(&config.data_dir).join("consumer")
+        .join(consumer.address().unwrap())
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    let saved_bytes = std::fs::read(&saved_path).unwrap();
+    let saved: Value = serde_json::from_slice(&saved_bytes).unwrap();
+    assert_eq!(saved["offer"], serde_json::to_value(&fixture.offer).unwrap());
+    assert_eq!(saved["quote"], serde_json::to_value(&original).unwrap());
+    let other_provider_key = format!("{:064x}", 60_040);
+
+    for restart in [false, true] {
+        if restart {
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+        }
+        for change in ["nonce", "validity", "offer_revision", "model", "price",
+            "fee_destination", "concurrency", "provider"] {
+            let mut offer = fixture.offer.payload.clone();
+            let mut quote = original.payload.clone();
+            let key = if change == "provider" {
+                other_provider_key.as_str()
+            } else {
+                fixture.state.private_key.as_str()
+            };
+            match change {
+                "nonce" => {
+                    let digit = if quote.nonce.as_bytes()[2] == b'0' { "1" } else { "0" };
+                    quote.nonce.replace_range(2..3, digit);
+                }
+                "validity" => {
+                    quote.issued_at -= 1;
+                    quote.expires_at -= 1;
+                }
+                "offer_revision" => offer.revision += 1,
+                "model" => {
+                    offer.model.context_length = 8192;
+                    quote.model = offer.model.clone();
+                }
+                "price" => {
+                    offer.price.input_wei_per_1k = "1".into();
+                    quote.price = offer.price.clone();
+                    quote.funding_wei = "100".into();
+                }
+                "fee_destination" => {
+                    offer.platform_wallet = format!("0x{}", "44".repeat(20));
+                    quote.platform_wallet = offer.platform_wallet.clone();
+                }
+                "concurrency" => {
+                    offer.max_concurrency = 1;
+                    quote.max_concurrency = 1;
+                }
+                "provider" => {
+                    offer.provider_wallet = wallet::address_from_private_key(key).unwrap();
+                    quote.provider_wallet = offer.provider_wallet.clone();
+                }
+                _ => unreachable!(),
+            }
+            // Matching, validly signed replacement declarations must still not replace
+            // an existing agreement. Keep its account ID and intended payer unchanged.
+            quote.offer_id = protocol::offer_id(&offer).unwrap();
+            let replacement_offer = protocol::sign(OFFER_DOMAIN, offer, key).unwrap();
+            let replacement_quote = protocol::sign(QUOTE_DOMAIN, quote, key).unwrap();
+            let requests = fixture.requests.load(Ordering::Acquire);
+            assert!(consumer.fund(&replacement_offer, &replacement_quote).await.is_err(),
+                "{change} must conflict with the saved agreement");
+            assert_eq!(fixture.requests.load(Ordering::Acquire), requests,
+                "{change} must be refused before contacting the provider or RPC");
+            // Avoid dumping protected credentials if an equality assertion fails.
+            assert!(std::fs::read(&saved_path).unwrap() == saved_bytes,
+                "{change} altered the saved record");
+            assert!(consumer.credential_export(id, None).unwrap() == exported,
+                "{change} altered the exported credential");
+        }
+        // Ordinary resumption remains reachable and must not rotate the exported root.
+        let resumed = consumer.fund(&fixture.offer, &original).await.unwrap();
+        assert_eq!(serde_json::to_value(resumed).unwrap(), expected_account);
+        assert!(consumer.credential_export(id, None).unwrap() == exported);
+        assert!(std::fs::read(&saved_path).unwrap() == saved_bytes);
+        let provider_saved = fixture.state.ledger.quote(id).unwrap();
+        assert_eq!(provider_saved.payload, original.payload);
+        assert_eq!(provider_saved.signature, original.signature);
+        let authenticated = fixture.state.ledger.authenticate(
+            exported["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+        assert_eq!(authenticated.credential_id, exported["credential_id"].as_str().unwrap());
+        assert_eq!(serde_json::to_value(authenticated.account).unwrap(), expected_account);
+        assert!(fixture.state.ledger.funding_history(id).unwrap().is_empty());
+        assert!(!fixture.submitted.load(Ordering::Acquire));
+    }
+    drop(consumer);
+    fixture.stop().await;
 }
