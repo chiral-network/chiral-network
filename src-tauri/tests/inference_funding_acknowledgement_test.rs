@@ -38,6 +38,7 @@ struct Exchange {
 #[derive(Default)]
 struct Counterparty {
     replacement: Mutex<Option<Vec<u8>>>,
+    ack_commit_obstruction: Mutex<Option<(PathBuf, PathBuf)>>,
     exchanges: Mutex<Vec<Exchange>>,
     unexpected: Mutex<Vec<String>>,
 }
@@ -59,6 +60,14 @@ async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next
     let original = serde_json::from_slice(&body).unwrap();
     let delivered = peer.replacement.lock().unwrap().clone().unwrap_or_else(|| body.to_vec());
     peer.exchanges.lock().unwrap().push(Exchange { request: requested, original, delivered: delivered.clone() });
+    if let Some((account, preserved)) = peer.ack_commit_obstruction.lock().unwrap().take() {
+        // Synchronous one-shot obstruction before the genuine reply is released.
+        // Keep the prepared file intact; replacing a directory with a file fails
+        // even when the test process has permission to write the parent.
+        assert!(!preserved.exists());
+        std::fs::rename(&account, &preserved).unwrap();
+        std::fs::create_dir(&account).unwrap();
+    }
     parts.headers.remove(header::CONTENT_LENGTH);
     Response::from_parts(parts, Body::from(delivered))
 }
@@ -497,6 +506,98 @@ async fn native_broadcast_started_without_acknowledgement_refuses_recovery() {
         }
         assert!(fixture.peer.exchanges.lock().unwrap().is_empty(), "reuse the saved acknowledgement");
         assert_eq!(std::fs::read(&fixture.account_path).unwrap(), saved_before);
+        assert_eq!(records(), original_records);
+        fixture.unchanged_provider();
+    }
+}
+
+#[tokio::test]
+async fn native_acknowledgement_commit_failure_preserves_original_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, repeat_fund) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 47_000 + index as u64).await;
+        // Reach the ordinary durable prepared state without accepting a reply.
+        // Malformed-response refusal is already covered by the schema tests.
+        *fixture.peer.replacement.lock().unwrap() = Some(b"{}".to_vec());
+        assert!(fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.is_err());
+        assert!(fixture.rpc.attempts.lock().unwrap().is_empty());
+        let prepared_bytes = std::fs::read(&fixture.account_path).unwrap();
+        let prepared: Value = serde_json::from_slice(&prepared_bytes).unwrap();
+        assert_eq!(prepared["raw_transaction"], fixture.raw);
+        assert_eq!(prepared["tx_hash"], fixture.acknowledgement.payload.tx_hash);
+        assert_eq!(prepared["quote"], serde_json::to_value(&fixture.quote).unwrap());
+        assert!(prepared["funding_intent"].is_null());
+        assert_eq!(prepared["funding_broadcast_started"], false);
+        let journal = Connection::open(&fixture.journal_path).unwrap();
+        let records = || {
+            let mut statement = journal.prepare(
+                "SELECT sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at
+                 FROM transactions ORDER BY sender,operation").unwrap();
+            let rows = statement.query_map([], |row| Ok((
+                row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?, row.get::<_, Option<String>>(7)?,
+                row.get::<_, u64>(8)?,
+            ))).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            rows
+        };
+        let original_records = records();
+        let preserved_path = fixture.account_path.with_extension("before-ack");
+        *fixture.peer.replacement.lock().unwrap() = None;
+        fixture.peer.exchanges.lock().unwrap().clear();
+        *fixture.peer.ack_commit_obstruction.lock().unwrap() =
+            Some((fixture.account_path.clone(), preserved_path.clone()));
+        fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+        let result = if repeat_fund {
+            fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await
+        } else {
+            fixture.consumer.resume(&fixture.quote.payload.id).await
+        };
+        assert!(result.is_err(), "repeat_fund={repeat_fund}: commit obstruction must stop funding");
+        let expected_ack = serde_json::to_value(&fixture.acknowledgement).unwrap();
+        {
+            let exchanges = fixture.peer.exchanges.lock().unwrap();
+            assert_eq!(exchanges.len(), 1, "must reach the real cached acknowledgement");
+            assert_eq!(exchanges[0].request, json!({"raw_transaction": fixture.raw}));
+            assert_eq!(exchanges[0].original, expected_ack);
+            assert_eq!(serde_json::from_slice::<Value>(&exchanges[0].delivered).unwrap(), expected_ack);
+        }
+        assert!(fixture.peer.ack_commit_obstruction.lock().unwrap().is_none());
+        assert!(fixture.account_path.is_dir(), "the target must still obstruct state commit");
+        assert_eq!(std::fs::read(&preserved_path).unwrap(), prepared_bytes);
+        assert!(fixture.rpc.attempts.lock().unwrap().is_empty(), "failed acknowledgement persistence must precede RPC");
+        assert_eq!(records(), original_records);
+        fixture.unchanged_provider();
+
+        // Remove only the isolated obstruction and return the intact prepared
+        // file. Recovery must fetch the same acknowledgement, never a new payment.
+        std::fs::remove_dir(&fixture.account_path).unwrap();
+        std::fs::rename(&preserved_path, &fixture.account_path).unwrap();
+        fixture.consumer = Consumer::new(fixture.config.clone()).unwrap();
+        let result = if repeat_fund {
+            fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await
+        } else {
+            fixture.consumer.resume(&fixture.quote.payload.id).await
+        };
+        assert!(result.is_err(), "RPC remains deliberately unavailable");
+        {
+            let exchanges = fixture.peer.exchanges.lock().unwrap();
+            assert_eq!(exchanges.len(), 2);
+            assert_eq!(exchanges[1].request, exchanges[0].request);
+            assert_eq!(exchanges[1].original, expected_ack);
+            assert_eq!(serde_json::from_slice::<Value>(&exchanges[1].delivered).unwrap(), expected_ack);
+        }
+        let attempts = fixture.rpc.attempts.lock().unwrap();
+        assert!(!attempts.is_empty(), "repair must permit same-original progress to RPC");
+        let mut expected_saved = prepared;
+        expected_saved["funding_intent"] = expected_ack;
+        expected_saved["funding_broadcast_started"] = json!(true);
+        for attempt in attempts.iter() {
+            assert_ne!(attempt.method, "eth_sendRawTransaction");
+            assert_eq!(attempt.saved.as_ref().unwrap(), &expected_saved);
+        }
+        assert_eq!(fixture.saved(), expected_saved);
         assert_eq!(records(), original_records);
         fixture.unchanged_provider();
     }
