@@ -6,7 +6,7 @@
 
 ## 2. Reconcile downstream specifications before implementation
 
-- [ ] 2.1 Retarget the existing `specify-proposal-rate-budgets` delta, proposal, design and remaining tasks to the single 600/minute committed-ledger bucket. Preserve its non-regressing clock, conservative retained-global-counter initialization and rollback contract; explicitly distinguish it from the new nonrefundable pre-signing work budget. Preserve old wallet tests as historical evidence until their implementation contract is migrated, not as mitigation.
+- [x] 2.1 Retarget the existing `specify-proposal-rate-budgets` delta, proposal, design and remaining tasks to the single 600/minute committed-ledger bucket. Both changes pass strict validation. Retained non-regressing time, global-counter preservation/fail-closed adoption and insertion rollback; distinguished independently spent pre-signing work. Old wallet tests are explicitly historical and revised acceptance tasks remain open until the native cutover.
 - [ ] 2.2 Align `specify-opening-funding-intent`, commercial bounded-proposal wording and scenario/source mappings with quote storage versus authenticated opening capacity. Replace remaining active wallet-slot requirements/tasks, preserve signed acknowledgement/nonce/lease recovery and keep all prior acceptance limitations explicit.
 
 ## 3. Implement the cutover with its regressions

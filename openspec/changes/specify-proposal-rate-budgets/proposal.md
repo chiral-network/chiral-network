@@ -1,18 +1,18 @@
 ## Why
 
-The whitepaper makes public proposal subject to provider admission rules without fixing its rate algorithm. The commercial-terms delta requires per-wallet/global proposal rates, while the integrated pending-quota requirements deliberately leave rate budgets and clock semantics separate. Existing rollback tests establish relative allowance conservation, not the complete numerical rate policy.
+The author's **Approved non-reserving quotes** decision in `docs/chiral-book.md` forbids public proposals from consuming named-wallet pending or rate allowances. This change now specifies only provider-ledger-wide committed issuance, implementing specification-alignment task 2.1 of `specify-non-reserving-quotes`. The former twelve-per-wallet proposal is superseded, not an acceptable mitigation with better disclosure.
 
 `BillingStore::store_quote` currently uses 12 proposals per named payer and 600 per ledger with `now / 60` buckets. `rate_limit` resets a counter on any differing bucket, and shared cleanup deletes older rate rows. [INFERENCE] An older timestamp can therefore replenish allowance instead of respecting an already observed later minute. Native control samples time before the ledger write transaction, so timestamp order is not inherently commit order even without a wall-clock adjustment. No live exploit or runtime clock-regression result is claimed.
 
-Specify the existing numerical budgets and fixed-minute basis, but require a durable non-regressing effective minute rather than making the reset weakness normative. This is a new safety requirement and an explicit implementation gap, not a claim that the current code already satisfies it.
+Retain the 600-per-ledger numerical budget and fixed-minute basis, require a durable non-regressing effective minute, and remove named-wallet charging. The independent pre-signing work budget belongs to `specify-non-reserving-quotes`; successful-quote accounting cannot bound signatures attempted before insertion. These are pending implementation requirements, not a claim that the current code complies.
 
 ## What Changes
 
-- Define 12 committed proposals per canonical named payer and 600 per provider ledger per effective minute, shared across models, offers and free/paid terms.
+- Define 600 committed proposals per provider ledger per effective minute, shared across all named wallets, models, offers and free/paid terms, with no wallet-specific sub-budget.
 - Define fixed Unix-minute selection with a durable ledger-local high-water mark: older samples consume remaining allowance in the latest committed minute, never reopen an earlier budget.
-- Require atomic quote/counter/window commitment, rollback on failure, persistence through reopening and no rate refund when pending capacity is reclaimed.
-- Protect active proposal-rate evidence from unrelated cleanup; preserve retained counters when introducing the clock watermark without converting financial state or reconstructing discarded history.
-- Add deterministic acceptance and implementation tasks. The native clock/pruning fix is blocked while the entirely untracked ledger source remains owner work; do not commit failing regressions or absorb that source.
+- Require atomic quote/global-counter/window commitment, rollback on failure, persistence through reopening and no committed-rate refund when quote storage is reclaimed. A previously committed pre-signing work permit is separate and is not rolled back with a failed insertion.
+- Protect active global proposal-rate evidence from unrelated cleanup. Preserve the retained global counter when introducing its watermark; fail closed on missing or contradictory retained totals rather than summing obsolete wallet counters or inventing allowance.
+- Retarget deterministic acceptance tasks and retain old-wallet test observations as historical evidence. Native quota/clock/pruning changes remain blocked while the entirely untracked ledger source is owner work; pair new regressions with the native cutover.
 
 ## Capabilities
 
@@ -22,11 +22,11 @@ None.
 
 ### Modified Capabilities
 
-- `inference-proposal-admission`: Add scoped proposal-rate budgets, non-regressing minute selection and transactional charging alongside pending-capacity and acknowledgement-retention requirements.
+- `inference-proposal-admission`: Add provider-wide committed-issuance limits, non-regressing minute selection and transactional charging alongside the non-reserving quote and accepted-agreement retention contract.
 
 ## Impact
 
 - Read-only authority: `docs/chiral-book.md`, public proposal/admission boundaries, durable agreements and protected network-scoped state.
 - Source: `contracts.rs::control`, `billing_store.rs::{store_quote,rate_limit,cleanup_pending,transaction}` and persisted `rate_limits`/ledger metadata.
-- Existing evidence: pending-capacity rollback controls and the actual HTTP named-payer quota case. These do not establish 12/600 rate edges or backward-time safety.
-- No changes this turn to production, tests, monetary arithmetic, quote validity, challenge-rate policy, owner authentication, paid retries or deployment. No author-only decision is needed for these delegated admission details; the existing public named-payer availability report remains open.
+- Existing global-capacity, rollback and concurrency tests supply partial evidence. The named-payer cases establish the old exposure, not the absence of a wallet budget; backward-time and adoption safety remain unimplemented.
+- No production or test changes in this specification slice. Quote validity, signed wallet identity, challenge policy, owner authentication, financial evidence and paid-retry rules remain intact. The author report stays open until downstream alignment and actual mitigation evidence are complete; no whitepaper edit or deployment is authorized.
