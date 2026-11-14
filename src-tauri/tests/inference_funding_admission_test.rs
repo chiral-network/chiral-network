@@ -14,7 +14,7 @@ use axum::{
 use chiral_network::{
     auth::{self, AuthPayload},
     billing_store::BillingStore,
-    chain_client::{ChainClient, ValidatedPaymentEnvelope},
+    chain_client::{ChainClient, ChainError, ValidatedPaymentEnvelope},
     contracts,
     protocol::{self, Challenge, FundingIntent, NetworkIdentity, Quote, Signed},
     wallet,
@@ -131,6 +131,29 @@ impl PaymentFields {
     }
 }
 
+fn encoded_access_list(addresses: usize, keys: usize, duplicates: bool) -> RlpStream {
+    assert!(addresses > 0);
+    let mut list = RlpStream::new_list(addresses);
+    for index in 0..addresses {
+        list.begin_list(2);
+        let mut address = [0_u8; 20];
+        if !duplicates { address[18..].copy_from_slice(&u16::try_from(index).unwrap().to_be_bytes()); }
+        list.append(&address.as_slice());
+        // Spread keys so the aggregate-overflow case has no oversized individual entry.
+        let count = keys / addresses + usize::from(index < keys % addresses);
+        list.begin_list(count);
+        for slot in 0..count {
+            let mut key = [0_u8; 32];
+            if !duplicates {
+                key[28..30].copy_from_slice(&u16::try_from(index).unwrap().to_be_bytes());
+                key[30..].copy_from_slice(&u16::try_from(slot).unwrap().to_be_bytes());
+            }
+            list.append(&key.as_slice());
+        }
+    }
+    list
+}
+
 fn payment_digest(kind: u8, payload: &[u8]) -> [u8; 32] {
     let mut digest = [0_u8; 32];
     let mut keccak = Keccak::v256();
@@ -140,7 +163,7 @@ fn payment_digest(kind: u8, payload: &[u8]) -> [u8; 32] {
     digest
 }
 
-fn signed_payment(payment: &PaymentFields, key: &str, kind: u8) -> String {
+fn signed_payment(payment: &PaymentFields, key: &str, kind: u8, access_list: &[u8]) -> String {
     let fields = |stream: &mut RlpStream| {
         if kind != 0 { stream.append(&payment.chain_id); }
         stream.append(&payment.nonce);
@@ -149,7 +172,7 @@ fn signed_payment(payment: &PaymentFields, key: &str, kind: u8) -> String {
         stream.append(&payment.gas).append(&payment.recipient.as_slice());
         append_uint(stream, payment.value);
         stream.append(&payment.data.as_slice());
-        if kind != 0 { stream.begin_list(0); }
+        if kind != 0 { stream.append_raw(access_list, 1); }
     };
     sign_payment_fields(kind, payment.chain_id, key, fields)
 }
@@ -240,12 +263,16 @@ impl Fixture {
     }
 
     fn original(&self, kind: u8, fields: &PaymentFields) -> (String, ValidatedPaymentEnvelope) {
-        let raw = signed_payment(fields, &self.owner_key, kind);
+        let raw = signed_payment(fields, &self.owner_key, kind, &[0xc0]);
         // Independently validate the control before exercising an admission refusal.
-        let envelope = self.provider.state.chain.validate_payment_envelope(&raw,
-            &self.quote.payload.consumer_wallet, &self.quote.payload.provider_wallet,
-            &self.quote.payload.funding_wei, &protocol::opening_data(&self.quote.payload).unwrap()).unwrap();
+        let envelope = self.envelope(&raw).unwrap();
         (raw, envelope)
+    }
+
+    fn envelope(&self, raw: &str) -> Result<ValidatedPaymentEnvelope, ChainError> {
+        self.provider.state.chain.validate_payment_envelope(raw,
+            &self.quote.payload.consumer_wallet, &self.quote.payload.provider_wallet,
+            &self.quote.payload.funding_wei, &protocol::opening_data(&self.quote.payload).unwrap())
     }
 
     async fn submit_intent(&mut self, raw: &str) -> (StatusCode, Value) {
@@ -315,6 +342,18 @@ impl Fixture {
         self.observed_without_submission(Some("eth_getBalance"));
         assert_eq!(serde_json::to_value(self.persisted_without_credit()
             .funding_intent(&self.quote.payload, raw).unwrap()).unwrap(), serde_json::to_value(&ack).unwrap(), "{name}");
+    }
+
+    async fn access_list_boundary(&mut self, kind: u8, accepted: &[u8], rejected: &[u8], name: &str) {
+        let fields = PaymentFields::opening(&self.quote.payload, 0, 11);
+        let original = signed_payment(&fields, &self.owner_key, kind, accepted);
+        let envelope = self.envelope(&original).unwrap();
+        let candidate = signed_payment(&fields, &self.owner_key, kind, rejected);
+        assert!(matches!(self.envelope(&candidate), Err(ChainError::Rejected(_))), "{name}");
+        self.rpc.control.lock().unwrap().balance = u128::MAX;
+        self.refuses(&candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
+        self.rpc.requests.lock().unwrap().clear();
+        self.acknowledges(&original, &envelope, name).await;
     }
 }
 
@@ -459,7 +498,7 @@ async fn fresh_intent_rejects_signed_payment_substitutions() {
                 _ => unreachable!(),
             }
             // Sign the substituted payload itself, not a mutation with a stale signature.
-            let candidate = signed_payment(&fields, signing_key, kind);
+            let candidate = signed_payment(&fields, signing_key, kind, &[0xc0]);
             fixture.rpc.control.lock().unwrap().balance = u128::MAX;
             fixture.refuses(&candidate, &name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
             fixture.rpc.requests.lock().unwrap().clear();
@@ -488,7 +527,7 @@ async fn fresh_intent_rejects_insufficient_signed_gas_and_zero_maximum_fee() {
                 }
                 _ => unreachable!(),
             }
-            let candidate = signed_payment(&fields, &fixture.owner_key, kind);
+            let candidate = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
             fixture.rpc.control.lock().unwrap().balance = u128::MAX;
             fixture.refuses(&candidate, &name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
             fixture.rpc.requests.lock().unwrap().clear();
@@ -504,7 +543,7 @@ async fn fresh_intent_rejects_priority_fee_above_signed_maximum() {
     let mut fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
     let (original, envelope) = fixture.original(2, &fields);
     fields.priority_fee = fields.max_fee + 1;
-    let candidate = signed_payment(&fields, &fixture.owner_key, 2);
+    let candidate = signed_payment(&fields, &fixture.owner_key, 2, &[0xc0]);
     fixture.rpc.control.lock().unwrap().balance = u128::MAX;
     fixture.refuses(&candidate, "EIP-1559 priority above maximum",
         (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
@@ -604,5 +643,37 @@ async fn fresh_intent_rejects_high_s_even_when_the_same_payer_is_recovered() {
         fixture.refuses(&candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
         fixture.rpc.requests.lock().unwrap().clear();
         fixture.acknowledges(&original, &envelope, name).await;
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_enforces_access_list_address_occurrence_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    for duplicates in [false, true] {
+        let accepted = encoded_access_list(64, 0, duplicates).out();
+        let rejected = encoded_access_list(65, 0, duplicates).out();
+        for &(kind, envelope_name) in &ENVELOPES[1..] {
+            let name = format!("{envelope_name}: 64/65 addresses, duplicate={duplicates}");
+            let mut fixture = Fixture::new(directory.path(),
+                61_000 + u64::from(duplicates) * 10 + u64::from(kind), 100).await;
+            fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_enforces_aggregate_storage_key_occurrence_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, addresses) in [1, 64].into_iter().enumerate() {
+        for duplicates in [false, true] {
+            let accepted = encoded_access_list(addresses, 256, duplicates).out();
+            let rejected = encoded_access_list(addresses, 257, duplicates).out();
+            for &(kind, envelope_name) in &ENVELOPES[1..] {
+                let name = format!("{envelope_name}: 256/257 keys over {addresses} addresses, duplicate={duplicates}");
+                let mut fixture = Fixture::new(directory.path(),
+                    62_000 + index as u64 * 100 + u64::from(duplicates) * 10 + u64::from(kind), 100).await;
+                fixture.access_list_boundary(kind, &accepted, &rejected, &name).await;
+            }
+        }
     }
 }

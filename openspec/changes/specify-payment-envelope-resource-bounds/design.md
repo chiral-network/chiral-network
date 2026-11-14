@@ -39,6 +39,28 @@ Calldata at 4,096/4,097 bytes belongs to the local envelope-validation API with 
 
 All RPC fixtures are synthetic. Successful structural decoding is neither executed funding, an on-chain reservation, public testnet qualification nor an authorized deployment. No automatic signing replacement, monetary conversion or migration is introduced.
 
+## Initial requirement and caller map (task 2.1)
+
+The common local path is `validate_payment_envelope -> decoded_payment -> decode`. Native `Consumer::verify_funding_intent` and original opening/top-up cancellation recovery use that path. Provider funding-intent uses `admit_payment_envelope` before acknowledgement registration. `verify_payment` also begins with `decode`, then verifies canonical execution; provider funding/fees and `RatingState::verify` use it. Stored-payment rechecks decode the retained original too. Native `prepare_payment_once -> payment_once` checks calldata before acquiring sender locks, decodes recovered originals, and uses the bounded legacy `sign_transaction` producer before journaling a new original. These are source correspondences, not new end-to-end credit or recovery evidence.
+
+| Requirement/scenarios | Source and existing evidence | Remaining acceptance |
+|---|---|---|
+| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; conservative size derivation above | Raw syntax/unsupported forms and remaining defensive budget evidence in 2.5; do not manufacture an unreachable valid raw-ceiling control |
+| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Local 4,096/4,097-byte calldata in 2.4; malformed access-list byte widths/shape remain in 2.2 |
+| Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | New task 2.2.1 count cases below; malformed shapes still need separate acceptance, not inferred from count rejection |
+| Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Exact occurrence-based floor/equality and one-below cases with duplicates in 2.3 |
+| Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | New access-list local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
+
+## Task 2.2.1 access-list occurrence boundaries
+
+Two new `inference_funding_admission_test` groups use the existing independent signer and production router. The signer now accepts an encoded access list; every previous caller explicitly retains the empty list, without changing prior assertions. A fixture builder emits exact 20-byte addresses and 32-byte keys and spreads keys evenly across entries. Distinct cases have distinct address/key pairs; duplicate cases repeat zero-filled opaque values, which must remain legal bytes within the occurrence limits.
+
+`fresh_intent_enforces_access_list_address_occurrence_limit` compares 64 with 65 entries for both typed envelopes, using distinct and repeated addresses with no keys. `fresh_intent_enforces_aggregate_storage_key_occurrence_limit` compares 256 with 257 keys within one entry and across 64 entries, with distinct or repeated occurrences, for both typed envelopes. The distributed over-limit case has at most five keys per entry, so per-entry-only counting cannot pass it. Distributed positive controls also exercise both inclusive caps simultaneously.
+
+Each of the twelve isolated cases requires direct local rejection of the over-limit candidate and HTTP 400 `invalid_payment`, no acknowledgement/submission/credit, and the retained quote. Its separately signed valid boundary control is locally validated before the negative request and acknowledged afterward, with exact original hash/signature binding and reopened-ledger assertions. Fixed one-million signed gas is above the structural floor even for these over-limit candidates, and synthetic RPC supplies the current nonce and ample balance, so a low-gas/balance failure cannot stand in for count rejection.
+
+This closes count/duplicate coverage only. Wrong entry/list shape and wrong opaque byte widths remain in parent 2.2; precise structural-gas boundaries remain in 2.3. No production decoder, native preparation, wallet, settlement or whitepaper behavior changes.
+
 ## Integration
 
 Run strict OpenSpec validation and the available README/CI checks. Keep the change open until acceptance tasks and evidence mapping are complete; archive normally with `openspec archive specify-payment-envelope-resource-bounds --yes`, never `--skip-specs`. Preserve all unrelated owner work and the whitepaper.
