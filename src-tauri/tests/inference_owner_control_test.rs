@@ -1,4 +1,4 @@
-//! Account-read authorization through the production control router and isolated disk ledgers.
+//! Account reads and credential mutations through the production control router and isolated disk ledgers.
 //! Free accounts are opened over HTTP; scoped credentials and cancelled requests are ledger prerequisites.
 //! No engine, chain RPC, paid funding, or simulated inference output.
 #[path = "support/proposal.rs"]
@@ -44,6 +44,28 @@ impl ReadRoute {
             Self::Credentials => format!("/v1/contracts/{id}/credentials"),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CredentialMutation { Issue, Revoke, Rotate }
+const MUTATIONS: [CredentialMutation; 3] = [
+    CredentialMutation::Issue, CredentialMutation::Revoke, CredentialMutation::Rotate,
+];
+
+impl CredentialMutation {
+    fn request(self, account: &str, credential: &str, options: &Value) -> (&'static str, String, Vec<u8>) {
+        let base = format!("/v1/contracts/{account}/credentials");
+        match self {
+            Self::Issue => ("POST", base, serde_json::to_vec(options).unwrap()),
+            Self::Revoke => ("DELETE", format!("{base}/{credential}"), Vec::new()),
+            Self::Rotate => ("POST", format!("{base}/{credential}/rotate"), serde_json::to_vec(options).unwrap()),
+        }
+    }
+}
+
+fn credential_options() -> Value {
+    json!({"expires_at": protocol::now().unwrap() + 3600, "spend_cap_wei": null,
+        "max_concurrency": 1, "scopes": ["read"]})
 }
 
 struct OwnerProof { headers: HeaderMap, nonce: String }
@@ -203,6 +225,45 @@ impl Fixture {
         assert_eq!(status, StatusCode::OK, "{route:?}: {value}");
         self.check_read(route, accounts, value);
     }
+
+    fn credential_state(&self, account: &str) -> Value {
+        let ledger = &self.provider.state.ledger;
+        json!({"account": ledger.account(account).unwrap(),
+            "credentials": ledger.credentials(account).unwrap()})
+    }
+
+    fn credentials_usable(&self, credentials: &[&Credential]) {
+        for credential in credentials {
+            let context = self.provider.state.ledger.authenticate(&credential.bearer, protocol::now().unwrap()).unwrap();
+            assert_eq!(context.account.contract_id, credential.contract_id);
+            assert_eq!(context.credential_id, credential.id);
+        }
+    }
+
+    fn check_mutation(&self, mutation: CredentialMutation, previous: &Credential, value: Value) {
+        let ledger = &self.provider.state.ledger;
+        let now = protocol::now().unwrap();
+        match mutation {
+            CredentialMutation::Revoke => assert_eq!(value["revoked"], true),
+            CredentialMutation::Issue | CredentialMutation::Rotate => {
+                let issued: Credential = serde_json::from_value(value).unwrap();
+                assert_eq!(issued.contract_id, previous.contract_id);
+                assert_ne!(issued.id, previous.id);
+                assert_ne!(issued.bearer, previous.bearer);
+                let context = ledger.authenticate(&issued.bearer, now).unwrap();
+                assert_eq!(context.account.contract_id, previous.contract_id);
+                assert_eq!(context.credential_id, issued.id);
+                assert_eq!(context.scopes, ["read"]);
+            }
+        }
+        if matches!(mutation, CredentialMutation::Issue) {
+            self.credentials_usable(&[previous]);
+        } else {
+            assert!(ledger.authenticate(&previous.bearer, now).is_err());
+            assert!(ledger.credentials(&previous.contract_id).unwrap().iter()
+                .find(|credential| credential.id == previous.id).unwrap().revoked);
+        }
+    }
 }
 
 #[tokio::test]
@@ -324,4 +385,110 @@ async fn foreign_request_lookup_consumes_authority_without_exposing_another_acco
     fixture.check_read(ReadRoute::Request, &accounts, value);
     // Equal client request keys on the two accounts must still resolve within the authorized account.
     fixture.read_ok(ReadRoute::Request, &accounts, &bearer(&accounts.read)).await;
+}
+
+#[tokio::test]
+async fn credential_mutations_accept_only_the_account_owner_not_any_bearer() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, mutation) in MUTATIONS.into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 1600 + index as u64);
+        let accounts = fixture.accounts().await;
+        let id = &accounts.target.account.contract_id;
+        let before = fixture.credential_state(id);
+        let other_before = fixture.credential_state(&accounts.other.account.contract_id);
+        let (method, path, body) = mutation.request(id, &accounts.read.id, &credential_options());
+        denied(fixture.send(method, &path, &HeaderMap::new(), body.clone()).await, StatusCode::UNAUTHORIZED);
+        for credential in [&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential] {
+            denied(fixture.send(method, &path, &bearer(credential), body.clone()).await, StatusCode::UNAUTHORIZED);
+        }
+        let mut incomplete = bearer(&accounts.read);
+        incomplete.insert("x-chiral-owner", accounts.target.account.consumer_wallet.parse().unwrap());
+        denied(fixture.send(method, &path, &incomplete, body.clone()).await, StatusCode::UNAUTHORIZED);
+        let mut wrong_owner = fixture.proof(OTHER_KEY, method, &path, &body).await;
+        wrong_owner.headers.extend(bearer(&accounts.read));
+        denied(fixture.send(method, &path, &wrong_owner.headers, body.clone()).await, StatusCode::FORBIDDEN);
+        assert!(fixture.provider.state.ledger.challenge(&wrong_owner.nonce).is_err());
+        denied(fixture.send(method, &path, &wrong_owner.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(fixture.credential_state(id), before);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+
+        let mut owner = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let (status, value) = fixture.send(method, &path, &owner.headers, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
+        fixture.check_mutation(mutation, &accounts.read, value);
+        let after = fixture.credential_state(id);
+        owner.headers.extend(bearer(&accounts.target.credential));
+        denied(fixture.send(method, &path, &owner.headers, body).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(fixture.credential_state(id), after);
+        assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.infer, &accounts.other.credential]);
+    }
+}
+
+#[tokio::test]
+async fn credential_identifiers_cannot_escape_the_signed_account_even_for_the_same_owner() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, mutation) in [CredentialMutation::Revoke, CredentialMutation::Rotate].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 1700 + index as u64);
+        let accounts = fixture.accounts().await;
+        let target = &accounts.target.account.contract_id;
+        let other = &accounts.other.account.contract_id;
+        let before = fixture.credential_state(target);
+        let other_before = fixture.credential_state(other);
+        let options = credential_options();
+        let (method, path, body) = mutation.request(target, &accounts.other.credential.id, &options);
+        let proof = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        denied(fixture.send(method, &path, &proof.headers, body.clone()).await, StatusCode::NOT_FOUND);
+        let persisted = BillingStore::open(&fixture.provider.ledger_path, &fixture.provider.offer.payload.network).unwrap();
+        assert!(persisted.challenge(&proof.nonce).is_err());
+        denied(fixture.send(method, &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(fixture.credential_state(target), before);
+        assert_eq!(fixture.credential_state(other), other_before);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+
+        // The credential exists and belongs to this wallet, but requires its own account's signed target.
+        let (method, path, body) = mutation.request(other, &accounts.other.credential.id, &options);
+        let correct = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let (status, value) = fixture.send(method, &path, &correct.headers, body).await;
+        assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
+        fixture.check_mutation(mutation, &accounts.other.credential, value);
+        assert_eq!(fixture.credential_state(target), before);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer]);
+    }
+}
+
+#[tokio::test]
+async fn credential_business_refusals_consume_proof_without_partial_mutations() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, mutation) in MUTATIONS.into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 1800 + index as u64);
+        let accounts = fixture.accounts().await;
+        let id = &accounts.target.account.contract_id;
+        let before = fixture.credential_state(id);
+        let options = credential_options();
+        let mut invalid = options.clone();
+        invalid["max_concurrency"] = json!(0);
+        let (method, path, mut body) = mutation.request(id, &accounts.read.id, &invalid);
+        if matches!(mutation, CredentialMutation::Revoke) { body = b"{}".to_vec(); }
+        let proof = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let response = fixture.send(method, &path, &proof.headers, body.clone()).await;
+        assert_eq!(response.1["error"]["code"], if matches!(mutation, CredentialMutation::Revoke) {
+            "invalid_request"
+        } else { "invalid_credential" });
+        denied(response, StatusCode::BAD_REQUEST);
+        // Credential rollback must not roll back the independently consumed owner challenge.
+        let persisted = BillingStore::open(&fixture.provider.ledger_path, &fixture.provider.offer.payload.network).unwrap();
+        assert!(persisted.challenge(&proof.nonce).is_err());
+        assert_eq!(serde_json::to_value(persisted.credentials(id).unwrap()).unwrap(), before["credentials"]);
+        assert_eq!(fixture.credential_state(id), before);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+        denied(fixture.send(method, &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+
+        let (method, path, body) = mutation.request(id, &accounts.read.id, &options);
+        let fresh = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let (status, value) = fixture.send(method, &path, &fresh.headers, body).await;
+        assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
+        fixture.check_mutation(mutation, &accounts.read, value);
+        fixture.credentials_usable(&[&accounts.target.credential, &accounts.infer, &accounts.other.credential]);
+    }
 }
