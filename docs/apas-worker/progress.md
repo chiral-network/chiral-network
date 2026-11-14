@@ -1,25 +1,26 @@
 # APAS progress
 
-## 2026-11-13 — Verify and archive the wire foundation
+## 2026-11-14 — Specify signed commercial terms
 
-- Completed task 2.2 with ten additional deterministic tests in `src-tauri/tests/inference_wire_foundation_test.rs` (18 total): canonical UTF-8/escaping/integer bytes, all six framed domains, independent personal-signature verification, malformed signatures, exact Keccak offer/opening/top-up vectors and changed-term binding.
-- Derived fixed vectors independently with Python's standard JSON encoder and installed OpenSSL 3.6.3; OpenSSL also verified the normalized signature. No Chiral helper generated expected values. Tests need no OpenSSL process, new dependency, real credential, clock or network. No generator files were created.
-- Completed the available checks and all change tasks, then ran `openspec archive specify-inference-wire-foundation --yes` without `--skip-specs`. Archive: `openspec/changes/archive/2026-11-13-specify-inference-wire-foundation/`. Main spec: `openspec/specs/inference-wire-foundation/spec.md` (7 requirements). Strict validation passed both before archive and on the resulting main spec.
-- Runtime sources and the whitepaper were not edited. `docs/chiral-book.md` still matches SHA-256 `f61bb0cf3926303745f06bf47f211a1169d768480f548a7750f320e5ca4d70c3`; the complete previously read design remains current. No open report entry or author-only question.
+- Created `specify-inference-commercial-terms` with `openspec new change`; wrote its proposal, design, delta and tasks. It covers complete offer/model/profile/quote declarations, validity/origin and hardware consistency, public proposal, exact free/paid funding terms, consumer verification and immutable evidence-only renewal.
+- Completed tasks 1.1–1.3. Strict validation passed. Implementation/coverage tasks remain open; do not archive yet. The existing `inference-wire-foundation` main spec and its archived change are unchanged.
+- Inspected the actual validators, proposal/storage/consumer paths and existing tests. Native embedding output price is only checked for canonical money; the provisioner separately requires zero. Managed inventory selects an inventoried template without an embedding-specific prohibition. Tasks 2.2–2.3 require native-boundary regressions and enforcement; this turn did not fix or claim runtime proof of those gaps.
+- Runtime sources and the whitepaper were not edited. The complete previously read `docs/chiral-book.md` remains unchanged, verified against SHA-256 `f61bb0cf3926303745f06bf47f211a1169d768480f548a7750f320e5ca4d70c3`. No author-only decision or open report entry.
 
-## Verification and blockers
+## Verification
 
-- Passed sequentially: `cargo test --locked --no-default-features --manifest-path src-tauri/Cargo.toml --all-targets` (203 library + 2 discovery + 18 foundation tests; 2 existing child-process helper entrypoints ignored), then `cargo build --locked --no-default-features --manifest-path src-tauri/Cargo.toml --bins`.
-- All frontend/Python check commands exited zero: `npm run check` (zero errors/warnings), `npm test` (15 tests), `npm run build` (stale Browserslist warning only), Python unittest discovery (46 tests) and CI's seven-script `py_compile`. The outer shell wrapper returned 1 because this worker inverted its final aggregation predicate; no project check failed and none was rerun to conceal that orchestration mistake.
-- The earlier Axum/Tokio compilation issue is not a current blocker; its cause was not established. Keep Rust checks sequential; do not delete caches or rewrite others' dependencies.
-- Native desktop still lacks WebKit/AppIndicator dependencies; release builds lack the actual `CHIRAL_POLICY_PUBLIC_KEY`. No installs or invented keys. Windows/macOS and live paid/GPU/public qualification require unavailable or out-of-checkout environments. Archiving this primitive contract does not close those release gates.
+- Passed `openspec validate specify-inference-commercial-terms --strict --no-interactive`.
+- Passed sequentially: `cargo test --locked --no-default-features --manifest-path src-tauri/Cargo.toml --all-targets` (203 library + 2 discovery + 18 foundation tests; 2 existing child-process entrypoints ignored), then the corresponding `cargo build ... --bins`.
+- Passed `npm run check` (zero errors/warnings), `npm test` (15 tests), `npm run build` (only stale Browserslist data warning), Python unittest discovery (46 tests), and CI's seven-script `py_compile`. Both orchestration commands also exited zero.
+- Native desktop dependencies, the actual release `CHIRAL_POLICY_PUBLIC_KEY`, Windows/macOS environments and live paid/GPU/public qualification remain unavailable/out-of-checkout gates. No installs, invented keys or deployment actions. Keep Rust checks sequential; no cache/dependency cleanup.
 
 ## Next, in order
 
-1. Prioritize any failure attributable to committed code; preserve unrelated dirty work and pass over recorded blockers without a new safe diagnostic path.
-2. Create the next OpenSpec change for complete signed offer/model/quote schema and validation rules: inspect `protocol.rs`, `offer_registry.rs`, `contracts.rs`, `consumer.rs` and their actual tests against the whitepaper. The foundation deliberately covers primitive schemas, not every commercial payload or model/profile constraint.
-3. Then specify funding acknowledgement/nonce ownership/recovery and exact accounting; follow with discovery/authorization, runtime/performance and consumer/reputation behavior. Add missing requirements before changing implementation. Full three-layer alignment is not established.
+1. Prioritize any new failure attributable to committed code. Native embedding enforcement tasks 2.2–2.3 outrank missing coverage but are currently blocked from a source-fix commit: their implementation files are pre-existing untracked owner work, and committing them would absorb that work. Reconsider only if source ownership becomes separable; do not weaken the requirement or mark these tasks complete.
+2. Next unblocked slice: task 2.1, standalone deterministic commercial-schema/model/profile acceptance tests. Reuse existing coverage, test real rejection boundaries, and avoid wall-clock-edge flakiness. Then complete missing proposal/quote cases (2.4) and renewal coverage review (2.5) where independently committable.
+3. Run final checks and archive normally only when every implementation task is genuinely complete. If native source fixes remain blocked, leave this change open and proceed to another independent capability.
+4. Subsequently specify funding acknowledgement/nonce ownership/recovery and exact accounting, then discovery/authorization, runtime/performance and consumer/reputation behavior. Full three-layer alignment is not established.
 
 ## Checkout discipline
 
-Extensive pre-existing modified/deleted/untracked implementation and documentation, including the whitepaper, belong to someone else. Commit only this worker's test changes, OpenSpec archive/main spec and these notes. Git identity remains per-command `APAS Worker <apas-worker@localhost>`; no identity configuration was persisted.
+Extensive pre-existing modified/deleted/untracked implementation and documentation, including the whitepaper, belong to someone else. This step commits only its new OpenSpec change and these notes. Preserve all other work; no push. Git identity is per-command `APAS Worker <apas-worker@localhost>`, not persisted configuration.
