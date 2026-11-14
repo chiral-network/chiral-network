@@ -770,6 +770,77 @@ async fn funding_intent_authority_is_required_before_new_admission_and_cached_ac
 }
 
 #[tokio::test]
+async fn funding_intent_object_fields_are_strict_before_new_admission_and_cached_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_bodies: &[(&str, fn(&str) -> Vec<u8>)] = &[
+        ("missing", |_| br#"{}"#.to_vec()),
+        ("null", |_| br#"{"raw_transaction":null}"#.to_vec()),
+        ("boolean", |_| br#"{"raw_transaction":true}"#.to_vec()),
+        ("integer", |_| br#"{"raw_transaction":1}"#.to_vec()),
+        ("fraction", |_| br#"{"raw_transaction":1.5}"#.to_vec()),
+        ("array field", |raw| serde_json::to_vec(&json!({"raw_transaction": [raw]})).unwrap()),
+        ("object field", |raw| serde_json::to_vec(&json!({"raw_transaction": {"hex": raw}})).unwrap()),
+        ("unknown field", |raw| serde_json::to_vec(&json!({"raw_transaction": raw, "quote_id": "another-agreement"})).unwrap()),
+        ("duplicate field", |raw| format!(r#"{{"raw_transaction":"{raw}","raw_transaction":"{raw}"}}"#).into_bytes()),
+    ];
+    for (registration, registered) in [false, true].into_iter().enumerate() {
+        for (index, (name, invalid_body)) in invalid_bodies.iter().enumerate() {
+            // Separate ledgers keep challenge occupancy/rate ceilings from masking schema errors.
+            let mut fixture = Fixture::new(directory.path(),
+                2600 + (registration * invalid_bodies.len() + index) as u64);
+            let opened = fixture.open_free().await;
+            let account_id = &opened.account.contract_id;
+            let read = fixture.scoped_credential(account_id, "read");
+            let before = fixture.credential_state(account_id);
+            let quote = fixture.paid_quote().await;
+            let (raw, envelope) = fixture.signed_payment(
+                &protocol::opening_data(&quote.payload).unwrap(), 100, 0);
+            let ack = registered.then(|| fixture.acknowledge_fixture(&quote, &raw, &envelope));
+            let expected_ack = serde_json::to_value(&ack).unwrap();
+            // A valid new request stops at draining; cached recovery needs no chain admission.
+            // Neither branch fabricates spendability, submits a payment or opens the paid account.
+            fixture.provider.state.accepting.store(false, Ordering::Release);
+            let path = format!("/v1/contracts/{}/funding-intent", quote.payload.id);
+            for (invalid, body) in [
+                (true, invalid_body(&raw)),
+                (false, serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap()),
+            ] {
+                let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+                let response = fixture.send("POST", &path, &proof.headers, body).await;
+                if invalid {
+                    assert_eq!(response.0, StatusCode::BAD_REQUEST, "{name}, registered={registered}: {}", response.1);
+                    assert_eq!(response.1["error"]["code"], "invalid_request", "{name}, registered={registered}");
+                } else if let Some(expected) = &ack {
+                    assert_eq!(response.0, StatusCode::OK, "{name}: {}", response.1);
+                    let recovered: Signed<FundingIntent> = serde_json::from_value(response.1).unwrap();
+                    protocol::verify(protocol::INTENT_DOMAIN, &recovered, &quote.payload.provider_wallet).unwrap();
+                    assert_eq!(recovered.payload, expected.payload);
+                    assert_eq!(recovered.signature, expected.signature);
+                } else {
+                    assert_eq!(response.1["error"]["code"], "provider_draining", "{name}");
+                    denied(response, StatusCode::SERVICE_UNAVAILABLE);
+                }
+                // Prove preservation after both refusal and a correctly shaped fresh-proof request.
+                let persisted = BillingStore::open(&fixture.provider.ledger_path, &quote.payload.network).unwrap();
+                assert_eq!(serde_json::to_value(persisted.funding_intent(&quote.payload, &raw).unwrap()).unwrap(),
+                    expected_ack, "{name}, registered={registered}");
+                assert_eq!(serde_json::to_value(persisted.quote(&quote.payload.id).unwrap()).unwrap(),
+                    serde_json::to_value(&quote).unwrap());
+                assert!(persisted.account(&quote.payload.id).unwrap_err().starts_with("not_found:"));
+                assert_eq!(json!({"account": persisted.account(account_id).unwrap(),
+                    "credentials": persisted.credentials(account_id).unwrap()}), before);
+                fixture.credentials_usable(&[&opened.credential, &read]);
+                let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+                let monetary_rows: (u64, u64) = db.query_row(
+                    "SELECT (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations)",
+                    [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+                assert_eq!(monetary_rows, (0, 0), "{name}, registered={registered}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn existing_free_and_paid_openings_cannot_be_reentered_using_bearers_or_another_owner() {
     let directory = tempfile::tempdir().unwrap();
     for (index, paid) in [false, true].into_iter().enumerate() {

@@ -63,6 +63,22 @@ These are inspected source/test assertions, not a claim that the listed tests ex
 
 Source modules: [`consumer.rs`](../../../src-tauri/src/consumer.rs), [`chain_client.rs`](../../../src-tauri/src/chain_client.rs), [`contracts.rs`](../../../src-tauri/src/contracts.rs), [`billing_store.rs`](../../../src-tauri/src/billing_store.rs) and [`protocol.rs`](../../../src-tauri/src/protocol.rs). Unit evidence is in `consumer.rs`, `chain_client_tests.rs` and `billing_store_tests.rs`; integration evidence is in `inference_owner_control_test.rs` and `inference_proposal_quota_test.rs` under [`src-tauri/tests`](../../../src-tauri/tests).
 
+## Task 2.1.1 request-object field acceptance
+
+`inference_owner_control_test::funding_intent_object_fields_are_strict_before_new_admission_and_cached_recovery` adds real-router coverage for nine request-object variants: absent `raw_transaction`, null, boolean, integer, fraction, array-valued field, object-valued field, an unknown member and duplicate `raw_transaction` members. Each uses the real owner's proof bound to those exact body bytes and is exercised against both a new proposal and a previously acknowledged agreement.
+
+Separate isolated ledgers prevent the eight pending challenges or minute rate budget from masking schema rejection. Every malformed object must return HTTP 400 / `invalid_request`; a subsequent correctly shaped request with fresh authority reaches the draining gate for a new intent or returns the exact provider-signed cached acknowledgement. The fresh branch deliberately stops before RPC: it is not successful spendability/admission evidence.
+
+After both requests an independent ledger connection checks the exact signed quote and optional acknowledgement, absence of a paid account/credited funding/fee obligations, and unchanged unrelated free-account/credential state. Existing root and read bearers remain usable. Cached prerequisites use the existing independently signed, offline-validated envelope and trusted post-spendability ledger boundary, not constructed chain execution. No engine, RPC, actual payment or client broadcast is exercised.
+
+The existing consumer `funding_acknowledgements_bind_all_terms_and_survive_quote_expiry` covers signed network/provider/payer/quote/hash substitutions, wrong signer/domain and invalid registration times; `missing_malformed_or_mismatched_ack_never_broadcasts` covers unavailable/malformed/hash-mismatched/lost replies with original recovery. They do not replace exhaustive native response-schema acceptance, which remains task 2.1.3.
+
+### Request container mismatch
+
+A throwaway executable linked to the built core observed both `{"raw_transaction":"0x00"}` and `["0x00"]` decode successfully as `FundingIntentRequest`, while an extra object member is refused. The signed-envelope validity of `0x00` was not tested or asserted. `contracts::parse` uses `serde_json::from_slice` directly for this request; the derived struct decoder's sequence form does not enforce the specified JSON-object container.
+
+Task 2.1.2 requires a native object-only guard plus regression when the owner-untracked parser/protocol source is independently committable. The probe is decoder evidence, not an HTTP exploit or financial acceptance result. It was removed; no permanent test blesses sequence acceptance, no specification is weakened and the request-object cases above do not claim this missing guarantee. Parent task 2.1 stays open.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.
@@ -75,7 +91,7 @@ Source modules: [`consumer.rs`](../../../src-tauri/src/consumer.rs), [`chain_cli
 
 ## Ownership, verification and integration
 
-This turn creates a specification and executable acceptance plan only. The production ledger, consumer, chain client and their native unit tests are owner-untracked migration work. The pre-issuance admission fix and any private time/fault seam remain blocked until independently committable; do not commit a failing regression alone, normalize away the flaw or adopt the migration wholesale. Independent worker-owned acceptance can proceed first.
+The change began with a specification and executable acceptance plan; subsequent worker-owned acceptance is recorded above. The production parser/protocol, ledger, consumer, chain client and their native unit tests are owner-untracked migration work. The object-only request guard, pre-issuance admission fix and any private time/fault seam remain blocked until independently committable; do not commit a failing regression alone, normalize away a flaw or adopt the migration wholesale. Independent worker-owned acceptance can proceed.
 
 Run strict noninteractive validation and all available README/CI checks. Keep platform dependencies, the actual release policy key, real paid-chain/SDK/GPU/public failure/load evidence as separate unavailable/out-of-checkout gates. No deployments, wallet/account changes, installs or whitepaper edits.
 
