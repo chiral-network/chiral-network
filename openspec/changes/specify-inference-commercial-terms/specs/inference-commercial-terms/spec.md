@@ -173,7 +173,7 @@ A quote SHALL use the quote domain and allow exactly these required fields, reje
 | `nonce` | Provider-supplied signed string; native issuance uses a fresh cryptographically random 32-byte `0x`-prefixed hexadecimal nonce |
 | `issued_at`, `expires_at` | Unsigned 64-bit Unix-second timestamps; native issuance expires 300 seconds after issuance |
 
-The native issuer SHALL create a fresh random quote/account identifier and nonce and sign and durably record the complete quote before returning it. A quote SHALL be a commercial agreement proposal, not an on-chain smart contract, spendable credit or proof of payment. Every copied field, including the complete optional serving profile, SHALL remain covered by the quote signature and opening commitment.
+The native issuer SHALL create a fresh random quote/account identifier and nonce and sign and durably record the complete quote before returning it. A quote SHALL be an overbookable commercial agreement proposal, not an opening-capacity reservation, admission acknowledgement, guarantee of later admission, on-chain smart contract, spendable credit or proof of payment. Every copied field, including the complete optional serving profile, SHALL remain covered by the quote signature and opening commitment.
 
 #### Scenario: Quote copies the selected commercial proposal
 
@@ -190,7 +190,11 @@ The native issuer SHALL create a fresh random quote/account identifier and nonce
 
 `POST /v1/contracts/propose` SHALL accept exactly `offer_id`, `consumer_wallet` and `funding_wei`. Proposal SHALL be public and SHALL NOT require an owner challenge or inference bearer. The selected offer SHALL be present, unexpired, local to this provider wallet and network, and subject to the provider's new-funding gates. Administrative drain or unavailable new-funding readiness SHALL refuse new proposals even when some existing settled accounts can still be served.
 
-The public control boundary SHALL limit the request body to 96 KiB, allow at most five seconds to read it, and admit at most 64 concurrent control readers without queuing. Quote storage SHALL enforce bounded pending-quote quotas and per-wallet/global proposal rates. Creating a quote SHALL NOT authorize spending or credential issuance, broadcast a transaction or establish a funded balance. Payer authentication and verified payment acceptance remain separate operations.
+The public control boundary SHALL limit the request body to 96 KiB, allow at most five seconds to read it, and admit at most 64 concurrent control readers without queuing, before signing. Under the authoritative pending replacement `specify-non-reserving-quotes`, standalone unaccepted quote retention SHALL be bounded to 10,000 per provider ledger without named-wallet pending or rate allowances. Quote issuance SHALL NOT consume paid-intent leases, free-account capacity or inference capacity; otherwise eligible quoting SHALL remain possible when opening capacity is full. Ordinary offer/readiness gates remain necessary.
+
+Signing work SHALL use a separate provider-ledger budget of 600 durable permits per effective minute, claimed after input validation and before signing; signing, insertion, persistence or response failure SHALL NOT refund a claimed permit. Under the aligned `specify-proposal-rate-budgets`, committed issuance SHALL independently consume at most 600 units per effective minute, charged atomically with durable quote insertion. Failed insertion SHALL roll back committed charges and quote mutations, not a prior work permit; successful insertion SHALL NOT be refunded by response loss, expiry, acknowledgement or opening. Each budget SHALL retain its own durable non-regressing clock across restart and cleanup, following its authoritative contract's initialization/adoption and fail-closed rules. Neither budget clock SHALL rewrite signed validity times. Optional source controls SHALL use transport or explicitly trusted proxy identity, never the named wallet or an untrusted forwarding header. Challenge authorization and per-inference admission/performance rules SHALL remain unchanged.
+
+Creating a quote SHALL NOT authorize spending or credential issuance, broadcast a transaction or establish a funded balance. Both old named-wallet quote gates SHALL be removed together during native cutover. These replacement/rate contracts supersede conflicting historical quote-quota wording while implementation is pending; old-wallet tests SHALL NOT be treated as compliance evidence.
 
 #### Scenario: Unauthenticated proposal without account authority
 
@@ -207,6 +211,55 @@ The public control boundary SHALL limit the request body to 96 KiB, allow at mos
 
 - **WHEN** a proposal exceeds the body bound, misses the body-read deadline or arrives when all control-reader slots are occupied
 - **THEN** it is rejected without adding an unbounded waiting request or issuing a quote
+
+#### Scenario: Unauthenticated names do not consume wallet allowances
+
+- **GIVEN** unrelated callers have obtained eight pending quotes and twelve committed proposals naming one wallet while provider-wide resources remain available
+- **WHEN** another valid public request names that wallet
+- **THEN** neither former wallet ceiling refuses it or charges wallet-specific quote state
+- **AND** the owner's authenticated opening remains governed by its own authorization and opening-capacity rules
+
+#### Scenario: Quote issuance overbooks opening admission
+
+- **GIVEN** paid-intent or free-opening capacity is full but quote resources and ordinary offer/readiness gates permit issuance
+- **WHEN** a valid public proposal is issued
+- **THEN** exact signed terms are retained without allocating an opening lease or account
+- **AND** receipt of the quote does not authorize payment broadcast
+
+#### Scenario: Failed insertion spends work but not committed issuance
+
+- **WHEN** a valid proposal claims a signing-work permit but subsequent insertion fails
+- **THEN** the work unit remains spent while tentative committed-rate and quote mutations roll back
+- **AND** exhausted work allowance refuses further signing before signer invocation
+
+### Requirement: Authenticated opening admission preserves original acceptance
+
+Fresh paid admission SHALL occur at payer-authenticated funding-intent registration after exact quote/payment validation and before durable acknowledgement or client broadcast. The final capacity check and accepted-evidence insertion SHALL be atomic across competing writers. At most 10,000 original un-opened intent leases whose original quote-expiry deadlines exceed transaction time SHALL be active per ledger, independently of standalone quote retention; replay SHALL NOT extend those deadlines. Full admission SHALL return 429/`rate_limit` without acknowledgement, accepted intent, account, credit or submission. An honest provider SHALL NOT broadcast the refused original. The consumer SHALL validate and durably persist a valid acknowledgement before submitting the same prepared transaction bytes.
+
+Once acknowledged, the exact original quote, acknowledgement, transaction and sender/nonce ownership SHALL survive later capacity pressure, quote/lease expiry and restart. Lease expiry SHALL release capacity only, never accepted evidence. Credit SHALL still require verified canonical successful execution at the healthy safe frontier. A lost reply or timeout SHALL be ambiguous, not proof of refusal: recovery SHALL use the original intent/acknowledgement/payment without automatic replacement. The provider receives broadcastable signed bytes; this residual trust boundary SHALL remain disclosed.
+
+Free first-opening admission SHALL instead occur atomically after payer authentication, requiring fewer than eight accounts owned by that authenticated wallet and fewer than 10,000 total ledger accounts immediately before creation. It SHALL NOT fabricate a payment or paid intent. Cached accepted-original, existing-account, top-up and settlement recovery SHALL NOT acquire fresh quote storage/work/issuance or opening-capacity gates, rotate an existing exported credential, or rewrite accepted terms.
+
+#### Scenario: Paid writers compete for final admission
+
+- **GIVEN** one paid lease remains and two authenticated original payments otherwise qualify
+- **WHEN** their registrations compete
+- **THEN** at most one durable acknowledgement and lease are created
+- **AND** the refused original creates no accepted intent, account, credit or broadcast
+
+#### Scenario: Lost acknowledgement survives later pressure
+
+- **GIVEN** an original acknowledgement committed but its reply was lost
+- **WHEN** restart, quote/lease expiry and later capacity exhaustion precede authenticated recovery
+- **THEN** the exact original acknowledgement and transaction remain recoverable without a new quote or lease
+- **AND** the valid original remains eligible for safe-frontier credit without replacement payment
+
+#### Scenario: Free opening capacity is authenticated
+
+- **GIVEN** two authorized first free openings compete for the final applicable account slot
+- **WHEN** their creation transactions execute
+- **THEN** at most one account is created and the other is refused without partial account creation or quote removal
+- **AND** neither path fabricates payment, while existing-account recovery remains usable without fresh capacity admission
 
 ### Requirement: Free and paid opening terms are distinguished exactly
 

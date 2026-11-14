@@ -1,25 +1,25 @@
 # APAS progress
 
-## 2026-11-14 — Provider-wide committed proposal rates
+## 2026-11-14 — Opening and commercial non-reserving alignment
 
-- Read the complete whitepaper, report answer and current notes; no new author change. Authority remains `docs/chiral-book.md`, SHA-256 `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`. The author-approved non-reserving decision still takes priority over the old wallet quotas.
-- Completed task 2.1 of the existing `specify-non-reserving-quotes` change: retargeted the proposal-rate delta, proposal, design and tasks to one 600-per-effective-minute provider-ledger committed budget, with no named-wallet allowance.
-- Preserved atomic insertion/global-counter rollback, nonrefundable successful issuance, durable non-regressing time and independent recovery. Specified conservative adoption from the retained global counter: never sum obsolete wallet rows; missing/contradictory totals fail closed; retire obsolete rows only with successful adoption. A separately committed signing-work permit is not refunded by insertion failure.
-- Compared native issuance/storage/cleanup and existing global-race/failed-insertion tests. Old wallet ceilings and clock gaps still exist in owner-untracked source. Retained earlier test results as historical evidence and reopened the changed acceptance work; no production code or tests changed. Both changes remain open, and the author report is not yet resolved.
+- Authority, README and CI hashes match the preceding complete reads; the report has no new answer. Book SHA-256 remains `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`. The author-approved non-reserving decision is read-only.
+- Completed task 2.2 of `specify-non-reserving-quotes`: aligned the opening-intent and commercial proposal/design/delta/task files with provider-wide quote resources, authenticated paid/free opening capacity and accepted-original recovery.
+- Preserved signed terms, original acknowledgements/transactions/nonces, safe-credit prerequisites and historical evidence. Replaced stale wallet-quota authority and follow-on tasks; added explicit pending acceptance for final-lease competition, definite full refusal, lost-response recovery and authenticated free opening. Earlier eight/twelve-unit tests remain historical exposure, not mitigation.
+- Native source/tests remain unchanged. The author report and all incomplete changes stay open for native cutover and acceptance; no new author-only decision is needed.
 
 ## Verification
 
-- Passed: strict validation of `specify-proposal-rate-budgets` and `specify-non-reserving-quotes`, plus unchanged-whitepaper checksum.
-- Passed: 373 all-target headless Rust tests (two existing child helpers ignored by the ordinary runner), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts. Total: 434 passing tests. These checks exercise the existing implementation, not mitigation; known blocked regression failures were not rerun.
-- The frontend build reports stale Browserslist data; no dependency update was attempted.
-- Entry probes found no configured release policy authority or WebKit desktop dependency. Release/native-desktop, Windows/macOS and live paid/GPU/public qualification remain unrun gates. No installation or deployment; Rust invocations remain sequential.
+- Passed strict validation of `specify-opening-funding-intent`, `specify-inference-commercial-terms` and `specify-non-reserving-quotes`, plus the unchanged-whitepaper checksum.
+- Passed 373 all-target headless Rust tests (two existing child helpers ignored by the ordinary runner), headless binary build, frontend type checks (zero errors/warnings), 15 frontend tests/build, 46 Python tests and compilation of CI's seven scripts: 434 passing tests total. These checks exercise the existing implementation, not mitigation of the revised quote policy; known blocked regression failures were not rerun.
+- Stale Browserslist data remains a frontend build warning; no dependency update was attempted.
+- Current probes confirm no WebKit desktop dependency or configured release policy authority. Release/native-desktop, Windows/macOS and live paid/GPU/public qualification remain unrun gates. No installation or deployment; keep Rust invocations sequential.
 
 ## Next steps, in order
 
-1. **Next unblocked specification step: non-reserving-quotes 2.2.** Reconcile opening-funding-intent and commercial bounded-proposal wording/tasks with overbookable quotes, provider-wide retained storage and authenticated paid/free capacity. Preserve exact accepted acknowledgements, original deadlines and nonce commitments. Do not archive conflicting old wallet rules as an intermediate step.
-2. Implement parent 3.1–3.5 with migrated contract tests, then acceptance 4.1–4.4. **Native cutover is blocked by entirely owner-untracked ledger/handler/consumer source:** do not absorb that migration, add unused helpers or commit expected-failing tests alone. Clear both old wallet gates together; removing only the eight-slot ceiling is insufficient. Revised proposal-rate 2.1–2.3 remain open because historical wallet tests do not prove the new path.
-3. Proposal-rate 2.4–2.5 still need the global clock/cleanup/adoption fix and regressions alongside the native cutover. Its global committed counter is separate from parent 3.2's signing-work limiter; initialization and failed-insertion clock semantics must not be conflated.
-4. Prioritize any independently committable failing check, then remaining code/spec gaps below. Resume exact-acknowledgement replay/lost-response and native broadcast/recovery acceptance under the new contract, not the superseded payer-slot policy. Prior committed opening rollback task 2.3.1 remains complete; isolated rollback/reopening is not power-loss or financial qualification.
+1. Native non-reserving cutover (parent 3.1–3.5) and proposal-rate clock/adoption work (2.4–2.5) remain **blocked by entirely owner-untracked ledger/handler/consumer source**. Do not adopt that migration, introduce unused helpers or commit expected-failing regressions alone. Clear both public wallet gates together and migrate affected tests; keep pre-signing work separate from committed issuance.
+2. **Next unblocked acceptance slice: opening-funding-intent 2.3's exact raw-string cached recovery.** Initial uppercase/mixed-case acceptance does not prove that a different spelling of the same decoded signed bytes/hash is refused after registration. Require conflict for alternate spellings and unchanged original acknowledgement recovery after reopening with fresh funding/qualification gates closed and RPC unavailable; preserve unrelated standalone quote storage, nonce/lease evidence and absence of credit. Do not use old payer-slot counts as an oracle.
+3. Then complete independently reachable final-capacity, lost-response and native journal/broadcast recovery acceptance (opening 2.3.3–2.3.4, 2.5–2.6, 2.8). Exact expiry/restart or new resource-gate assertions needing private native seams remain blocked with their fixes. Preserve safe-frontier prerequisites; isolated fixtures do not qualify live settlement or power-loss recovery.
+4. Prioritize any independently committable failing check, then retained code/spec gaps below. Prior committed cost/nonce/schema-member and rollback evidence remains valid within its recorded limits, not proof of the unimplemented quote-policy cutover.
 5. After the bounded pre-credit contract, specify safe-credit/reorg accounting, explicit cancellation, top-ups and fees before broader discovery, credential lifecycle, runtime/performance and consumer/reputation alignment. Keep incomplete changes open; never archive with `--skip-specs`.
 
 ## Other retained blockers
@@ -32,4 +32,4 @@
 
 ## Checkout discipline
 
-Entry had no staged files and extensive owner migration changes. All seven step files were clean at entry. Commit only the proposal-rate change's proposal/design/delta/tasks, the parent change's task list, progress and report; exclude the owner's whitepaper and all source/tests. Preserve the author's complete `Answer:`. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
+Entry had no staged files and extensive owner migration changes; all candidate OpenSpec and APAS files were clean. Commit only this step's opening/commercial proposal/design/delta/tasks, the parent's task list and APAS progress/report. Exclude the owner's whitepaper and all source/tests; preserve the complete author `Answer:` and unrelated changes. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.

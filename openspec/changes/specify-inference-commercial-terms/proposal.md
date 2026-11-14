@@ -6,9 +6,10 @@ The archived wire foundation specifies identities and signing bytes, but not the
 
 - Add the complete allowed offer, model, serving-profile and quote field sets with typed limits and cross-field consistency rules.
 - Separate remote declaration validation from stricter native deployment and qualification requirements; signatures are attribution, not execution or performance attestation.
-- Specify bounded public quote proposal, exact copying of selected terms, free-versus-paid funding rules, consumer verification and preservation of existing signed agreements.
+- Specify provider-wide bounded public quote proposals as exact signed, overbookable terms, not opening-capacity reservations or named-wallet allowances. Paid admission belongs at authenticated funding-intent; free admission belongs at authenticated first opening.
 - Specify the whitepaper's input-only embedding deployment rule at the native configuration boundary as well as provisioning. Source inspection found that the provisioner enforces zero output price while native configuration currently validates only its canonical monetary syntax; leave a concrete regression/fix task open.
 - Preserve current issuer-versus-receiver distinctions, including 300-second local quote issuance and the separate freshness checks used for new onboarding versus historical recovery. Do not invent a new wire version or reinterpret existing money.
+- Align pending cutover with the authoritative `specify-non-reserving-quotes` replacement and `specify-proposal-rate-budgets` committed-issuance contract: separate retained quotes, pre-signing work and committed issuance from authenticated opening capacity, without new gates on accepted-account, top-up or settlement recovery.
 
 ## Capabilities
 

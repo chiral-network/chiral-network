@@ -84,11 +84,29 @@ The provider SHALL recheck latest/pending nonce and chain health after the balan
 
 ### Requirement: Fresh registration uses current quote time and bounded admission
 
+Public quotes SHALL be overbookable signed commercial terms, not reservations of paid-intent leases, free-opening capacity or inference capacity. Their retention and issuance SHALL follow the pending `specify-non-reserving-quotes` replacement of `inference-proposal-admission` and the aligned `specify-proposal-rate-budgets`, not the superseded named-wallet quote allowances. Otherwise eligible quoting may continue while opening capacity is full. Receipt of a quote SHALL NOT authorize payment submission.
+
 Fresh registration SHALL require the exact signed quote previously issued by this provider, paid rather than genuinely free terms, current acceptance of new funding and compatible qualified execution under the existing commercial/evidence-only-renewal rules. Qualification SHALL be checked again after asynchronous chain admission; changed or unavailable admission execution SHALL NOT silently substitute terms. These observations do not promise atomicity with external engine failure or a concurrent operator transition after observation.
 
 The provider SHALL sample registration time after acquiring the ledger write transaction and require `quote.issued_at <= registered_at < quote.expires_at`. A request waiting for another writer SHALL NOT backdate acceptance using its earlier arrival time. A regressed sample before issuance SHALL refuse new registration rather than clamp or fabricate an acceptable signed timestamp.
 
-There SHALL be at most 10,000 active opening-intent leases per provider ledger, counted as retained intents whose admission deadline is strictly later than the transaction's registration time and whose accounts have not opened. A new lease SHALL end at the original quote's expiry. Capacity exhaustion SHALL return HTTP 429 with `rate_limit`, without evicting an acknowledged agreement. Active-intent capacity is separate from standalone proposal slots, retained historical agreements, credentials and inference admission; it is not a promise of paid execution speed or concurrent generation capacity.
+There SHALL be at most 10,000 active opening-intent leases per provider ledger, counted as retained intents whose admission deadline is strictly later than the transaction's registration time and whose accounts have not opened. A new lease SHALL end at the original quote's expiry. After payer authentication and exact quote/payment validation, the final capacity check and accepted-evidence insertion SHALL be atomic across writers, before durable acknowledgement and client broadcast. Active-intent capacity is independent of the 10,000 provider-wide standalone quote records, quote-work/issuance budgets, retained historical agreements, credentials and inference admission; it is not a promise of paid execution speed or concurrent generation capacity.
+
+Capacity exhaustion SHALL return HTTP 429 with `rate_limit`, without creating an acknowledgement, accepted intent, account, credit or submission, or evicting an acknowledged agreement. An honest provider SHALL NOT broadcast the refused signed original, and the consumer SHALL NOT broadcast it without a valid durably saved acknowledgement. Later capacity pressure, quote/lease expiry or restart SHALL NOT cancel accepted terms or justify refusing recovery or credit of a valid acknowledged original; canonical successful execution and the healthy `safe` frontier remain required.
+
+#### Scenario: Issued quotes do not decide paid admission
+
+- **GIVEN** paid-intent capacity is full but separate provider-wide quote resources and offer/readiness validity permit issuance
+- **WHEN** valid public quotes are issued
+- **THEN** their signed terms are retained without allocating a paid lease or free account
+- **AND** an otherwise valid authenticated fresh funding intent receives 429/`rate_limit` without acknowledgement, acceptance, credit or honest-provider/client submission
+
+#### Scenario: Writers compete for the final paid lease
+
+- **GIVEN** exactly one active-intent lease remains and two distinct independently authorized originals satisfy fresh admission
+- **WHEN** independent writers register them concurrently
+- **THEN** exactly one acknowledgement and original lease commit
+- **AND** the loser receives 429/`rate_limit` without partial intent, quote removal, nonce assignment or submission, while earlier accepted evidence remains intact
 
 #### Scenario: Waiting cannot turn an expired quote into a new acceptance
 
@@ -112,11 +130,11 @@ There SHALL be at most 10,000 active opening-intent leases per provider ledger, 
 
 ### Requirement: Acknowledgement commits evidence and nonce ownership atomically
 
-The provider SHALL atomically persist the complete original signed quote, verbatim submitted raw-transaction string, computed hash, original payer/nonce assignment, signed acknowledgement and admission lease before returning a successful acknowledgement. It SHALL apply the existing `inference-proposal-admission` retention handoff in the same transaction, removing only the matching standalone proposal after durable intent retention succeeds.
+The provider SHALL atomically persist the complete original signed quote, verbatim submitted raw-transaction string, computed hash, original payer/nonce assignment, signed acknowledgement and admission lease before returning a successful acknowledgement. It SHALL apply the retention handoff specified by the pending `specify-non-reserving-quotes` replacement contract in the same transaction, removing only the matching standalone proposal after durable intent retention succeeds. This releases one provider-wide unaccepted-quote storage slot, not a named-wallet allowance or a refund of quote-work/committed-issuance charges.
 
 Within that provider ledger, an acknowledged transaction hash and original sender/nonce SHALL NOT be assigned to another agreement. Competing writers SHALL observe that ownership atomically. Expiry, a rejected funding attempt, opening, terminal status or later chain regression SHALL NOT release the original nonce commitment for conflicting acknowledgement. This is provider-ledger ownership, not a network-wide acknowledgement coordinator.
 
-Failed admission, signing or persistence SHALL leave no partial acknowledgement/lease/nonce assignment and SHALL NOT free another proposal slot or modify earlier accepted terms. Acknowledgement alone SHALL NOT create an account, issue a credential, credit funding or create a platform-fee obligation. Paid opening SHALL require the registered original and independent verified canonical-successful healthy-safe evidence; it SHALL NOT implicitly register an unacknowledged payment or treat a pending/mempool transaction as credit.
+Failed admission, signing or persistence SHALL leave no partial acknowledgement/lease/nonce assignment and SHALL NOT free another proposal's storage or modify earlier accepted terms. Acknowledgement alone SHALL NOT create an account, issue a credential, credit funding or create a platform-fee obligation. Paid opening SHALL require the registered original and independent verified canonical-successful healthy-safe evidence; it SHALL NOT implicitly register an unacknowledged payment, repeat fresh opening-capacity admission for an accepted original or treat a pending/mempool transaction as credit.
 
 #### Scenario: Durable success precedes acknowledgement disclosure
 
@@ -140,13 +158,14 @@ Failed admission, signing or persistence SHALL leave no partial acknowledgement/
 
 After fresh owner authentication and quoted-payer binding, an exact cached acknowledgement SHALL be returned before fresh spendability, engine qualification, draining/readiness or active-lease checks. Recovery SHALL use the retained original signed quote, require the originally submitted raw-transaction string and its computed hash, and return the stored acknowledgement payload and signature unchanged. A differently cased or reserialized raw-transaction string is not the persisted original representation and SHALL NOT replace it, even if it decodes to the same bytes.
 
-Recovery SHALL NOT require a fresh proposal, current quote validity, an active lease, an unspent current sender nonce, current value-plus-gas balance or a working fresh-admission RPC. It SHALL NOT renew the lease, register another transaction, free another proposal's slot or renegotiate terms. Different bytes/hash, repricing or a different same-nonce transaction SHALL be refused while the accepted original remains intact. Required owner authority and bounded control/challenge admission remain in force; durable recoverability is not guaranteed immediate access to a fresh proof.
+Recovery SHALL NOT require a fresh proposal, quote-retention capacity, quote-signing work permit, committed-issuance allowance, current quote validity, opening-capacity admission, an active lease, an unspent current sender nonce, current value-plus-gas balance or a working fresh-admission RPC. It SHALL NOT renew the lease, register another transaction, free another proposal's slot or renegotiate terms. Different bytes/hash, repricing or a different same-nonce transaction SHALL be refused while the accepted original remains intact. Required owner authority and bounded control/challenge admission remain in force; durable recoverability is not guaranteed immediate access to a fresh proof.
 
 #### Scenario: Cached acceptance survives expiry and unavailable admission
 
 - **GIVEN** the original was durably acknowledged before expiry
-- **WHEN** authorized recovery follows expiry/restart with draining, unavailable qualification, changed sender balance/nonce or unavailable RPC
+- **WHEN** authorized recovery follows expiry/restart with full fresh quote/admission resources, draining, unavailable qualification, changed sender balance/nonce or unavailable RPC
 - **THEN** the same acknowledgement and original agreement are returned without new admission or broadcast
+- **AND** the original nonce commitment remains protected and a valid original payment remains eligible for healthy-safe credit, not credit from acknowledgement alone
 
 #### Scenario: Repricing or alternate original representation cannot replace acceptance
 
@@ -158,9 +177,16 @@ Recovery SHALL NOT require a fresh proposal, current quote validity, an active l
 
 The native consumer SHALL accept only an acknowledgement satisfying all message, original-envelope and timestamp checks above, then durably save it with the original signed terms/payment before any client broadcast. It SHALL durably record broadcast-started intent before submitting those same journaled bytes. Failure to verify or persist either prerequisite SHALL prevent client submission; a saved broadcast-started flag without a valid saved acknowledgement SHALL fail closed, not authorize a fresh payment.
 
-Missing, malformed, mismatched or lost acknowledgement responses SHALL NOT authorize broadcast, replacement, automatic fee bump or newly signed funding. Once acknowledgement and start state are durable, a missing/mismatched RPC submission response SHALL retain an ambiguous original operation rather than prove rejection. Explicit recovery may resubmit only its original bytes when reconciliation permits it; an already accepted original SHALL NOT be submitted again merely to obtain a response.
+Missing, malformed, mismatched or lost acknowledgement responses SHALL NOT authorize broadcast, replacement, automatic fee bump or newly signed funding. A lost registration reply or timeout SHALL be treated as ambiguous, not proven refusal: the provider may already have durably accepted the original. Recovery SHALL seek that exact intent/acknowledgement and original transaction rather than automatically obtain a replacement quote/payment. Once acknowledgement and start state are durable, a missing/mismatched RPC submission response SHALL likewise retain an ambiguous original operation rather than prove rejection. Explicit recovery may resubmit only its original bytes when reconciliation permits it; an already accepted original SHALL NOT be submitted again merely to obtain a response.
 
-Client/operator guidance SHALL disclose that the provider already has independently broadcastable signed bytes during registration. Provider-side early broadcast and a lost acknowledgement remain risks: client ordering is not cryptographic escrow, a guarantee that no money moved, or refundable funding.
+Client/operator guidance SHALL disclose that the provider already has independently broadcastable signed bytes during registration. An honest provider's prohibition on broadcasting a definitely refused original is not cryptographic prevention of dishonest early broadcast. A lost acknowledgement or timeout cannot prove that no money moved; client ordering is not escrow, and an off-chain rejection cannot reverse a transfer or make funding refundable.
+
+#### Scenario: Lost acceptance reply is not a definite full refusal
+
+- **GIVEN** an original acknowledgement committed but its response was lost before native persistence
+- **WHEN** restart, quote/lease expiry and later full admission capacity precede recovery
+- **THEN** fresh owner authority recovers the exact retained acknowledgement, quote, original raw string/hash and sender/nonce ownership without a new lease or quote gate
+- **AND** the client persists that acknowledgement before any permitted original submission and does not automatically replace the operation
 
 #### Scenario: Missing or invalid acknowledgement stops client broadcast
 
@@ -212,3 +238,23 @@ Repeated native `fund` with the same saved signed terms and `resume` SHALL recov
 - **WHEN** the same terms are funded again or the consumer resumes after restart
 - **THEN** it recovers original funding and refreshes that account without new opening or implicit credential rotation
 - **AND** a revoked or expired credential is not silently replaced by this recovery path
+
+### Requirement: Free opening and accepted recovery keep distinct capacity boundaries
+
+Genuinely free first opening SHALL use authenticated account-opening admission under the pending `specify-non-reserving-quotes` contract, not a paid funding-intent or fabricated zero-value payment. Its existing fewer-than-eight owned-account and fewer-than-10,000 ledger-account checks SHALL occur atomically before first free account creation, not during public quoting. Failed free admission SHALL NOT partially create an account or remove its standalone quote. These authenticated account bounds SHALL NOT become public named-wallet quote gates or fresh capacity grounds for refusing an acknowledged paid opening.
+
+Existing accepted-account, top-up and settlement recovery SHALL NOT require fresh quote retention, work, issuance or opening-capacity admission. Existing authorization, exact original-payment evidence, healthy-safe credit, credential authority and per-inference concurrency/reservation/performance requirements remain in force; these recovery exclusions SHALL NOT waive them or imply complete lifecycle acceptance.
+
+#### Scenario: Free first openings compete without fake funding
+
+- **GIVEN** valid free quotes are issued and only one applicable free-account slot remains
+- **WHEN** two otherwise eligible owner-authenticated first openings compete
+- **THEN** at most one account is created and the loser receives 429/`rate_limit` without partial account or quote removal
+- **AND** neither path prepares or submits a payment or paid funding-intent
+
+#### Scenario: Accepted recovery does not become new quote work
+
+- **GIVEN** an account or acknowledged original already exists and fresh quote/opening resources later fill
+- **WHEN** authorized existing-account, original-payment, top-up or settlement recovery proceeds
+- **THEN** it is not charged or refused as fresh quoting or opening-capacity admission
+- **AND** retained terms, original-operation ownership, balances and existing exported credential authority remain governed by their unchanged recovery contracts
