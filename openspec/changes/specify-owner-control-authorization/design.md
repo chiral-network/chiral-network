@@ -38,14 +38,21 @@ Persist before returning a challenge, and never accept stateless signature-only 
 
 |Contract area|Current implementation|Existing evidence and limits|
 |---|---|---|
-|Strict challenge request and payload|`protocol::ChallengeRequest`, `auth::AuthPayload`, `auth::validate_challenge_request`, challenge branch of `contracts::control`|Source correspondence; HTTP malformed-field, alias, and boundary acceptance remains to be established under the tasks.|
+|Strict challenge request and payload|`protocol::ChallengeRequest`, `auth::AuthPayload`, `auth::validate_challenge_request`, challenge branch of `contracts::control`|`inference_owner_challenge_test` exercises missing, mistyped, extra and duplicate fields; supported/unsupported methods; wallet/digest aliases and invalid encodings; path prefix, controls, fragment and 512-byte ASCII/UTF-8 boundaries; exact provider/network/request binding.|
 |Local reconstruction and safe signing|`consumer::owner_request`, `consumer::validate_challenge`|`owner_challenge_cannot_be_substituted_across_body_or_provider` and `challenges_require_exact_bytes_and_freshness` cover selected substitutions/freshness, not every boundary or real-key transport case.|
 |Payload binding and rejection without consumption|`auth::authenticate_owner`, `auth::challenge_payload`|`signature_binds_every_control_field_and_raw_body` compares framed bytes; `intent_owner_challenge_binds_body_payer_network_provider_and_consumes_once` exercises real signatures, altered bindings, later success, and replay. These are distinct levels of evidence.|
-|Atomic durable consumption|`BillingStore::challenge`, `BillingStore::consume_challenge`|`challenge_consumption_is_atomic_across_connections_and_restart` reopens a ledger then races two consumers; it does not by itself prove all HTTP outcomes or replay after a second restart.|
-|Pending capacity and expiry|`BillingStore::create_challenge` and `cleanup_pending`|`one_use_challenges_are_expiring_and_pending_state_is_bounded` covers the eight-wallet cap, expiry cleanup, and expired consumption, not all global/transactional scenarios.|
-|Quote/account authority and read scope|`contracts::authorize_read`, `authorize_owner`, opening/funding-intent/top-up/credential branches|`a_public_free_quote_does_not_authorize_account_opening_or_credentials` covers the public-quote boundary; the complete read/mutation matrix remains an acceptance task.|
+|Atomic durable consumption|`BillingStore::challenge`, `BillingStore::consume_challenge`|`challenge_consumption_is_atomic_across_connections_and_restart` reopens a ledger then races two consumers. `issued_challenge_survives_restart_but_public_fields_do_not_authorize_opening` obtains a public response, drops the router/provider, reopens the ledger and authenticates the reconstructed real-key proof. Replay after a second restart remains an acceptance task.|
+|Pending capacity and expiry|`BillingStore::create_challenge` and `cleanup_pending`|`wallet_hex_aliases_share_the_same_pending_challenge_allowance` proves both wallet spellings share eight slots without excluding another wallet. Existing `one_use_challenges_are_expiring_and_pending_state_is_bounded` covers expiry cleanup and expired consumption; global/transactional scenarios remain open.|
+|Quote/account authority and read scope|`contracts::authorize_read`, `authorize_owner`, opening/funding-intent/top-up/credential branches|The existing public-free-quote case and the new public challenge nonce/owner-without-signature case refuse opening without account creation. Successful authentication alone also leaves the account unopened. The complete read/mutation matrix remains an acceptance task.|
 
 These sources were read; correspondence is not a claim that the unchecked acceptance tasks have passed. Reuse existing tests before adding deterministic consumer-visible regressions. Do not test only wiring or implementation text.
+
+### Task 2.1 acceptance scope
+
+The five tests in `src-tauri/tests/inference_owner_challenge_test.rs` call the production Axum HTTP router with isolated disk-backed `PreparedProvider` fixtures and reserved loopback addresses, not live providers or simulated engine/RPC responses. Payload expectations come from the intended request and provider context; existing independent wire vectors cover the reused framing function. Exact opaque queries, raw-body digests and UTF-8 limits are checked without treating challenge issuance as route validation.
+
+The restart case verifies a persisted response and a valid signature against the reopened ledger at its explicit pre-expiry time. It does not pretend to advance the real server clock, complete account opening, or prove the remaining replay/concurrency matrix. The issuer's 120-second constant and overflow-safe assignment remain source evidence; exact expiry and native receiver boundary acceptance belong to tasks 2.3 and 2.2 respectively. No sleeps or new clock seam were introduced.
+
 
 ## Risks and rollout
 
