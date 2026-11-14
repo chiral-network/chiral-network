@@ -1,7 +1,9 @@
-//! Explicit-time contracts for proposal capacity, rate budgets and lifecycle retention.
+//! Explicit-time contracts for proposal/challenge budgets, capacity and lifecycle retention.
 //! Ledger tests assume prior owner/spendability admission; offline signatures are not settlement.
+use axum::http::HeaderMap;
 use chiral_network::{
-    billing_store::BillingStore,
+    auth::{self, AuthPayload},
+    billing_store::{BillingStore, CredentialIssueRequest},
     chain_client::{ChainClient, ValidatedPaymentEnvelope},
     network::{NetworkConfig, ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
     protocol::{self, ModelSpec, NetworkIdentity, PriceSchedule, Quote, Signed, QUOTE_DOMAIN},
@@ -11,6 +13,8 @@ use chiral_network::{
 const NOW: u64 = 120;
 const PAYER: &str = "0x2222222222222222222222222222222222222222";
 const OTHER_PAYER: &str = "0x4444444444444444444444444444444444444444";
+// Public fixture scalar; never funded or used outside isolated test state.
+const CHALLENGE_OWNER_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000007";
 
 fn network() -> NetworkIdentity {
     NetworkIdentity {
@@ -543,6 +547,35 @@ fn rate_challenge(quote: &Quote, nonce: u64, now: u64) -> chiral_network::auth::
     }
 }
 
+fn assert_challenge_rate_rejected_at(ledger: &BillingStore, challenge: &AuthPayload, now: u64) {
+    let error = ledger.create_challenge(challenge, now).unwrap_err();
+    assert!(error.starts_with("rate_limit:"), "{error}");
+    assert!(ledger.challenge(&challenge.nonce).is_err());
+}
+
+fn consume_rate_challenge(ledger: &BillingStore, challenge: &AuthPayload, now: u64) {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-chiral-owner", challenge.wallet.parse().unwrap());
+    headers.insert("x-chiral-nonce", challenge.nonce.parse().unwrap());
+    headers.insert("x-chiral-signature", wallet::sign_message(CHALLENGE_OWNER_KEY,
+        &auth::challenge_payload(challenge).unwrap()).unwrap().parse().unwrap());
+    assert_eq!(auth::authenticate_owner(ledger, &headers, &challenge.network,
+        &challenge.provider_wallet, "GET", &challenge.path, b"", now).unwrap(), challenge.wallet);
+    assert!(ledger.challenge(&challenge.nonce).is_err());
+}
+
+fn assert_read_context(ledger: &BillingStore, credential: &protocol::Credential, terms: &Quote, now: u64) {
+    let context = ledger.authenticate(&credential.bearer, now).unwrap();
+    assert_eq!(context.credential_id, credential.id);
+    assert_eq!(context.scopes, ["read"]);
+    assert_eq!(context.account.contract_id, terms.id);
+    assert_eq!(context.account.consumer_wallet, terms.consumer_wallet);
+    assert_eq!(context.account.model, terms.model);
+    assert_eq!(context.account.price, terms.price);
+    assert_eq!(context.account.status, "free");
+    assert_eq!(context.account.funded_wei, "0");
+}
+
 #[test]
 fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budgets() {
     let directory = tempfile::tempdir().unwrap();
@@ -672,6 +705,180 @@ fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets
     assert_eq!(authenticated.account.contract_id, original.payload.id);
     assert_eq!(authenticated.account.funded_wei, "0");
     assert!(ledger.prepare_fee_batches(now, true).unwrap().is_empty());
+}
+
+#[test]
+fn challenge_ledger_rate_is_independent_of_proposals_providers_and_existing_accounts() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let ledger = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let original = quote(1, 1, &owner, "test/challenge-global", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    let read = ledger.issue_credential(&original.payload.id, &CredentialIssueRequest {
+        expires_at: NOW + 300, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["read".into()],
+    }, NOW).unwrap();
+    assert_read_context(&ledger, &read, &original.payload, NOW);
+
+    let mut accepted = Vec::with_capacity(600);
+    for sequence in 1..=600 {
+        let mut challenge = rate_challenge(&original.payload, sequence, NOW);
+        challenge.path = format!("/v1/contracts/{}", original.payload.id);
+        if sequence > 1 {
+            // One pending record per named wallet; neither wallet rates nor occupancy can mask 600/601.
+            challenge.wallet = format!("0x{:040x}", 0x10000 + sequence);
+            match sequence % 3 {
+                0 => challenge.path = format!("/v1/contracts/{}/requests?before={sequence}", original.payload.id),
+                1 => {
+                    challenge.method = "POST".into();
+                    challenge.path = format!("/v1/contracts/0x{sequence:064x}/credentials");
+                    challenge.body_hash = protocol::hash_hex(br#"{"scopes":["read"]}"#);
+                }
+                _ => {
+                    challenge.method = "DELETE".into();
+                    challenge.path = format!("/v1/contracts/0x{sequence:064x}/credentials/0x{sequence:064x}");
+                }
+            }
+        }
+        ledger.create_challenge(&challenge, NOW).unwrap();
+        accepted.push(challenge);
+    }
+    let mut rejected_owner = accepted[0].clone();
+    rejected_owner.nonce = format!("0x{:064x}", 601);
+    let mut rejected_other = rejected_owner.clone();
+    rejected_other.wallet = OTHER_PAYER.into();
+    rejected_other.nonce = format!("0x{:064x}", 602);
+    for rejected in [&rejected_owner, &rejected_other] {
+        assert_challenge_rate_rejected_at(&ledger, rejected, NOW + 1);
+    }
+
+    // The original opening spent one proposal unit; all 599 others remain after 600 challenges.
+    let key = format!("{:064x}", 1);
+    let mut proposals = Vec::with_capacity(599);
+    for sequence in 2..=600 {
+        let payer = format!("0x{:040x}", 0x10000 + sequence);
+        let signed = protocol::sign(QUOTE_DOMAIN, quote_payload(&original.payload.provider_wallet,
+            sequence, &payer, &original.payload.model.id, ("0", "0")), &key).unwrap();
+        ledger.store_quote(&signed, NOW + 1).unwrap();
+        proposals.push(signed);
+    }
+    let rejected_quote = quote(1, 601, &owner, "test/challenge-global", ("0", "0"));
+    assert_rate_rejected_at(&ledger, &rejected_quote, NOW + 1);
+    assert_read_context(&ledger, &read, &original.payload, NOW + 1);
+    // Reservation only, not dispatched inference or an invented usage/settlement result.
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+        "after-both-control-budgets", 1, 1, NOW + 1, &original.payload.model).unwrap();
+    for rejected in [&rejected_owner, &rejected_other] {
+        assert_challenge_rate_rejected_at(&ledger, rejected, NOW + 1);
+    }
+
+    let independent = BillingStore::open(&directory.path().join("other-provider.sqlite"), &network()).unwrap();
+    let other_provider = quote(2, 601, &owner, "test/challenge-global", ("0", "0"));
+    independent.store_quote(&other_provider, NOW + 1).unwrap();
+    let other_challenge = rate_challenge(&other_provider.payload, 601, NOW + 1);
+    independent.create_challenge(&other_challenge, NOW + 1).unwrap();
+    assert_preserved(&independent, &other_provider);
+    assert_eq!(serde_json::to_value(independent.challenge(&other_challenge.nonce).unwrap()).unwrap(),
+        serde_json::to_value(&other_challenge).unwrap());
+
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for rejected in [&rejected_owner, &rejected_other] {
+        assert_challenge_rate_rejected_at(&reopened, rejected, NOW + 2);
+    }
+    assert_rate_rejected_at(&reopened, &rejected_quote, NOW + 2);
+    for challenge in &accepted {
+        assert_eq!(serde_json::to_value(reopened.challenge(&challenge.nonce).unwrap()).unwrap(),
+            serde_json::to_value(challenge).unwrap());
+    }
+    for proposed in &proposals { assert_preserved(&reopened, proposed); }
+    assert_read_context(&reopened, &read, &original.payload, NOW + 2);
+    let authenticated = reopened.authenticate(&opened.credential.bearer, NOW + 2).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.id);
+    assert!(authenticated.scopes.iter().any(|scope| scope == "infer"));
+    let request = reopened.request_view(&original.payload.id, "after-both-control-budgets").unwrap();
+    assert_eq!(request.id, reservation.id);
+    assert_eq!(request.status, "reserved");
+    assert_eq!(request.max_cost_wei, "0");
+    consume_rate_challenge(&reopened, &accepted[0], NOW + 2);
+    assert_challenge_rate_rejected_at(&reopened, &rejected_owner, NOW + 2);
+}
+
+#[test]
+fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let ledger = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let original = quote(1, 1, &owner, "test/challenge-wallet", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    let read = ledger.issue_credential(&original.payload.id, &CredentialIssueRequest {
+        expires_at: NOW + 300, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["read".into()],
+    }, NOW).unwrap();
+    assert_read_context(&ledger, &read, &original.payload, NOW);
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+        "busy-before-wallet-challenges", 1, 1, NOW, &original.payload.model).unwrap();
+    let saturated = ledger.reserve(&original.payload.id, &opened.credential.id,
+        "saturated-before-challenges", 1, 1, NOW, &original.payload.model).unwrap_err();
+    assert!(saturated.starts_with("saturation:"), "{saturated}");
+    assert!(ledger.request_view(&original.payload.id, "saturated-before-challenges").is_err());
+
+    // Inference saturation and read authentication must not consume any of the twelve issuance units.
+    for nonce in 1..=12 {
+        let mut challenge = rate_challenge(&original.payload, nonce, NOW);
+        challenge.path = format!("/v1/contracts/{}", original.payload.id);
+        ledger.create_challenge(&challenge, NOW).unwrap();
+        consume_rate_challenge(&ledger, &challenge, NOW);
+    }
+    let rejected = rate_challenge(&original.payload, 13, NOW);
+    assert_challenge_rate_rejected_at(&ledger, &rejected, NOW);
+    let mut other_wallet = rate_challenge(&original.payload, 14, NOW);
+    other_wallet.wallet = OTHER_PAYER.into();
+    ledger.create_challenge(&other_wallet, NOW).unwrap();
+
+    // Preserve all eleven remaining same-wallet proposal units without the eight-slot gate masking them.
+    let key = format!("{:064x}", 1);
+    for sequence in 2..=12 {
+        let now = NOW + sequence - 1;
+        let mut payload = quote_payload(&original.payload.provider_wallet, sequence, &owner,
+            &original.payload.model.id, ("0", "0"));
+        payload.issued_at = now;
+        payload.expires_at = now + 1; // Valid storage fixture, not the native proposal lifetime.
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        ledger.store_quote(&signed, now).unwrap();
+        assert_preserved(&ledger, &signed);
+    }
+    let now = NOW + 12;
+    let rejected_quote = quote(1, 13, &owner, "test/challenge-wallet", ("0", "0"));
+    assert_rate_rejected_at(&ledger, &rejected_quote, now);
+    assert_challenge_rate_rejected_at(&ledger, &rejected, now);
+    assert_read_context(&ledger, &read, &original.payload, now);
+
+    let independent = BillingStore::open(&directory.path().join("other-provider.sqlite"), &network()).unwrap();
+    let other_provider = quote(2, 13, &owner, "test/challenge-wallet", ("0", "0"));
+    independent.store_quote(&other_provider, now).unwrap();
+    let other_challenge = rate_challenge(&other_provider.payload, 13, now);
+    independent.create_challenge(&other_challenge, now).unwrap();
+    assert_preserved(&independent, &other_provider);
+    assert_eq!(serde_json::to_value(independent.challenge(&other_challenge.nonce).unwrap()).unwrap(),
+        serde_json::to_value(&other_challenge).unwrap());
+
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    assert_challenge_rate_rejected_at(&reopened, &rejected, now);
+    assert_rate_rejected_at(&reopened, &rejected_quote, now);
+    assert_read_context(&reopened, &read, &original.payload, now);
+    assert_eq!(serde_json::to_value(reopened.challenge(&other_wallet.nonce).unwrap()).unwrap(),
+        serde_json::to_value(&other_wallet).unwrap());
+    let authenticated = reopened.authenticate(&opened.credential.bearer, now).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.id);
+    assert!(authenticated.scopes.iter().any(|scope| scope == "infer"));
+    let request = reopened.request_view(&original.payload.id, "busy-before-wallet-challenges").unwrap();
+    assert_eq!(request.id, reservation.id);
+    assert_eq!(request.status, "reserved");
+    assert_eq!(request.max_cost_wei, "0");
 }
 
 #[test]
