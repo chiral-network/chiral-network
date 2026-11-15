@@ -1,6 +1,6 @@
 ## Why
 
-The author has added **Approved non-reserving quotes** to `docs/chiral-book.md` and answered the public named-payer quota report. Public proposals must not spend a named wallet's pending-quote or proposal-rate allowance. The current eight-pending/twelve-per-minute wallet gates contradict that decision; merely disclosing the exposure or raising one limit is not the selected remedy.
+The author has added **Approved non-reserving quotes** to `docs/chiral-book.md` and answered the public named-payer quota report. Public proposals must not spend a named wallet's pending-quote or proposal-rate allowance. The former eight-pending/twelve-per-minute wallet gates contradicted that decision; merely disclosing the exposure or raising one limit was not the selected remedy.
 
 ## What Changes
 
@@ -10,7 +10,7 @@ The author has added **Approved non-reserving quotes** to `docs/chiral-book.md` 
 - Bound public body/concurrent work, pre-signing attempts and committed quote retention/rates independently of the named payer. Keep provider-wide refusal honest: this is not global availability or Sybil resistance.
 - Retarget the existing proposal-rate and opening-intent changes, migrate conflicting acceptance cases with the native implementation, and preserve historical evidence as historical evidence.
 
-This turn defines the replacement contract and implementation sequence only. It does not remove the live wallet gates, complete downstream specification alignment, or claim mitigation. The change remains open until implementation and acceptance tasks pass.
+The replacement specifications and provider-only committed-admission cutover are implemented. This step adds the separate durable pre-signing work limit and its acceptance evidence; remaining paid/expiry recovery acceptance keeps the change open. No isolated regression or specification completion is public-release approval.
 
 ## Capabilities
 
@@ -24,4 +24,4 @@ None.
 
 ## Impact
 
-The production paths are public proposal issuance in `contracts.rs`, quote/admission/account transactions in `billing_store.rs`, and native funding-intent/broadcast recovery in `consumer.rs`. Existing proposal-rate, commercial-terms and opening-funding-intent changes and proposal/admission tests need coordinated alignment. The native files are currently owner-untracked; this change does not adopt them, migrate financial state, deploy a provider or edit the whitepaper. Public-release, safe-credit and performance qualification remain separate gates.
+The production paths are public proposal issuance in `contracts.rs`, quote/admission/account transactions in `billing_store.rs`, and native funding-intent/broadcast recovery in `consumer.rs`. Proposal-rate, commercial and opening-intent contracts are aligned to the replacement decision. Necessary source incorporation was authorized and the migration is committed; source ownership no longer blocks implementation. This change does not migrate financial state, deploy a provider or edit the whitepaper. Public-release, safe-credit and performance qualification remain separate gates.

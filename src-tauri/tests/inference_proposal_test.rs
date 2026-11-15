@@ -14,14 +14,15 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use std::{
     path::{Path, PathBuf},
-    sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc},
+    sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, RwLock},
     time::Duration,
 };
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+use tower::Service;
 
 #[path = "support/proposal.rs"]
 mod proposal;
-use proposal::PreparedProvider;
+use proposal::{quote_work_evidence, restore_quote_work, PreparedProvider};
 
 const PAYER: &str = "0x2222222222222222222222222222222222222222";
 const PROPOSE: &str = "/v1/contracts/propose";
@@ -148,6 +149,226 @@ async fn reject(response: reqwest::Response, status: StatusCode, code: &str) {
     assert_eq!(response.status(), status);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["code"], code);
+}
+
+// Reconstruct the router with an independently opened durable ledger, not a
+// clone of BillingStore's connection or a replacement signing callback.
+fn reopened_router(fixture: &Fixture, private_key: &str) -> axum::Router {
+    let original = &fixture.state;
+    let state = Arc::new(ProviderState {
+        config: original.config.clone(), chain: original.chain.clone(),
+        ledger: Arc::new(BillingStore::open(&fixture.ledger_path,
+            &original.config.network.identity).unwrap()),
+        private_key: Arc::new(private_key.to_owned()), wallet: original.wallet.clone(),
+        offers: original.offers.clone(),
+        accepting: AtomicBool::new(original.accepting.load(Ordering::Acquire)),
+        funding_ready: AtomicBool::new(original.funding_ready.load(Ordering::Acquire)),
+        qualified_models: RwLock::new(original.qualified_models.read().unwrap().clone()),
+        model_slots: original.model_slots.clone(), managed_engines: original.managed_engines.clone(),
+    });
+    contracts::router(state)
+}
+
+async fn route_proposal(mut router: axum::Router, body: &Value) -> axum::response::Response {
+    router.call(axum::http::Request::builder().method("POST").uri(PROPOSE)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(body).unwrap())).unwrap())
+        .await.unwrap()
+}
+
+async fn route_error(response: axum::response::Response, status: StatusCode, code: &str) {
+    assert_eq!(response.status().as_u16(), status.as_u16());
+    let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"]["code"], code);
+}
+
+#[tokio::test]
+async fn public_quote_work_initialization_refuses_durably_without_erasing_opened_terms() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 32, "0", "0").await;
+    let config = ConsumerConfig {
+        network: fixture.state.config.network.clone(),
+        data_dir: directory.path().join("consumer"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, &format!("{:064x}", 50_032)).unwrap();
+    consumer.wallet_import_file(&import).unwrap();
+    let original = consumer.quote(&fixture.offer, "0").await.unwrap();
+    let account = serde_json::to_value(consumer.fund(&fixture.offer, &original).await.unwrap()).unwrap();
+    let credential = consumer.credential_export(&original.payload.id, None).unwrap();
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    // Remove BOTH restored fixture rows: this is genuine production initialization
+    // of missing work evidence, not a pre-populated exhausted-budget assertion.
+    db.execute_batch("BEGIN IMMEDIATE;
+        DELETE FROM metadata WHERE key='quote_work_minute';
+        DELETE FROM rate_limits WHERE bucket='quote-work:global';
+        COMMIT;").unwrap();
+    let before = protocol::now().unwrap() / 60;
+    reject(fixture.post(PROPOSE, &fixture.request("0")).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    let after = protocol::now().unwrap() / 60;
+    let (watermark, minute, count) = quote_work_evidence(&fixture.ledger_path);
+    assert!((before..=after).contains(&minute));
+    assert_eq!(watermark, minute.to_string());
+    assert_eq!(count, 600);
+    let quotes: u64 = db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get(0)).unwrap();
+    assert_eq!(quotes, 0, "the opened agreement is account-retained; initialization must not create a standalone quote");
+
+    // Restore that exhausted shape in a future effective window solely to avoid a
+    // wall-clock minute race in the restart assertions; this is not observed work.
+    let stable_minute = after + 10;
+    restore_quote_work(&fixture.ledger_path, stable_minute, 600);
+    let request = fixture.request("0");
+    let restarted = reopened_router(&fixture, &fixture.state.private_key);
+    route_error(route_proposal(restarted.clone(), &request).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    let resumed = consumer.fund(&fixture.offer, &original).await.unwrap();
+    assert_eq!(serde_json::to_value(resumed).unwrap(), account);
+    assert_eq!(consumer.credential_export(&original.payload.id, None).unwrap(), credential);
+    let saved = fixture.state.ledger.quote(&original.payload.id).unwrap();
+    assert_eq!(saved.payload, original.payload);
+    assert_eq!(saved.signature, original.signature);
+    assert!(fixture.state.ledger.funding_history(&original.payload.id).unwrap().is_empty());
+    assert!(!fixture.submitted.load(Ordering::Acquire));
+    let ledger_path = fixture.ledger_path.clone();
+    fixture.stop().await;
+    route_error(route_proposal(restarted, &request).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    assert_eq!(quote_work_evidence(&ledger_path),
+        (stable_minute.to_string(), stable_minute, 600));
+}
+
+#[tokio::test]
+async fn public_quote_signing_failures_spend_global_work_across_wallets_and_reopened_routers() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 33, "1", "2").await;
+    let original = fixture.propose("100").await;
+    let minute = protocol::now().unwrap() / 60 + 10;
+    // Three remaining attempts are restored evidence, not 597 observed signatures.
+    restore_quote_work(&fixture.ledger_path, minute, 597);
+    let payer = wallet::address_from_private_key(&format!("{:064x}", 50_033)).unwrap();
+    let alias = format!("0x{}", payer[2..].to_ascii_uppercase());
+    assert_ne!(payer, alias);
+    let invalid = reopened_router(&fixture, "not-a-private-key");
+    let independently_reopened = reopened_router(&fixture, "not-a-private-key");
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    let committed = || db.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket='quote:global'", [],
+        |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))).unwrap();
+    let before = committed();
+    for (index, (router, named)) in [(invalid, &payer), (independently_reopened, &alias)]
+        .into_iter().enumerate()
+    {
+        let mut request = fixture.request("100");
+        request["consumer_wallet"] = json!(named);
+        // The real protocol signer rejects this key. A permitted attempt is 500,
+        // whereas denial before signing below is 429; no callback mock is involved.
+        route_error(route_proposal(router, &request).await,
+            StatusCode::INTERNAL_SERVER_ERROR, "internal_error").await;
+        assert_eq!(quote_work_evidence(&fixture.ledger_path),
+            (minute.to_string(), minute, 598 + index as u64));
+        assert_eq!(committed(), before, "signing failure changed committed accounting");
+    }
+    let sampled_before = protocol::now().unwrap();
+    let last = fixture.propose("100").await; // Another named wallet shares the final permit.
+    let sampled_after = protocol::now().unwrap();
+    assert!((sampled_before..=sampled_after).contains(&last.payload.issued_at));
+    assert!(last.payload.issued_at / 60 < minute, "budget time replaced signed wall time");
+    assert_eq!(quote_work_evidence(&fixture.ledger_path), (minute.to_string(), minute, 600));
+    let restarted = reopened_router(&fixture, "not-a-private-key");
+    route_error(route_proposal(restarted, &fixture.request("100")).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    // A new actual HTTP client/connection and a different canonical owner cannot
+    // acquire another budget or undo failed signatures.
+    let mut request = fixture.request("100");
+    request["consumer_wallet"] = json!(payer);
+    let caller = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
+    reject(caller.post(format!("{}{PROPOSE}", fixture.base)).json(&request).send().await.unwrap(),
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    assert_eq!(quote_work_evidence(&fixture.ledger_path), (minute.to_string(), minute, 600));
+    let work_buckets: Vec<String> = db.prepare(
+        "SELECT bucket FROM rate_limits WHERE bucket LIKE 'quote-work:%' ORDER BY bucket"
+    ).unwrap().query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(work_buckets, vec!["quote-work:global".to_string()]);
+    let count: u64 = db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, 2);
+    for signed in [&original, &last] {
+        let saved = fixture.state.ledger.quote(&signed.payload.id).unwrap();
+        assert_eq!(saved.payload, signed.payload);
+        assert_eq!(saved.signature, signed.signature);
+        assert!(fixture.state.ledger.account(&signed.payload.id).is_err());
+    }
+    assert!(!fixture.submitted.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn failed_quote_response_body_does_not_refund_work_or_committed_quote() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 34, "1", "2").await;
+    let original = fixture.propose("100").await;
+    let minute = protocol::now().unwrap() / 60 + 10;
+    restore_quote_work(&fixture.ledger_path, minute, 599);
+    let router = reopened_router(&fixture, &fixture.state.private_key)
+        .layer(axum::middleware::from_fn(
+            |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                let response = next.run(request).await;
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                // Lose the reply only AFTER the real handler has signed and
+                // durably inserted it, following the owner-response-loss fixture.
+                let (mut parts, body) = response.into_parts();
+                drop(body);
+                parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+                axum::response::Response::from_parts(parts, axum::body::Body::from_stream(
+                    futures_util::stream::once(async {
+                        Err::<axum::body::Bytes, _>(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionReset, "isolated quote response loss"))
+                    })))
+            },
+        ));
+    let response = route_proposal(router, &fixture.request("100")).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(axum::body::to_bytes(response.into_body(), 96 * 1024).await.is_err());
+    assert_eq!(quote_work_evidence(&fixture.ledger_path), (minute.to_string(), minute, 600));
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    let retained = || db.prepare("SELECT record FROM quotes ORDER BY id").unwrap()
+        .query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .collect::<Result<Vec<_>, _>>().unwrap();
+    let before = retained();
+    assert_eq!(before.len(), 2);
+    let independently_opened = BillingStore::open(&fixture.ledger_path,
+        &fixture.state.config.network.identity).unwrap();
+    let mut latest_minute = original.payload.issued_at / 60;
+    let mut expected_count = 2;
+    for record in &before {
+        let signed: Signed<Quote> = serde_json::from_str(record).unwrap();
+        protocol::verify(QUOTE_DOMAIN, &signed, &fixture.state.wallet).unwrap();
+        if signed.payload.id != original.payload.id {
+            let lost_minute = signed.payload.issued_at / 60;
+            if lost_minute > latest_minute {
+                latest_minute = lost_minute;
+                expected_count = 1;
+            }
+        }
+        let saved = independently_opened.quote(&signed.payload.id).unwrap();
+        assert_eq!(saved.payload, signed.payload);
+        assert_eq!(saved.signature, signed.signature);
+        assert!(independently_opened.account(&signed.payload.id).is_err());
+    }
+    assert_eq!(independently_opened.quote(&original.payload.id).unwrap().signature, original.signature);
+    let committed = || db.query_row(
+        "SELECT value,window,count FROM metadata,rate_limits
+         WHERE key='quote_committed_minute' AND bucket='quote:global'", [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?))).unwrap();
+    let charged = (latest_minute.to_string(), latest_minute, expected_count);
+    assert_eq!(committed(), charged);
+    route_error(route_proposal(reopened_router(&fixture, &fixture.state.private_key),
+        &fixture.request("100")).await, StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    assert_eq!(retained(), before);
+    assert_eq!(quote_work_evidence(&fixture.ledger_path), (minute.to_string(), minute, 600));
+    assert_eq!(committed(), charged);
 }
 
 #[tokio::test]
@@ -438,6 +659,9 @@ async fn public_global_committed_rate_refusal_preserves_quotes_and_an_opened_agr
     for index in 0..599 {
         fixture.commit_prerequisite(&format!("0x{:040x}", 100_000 + index), "0", minute_sample);
     }
+    // Restore a stable, nearly exhausted independent work window. The 599 ledger
+    // prerequisites above did not perform public-route signing work.
+    restore_quote_work(&fixture.ledger_path, minute_sample / 60, 597);
     let last = fixture.propose("0").await; // Actual HTTP admission spends global unit 600.
     let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
     let retained = || {
@@ -447,13 +671,23 @@ async fn public_global_committed_rate_refusal_preserves_quotes_and_an_opened_agr
     };
     let before = retained();
     assert_eq!(before.len(), 600);
-    for payer in [PAYER.to_string(), consumer.address().unwrap()] {
+    assert_eq!(quote_work_evidence(&fixture.ledger_path),
+        ((minute_sample / 60).to_string(), minute_sample / 60, 598));
+    for (index, payer) in [PAYER.to_string(), consumer.address().unwrap()].into_iter().enumerate() {
         let mut request = fixture.request("0");
         request["consumer_wallet"] = json!(payer);
         reject(fixture.post(PROPOSE, &request).await,
             StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
         assert!(retained() == before, "global refusal altered retained signed quotes");
+        assert_eq!(quote_work_evidence(&fixture.ledger_path),
+            ((minute_sample / 60).to_string(), minute_sample / 60, 599 + index as u64),
+            "failed committed insertion must still spend its independent signing permit");
     }
+    reject(fixture.post(PROPOSE, &fixture.request("0")).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    assert_eq!(quote_work_evidence(&fixture.ledger_path),
+        ((minute_sample / 60).to_string(), minute_sample / 60, 600));
+    assert_eq!(retained(), before);
     let counter: (u64, u64) = db.query_row(
         "SELECT window,count FROM rate_limits WHERE bucket='quote:global'", [],
         |row| Ok((row.get(0)?, row.get(1)?))).unwrap();

@@ -458,6 +458,21 @@ impl BillingStore {
             Ok(())
         })
     }
+    /// Spend durable signing work before invoking the signer. Neither signing
+    /// failure nor a later quote-insertion rollback refunds this permit.
+    pub(crate) fn sign_quote(
+        &self,
+        quote: Quote,
+        private_key: &str,
+        now: u64,
+    ) -> Result<Signed<Quote>, String> {
+        // Initialization refuses outwardly but must commit its exhausted state.
+        if !self.transaction(|tx| claim_quote_work(tx, now))? {
+            return Err("rate_limit: quote signing work limit exceeded".into());
+        }
+        protocol::sign(protocol::QUOTE_DOMAIN, quote, private_key)
+    }
+
     pub fn store_quote(&self, quote: &Signed<Quote>, now: u64) -> Result<(), String> {
         if quote.payload.network != self.network || quote.payload.expires_at <= now {
             return Err("invalid_quote: wrong network or expired quote".into());
@@ -527,10 +542,53 @@ fn cleanup_pending(tx: &Connection, now: u64) -> Result<(), String> {
         .map_err(sql)?;
     tx.execute("UPDATE funding_intents SET admission_until=0 WHERE admission_until>0 AND admission_until<=?1", [now]).map_err(sql)?;
     tx.execute("DELETE FROM funding_attempts WHERE updated<?1 AND json_extract(record,'$.status')='rejected' AND NOT EXISTS(SELECT 1 FROM funding_intents WHERE tx_hash=funding_attempts.tx_hash)", [now.saturating_sub(86_400)]).map_err(sql)?;
-    tx.execute("DELETE FROM rate_limits WHERE window<?1 AND bucket NOT GLOB 'quote:*'", [now / 60])
+    tx.execute("DELETE FROM rate_limits WHERE window<?1 AND bucket NOT GLOB 'quote:*' AND bucket<>'quote-work:global'", [now / 60])
         .map_err(sql)?;
     Ok(())
 }
+// This independent transaction conservatively initializes exhausted. Missing or
+// inconsistent installed evidence is never repaired by a request.
+fn claim_quote_work(tx: &Connection, now: u64) -> Result<bool, String> {
+    const INVALID: &str = "ledger invariant: inconsistent quote signing work evidence";
+    let watermark: Option<String> = tx.query_row(
+        "SELECT value FROM metadata WHERE key='quote_work_minute'",
+        [], |row| row.get(0),
+    ).optional().map_err(sql)?;
+    let bucket: Option<(u64, u64)> = tx.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket='quote-work:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(sql)?;
+    let sampled = now / 60;
+    let (window, count, permitted) = match (watermark, bucket) {
+        (None, None) => (sampled, 600, false),
+        (Some(value), Some((previous, spent))) => {
+            if value.is_empty() || (value.len() > 1 && value.starts_with('0'))
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+                || value.parse::<u64>().map_err(|_| INVALID.to_string())? != previous
+                || previous > u64::MAX / 60 || !(1..=600).contains(&spent) {
+                return Err(INVALID.into());
+            }
+            let window = sampled.max(previous);
+            if window == previous && spent == 600 {
+                return Ok(false);
+            }
+            (window, if window == previous { spent + 1 } else { 1 }, true)
+        }
+        _ => return Err(INVALID.into()),
+    };
+    tx.execute(
+        "INSERT INTO rate_limits(bucket,window,count) VALUES('quote-work:global',?1,?2)
+         ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=excluded.count",
+        params![window, count],
+    ).map_err(sql)?;
+    tx.execute(
+        "INSERT INTO metadata(key,value) VALUES('quote_work_minute',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [window],
+    ).map_err(sql)?;
+    Ok(permitted)
+}
+
 // Committed issuance is independent of signing work and named payer identity.
 // Adoption, clock advancement and legacy retirement share the quote transaction.
 fn proposal_rate_limit(tx: &Connection, now: u64) -> Result<(), String> {

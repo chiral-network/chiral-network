@@ -71,6 +71,8 @@ chiral --config consumer.json pending
 
 Use the quote ID as `CONTRACT_ID`. Pending settlement is not spendable credit: run `chiral --config consumer.json resume CONTRACT_ID` until the original payment is resolved, then inspect `account CONTRACT_ID`. Do not create a fresh quote merely because the first request timed out. A signed transaction disclosed during registration could be broadcast by the provider even if its acknowledgement never reaches you.
 
+Fresh or upgraded provider ledgers conservatively initialize their quote-signing budget: the first valid proposal can receive HTTP 429 until a strictly newer minute. Signing work is limited to 600 attempts per provider ledger per effective minute, separately from 600 committed quotes; failed signing or insertion does not refund work. These limits do not reserve opening capacity or gate recovery of accepted accounts/payments. Retry an unpaid quote deliberately, never replace an ambiguous paid operation.
+
 Create a separate application credential; its returned metadata supplies `CREDENTIAL_ID`:
 
 ```bash

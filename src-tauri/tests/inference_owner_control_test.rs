@@ -975,7 +975,29 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
         assert_eq!(account["spent_wei"], if paid { "1" } else { "0" });
         assert_eq!(account["reserved_wei"], if paid { "3" } else { "0" });
         assert_eq!(account["available_wei"], if paid { "991" } else { "0" });
-        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        // Restored exhaustion is a resource prerequisite, not 600 observed HTTP
+        // issuances. Logical time stays ahead without changing any signed terms.
+        let minute = now / 60 + 10;
+        let tx = db.transaction().unwrap();
+        for (bucket, watermark) in [
+            ("quote:global", "quote_committed_minute"),
+            ("quote-work:global", "quote_work_minute"),
+        ] {
+            assert_eq!(tx.execute("UPDATE rate_limits SET window=?1,count=600 WHERE bucket=?2",
+                params![minute, bucket]).unwrap(), 1);
+            assert_eq!(tx.execute("UPDATE metadata SET value=?1 WHERE key=?2",
+                params![minute, watermark]).unwrap(), 1);
+        }
+        tx.commit().unwrap();
+        let budgets = || {
+            let mut statement = db.prepare(
+                "SELECT json_array(bucket,window,count) FROM rate_limits
+                 WHERE bucket IN ('quote:global','quote-work:global') ORDER BY bucket").unwrap();
+            statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+        let exhausted = budgets();
         let protected = || {
             let rows = ledger_snapshot(&db);
             // Challenge issuance/consumption has its own counters. Recovery must
@@ -985,6 +1007,15 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
         let before = protected();
         assert_eq!(before[4].len(), usize::from(paid));
         assert_eq!(before[7].len(), usize::from(paid));
+        let (status, refusal) = fixture.post("/v1/contracts/propose", json!({
+            "offer_id":fixture.provider.offer_id,
+            "consumer_wallet":opened.account.consumer_wallet,
+            "funding_wei":if paid { "100" } else { "0" }
+        })).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(refusal["error"]["code"], "rate_limit");
+        assert_eq!(budgets(), exhausted);
+        assert_eq!(protected(), before);
         let raw: Option<String> = if paid {
             Some(db.query_row("SELECT raw_transaction FROM funding_intents WHERE contract=?1",
                 [id], |row| row.get(0)).unwrap())
@@ -1028,6 +1059,7 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
             fixture.consumed(&proof);
             assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
             assert_eq!(protected(), before);
+            assert_eq!(budgets(), exhausted);
             fixture.credentials_usable(&[root, &read]);
             assert_eq!(fixture.provider.state.ledger.request_view(id, &held.id).unwrap().status, "reserved");
             for credential in [root, &read] {
@@ -1070,6 +1102,21 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
         assert_eq!(protected(), after_mutations);
         fixture.credentials_usable(&[&explicit[0], &explicit[1], &read]);
         assert!(fixture.provider.state.ledger.authenticate(&root.bearer, protocol::now().unwrap()).is_err());
+        // Even the held request's now-revoked credential retains settlement
+        // authority; exhausted quoting cannot prevent release and accounting.
+        let settled = fixture.provider.state.ledger.settle(&held.id,
+            &TokenUsage { prompt_tokens: 1000, completion_tokens: 512 },
+            "completed", protocol::now().unwrap()).unwrap();
+        assert_eq!(settled.cost_wei, if paid { "3" } else { "0" });
+        let after = fixture.provider.state.ledger.account(id).unwrap();
+        assert_eq!(after.reserved_wei, "0");
+        assert_eq!(after.spent_wei, if paid { "4" } else { "0" });
+        assert_eq!(after.available_wei, if paid { "991" } else { "0" });
+        let (status, recovered) = fixture.send("GET",
+            &format!("/v1/contracts/{id}/requests/{}", held.id), &bearer(&read), Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(recovered, serde_json::to_value(settled).unwrap());
+        assert_eq!(budgets(), exhausted);
     }
 }
 

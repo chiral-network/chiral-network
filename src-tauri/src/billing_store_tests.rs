@@ -2943,3 +2943,327 @@ fn inconsistent_quote_rate_evidence_refuses_without_erasing_recoverable_accounts
             encode(&opened.account).unwrap());
     }
 }
+
+fn quote_work_rate(store: &BillingStore) -> (String, u64, u64) {
+    let db = store.db.lock().unwrap();
+    db.query_row(
+        "SELECT value,window,count FROM metadata,rate_limits
+         WHERE key='quote_work_minute' AND bucket='quote-work:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap()
+}
+
+// Include accepted money, credentials, requests and recovery evidence, not just
+// pending-quote counts. Only the independently spent work evidence is excluded.
+fn quote_work_protected_snapshot(store: &BillingStore) -> Vec<Vec<String>> {
+    let db = store.db.lock().unwrap();
+    [
+        "SELECT json_array(key,value) FROM metadata WHERE key<>'quote_work_minute' ORDER BY key",
+        "SELECT json_array(bucket,window,count) FROM rate_limits WHERE bucket<>'quote-work:global' ORDER BY bucket",
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(nonce,wallet,expires,record) FROM challenges ORDER BY nonce",
+        "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+        "SELECT json_array(id,contract,request_key,credential,status,created,record) FROM requests ORDER BY id",
+        "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash",
+        "SELECT json_array(tx_hash,contract,record,raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
+        "SELECT json_array(id,status,record) FROM fee_batches ORDER BY id",
+        "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence",
+        "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence",
+    ].into_iter().map(|query| {
+        db.prepare(query).unwrap().query_map([], |row| row.get(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap()
+    }).collect()
+}
+
+#[test]
+fn quote_work_bounds_600_real_signatures_when_every_insertion_rolls_back() {
+    let store = memory();
+    let (agreement, _, opened) = paid(&store);
+    let pending = quote(1000, false);
+    store.store_quote(&pending, 110).unwrap();
+    assert!(store.sign_quote(pending.payload.clone(), PROVIDER_KEY, 100)
+        .unwrap_err().starts_with("rate_limit:"));
+    let protected = quote_work_protected_snapshot(&store);
+    let committed = committed_quote_rate(&store);
+    for attempt in 1..=600 {
+        let mut payload = pending.payload.clone();
+        // Named payers do not partition or replenish provider signing work.
+        payload.consumer_wallet = format!("0x{attempt:040x}");
+        let signed = store.sign_quote(payload.clone(), PROVIDER_KEY, 120).unwrap();
+        protocol::verify(protocol::QUOTE_DOMAIN, &signed, &payload.provider_wallet).unwrap();
+        assert_eq!(signed.payload, payload);
+        assert!(store.store_quote(&signed, 120).unwrap_err().contains("UNIQUE"));
+        assert_eq!(quote_work_rate(&store), ("2".into(), 2, attempt));
+        assert_eq!(committed_quote_rate(&store), committed);
+        assert_eq!(quote_work_protected_snapshot(&store), protected);
+    }
+    let before = quote_rate_snapshot(&store);
+    assert!(store.sign_quote(pending.payload.clone(), "invalid-key", 120)
+        .unwrap_err().starts_with("rate_limit:"));
+    assert_eq!(quote_rate_snapshot(&store), before);
+    assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
+        encode(&opened.account).unwrap());
+    assert_eq!(store.account(&agreement.payload.id).unwrap().available_wei, "995");
+}
+
+#[test]
+fn quote_work_failed_signer_spends_last_permit_without_refund() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("signer-failure.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (agreement, _, _) = paid(&store);
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 180).is_err());
+    // Explicit restored evidence isolates the last-unit boundary.
+    store.db.lock().unwrap().execute(
+        "UPDATE rate_limits SET count=599 WHERE bucket='quote-work:global'", [],
+    ).unwrap();
+    let protected = quote_work_protected_snapshot(&store);
+    let error = store.sign_quote(agreement.payload.clone(), "invalid-key", 120).unwrap_err();
+    assert_eq!(error,
+        protocol::sign(protocol::QUOTE_DOMAIN, agreement.payload.clone(), "invalid-key").unwrap_err());
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    assert_eq!(quote_work_protected_snapshot(&store), protected);
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 180)
+        .unwrap_err().starts_with("rate_limit:"));
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    let signed = store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 240).unwrap();
+    protocol::verify(protocol::QUOTE_DOMAIN, &signed, &agreement.payload.provider_wallet).unwrap();
+    assert_eq!(quote_work_rate(&store), ("4".into(), 4, 1));
+    assert_eq!(quote_work_protected_snapshot(&store), protected);
+}
+
+#[test]
+fn quote_work_initialization_restart_and_clock_regression_require_new_minute() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("work-clock.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (agreement, _, _) = paid(&store);
+    let protected = quote_work_protected_snapshot(&store);
+    assert!(store.sign_quote(agreement.payload.clone(), "invalid-key", 180)
+        .unwrap_err().starts_with("rate_limit:"));
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    assert_eq!(quote_work_protected_snapshot(&store), protected);
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    for sample in [0, 120, 180, 239] {
+        let before = quote_rate_snapshot(&store);
+        assert!(store.sign_quote(agreement.payload.clone(), "invalid-key", sample)
+            .unwrap_err().starts_with("rate_limit:"));
+        assert_eq!(quote_rate_snapshot(&store), before);
+    }
+    for (sample, spent) in [(240, 1), (120, 2), (299, 3)] {
+        let signed = store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, sample).unwrap();
+        protocol::verify(protocol::QUOTE_DOMAIN, &signed, &agreement.payload.provider_wallet).unwrap();
+        assert_eq!(signed.payload, agreement.payload, "effective minute is not a signed timestamp");
+        assert_eq!(quote_work_rate(&store), ("4".into(), 4, spent));
+        assert_eq!(quote_work_protected_snapshot(&store), protected);
+    }
+}
+
+#[test]
+fn quote_work_separate_connections_share_the_final_unit() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("work-race.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (agreement, _, _) = paid(&store);
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 180).is_err());
+    store.db.lock().unwrap().execute(
+        "UPDATE rate_limits SET count=599 WHERE bucket='quote-work:global'", [],
+    ).unwrap();
+    let protected = quote_work_protected_snapshot(&store);
+    let writers = [120, 180].map(|sample|
+        (BillingStore::open(&path, &network()).unwrap(), sample));
+    let barrier = Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let handles = writers.map(|(ledger, sample)| {
+            let barrier = &barrier;
+            let payload = agreement.payload.clone();
+            scope.spawn(move || {
+                barrier.wait();
+                ledger.sign_quote(payload, PROVIDER_KEY, sample)
+            })
+        });
+        handles.map(|handle| handle.join().unwrap())
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    for result in results {
+        match result {
+            Ok(signed) => {
+                protocol::verify(protocol::QUOTE_DOMAIN, &signed, &agreement.payload.provider_wallet).unwrap();
+                assert_eq!(signed.payload, agreement.payload);
+            }
+            Err(error) => assert!(error.starts_with("rate_limit:"), "{error}"),
+        }
+    }
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    assert_eq!(quote_work_protected_snapshot(&store), protected);
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 120)
+        .unwrap_err().starts_with("rate_limit:"));
+}
+
+#[test]
+fn quote_work_survives_future_challenge_cleanup_and_legacy_quote_retirement() {
+    let store = memory();
+    let (agreement, payment, opened) = paid(&store);
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 180).is_err());
+    store.db.lock().unwrap().execute_batch(
+        "DELETE FROM metadata WHERE key='quote_committed_minute';
+         INSERT INTO rate_limits VALUES('quote:legacy-wallet',1,1);",
+    ).unwrap();
+    let pending = quote(1000, false);
+    store.store_quote(&pending, 180).unwrap();
+    assert_eq!(committed_quote_rate(&store), (Some("3".into()), 3, 1, 0));
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    let challenge = crate::auth::AuthPayload {
+        network: network(), provider_wallet: agreement.payload.provider_wallet.clone(),
+        wallet: agreement.payload.consumer_wallet.clone(), method: "GET".into(),
+        path: "/v1/models".into(), body_hash: protocol::hash_hex(b""),
+        nonce: format!("0x{:064x}", 78), expires_at: 720,
+    };
+    store.create_challenge(&challenge, 600).unwrap();
+    assert!(store.quote(&pending.payload.id).is_err(), "cleanup actually ran");
+    assert_eq!(quote_work_rate(&store), ("3".into(), 3, 600));
+    assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 239)
+        .unwrap_err().starts_with("rate_limit:"));
+    store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 240).unwrap();
+    assert_eq!(quote_work_rate(&store), ("4".into(), 4, 1));
+    assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
+        encode(&opened.account).unwrap());
+    assert_eq!(store.authenticate(&opened.credential.as_ref().unwrap().bearer, 600).unwrap().credential_id,
+        opened.credential.as_ref().unwrap().id);
+    assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
+}
+
+#[test]
+fn quote_work_persistence_begin_statement_and_commit_failures_return_no_signature() {
+    for initialized in [false, true] {
+        for fault in ["readonly", "statement", "commit"] {
+            let store = memory();
+            let (agreement, _, _) = paid(&store);
+            if initialized {
+                assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 60).is_err());
+            }
+            {
+                let db = store.db.lock().unwrap();
+                match fault {
+                    "readonly" => db.execute_batch("PRAGMA query_only=ON;").unwrap(),
+                    "statement" => db.execute_batch(
+                        "CREATE TRIGGER refuse_quote_work BEFORE INSERT ON metadata
+                         WHEN NEW.key='quote_work_minute'
+                         BEGIN SELECT RAISE(ABORT,'work statement failure'); END;",
+                    ).unwrap(),
+                    "commit" => db.execute_batch(
+                        "CREATE TABLE work_commit_fault(
+                            account TEXT REFERENCES accounts(id) DEFERRABLE INITIALLY DEFERRED);
+                         CREATE TRIGGER fail_quote_work_commit BEFORE INSERT ON metadata
+                         WHEN NEW.key='quote_work_minute'
+                         BEGIN INSERT INTO work_commit_fault VALUES('missing-account'); END;",
+                    ).unwrap(),
+                    _ => unreachable!(),
+                }
+            }
+            let before = quote_rate_snapshot(&store);
+            let protected = quote_work_protected_snapshot(&store);
+            let error = store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 120).unwrap_err();
+            assert!(error.starts_with("ledger database:"), "{fault}: {error}");
+            assert_eq!(quote_rate_snapshot(&store), before, "{fault}, initialized={initialized}");
+            assert_eq!(quote_work_protected_snapshot(&store), protected);
+            {
+                let db = store.db.lock().unwrap();
+                match fault {
+                    "readonly" => db.execute_batch("PRAGMA query_only=OFF;").unwrap(),
+                    "statement" => db.execute_batch("DROP TRIGGER refuse_quote_work;").unwrap(),
+                    "commit" => {
+                        let rows: u64 = db.query_row("SELECT COUNT(*) FROM work_commit_fault", [], |row| row.get(0)).unwrap();
+                        assert_eq!(rows, 0, "failed commit must roll back trigger writes too");
+                        db.execute_batch("DROP TRIGGER fail_quote_work_commit;").unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            if initialized {
+                let signed = store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 120).unwrap();
+                protocol::verify(protocol::QUOTE_DOMAIN, &signed, &agreement.payload.provider_wallet).unwrap();
+                assert_eq!(quote_work_rate(&store), ("2".into(), 2, 1));
+            } else {
+                assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 120)
+                    .unwrap_err().starts_with("rate_limit:"));
+                assert_eq!(quote_work_rate(&store), ("2".into(), 2, 600));
+            }
+            assert_eq!(quote_work_protected_snapshot(&store), protected);
+        }
+    }
+}
+
+#[test]
+fn quote_work_invalid_evidence_fails_closed_without_blocking_paid_settlement() {
+    for mutation in [
+        "DELETE FROM rate_limits WHERE bucket='quote-work:global'",
+        "DELETE FROM metadata WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='invalid' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='01' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='+1' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='1 ' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='1.0' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='18446744073709551616' WHERE key='quote_work_minute'",
+        "UPDATE metadata SET value='2' WHERE key='quote_work_minute'",
+        "UPDATE rate_limits SET window=2 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET window=-1 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET window='invalid' WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET window=1.5 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET window=9223372036854775807 WHERE bucket='quote-work:global';
+         UPDATE metadata SET value='9223372036854775807' WHERE key='quote_work_minute'",
+        "UPDATE rate_limits SET count=-1 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET count=0 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET count=601 WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET count='invalid' WHERE bucket='quote-work:global'",
+        "UPDATE rate_limits SET count=1.5 WHERE bucket='quote-work:global'",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-work.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        let credential = opened.credential.as_ref().unwrap();
+        let held = store.reserve(&agreement.payload.id, &credential.id,
+            "recoverable-work-fault", 100, 100, 110, &agreement.payload.model).unwrap();
+        let account = encode(&store.account(&agreement.payload.id).unwrap()).unwrap();
+        assert!(store.sign_quote(agreement.payload.clone(), PROVIDER_KEY, 100).is_err());
+        store.db.lock().unwrap().execute_batch(mutation).unwrap();
+        let before = quote_rate_snapshot(&store);
+        let protected = quote_work_protected_snapshot(&store);
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let candidate = quote(1000, false).payload;
+        let error = store.sign_quote(candidate.clone(), PROVIDER_KEY, 300).unwrap_err();
+        assert!(error.starts_with("ledger "), "{mutation}: {error}");
+        assert_eq!(quote_rate_snapshot(&store), before, "{mutation}");
+        assert_eq!(quote_work_protected_snapshot(&store), protected, "{mutation}");
+        assert!(store.quote(&candidate.id).unwrap_err().starts_with("not_found:"));
+        assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(), account);
+        assert_eq!(store.authenticate(&credential.bearer, 300).unwrap().credential_id, credential.id);
+        assert_eq!(store.quote(&agreement.payload.id).unwrap().payload, agreement.payload);
+        assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
+        let settled = store.settle(&held.id,
+            &TokenUsage { prompt_tokens: 100, completion_tokens: 50 }, "completed", 301).unwrap();
+        assert_eq!(settled.cost_wei, "150");
+        let account = store.account(&agreement.payload.id).unwrap();
+        assert_eq!(account.funded_wei, "1000");
+        assert_eq!(account.fee_wei, "5");
+        assert_eq!(account.spent_wei, "150");
+        assert_eq!(account.reserved_wei, "0");
+        assert_eq!(account.available_wei, "845");
+        assert_eq!(account.reversed_wei, "0");
+        assert_eq!(account.provider_loss_wei, "0");
+        let after_settlement = quote_work_protected_snapshot(&store);
+        assert!(store.sign_quote(candidate, PROVIDER_KEY, 360).is_err());
+        assert_eq!(quote_work_protected_snapshot(&store), after_settlement);
+    }
+}

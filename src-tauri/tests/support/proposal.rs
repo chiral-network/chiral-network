@@ -23,6 +23,25 @@ pub(crate) struct PreparedProvider {
     pub ledger_path: PathBuf,
 }
 
+// Restored durable prerequisites, never evidence of observed signing work. Keeping
+// both rows in one transaction also makes independent ledger connections realistic.
+pub(crate) fn restore_quote_work(path: &Path, minute: u64, count: u64) {
+    let mut db = rusqlite::Connection::open(path).unwrap();
+    let tx = db.transaction().unwrap();
+    tx.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('quote_work_minute',?1)",
+        [minute.to_string()]).unwrap();
+    tx.execute("INSERT OR REPLACE INTO rate_limits(bucket,window,count) VALUES('quote-work:global',?1,?2)",
+        rusqlite::params![minute, count]).unwrap();
+    tx.commit().unwrap();
+}
+
+pub(crate) fn quote_work_evidence(path: &Path) -> (String, u64, u64) {
+    rusqlite::Connection::open(path).unwrap().query_row(
+        "SELECT metadata.value,rate_limits.window,rate_limits.count FROM metadata,rate_limits
+         WHERE metadata.key='quote_work_minute' AND rate_limits.bucket='quote-work:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
+}
+
 impl PreparedProvider {
     pub fn new(directory: &Path, case: u64, input: &str, output: &str,
         public_bind: SocketAddr, admin_bind: SocketAddr) -> Self {
@@ -85,6 +104,9 @@ impl PreparedProvider {
         let offer_id = offers.insert(offer.clone()).unwrap();
         let ledger_path = data_dir.join("billing.sqlite");
         let ledger = Arc::new(BillingStore::open(&ledger_path, &network.identity).unwrap());
+        // An initialized, exhausted previous minute is a restored prerequisite,
+        // not 600 signatures performed by this fixture or a production bypass.
+        restore_quote_work(&ledger_path, now / 60 - 1, 600);
         let state = Arc::new(ProviderState {
             model_slots: ProviderState::slots(&config), managed_engines: Default::default(),
             chain: Arc::new(ChainClient::new(network, data_dir).unwrap()),

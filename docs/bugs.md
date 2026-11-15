@@ -74,6 +74,13 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Rejected quote insertions did not bound signing work
+
+- **Current native-CFX defect:** the public proposal route signed before storage admission, so its committed-issuance counter did not bound signatures for rejected insertions.
+- **Correction:** commit one of 600 provider-ledger-wide signing permits per effective minute before signing, independently of quote insertion. Failures cannot refund work; competing connections and restart share non-regressing persisted evidence. Missing initial evidence exhausts its initialization minute; malformed evidence refuses fresh quoting without resetting financial state.
+- **Operator consequence:** the first eligible proposal on a fresh/upgraded ledger may receive 429 until a strictly newer minute. Do not delete rate evidence to clear a refusal or retry an ambiguous paid operation as a new quote.
+- **Verification:** seven ledger and three new HTTP regressions pass, with extended actual body/control and accepted-account recovery cases. They cover 600 real signatures despite insertion rollback, signer/persistence/response failures, initialization, corruption, reordered/reopened writers and independent counter conservation. Existing free/paid recovery, explicit credential management, held settlement and request reads preserve exhausted quote budgets. All 479 available tests and available builds/checks pass; no public load, deployment or live-payment qualification is claimed.
+
 ### Settled top-up recovery incorrectly required a ready engine
 
 - **Where:** `src-tauri/src/contracts.rs`, existing-agreement top-up settlement.

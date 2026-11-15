@@ -291,8 +291,7 @@ async fn control(
             issued_at: now,
             expires_at: now.saturating_add(300),
         };
-        let signed =
-            protocol::sign(protocol::QUOTE_DOMAIN, quote, &state.private_key).map_err(error)?;
+        let signed = state.ledger.sign_quote(quote, &state.private_key, now).map_err(error)?;
         state.ledger.store_quote(&signed, now).map_err(error)?;
         return Ok(Json(signed).into_response());
     }

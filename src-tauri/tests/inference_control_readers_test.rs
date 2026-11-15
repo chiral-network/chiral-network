@@ -13,7 +13,7 @@ use axum::{
 };
 use chiral_network::{billing_store::BillingStore, contracts, protocol::{self, Quote, Signed, QUOTE_DOMAIN}};
 use futures_util::{stream, StreamExt};
-use proposal::PreparedProvider;
+use proposal::{quote_work_evidence, restore_quote_work, PreparedProvider};
 use serde_json::{json, Value};
 use std::{net::TcpListener, time::Duration};
 use tokio::{
@@ -103,6 +103,12 @@ async fn control_readers_bound_time_and_concurrency_and_recover_every_permit() {
     let fixture = PreparedProvider::new(directory.path(), 20, "1", "2",
         public.local_addr().unwrap(), admin.local_addr().unwrap());
     let mut app = contracts::router(fixture.state.clone());
+    // Explicitly restored future-window evidence pins the budget while Tokio time
+    // advances independently of the signing wall clock; no HTTP work is claimed.
+    let work_minute = protocol::now().unwrap() / 60 + 10;
+    restore_quote_work(&fixture.ledger_path, work_minute, 598);
+    let work = |count| assert_eq!(quote_work_evidence(&fixture.ledger_path),
+        (work_minute.to_string(), work_minute, count));
 
     let before = Instant::now();
     let response = timeout(DEADLINE + Duration::from_secs(1),
@@ -110,10 +116,12 @@ async fn control_readers_bound_time_and_concurrency_and_recover_every_permit() {
         .expect("an incomplete control body must have a five-second deadline").unwrap();
     assert_eq!(Instant::now() - before, DEADLINE);
     error(response, StatusCode::REQUEST_TIMEOUT, "request_timeout").await;
+    work(598);
 
     let mut readers = JoinSet::new();
     let cancel = fill(&app, &mut readers).await;
     saturated(&mut app).await;
+    work(598); // Neither the 64 blocked readers nor rejected reader reached signing.
     let held_since = Instant::now();
     cancel.abort();
     assert!(timeout(IMMEDIATE, readers.join_next()).await.unwrap().unwrap()
@@ -143,8 +151,10 @@ async fn control_readers_bound_time_and_concurrency_and_recover_every_permit() {
     ]));
     error(immediate(&mut app, oversized).await,
         StatusCode::PAYLOAD_TOO_LARGE, "request_too_large").await;
+    work(598); // Broken, malformed, oversized and expired bodies spend no work.
     let exact = Body::from_stream(stream::once(async move { Ok::<_, std::io::Error>(padded) }));
     issued(immediate(&mut app, exact).await, &fixture).await;
+    work(599);
 
     fill(&app, &mut readers).await;
     saturated(&mut app).await;
@@ -155,6 +165,7 @@ async fn control_readers_bound_time_and_concurrency_and_recover_every_permit() {
             .expect("every timed-out reader must complete").unwrap().unwrap();
         error(response, StatusCode::REQUEST_TIMEOUT, "request_timeout").await;
     }
+    work(599);
 
     // Reoccupy all 64 slots, not just one, to catch partial timeout cleanup leaks.
     fill(&app, &mut readers).await;
@@ -164,6 +175,11 @@ async fn control_readers_bound_time_and_concurrency_and_recover_every_permit() {
         assert!(timeout(IMMEDIATE, readers.join_next()).await.unwrap().unwrap()
             .unwrap_err().is_cancelled());
     }
+    work(599); // Cancellation and saturation release readers, not signing budget.
     issued(immediate(&mut app, Body::from(serde_json::to_vec(&proposal).unwrap())).await,
         &fixture).await;
+    work(600);
+    error(immediate(&mut app, Body::from(serde_json::to_vec(&proposal).unwrap())).await,
+        StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+    work(600);
 }
