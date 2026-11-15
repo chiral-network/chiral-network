@@ -4224,3 +4224,261 @@ async fn same_key_writers_preserve_one_reservation_and_its_original_bounds() {
         }
     }
 }
+
+#[tokio::test]
+async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
+    let directory = tempfile::tempdir().unwrap();
+    for (limit_index, limit) in ["spend-cap", "credential-concurrency", "account-concurrency"]
+        .into_iter().enumerate() {
+        for (terminal_index, known) in [true, false].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(),
+                64_000 + (limit_index * 2 + terminal_index) as u64);
+            let other = fixture.open_free().await;
+            // These are post-verification credit and supplied-usage prerequisites,
+            // not engine execution, public admission or live-chain observations.
+            let (opened, _) = fixture.paid_account().await;
+            let id = &opened.account.contract_id;
+            let model = &opened.account.model;
+            let now = protocol::now().unwrap();
+            let ledger = &fixture.provider.state.ledger;
+            let options = CredentialIssueRequest {
+                expires_at: now + 3600,
+                spend_cap_wei: Some(if limit == "spend-cap" { "5" } else { "8" }.into()),
+                max_concurrency: if limit == "credential-concurrency" { 1 } else { 2 },
+                scopes: vec!["infer".into()],
+            };
+            let first = ledger.issue_credential(id, &options, now).unwrap();
+            let second = ledger.issue_credential(id, &CredentialIssueRequest {
+                spend_cap_wei: Some("8".into()), ..options
+            }, now).unwrap();
+            let prior = ledger.reserve(id, &first.id, "prior-limit-spend", 1, 1, now, model).unwrap();
+            ledger.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
+                "completed", now).unwrap();
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+                "limit-candidate-a", 1, 1, now, &other.account.model).unwrap();
+            ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
+                "completed", now).unwrap();
+            let root_live = if limit == "account-concurrency" {
+                Some(ledger.reserve(id, &opened.credential.id, "retained-root-hold",
+                    2048, 256, now, model).unwrap())
+            } else { None };
+            let root_hold = if root_live.is_some() { 3_u128 } else { 0 };
+            let candidates = [
+                ("limit-candidate-a", first.id.as_str(), 1_u64, 2_u128),
+                ("limit-candidate-b",
+                    if root_live.is_some() { second.id.as_str() } else { first.id.as_str() },
+                    1000_u64, 3_u128),
+            ];
+            let path = &fixture.provider.ledger_path;
+            let network = &fixture.provider.offer.payload.network;
+            let db = Connection::open(path).unwrap();
+            let before = ledger_snapshot(&db);
+            let account = &before[0].iter().find(|row| row[0] == *id).unwrap()[3];
+            assert_eq!(account["available_wei"], (99 - root_hold).to_string());
+            assert_eq!(account["reserved_wei"], root_hold.to_string());
+            assert_eq!(account["spent_wei"], "1");
+            assert_eq!(account["usage"], json!({"prompt_tokens":1,"completion_tokens":1}));
+            assert_eq!(before[1].iter().find(|row| row[0] == first.id).unwrap()[3]["spent_wei"], "1");
+            let writers = [0, 1].map(|index| (BillingStore::open(path, network).unwrap(), index));
+            let barrier = Barrier::new(2);
+            let results = thread::scope(|scope| {
+                let handles = writers.map(|(writer, index)| {
+                    let barrier = &barrier;
+                    let (key, credential, prompt, _) = candidates[index];
+                    scope.spawn(move || {
+                        barrier.wait();
+                        writer.reserve(id, credential, key, prompt, 512, now + 1, model)
+                    })
+                });
+                handles.map(|handle| handle.join().unwrap())
+            });
+            assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1, "{limit}");
+            let winner = results.iter().position(|result| result.is_ok()).unwrap();
+            let loser = 1 - winner;
+            let error_prefix = if limit == "spend-cap" { "spend_cap:" } else { "saturation:" };
+            assert!(results[loser].as_ref().unwrap_err().starts_with(error_prefix),
+                "{limit}: {:?}", results[loser]);
+            let reservation = results[winner].as_ref().unwrap();
+            let (key, credential, prompt, maximum) = candidates[winner];
+            let (losing_key, losing_credential, losing_prompt, losing_maximum) = candidates[loser];
+            assert_eq!(reservation.contract_id, *id);
+            assert_eq!(reservation.model, *model);
+            assert_eq!(reservation.price, opened.account.price);
+            assert_eq!(reservation.max_cost_wei, maximum.to_string());
+            let request_row = |opaque: &str, contract: &str, key: &str, credential: &str,
+                prompt: u64, output: u64, maximum: u128, created: u64| {
+                json!([opaque, contract, key, credential, "reserved", created, {
+                    "id":opaque, "request_id":key, "contract_id":contract, "credential_id":credential,
+                    "status":"reserved", "usage":{"prompt_tokens":0,"completion_tokens":0},
+                    "cost_wei":"0", "max_cost_wei":maximum.to_string(), "provider_loss_wei":"0",
+                    "prompt_tokens_reserved":prompt, "max_output_tokens":output,
+                    "created_at":created, "settled_at":null, "performance":null, "waived_wei":"0"
+                }])
+            };
+            let mut expected = before;
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["available_wei"] = json!((99 - root_hold - maximum).to_string());
+            account["reserved_wei"] = json!((root_hold + maximum).to_string());
+            expected[1].iter_mut().find(|row| row[0] == credential).unwrap()[3]["reserved_wei"]
+                = json!(maximum.to_string());
+            expected[2].push(request_row(&reservation.id, id, key, credential, prompt, 512, maximum, now + 1));
+            expected[2].sort_by(|left, right| left[0].as_str().cmp(&right[0].as_str()));
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: no partial losing reservation");
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(path, &state.config.network.identity).unwrap());
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                let reader = &fixture.provider.state.ledger;
+                assert!(reader.request_view(id, losing_key).unwrap_err().starts_with("not_found:"));
+                assert!(reader.reserve(id, losing_credential, losing_key, losing_prompt,
+                    512, now + 2, model).unwrap_err().starts_with(error_prefix));
+                assert!(reader.reserve(id, credential, key, prompt, 512, now + 2, model)
+                    .unwrap_err().starts_with("duplicate_request:"));
+                let original = &expected[2].iter().find(|row| row[0] == reservation.id).unwrap()[6];
+                for lookup in [key, reservation.id.as_str()] {
+                    assert_eq!(serde_json::to_value(reader.request_view(id, lookup).unwrap()).unwrap(), *original);
+                }
+                fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), expected, "{limit}, reopened={reopened}");
+            }
+            // Isolate the limiting dimension while the winner is still held:
+            // a smaller hold fits the cap; another credential fits the same
+            // account; another account remains available when this one is full.
+            let (control_account, control_credential, control_model, control_maximum) = match limit {
+                "spend-cap" => (id.as_str(), first.id.as_str(), model, 1_u128),
+                "credential-concurrency" => (id.as_str(), second.id.as_str(), model, 1_u128),
+                "account-concurrency" => (other.account.contract_id.as_str(), other.credential.id.as_str(),
+                    &other.account.model, 0_u128),
+                _ => unreachable!(),
+            };
+            let mut after_control = expected.clone();
+            let control = fixture.provider.state.ledger.reserve(control_account, control_credential,
+                "independent-limit-control", 1, 1, now + 3, control_model).unwrap();
+            assert_eq!(control.max_cost_wei, control_maximum.to_string());
+            if control_maximum != 0 {
+                let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+                account["available_wei"] = json!((98 - root_hold - maximum).to_string());
+                account["reserved_wei"] = json!((root_hold + maximum + 1).to_string());
+                expected[1].iter_mut().find(|row| row[0] == control_credential).unwrap()[3]["reserved_wei"]
+                    = json!(if limit == "spend-cap" { (maximum + 1).to_string() } else { "1".into() });
+            }
+            let mut control_row = request_row(&control.id, control_account, "independent-limit-control",
+                control_credential, 1, 1, control_maximum, now + 3);
+            expected[2].push(control_row.clone());
+            expected[2].sort_by(|left, right| left[0].as_str().cmp(&right[0].as_str()));
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: independent positive control");
+            control_row[4] = json!("backend_unknown_usage");
+            control_row[6]["status"] = json!("backend_unknown_usage");
+            control_row[6]["provider_loss_wei"] = json!(control_maximum.to_string());
+            control_row[6]["settled_at"] = json!(now + 4);
+            let released = fixture.provider.state.ledger.settle(&control.id,
+                &TokenUsage::default(), "backend_unknown_usage", now + 4).unwrap();
+            assert_eq!(serde_json::to_value(released).unwrap(), control_row[6]);
+            after_control[2].push(control_row);
+            after_control[2].sort_by(|left, right| left[0].as_str().cmp(&right[0].as_str()));
+            expected = after_control;
+            assert!(fixture.provider.state.ledger.reserve(id, losing_credential, losing_key,
+                losing_prompt, 512, now + 4, model).unwrap_err().starts_with(error_prefix));
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: control release preserves winning hold");
+
+            let charge = if known { (winner + 1) as u128 } else { 0 };
+            let usage = if known { TokenUsage { prompt_tokens: prompt, completion_tokens: 1 } }
+                else { TokenUsage::default() };
+            let status = if known { "completed" } else { "backend_unknown_usage" };
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["available_wei"] = json!((99 - root_hold - charge).to_string());
+            account["reserved_wei"] = json!(root_hold.to_string());
+            account["spent_wei"] = json!((1 + charge).to_string());
+            account["usage"] = json!({"prompt_tokens":if known { 1 + prompt } else { 1 },
+                "completion_tokens":if known { 2 } else { 1 }});
+            let credential_record = &mut expected[1].iter_mut().find(|row| row[0] == credential).unwrap()[3];
+            credential_record["reserved_wei"] = json!("0");
+            credential_record["spent_wei"] = json!((if credential == first.id { 1 } else { 0 } + charge).to_string());
+            let row = expected[2].iter_mut().find(|row| row[0] == reservation.id).unwrap();
+            row[4] = json!(status);
+            row[6]["status"] = json!(status);
+            row[6]["usage"] = serde_json::to_value(&usage).unwrap();
+            row[6]["cost_wei"] = json!(charge.to_string());
+            row[6]["provider_loss_wei"] = json!(if known { "0".into() } else { maximum.to_string() });
+            row[6]["settled_at"] = json!(now + 5);
+            let winner_terminal = row[6].clone();
+            let settled = fixture.provider.state.ledger.settle(&reservation.id, &usage, status, now + 5).unwrap();
+            assert_eq!(serde_json::to_value(settled).unwrap(), winner_terminal);
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: winner releases only its own hold");
+
+            // A definite refusal never consumed the losing key. Reopening and
+            // retrying that exact candidate now uses the released allowance.
+            let reopened = BillingStore::open(path, network).unwrap();
+            let admitted = reopened.reserve(id, losing_credential, losing_key, losing_prompt,
+                512, now + 6, model).unwrap();
+            assert_eq!(admitted.max_cost_wei, losing_maximum.to_string());
+            assert_eq!(admitted.model, *model);
+            assert_eq!(admitted.price, opened.account.price);
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["available_wei"] = json!((99 - root_hold - charge - losing_maximum).to_string());
+            account["reserved_wei"] = json!((root_hold + losing_maximum).to_string());
+            expected[1].iter_mut().find(|row| row[0] == losing_credential).unwrap()[3]["reserved_wei"]
+                = json!(losing_maximum.to_string());
+            expected[2].push(request_row(&admitted.id, id, losing_key, losing_credential,
+                losing_prompt, 512, losing_maximum, now + 6));
+            expected[2].sort_by(|left, right| left[0].as_str().cmp(&right[0].as_str()));
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: original refused key is newly admitted");
+            let replay = reopened.settle(&reservation.id,
+                &TokenUsage { prompt_tokens: losing_prompt, completion_tokens: 512 }, "cancelled", now + 7).unwrap();
+            assert_eq!(serde_json::to_value(replay).unwrap(), winner_terminal);
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: terminal replay cannot release the new hold");
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["available_wei"] = json!((99 - root_hold - charge).to_string());
+            account["reserved_wei"] = json!(root_hold.to_string());
+            expected[1].iter_mut().find(|row| row[0] == losing_credential).unwrap()[3]["reserved_wei"] = json!("0");
+            let row = expected[2].iter_mut().find(|row| row[0] == admitted.id).unwrap();
+            row[4] = json!("backend_unknown_usage");
+            row[6]["status"] = json!("backend_unknown_usage");
+            row[6]["provider_loss_wei"] = json!(losing_maximum.to_string());
+            row[6]["settled_at"] = json!(now + 8);
+            let released = reopened.settle(&admitted.id, &TokenUsage::default(),
+                "backend_unknown_usage", now + 8).unwrap();
+            assert_eq!(serde_json::to_value(released).unwrap(), row[6]);
+            assert_eq!(ledger_snapshot(&db), expected);
+            if let Some(root) = &root_live {
+                let root_usage = TokenUsage { prompt_tokens: 2048, completion_tokens: 256 };
+                let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+                account["reserved_wei"] = json!("0");
+                account["spent_wei"] = json!((4 + charge).to_string());
+                account["usage"] = json!({"prompt_tokens":2049 + if known { prompt } else { 0 },
+                    "completion_tokens":if known { 258 } else { 257 }});
+                let root_credential = &mut expected[1].iter_mut()
+                    .find(|row| row[0] == opened.credential.id).unwrap()[3];
+                root_credential["reserved_wei"] = json!("0");
+                root_credential["spent_wei"] = json!("3");
+                let row = expected[2].iter_mut().find(|row| row[0] == root.id).unwrap();
+                row[4] = json!("completed");
+                row[6]["status"] = json!("completed");
+                row[6]["usage"] = serde_json::to_value(&root_usage).unwrap();
+                row[6]["cost_wei"] = json!("3");
+                row[6]["settled_at"] = json!(now + 9);
+                let settled = reopened.settle(&root.id, &root_usage, "completed", now + 9).unwrap();
+                assert_eq!(serde_json::to_value(settled).unwrap(), row[6]);
+                assert_eq!(ledger_snapshot(&db), expected, "unrelated root hold survives both contenders");
+            }
+            drop(reopened);
+            let reopened = BillingStore::open(path, network).unwrap();
+            for (request_key, request_id, credential, prompt) in [
+                (key, reservation.id.as_str(), credential, prompt),
+                (losing_key, admitted.id.as_str(), losing_credential, losing_prompt),
+            ] {
+                let original = &expected[2].iter().find(|row| row[0] == request_id).unwrap()[6];
+                for lookup in [request_key, request_id] {
+                    assert_eq!(serde_json::to_value(reopened.request_view(id, lookup).unwrap()).unwrap(), *original);
+                }
+                assert!(reopened.reserve(id, credential, request_key, prompt, 512, now + 10, model)
+                    .unwrap_err().starts_with("duplicate_request:"));
+            }
+            fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+            assert_eq!(ledger_snapshot(&db), expected, "{limit}: final identities, spend and authority");
+        }
+    }
+}
