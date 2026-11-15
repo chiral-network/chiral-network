@@ -16,6 +16,9 @@
     - [x] 2.4.2.1 Prove provider HTTP top-up recovery independently at the eight-owned-account and 10,000-total-account free-opening bounds, with real fresh-opening refusal controls, preserved authority/eligibility and independently verified safe credit/replay.
     - [x] 2.4.2.2 Prove provider top-up recovery at the independent 10,000-active-paid-intent bound, retaining exact signed originals and unrelated leases without fresh admission or duplicate credit; disclose restored history and exercise a genuine fresh-intent capacity refusal.
   - [ ] 2.4.3 Complete native same-original recovery under the independent quote budgets and applicable opening-capacity pressure. Inventory remaining positive-canonical/pending-amount edge acceptance; preserve prior journal/lost-response coverage rather than duplicating it.
+    - [x] 2.4.3.1 Exercise native same-original recovery independently at quote-work and committed-issuance exhaustion, retaining the full-storage case. Require genuine fresh-proposal refusal, pending/unsafe/safe observations, a lost committed reply, explicit same-original recovery, unchanged budget/term/credential/request state and preserved prior spend/live hold.
+    - [ ] 2.4.3.2 Exercise native same-original recovery under independently full applicable paid-intent and free-account opening capacities; preserve completed provider coverage and distinguish restored pressure from observed admissions.
+    - [ ] 2.4.3.3 Cover remaining native positive-canonical amount and different-pending-amount refusal edges without changing saved intent, original journal ownership or provider state. Retain existing dropped-broadcast and missing/different-original journal regressions rather than duplicating them.
 
 ## 3. Verify and integrate
 

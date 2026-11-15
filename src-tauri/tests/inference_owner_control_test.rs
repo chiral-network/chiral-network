@@ -4321,23 +4321,80 @@ async fn native_topup_rpc(
     Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
 }
 
+enum NativeQuotePressure {
+    Storage,
+    SigningWork,
+    CommittedIssuance,
+}
+
 #[tokio::test]
 async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
+    native_topup_recovery_under_quote_pressure(NativeQuotePressure::Storage).await;
+}
+
+#[tokio::test]
+async fn native_topup_recovers_lost_credit_response_at_full_quote_work() {
+    native_topup_recovery_under_quote_pressure(NativeQuotePressure::SigningWork).await;
+}
+
+#[tokio::test]
+async fn native_topup_recovers_lost_credit_response_at_full_quote_issuance() {
+    native_topup_recovery_under_quote_pressure(NativeQuotePressure::CommittedIssuance).await;
+}
+
+async fn native_topup_recovery_under_quote_pressure(pressure: NativeQuotePressure) {
     use std::io::Write;
+    use protocol::TokenUsage;
 
     let directory = tempfile::tempdir().unwrap();
-    let mut fixture = Fixture::new(directory.path(), 58_000);
+    let (case, quote_count, exhausted_bucket) = match pressure {
+        NativeQuotePressure::Storage => (58_000, 10_000_u64, None),
+        NativeQuotePressure::SigningWork => (76_000, 1, Some("quote-work:global")),
+        NativeQuotePressure::CommittedIssuance => (76_001, 1, Some("quote:global")),
+    };
+    let mut fixture = Fixture::new(directory.path(), case);
     let other = fixture.open_free().await;
-    // Only the original paid opening/native history is restored. The top-up intent,
-    // nonce allocation, preparation, submission and both verifications run below.
+    // Original paid opening/native history and supplied usage are prerequisites.
+    // The top-up intent, nonce, preparation, submission and verification run below.
     let (opened, opening_raw) = fixture.paid_account().await;
     let id = &opened.account.contract_id;
     let quote = fixture.provider.state.ledger.quote(id).unwrap();
     let ack = fixture.provider.state.ledger.funding_intent(&quote.payload, &opening_raw).unwrap().unwrap();
+    let now = protocol::now().unwrap();
+    let root = opened.credential.as_ref().unwrap();
+    let ledger = &fixture.provider.state.ledger;
+    let spent = ledger.reserve(id, &root.id, "spent-before-native-topup", 1, 1, now, &opened.account.model).unwrap();
+    ledger.settle(&spent.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", now).unwrap();
+    let held = ledger.reserve(id, &root.id, "held-through-native-topup", 1000, 512, now, &opened.account.model).unwrap();
+    let original_account = ledger.account(id).unwrap();
+    assert_eq!(original_account.spent_wei, "1");
+    assert_eq!(original_account.reserved_wei, "3");
+    assert_eq!(original_account.available_wei, "96");
     let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
     let pending = fixture.quote("100").await;
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
-    restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
+    if exhausted_bucket.is_none() {
+        restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
+    }
+    // Restored coherent logical minutes, not observed future signing history.
+    // Exhaust only the selected budget; retain actual counts for other resources.
+    // Future watermarks avoid a wall-minute rollover changing the refusal control.
+    let minute = protocol::now().unwrap() / 60 + 10;
+    let tx = db.transaction().unwrap();
+    for (bucket, watermark) in [
+        ("quote:global", "quote_committed_minute"),
+        ("quote-work:global", "quote_work_minute"),
+    ] {
+        assert_eq!(tx.execute(
+            "UPDATE rate_limits SET window=?1,count=CASE WHEN bucket=?2 THEN 600 ELSE count END WHERE bucket=?3",
+            params![minute, exhausted_bucket, bucket]).unwrap(), 1);
+        assert_eq!(tx.execute("UPDATE metadata SET value=?1 WHERE key=?2", params![minute, watermark]).unwrap(), 1);
+    }
+    tx.commit().unwrap();
+    let quote_rates = || db.prepare(
+        "SELECT json_array(bucket,window,count) FROM rate_limits WHERE bucket IN ('quote:global','quote-work:global') ORDER BY bucket")
+        .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .map(|row| serde_json::from_str::<Value>(&row.unwrap()).unwrap()).collect::<Vec<_>>();
     let fingerprint = |query: &str| {
         let mut hash = Keccak::v256();
         let mut count = 0_u64;
@@ -4356,6 +4413,8 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
         "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
         "SELECT json_array(id,owner,quote,sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,request_key,credential,status,created,record) FROM requests ORDER BY id",
+        "SELECT json_array(key,value) FROM metadata WHERE key IN ('quote_committed_minute','quote_work_minute') ORDER BY key",
     ].map(&fingerprint);
     let monetary_state = || [
         "SELECT json_array(id,account) FROM accounts ORDER BY id",
@@ -4363,23 +4422,34 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
         "SELECT json_array(id,record) FROM fee_batches ORDER BY id",
     ].map(&fingerprint);
-    let full_quotes = || assert_eq!(db.query_row(
+    let assert_quote_storage = || assert_eq!(db.query_row(
         "SELECT COUNT(*) FROM quotes WHERE expires>?1", [protocol::now().unwrap()],
-        |row| row.get::<_, u64>(0)).unwrap(), 10_000);
+        |row| row.get::<_, u64>(0)).unwrap(), quote_count);
     let protected = protected_state();
     let before_credit = monetary_state();
-    assert_eq!(protected.map(|entry| entry.0), [10_000, 2, 1, 2]);
+    assert_eq!(protected.map(|entry| entry.0), [quote_count, 2, 1, 2, 2, 2]);
     assert_eq!(before_credit.map(|entry| entry.0), [2, 1, 0, 0]);
-    full_quotes();
-    let rates = rate_records(&fixture.provider.ledger_path);
-    assert!(rates.iter().filter(|(bucket, _, _)| bucket.starts_with("quote:"))
-        .all(|(bucket, _, count)| bucket == "quote:global" && *count < 600));
+    assert_quote_storage();
+    let mut expected_rates = quote_rates();
+    assert_eq!(expected_rates.len(), 2);
+    for row in &expected_rates {
+        assert_eq!(row[1], minute);
+        let count = row[2].as_u64().unwrap();
+        if row[0].as_str() == exhausted_bucket { assert_eq!(count, 600); }
+        else { assert!((1..600).contains(&count)); }
+    }
     let (status, refused) = fixture.post("/v1/contracts/propose", json!({
         "offer_id":fixture.provider.offer_id,"consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),
         "funding_wei":"100"
     })).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
     assert_eq!(refused["error"]["code"], "rate_limit");
+    if exhausted_bucket != Some("quote-work:global") {
+        // Storage/issuance refusal spends signing work; work exhaustion does not.
+        let work = expected_rates.iter_mut().find(|row| row[0] == "quote-work:global").unwrap();
+        work[2] = json!(work[2].as_u64().unwrap() + 1);
+    }
+    assert_eq!(quote_rates(), expected_rates);
     assert_eq!(protected_state(), protected);
     assert_eq!(monetary_state(), before_credit);
 
@@ -4401,7 +4471,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
     wallet::secure_directory(account_path.parent().unwrap()).unwrap();
     let saved_opening = json!({
-        "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
+        "offer":fixture.provider.offer,"quote":quote,"account":original_account,
         "raw_transaction":opening_raw,"tx_hash":ack.payload.tx_hash,"funding_intent":ack,
         "funding_broadcast_started":true,"funding_cancellation_requested":false,
         "funding_cancellation":null,"credentials":[opened.credential.as_ref().unwrap()],
@@ -4492,7 +4562,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
     let mut retained_saved = None;
     let mut retained_topup = Value::Null;
     let mut credited = None;
-    let mut expected_account = serde_json::to_value(&opened.account).unwrap();
+    let mut expected_account = serde_json::to_value(&original_account).unwrap();
     for (attempt, phase) in [0, 1, 2, 2].into_iter().enumerate() {
         // Reopen native state and actual provider store/chain/router at every recovery boundary.
         fixture.app = Router::new();
@@ -4507,7 +4577,8 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         provider_view.phase.store(phase, Ordering::Release);
         client_view.phase.store(if attempt == 0 { 0 } else { 2 }, Ordering::Release);
         lose_next.store(attempt == 2, Ordering::Release);
-        full_quotes();
+        assert_quote_storage();
+        assert_eq!(quote_rates(), expected_rates);
         let (stop, server) = serve(fixture.app.clone());
         let consumer = Consumer::new(config.clone()).unwrap();
         let start = exchanges.lock().unwrap().len();
@@ -4550,7 +4621,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         } else {
             expected_account["funded_wei"] = json!("1100");
             expected_account["fee_wei"] = json!("5");
-            expected_account["available_wei"] = json!("1095");
+            expected_account["available_wei"] = json!("1091");
             assert_eq!(topup.3, StatusCode::OK);
             assert_eq!(topup.4, expected_account);
             assert!(!lose_next.load(Ordering::Acquire));
@@ -4618,7 +4689,9 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         assert_eq!(journal.query_row("SELECT COUNT(*) FROM cancellations", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
         assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
         assert_eq!(protected_state(), protected);
-        full_quotes();
+        assert_quote_storage();
+        assert_eq!(quote_rates(), expected_rates);
+        assert_eq!(fixture.provider.state.ledger.request_view(id, &held.id).unwrap().status, "reserved");
         for (credential, account) in [
             (opened.credential.as_ref().unwrap(), expected_account.clone()),
             (other.credential.as_ref().unwrap(), serde_json::to_value(&other.account).unwrap()),
@@ -4639,7 +4712,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)",
         [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
     assert_eq!(operations, (0, 0));
-    assert_eq!(db.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get::<_, u64>(0)).unwrap(), 2);
     client_server.abort();
     provider_rpc_server.abort();
     assert!(client_server.await.unwrap_err().is_cancelled());
