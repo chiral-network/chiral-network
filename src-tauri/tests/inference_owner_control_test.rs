@@ -1731,6 +1731,187 @@ async fn topups_require_account_owner_and_business_refusals_consume_only_authori
 }
 
 #[tokio::test]
+async fn topup_inactive_accounts_refuse_before_rpc_and_again_at_credit() {
+    use chiral_network::chain_client::PaymentState;
+
+    let directory = tempfile::tempdir().unwrap();
+    for (case, status) in ["free", "frozen", "settlement_pending"].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 71_000 + case as u64);
+        let unrelated = fixture.open_free().await;
+        let opened = if status == "free" {
+            fixture.open_free().await
+        } else {
+            fixture.paid_account().await.0
+        };
+        let id = &opened.account.contract_id;
+        let quote = fixture.provider.state.ledger.quote(id).unwrap();
+        // Supplied recheck observations establish the account-state prerequisite,
+        // not evidence that this test observed a real chain regression.
+        let original = if status == "free" { None } else {
+            let original = fixture.provider.state.ledger.funding_to_recheck().unwrap().remove(0);
+            let observation = if status == "frozen" { PaymentState::Orphaned } else { PaymentState::Pending };
+            fixture.provider.state.ledger.apply_funding_recheck(
+                &original.tx_hash, &Ok(observation), protocol::now().unwrap()).unwrap();
+            Some(original)
+        };
+        assert_eq!(fixture.provider.state.ledger.account(id).unwrap().status, status);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let observed = calls.clone();
+        let app = Router::new().fallback(move |request: Request| {
+            observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+            async { StatusCode::SERVICE_UNAVAILABLE }
+        });
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+        let path = format!("/v1/contracts/{id}/topup");
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        for supplied in ["", raw.as_str()] {
+            let body = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: supplied.into() }).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let mut expected = ledger_snapshot(&db);
+            let (response, document) = fixture.send("POST", &path, &proof.headers, body.clone()).await;
+            assert_eq!(response, StatusCode::CONFLICT, "{document}");
+            assert_eq!(document["error"]["code"], "account_frozen");
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            assert_eq!(ledger_snapshot(&db), expected);
+            denied(fixture.send("POST", &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(ledger_snapshot(&db), expected);
+            assert!(calls.lock().unwrap().is_empty());
+        }
+
+        // Exercise the credit transaction independently of the HTTP precheck,
+        // with explicit post-verification input rather than claimed RPC evidence.
+        let payment = VerifiedPayment {
+            network: quote.payload.network.clone(), tx_hash: envelope.tx_hash,
+            from: envelope.from, to: envelope.to, value_wei: envelope.value_wei, data: envelope.data,
+            block_hash: format!("0x{:064x}", 8), block_number: 8, raw_transaction: raw,
+        };
+        let reopened = BillingStore::open(&fixture.provider.ledger_path, &quote.payload.network).unwrap();
+        let before = ledger_snapshot(&db);
+        assert!(reopened.credit_topup(id, &payment, protocol::now().unwrap()).unwrap_err().starts_with("forbidden:"));
+        assert_eq!(ledger_snapshot(&db), before);
+        fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), unrelated.credential.as_ref().unwrap()]);
+        let (response, account) = fixture.send("GET", &format!("/v1/contracts/{id}"),
+            &bearer(opened.credential.as_ref().unwrap()), Vec::new()).await;
+        assert_eq!(response, StatusCode::OK, "{account}");
+        assert_eq!(account, serde_json::to_value(reopened.account(id).unwrap()).unwrap());
+        assert_eq!(ledger_snapshot(&db), before);
+
+        if let Some(original) = original {
+            // Explicit fixture reconciliation is a positive ledger control, not
+            // an automatic repair policy or a live canonical-restoration claim.
+            reopened.apply_funding_recheck(&original.tx_hash,
+                &Ok(PaymentState::Accepted(original.clone())), protocol::now().unwrap()).unwrap();
+            let mut expected = serde_json::to_value(&opened.account).unwrap();
+            expected["funded_wei"] = json!("1100");
+            expected["fee_wei"] = json!("5");
+            expected["available_wei"] = json!("1095");
+            assert_eq!(serde_json::to_value(reopened.credit_topup(id, &payment, protocol::now().unwrap()).unwrap()).unwrap(), expected);
+            let credited = ledger_snapshot(&db);
+            assert_eq!(serde_json::to_value(reopened.credit_topup(id, &payment, protocol::now().unwrap()).unwrap()).unwrap(), expected);
+            assert_eq!(ledger_snapshot(&db), credited);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), unrelated.credential.as_ref().unwrap()]);
+        }
+        assert!(calls.lock().unwrap().is_empty());
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn topup_invalid_payment_and_zero_value_preserve_accepted_money() {
+    let directory = tempfile::tempdir().unwrap();
+    for (case, label) in ["empty", "empty hex", "malformed hex", "malformed envelope",
+        "opening commitment", "other account", "zero value"].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 72_000 + case as u64);
+        let unrelated = fixture.open_free().await;
+        // Paid opening is a post-verification ledger prerequisite.
+        let (opened, _) = fixture.paid_account().await;
+        let id = &opened.account.contract_id;
+        let quote = fixture.provider.state.ledger.quote(id).unwrap();
+        let (zero, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 0, 1);
+        let raw = match label {
+            "empty" => String::new(),
+            "empty hex" => "0x".into(),
+            "malformed hex" => "0xnot-hex".into(),
+            "malformed envelope" => "0x00".into(),
+            "opening commitment" => fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 1000, 1).0,
+            "other account" => fixture.signed_payment(&protocol::topup_data(&unrelated.account.contract_id).unwrap(), 1000, 1).0,
+            "zero value" => zero,
+            _ => unreachable!(),
+        };
+        let recorded = matches!(label, "malformed envelope" | "opening commitment" | "other account");
+        // Only zero value may reach this RPC. Complete healthy-safe observations
+        // make the monetary guard, rather than absent chain evidence, decisive.
+        let rpc = Arc::new(TopupRecoveryRpc {
+            quote: quote.payload.clone(), tx_hash: envelope.tx_hash,
+            phase: AtomicU64::new(2), timestamp: AtomicU64::new(protocol::now().unwrap()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let app = Router::new().route("/", post(topup_recovery_rpc)).with_state(rpc.clone());
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let path = format!("/v1/contracts/{id}/topup");
+        let body = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: raw.clone() }).unwrap();
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let mut first_attempt = None;
+        for _ in 0..2 {
+            rpc.timestamp.store(protocol::now().unwrap(), Ordering::Release);
+            let start = rpc.requests.lock().unwrap().len();
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let mut expected = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", &path, &proof.headers, body.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{label}: {document}");
+            assert_eq!(document["error"]["code"], if recorded { "funding_rejected" } else { "invalid_payment" });
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            let after = ledger_snapshot(&db);
+            if recorded {
+                assert_eq!(after[5].len(), 1);
+                let attempt = &after[5][0];
+                let hash = protocol::hash_hex(&hex::decode(raw.strip_prefix("0x").unwrap()).unwrap());
+                assert_eq!(attempt[0], hash);
+                assert_eq!(attempt[1], *id);
+                assert_eq!(attempt[3], raw);
+                assert_eq!(attempt[2], json!({"tx_hash":hash,"contract_id":id,"status":"rejected",
+                    "value_wei":null,"fee_wei":null,"created_at":attempt[2]["created_at"]}));
+                assert!(attempt[2]["created_at"].as_u64().is_some());
+                if let Some(first) = &first_attempt { assert_eq!(&attempt[2], first); }
+                else { first_attempt = Some(attempt[2].clone()); }
+                expected[5] = after[5].clone();
+            }
+            assert_eq!(after, expected, "{label}");
+            {
+                let calls = rpc.requests.lock().unwrap();
+                let calls = &calls[start..];
+                if label == "zero value" {
+                    for method in ["eth_getTransactionReceipt", "eth_syncing"] {
+                        assert_eq!(calls.iter().filter(|call| call["method"] == method).count(), 2);
+                    }
+                    for tag in ["safe", "latest", "0x8"] {
+                        assert_eq!(calls.iter().filter(|call| call["method"] == "eth_getBlockByNumber"
+                            && call["params"][0] == tag).count(), 2);
+                    }
+                } else { assert!(calls.is_empty(), "{label} reached RPC"); }
+            }
+            let calls = rpc.requests.lock().unwrap().len();
+            denied(fixture.send("POST", &path, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(rpc.requests.lock().unwrap().len(), calls);
+            assert_eq!(ledger_snapshot(&db), after);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), unrelated.credential.as_ref().unwrap()]);
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn global_pending_challenge_ceiling_returns_429_without_eviction_or_budget_debit() {
     let directory = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(directory.path(), 2300);
