@@ -494,11 +494,10 @@ impl Fixture {
         winner
     }
 
-    async fn accounting_account(&mut self, profiled: bool) -> (Signed<Quote>, OpenResult) {
+    async fn accounting_quote(&mut self, profiled: bool) -> Signed<Quote> {
         use chiral_network::performance;
 
-        // Signed synthetic terms and post-verification payment are prerequisites,
-        // not observed enrollment, hardware, engine or safe-chain evidence.
+        // Signed synthetic terms, not observed model or hardware qualification.
         let mut terms = self.paid_quote().await.payload;
         terms.id = protocol::random_id();
         terms.nonce = protocol::random_id();
@@ -536,6 +535,12 @@ impl Fixture {
         let quote = protocol::sign(protocol::QUOTE_DOMAIN, terms,
             &self.provider.state.private_key).unwrap();
         self.provider.state.ledger.store_quote(&quote, protocol::now().unwrap()).unwrap();
+        quote
+    }
+
+    async fn accounting_account(&mut self, profiled: bool) -> (Signed<Quote>, OpenResult) {
+        // Post-verification payment is a prerequisite, not observed safe-chain credit.
+        let quote = self.accounting_quote(profiled).await;
         let (raw, envelope) = self.signed_payment(
             &protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
         self.acknowledge_fixture(&quote, &raw, &envelope);
@@ -5144,6 +5149,296 @@ fn native_snapshot_mutations(original: &Value) -> Vec<NativeSnapshotMutation> {
         cases.push(NativeSnapshotMutation::Shape(form));
     }
     cases
+}
+
+#[derive(Clone, Copy)]
+enum NativeOpeningSnapshotReply {
+    Original,
+    Wide,
+    Fault(usize),
+}
+
+#[tokio::test]
+async fn native_opening_snapshots_recover_committed_credit_without_installing_invalid_accounts() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(&directory.path().join("mutation-plan"), 69_999);
+    let quote = fixture.accounting_quote(true).await;
+    // Mutation paths come from the actual agreed terms; only the account's
+    // identifier has a different field name. Responses use real ledger accounts.
+    let mut terms = serde_json::to_value(&quote.payload).unwrap();
+    terms["contract_id"] = terms["id"].clone();
+    let cases = Arc::new(native_snapshot_mutations(&terms));
+    // Separate current-thread runtimes keep each SQLite connection on its owner
+    // thread while overlapping independent loopback RPC work. Serialize this
+    // test's control requests so the suite sees no additional control-slot load.
+    let control_gate = Arc::new(tokio::sync::Mutex::new(()));
+    std::thread::scope(|scope| {
+        let workers = (0..4).map(|worker| {
+            let directory = &directory;
+            let cases = cases.clone();
+            let control_gate = control_gate.clone();
+            scope.spawn(move || {
+                tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                    .block_on(native_opening_snapshot_partition(directory, cases, control_gate, worker));
+            })
+        }).collect::<Vec<_>>();
+        for worker in workers { worker.join().unwrap(); }
+    });
+}
+
+async fn native_opening_snapshot_partition(
+    directory: &tempfile::TempDir, cases: Arc<Vec<NativeSnapshotMutation>>,
+    control_gate: Arc<tokio::sync::Mutex<()>>, worker: usize,
+) {
+    let mut fixture = Fixture::new(&directory.path().join(format!("provider-{worker}")), 68_000 + worker as u64);
+    let mut quote = {
+        let _control = control_gate.lock().await;
+        fixture.accounting_quote(true).await
+    };
+
+    // Each fault gets a fresh opening, its already-committed replay, and valid
+    // recovery. At most seven owner challenges are used per independent ledger.
+    for index in (worker..cases.len() + 2).step_by(4) {
+        if index != worker {
+            fixture = Fixture::new(&directory.path().join(format!("provider-{index}")), 68_000 + index as u64);
+            quote = {
+                let _control = control_gate.lock().await;
+                fixture.accounting_quote(true).await
+            };
+        }
+        let mode = match index {
+            0 => NativeOpeningSnapshotReply::Original,
+            1 => NativeOpeningSnapshotReply::Wide,
+            _ => NativeOpeningSnapshotReply::Fault(index - 2),
+        };
+        let label = if index < 2 { format!("success control {index}") } else { format!("{:?}", cases[index - 2]) };
+        let id = &quote.payload.id;
+        let (raw, envelope) = fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
+        // Restore signed terms, admission acknowledgement and original preparation,
+        // not an account or accepted credit. Actual HTTP opening commits below.
+        let ack = fixture.acknowledge_fixture(&quote, &raw, &envelope);
+        fixture.unopened(&quote);
+        let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        let provider_config = Arc::get_mut(&mut state.config).unwrap();
+        provider_config.network.rpc_url = format!("http://{}", provider_listener.local_addr().unwrap());
+        state.chain = Arc::new(ChainClient::new(provider_config.network.clone(), provider_config.data_dir.clone()).unwrap());
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        let mut network = fixture.provider.state.config.network.clone();
+        network.rpc_url = format!("http://{}", client_listener.local_addr().unwrap());
+        let config = ConsumerConfig { network, data_dir: directory.path().join(format!("native-{index}")),
+            catalog_url: None, development: true, dht: None };
+        let mut consumer = Consumer::new(config.clone()).unwrap();
+        let import = config.data_dir.join("public-test-scalar.key");
+        wallet::save_private_key(&import, OWNER_KEY).unwrap();
+        assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
+        let scoped = config.network.scoped_dir(&config.data_dir);
+        let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
+            .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+        let journal_path = scoped.join("wallet-journal/transactions.sqlite3");
+        let journal = Connection::open(&journal_path).unwrap();
+        journal.execute(
+            "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,created_at)
+             VALUES(?1,?2,'0',?3,?4,'prepared',?5)",
+            params![quote.payload.consumer_wallet, format!("open:{id}"), envelope.tx_hash, raw,
+                quote.payload.issued_at]).unwrap();
+        let original_payment = || journal.query_row(
+            "SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at) FROM transactions",
+            [], |row| row.get::<_, String>(0)).unwrap();
+        let original_payment_before = original_payment();
+        let rpc = Arc::new(SafeOpeningRpc { quote: quote.clone(), raw: raw.clone(),
+            hash: envelope.tx_hash.clone(), saved: account_path.clone(), phase: AtomicU64::new(5),
+            timestamp: AtomicU64::new(protocol::now().unwrap()), requests: Mutex::new(Vec::new()) });
+        let provider_rpc = Router::new().route("/", post(safe_opening_rpc)).with_state((rpc.clone(), true));
+        let client_rpc = Router::new().route("/", post(safe_opening_rpc)).with_state((rpc.clone(), false));
+        let provider_rpc_server = tokio::spawn(async move { axum::serve(provider_listener, provider_rpc).await.unwrap(); });
+        let client_rpc_server = tokio::spawn(async move { axum::serve(client_listener, client_rpc).await.unwrap(); });
+
+        let reply = Arc::new(Mutex::new(mode));
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let app = fixture.app.clone().layer(from_fn({
+            let reply = reply.clone();
+            let observations = observations.clone();
+            let account_path = account_path.clone();
+            let journal_path = journal_path.clone();
+            let cases = cases.clone();
+            let control_gate = control_gate.clone();
+            let expected_request = Arc::new(json!({"quote_id":id,"raw_transaction":raw}));
+            move |request: Request, next: Next| {
+                let opening = request.method() == axum::http::Method::POST && request.uri().path() == OPEN;
+                let reply = reply.clone();
+                let observations = observations.clone();
+                let account_path = account_path.clone();
+                let journal_path = journal_path.clone();
+                let cases = cases.clone();
+                let control_gate = control_gate.clone();
+                let expected_request = expected_request.clone();
+                async move {
+                    let _control = control_gate.lock().await;
+                    if !opening { return next.run(request).await; }
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 96 * 1024).await.unwrap();
+                    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), *expected_request);
+                    let pending = std::fs::read(&account_path).unwrap();
+                    let journal = {
+                        let connection = Connection::open(&journal_path).unwrap();
+                        native_payment_journal_snapshot(&connection)
+                    };
+                    let response = next.run(Request::from_parts(parts, Body::from(body))).await;
+                    if response.status() != StatusCode::OK { return response; }
+                    let (mut parts, body) = response.into_parts();
+                    let body = to_bytes(body, 96 * 1024).await.unwrap();
+                    let result: OpenResult = serde_json::from_slice(&body).unwrap();
+                    let mode = *reply.lock().unwrap();
+                    let wire = match mode {
+                        NativeOpeningSnapshotReply::Original => body,
+                        NativeOpeningSnapshotReply::Wide | NativeOpeningSnapshotReply::Fault(_) => {
+                            let account = serde_json::to_value(&result.account).unwrap();
+                            let changed = match mode {
+                                NativeOpeningSnapshotReply::Wide => serde_json::to_vec(&wide_snapshot(&account)).unwrap(),
+                                NativeOpeningSnapshotReply::Fault(case) => snapshot_mutation_bytes(&cases[case], &account),
+                                NativeOpeningSnapshotReply::Original => unreachable!(),
+                            };
+                            // Preserve raw duplicates and the genuinely issued root.
+                            // Only account bytes change, after the provider commits.
+                            let member = format!("\"account\":{}", serde_json::to_string(&result.account).unwrap());
+                            serde_json::to_string(&result).unwrap().replacen(&member,
+                                &format!("\"account\":{}", std::str::from_utf8(&changed).unwrap()), 1).into_bytes().into()
+                        }
+                    };
+                    observations.lock().unwrap().push((pending, journal, serde_json::to_value(&result).unwrap()));
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    Response::from_parts(parts, Body::from(wire))
+                }
+            }
+        }));
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                .await.unwrap();
+        });
+        let first = consumer.fund(&fixture.provider.offer, &quote).await;
+        let (pending, accepted_journal, genuine) = {
+            let observed = observations.lock().unwrap();
+            assert_eq!(observed.len(), 1, "must reach successful opening response: {label}");
+            observed[0].clone()
+        };
+        let pending_value: Value = serde_json::from_slice(&pending).unwrap();
+        assert!(pending_value["account"].is_null());
+        assert_eq!(pending_value["credentials"], json!([]));
+        assert_eq!(pending_value["funding_intent"], serde_json::to_value(&ack).unwrap());
+        let root: Credential = serde_json::from_value(genuine["credential"].clone()).unwrap();
+        let original = genuine["account"].clone();
+        assert_eq!(original["funded_wei"], "1000");
+        assert_eq!(original["fee_wei"], "5");
+        assert_eq!(original["available_wei"], "995");
+        assert_eq!(original["model"], serde_json::to_value(&quote.payload.model).unwrap());
+        assert_eq!(original["price"], serde_json::to_value(&quote.payload.price).unwrap());
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let financial_state = || ledger_snapshot(&db).into_iter().enumerate()
+            .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
+        let credited = financial_state();
+        assert_eq!((credited[0].len(), credited[1].len(), credited[4].len(), credited[5].len(),
+            credited[7].len(), credited[8].len()), (1, 1, 1, 0, 1, 0));
+        let provider_evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
+            [id], |row| row.get(0)).unwrap();
+        let native_evidence: String = journal.query_row("SELECT evidence FROM transactions WHERE status='accepted'",
+            [], |row| row.get(0)).unwrap();
+        let evidence: Value = serde_json::from_str(&provider_evidence).unwrap();
+        assert_eq!(evidence, serde_json::from_str::<Value>(&native_evidence).unwrap());
+        assert_eq!(evidence["raw_transaction"], raw);
+        assert_eq!(evidence["tx_hash"], envelope.tx_hash);
+        assert_eq!(evidence["block_number"], 8);
+        assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal);
+        assert_eq!(original_payment(), original_payment_before);
+
+        if index >= 2 {
+            first.expect_err(&label);
+            assert_eq!(std::fs::read(&account_path).unwrap(), pending, "{label}");
+            assert!(consumer.accounts().unwrap().is_empty());
+            assert!(consumer.credential_export(id, None).is_err());
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            assert_eq!(std::fs::read(&account_path).unwrap(), pending, "{label}");
+            consumer.resume(id).await.expect_err(&label);
+            {
+                let observed = observations.lock().unwrap();
+                assert_eq!(observed.len(), 2, "must reach committed replay: {label}");
+                assert_eq!(observed[1].0, pending);
+                assert_eq!(observed[1].1, accepted_journal);
+                assert_eq!(observed[1].2["account"], original);
+                assert!(observed[1].2["credential"].is_null(), "replay cannot rotate or re-expose the root");
+            }
+            assert_eq!(std::fs::read(&account_path).unwrap(), pending, "{label}");
+            assert_eq!(financial_state(), credited, "{label}");
+            assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal, "{label}");
+            assert!(consumer.credential_export(id, None).is_err());
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            *reply.lock().unwrap() = NativeOpeningSnapshotReply::Original;
+            assert_eq!(serde_json::to_value(consumer.resume(id).await.unwrap()).unwrap(), original);
+            assert_eq!(observations.lock().unwrap().len(), 3);
+            let mut recovered = pending_value.clone();
+            recovered["account"] = original.clone();
+            assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), recovered);
+            assert!(consumer.credential_export(id, None).is_err(), "lost root secret requires explicit issuance");
+            assert_eq!(financial_state(), credited);
+            assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal);
+
+            consumer.credential_issue(id, json!({"expires_at":protocol::now().unwrap() + 3600,
+                "spend_cap_wei":null,"max_concurrency":1,"scopes":["infer","read"]})).await.unwrap();
+            let saved: Value = serde_json::from_slice(&std::fs::read(&account_path).unwrap()).unwrap();
+            let issued: Credential = serde_json::from_value(saved["credentials"][0].clone()).unwrap();
+            fixture.credentials_usable(&[&root, &issued]);
+            assert_eq!(consumer.credential_export(id, None).unwrap()["api_key"], issued.bearer);
+            assert_ne!(issued.id, root.id);
+            let mut after_issuance = financial_state();
+            assert_eq!(after_issuance[1].len(), 2);
+            assert!(after_issuance[1].contains(&credited[1][0]), "explicit issuance preserves the original root");
+            after_issuance[1] = credited[1].clone();
+            assert_eq!(after_issuance, credited, "issuance does not re-credit or alter original funding");
+        } else {
+            let accepted = serde_json::to_value(first.unwrap()).unwrap();
+            assert_eq!(accepted, if index == 0 { original.clone() } else { wide_snapshot(&original) });
+            let mut expected = pending_value.clone();
+            expected["account"] = accepted;
+            expected["credentials"] = json!([root]);
+            expected["active_credential"] = json!(root.id);
+            assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
+            assert_eq!(consumer.credential_export(id, None).unwrap()["api_key"], root.bearer);
+        }
+        let exported = consumer.credential_export(id, None).unwrap();
+        let before: Value = serde_json::from_slice(&std::fs::read(&account_path).unwrap()).unwrap();
+        let financial_before = financial_state();
+        let opening_count = observations.lock().unwrap().len();
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+        assert_eq!(serde_json::to_value(consumer.resume(id).await.unwrap()).unwrap(), original);
+        let mut expected = before;
+        expected["account"] = original;
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+        assert_eq!(observations.lock().unwrap().len(), opening_count, "installed accounts refresh, not reopen");
+        assert_eq!(financial_state(), financial_before);
+        assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal);
+        assert_eq!(original_payment(), original_payment_before);
+        fixture.credentials_usable(&[&root]);
+        assert!(rpc.requests.lock().unwrap().iter().all(|(_, request)| !matches!(
+            request["method"].as_str(), Some("eth_sendRawTransaction" | "eth_getTransactionCount" | "eth_getBalance"))),
+            "recover the prepared, canonically included original without another payment");
+        stop.send(()).unwrap();
+        server.await.unwrap();
+        provider_rpc_server.abort();
+        client_rpc_server.abort();
+        assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
+        assert!(client_rpc_server.await.unwrap_err().is_cancelled());
+    }
 }
 
 #[tokio::test]
