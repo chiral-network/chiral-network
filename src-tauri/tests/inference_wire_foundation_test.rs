@@ -261,6 +261,51 @@ fn price_schedule_requires_string_money_fields() {
 }
 
 #[test]
+fn price_schedule_rejects_positional_arrays() {
+    let maximum = u128::MAX.to_string();
+    for (input, output) in [("0", "0"), ("1", "2"), (maximum.as_str(), maximum.as_str())] {
+        let positional = json!([input, output]);
+        let bytes = serde_json::to_vec(&positional).unwrap();
+        assert!(
+            serde_json::from_slice::<PriceSchedule>(&bytes).is_err(),
+            "positional price bytes must not become named monetary terms"
+        );
+        assert!(
+            serde_json::from_value::<PriceSchedule>(positional).is_err(),
+            "JSON value decoding must enforce the same object boundary"
+        );
+    }
+}
+
+#[test]
+fn price_schedule_rejects_signed_array_and_duplicate_member_projections() {
+    let signed = Signed {
+        payload: signed_quote().payload,
+        signature: QUOTE_SIGNATURE.into(),
+    };
+    let encoded = serde_json::to_string(&signed).unwrap();
+    let price_member = format!("\"price\":{}", serde_json::to_string(&signed.payload.price).unwrap());
+    for price in [
+        r#"{"input_wei_per_1k":"1","output_wei_per_1k":"2"}"#,
+        r#"{"output_wei_per_1k":"2","input_wei_per_1k":"1"}"#,
+    ] {
+        let wire = encoded.replacen(&price_member, &format!("\"price\":{price}"), 1);
+        let decoded: Signed<Quote> = serde_json::from_str(&wire).unwrap();
+        protocol::verify(protocol::QUOTE_DOMAIN, &decoded, VECTOR_WALLET).unwrap();
+        assert_eq!(protocol::opening_data(&decoded.payload).unwrap(), hex::decode(OPENING_DATA).unwrap());
+    }
+    for price in [
+        r#"["1","2"]"#,
+        r#"{"input_wei_per_1k":"1","input_wei_per_1k":"1","output_wei_per_1k":"2"}"#,
+        r#"{"input_wei_per_1k":"1","output_wei_per_1k":"2","output_wei_per_1k":"2"}"#,
+    ] {
+        // Keep the original signed values and signature, changing only their wire shape.
+        let wire = encoded.replacen(&price_member, &format!("\"price\":{price}"), 1);
+        assert!(serde_json::from_str::<Signed<Quote>>(&wire).is_err(), "{price}");
+    }
+}
+
+#[test]
 fn canonical_wei_accepts_exact_boundaries() {
     for (encoded, expected) in [
         ("0", 0),

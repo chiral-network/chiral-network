@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Price schedules accepted positional arrays
+
+- **Cause:** Derived `PriceSchedule` decoding accepted a two-element array instead of the required object with named monetary fields, including inside a signed quote. Two new regression tests reproduced the acceptance before the fix.
+- **Correction:** Reuse the shared object-only visitor and derived field checks. Reject positional arrays without buffering through `serde_json::Value`; retain unknown, missing, wrong-type and raw duplicate-member rejection. Valid serialization, monetary validation and signed commitments are unchanged.
+- **Verification:** Both regressions now pass: byte/value array rejection, raw duplicate price members, and both valid member orders against independent quote-signature/opening-data vectors. All 490 available tests passed, along with headless/frontend builds, Svelte checking, CI Python compilation and strict `inference-wire-foundation` validation. This is typed-decoder evidence, not a live payment or HTTP-path qualification.
+
 ### Managed embeddings could select a generation chat template
 
 - **Native-CFX mismatch:** inventory validation accepted an embedding artifact's selected template file when its hashes matched, and ignored a non-null template selector. The provisioner already prohibited such selection.

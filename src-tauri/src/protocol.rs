@@ -63,11 +63,26 @@ impl<'de> Deserialize<'de> for NetworkIdentity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PriceSchedule {
     pub input_wei_per_1k: String,
     pub output_wei_per_1k: String,
+}
+
+impl<'de> Deserialize<'de> for PriceSchedule {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            input_wei_per_1k: String,
+            output_wei_per_1k: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            input_wei_per_1k: fields.input_wei_per_1k,
+            output_wei_per_1k: fields.output_wei_per_1k,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
