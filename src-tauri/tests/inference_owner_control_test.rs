@@ -2490,3 +2490,223 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
     server.abort();
     assert!(server.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test]
+async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
+    use std::io::Write;
+
+    let directory = tempfile::tempdir().unwrap();
+    for (condition, missing) in [true, false].into_iter().enumerate() {
+        for (entry, method) in ["resume", "topup", "fund"].into_iter().enumerate() {
+            let case = 57_000 + (condition * 3 + entry) as u64;
+            let mut fixture = Fixture::new(directory.path(), case);
+            // Complete paid-opening state is restored setup, not observed chain execution.
+            // The native refresh below validates that this is a usable saved agreement.
+            let (opened, opening_raw) = fixture.paid_account().await;
+            let id = &opened.account.contract_id;
+            let quote = fixture.provider.state.ledger.quote(id).unwrap();
+            let ack = fixture.provider.state.ledger.funding_intent(&quote.payload, &opening_raw)
+                .unwrap().unwrap();
+            let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+            let (different_raw, different) = fixture.signed_payment(
+                &protocol::topup_data(id).unwrap(), 1000, 2);
+            assert_ne!(raw, different_raw);
+            assert_eq!(envelope.from, different.from);
+            assert_eq!(envelope.to, different.to);
+            assert_eq!(envelope.value_wei, different.value_wei);
+            assert_eq!(envelope.data, different.data);
+            let intent_id = uuid::Uuid::new_v4().to_string();
+            let operation = format!("topup:{id}:{intent_id}");
+
+            let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+            let observed_rpc = requests.clone();
+            let rpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
+            let rpc_app = Router::new().route("/", post(move |Json(request): Json<Value>| {
+                let observed = observed_rpc.clone();
+                async move {
+                    observed.lock().unwrap().push(request);
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }));
+            let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc_app).await.unwrap(); });
+            let controls = Arc::new(Mutex::new(Vec::new()));
+            let observed_controls = controls.clone();
+            let app = fixture.app.clone().layer(from_fn(move |request: Request, next: Next| {
+                let observed = observed_controls.clone();
+                async move {
+                    let method = request.method().to_string();
+                    let path = request.uri().path().to_owned();
+                    let response = next.run(request).await;
+                    observed.lock().unwrap().push((method, path, response.status()));
+                    response
+                }
+            }));
+            let listener = fixture._listeners[0].try_clone().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+            let provider_server = tokio::spawn(async move {
+                axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                    .await.unwrap();
+            });
+            let mut network = fixture.provider.state.config.network.clone();
+            network.rpc_url = rpc_url;
+            let config = ConsumerConfig {
+                network, data_dir: directory.path().join(format!("consumer-{case}")),
+                catalog_url: None, development: true, dht: None,
+            };
+            let mut consumer = Consumer::new(config.clone()).unwrap();
+            let import = config.data_dir.join("public-test-scalar.key");
+            wallet::save_private_key(&import, OWNER_KEY).unwrap();
+            assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
+            let scoped = config.network.scoped_dir(&config.data_dir);
+            let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
+                .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+            wallet::secure_directory(account_path.parent().unwrap()).unwrap();
+            let saved = json!({
+                "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
+                "raw_transaction":opening_raw,"tx_hash":ack.payload.tx_hash,"funding_intent":ack,
+                "funding_broadcast_started":true,"funding_cancellation_requested":false,
+                "funding_cancellation":null,"credentials":[opened.credential],
+                "active_credential":opened.credential.id,"receipt_sequence":0,
+                "topup":{"id":intent_id,"amount_wei":"1000","raw_transaction":raw}
+            });
+            let mut file = wallet::create_secret_file(&account_path).unwrap();
+            file.write_all(&serde_json::to_vec(&saved).unwrap()).unwrap();
+            file.sync_all().unwrap();
+            drop(file);
+            let provider_db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let opening_evidence: String = provider_db.query_row(
+                "SELECT evidence FROM funding WHERE tx_hash=?1",
+                [&ack.payload.tx_hash], |row| row.get(0)).unwrap();
+            let journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
+            journal.execute(
+                "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,evidence,created_at)
+                 VALUES(?1,?2,'0',?3,?4,'accepted',?5,?6)",
+                params![quote.payload.consumer_wallet, format!("open:{id}"), ack.payload.tx_hash,
+                    opening_raw, opening_evidence, quote.payload.issued_at]).unwrap();
+            // This read really authenticates against the provider; it neither resumes funding
+            // nor replaces the pending top-up. Exported authority must remain usable throughout.
+            assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(),
+                serde_json::to_value(&opened.account).unwrap());
+            assert_eq!(*controls.lock().unwrap(), [
+                ("POST".into(), "/v1/auth/challenge".into(), StatusCode::OK),
+                ("GET".into(), format!("/v1/contracts/{id}"), StatusCode::OK),
+            ]);
+            assert!(requests.lock().unwrap().is_empty());
+            let exported = consumer.credential_export(id, None).unwrap();
+            assert_eq!(exported["api_key"], opened.credential.bearer);
+            let saved_bytes = std::fs::read(&account_path).unwrap();
+            let saved: Value = serde_json::from_slice(&saved_bytes).unwrap();
+            assert_eq!(saved["topup"]["raw_transaction"], raw);
+            assert_eq!(saved["topup"]["id"], intent_id);
+            assert_eq!(saved["topup"]["amount_wei"], "1000");
+            drop(consumer);
+
+            if !missing {
+                // The mismatched row is internally consistent and has identical payment terms,
+                // but a different genuinely signed nonce. Without the guard, reconciliation would
+                // reach RPC rather than reject an unrelated amount/calldata mismatch locally.
+                journal.execute(
+                    "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,created_at)
+                     VALUES(?1,?2,'2',?3,?4,'submitted',?5)",
+                    params![quote.payload.consumer_wallet, operation, different.tx_hash,
+                        different_raw, quote.payload.issued_at]).unwrap();
+            }
+            let records = || {
+                let mut statement = journal.prepare(
+                    "SELECT json_array(sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at)
+                     FROM transactions ORDER BY sender,operation").unwrap();
+                let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+                rows
+            };
+            let originals = || {
+                let mut statement = journal.prepare(
+                    "SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at)
+                     FROM transactions ORDER BY sender,operation").unwrap();
+                let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+                rows
+            };
+            let provider_records = || [
+                "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts ORDER BY id",
+                "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+                "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash",
+                "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+                "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+                "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket",
+            ].map(|query| {
+                let mut statement = provider_db.prepare(query).unwrap();
+                let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                    .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+                rows
+            });
+            let before = records();
+            assert_eq!(before.len(), if missing { 1 } else { 2 });
+            let provider_before = provider_records();
+            let controls_before = controls.lock().unwrap().clone();
+            let reopened = Consumer::new(config.clone()).unwrap();
+            let result = match method {
+                "resume" => reopened.resume(id).await,
+                "topup" => reopened.topup(id, "1000").await,
+                "fund" => reopened.fund(&fixture.provider.offer, &quote).await,
+                _ => unreachable!(),
+            };
+            assert!(result.is_err(), "{method}, missing={missing}");
+            assert!(requests.lock().unwrap().is_empty(), "journal disagreement must precede all chain access");
+            assert_eq!(*controls.lock().unwrap(), controls_before);
+            assert_eq!(records(), before, "refusal must not create, replace or reclassify journal operations");
+            assert_eq!(std::fs::read(&account_path).unwrap(), saved_bytes);
+            assert_eq!(reopened.credential_export(id, None).unwrap(), exported);
+            assert_eq!(provider_records(), provider_before);
+            drop(reopened);
+
+            // Explicit isolated fixture repair, not automatic product behavior: restore only the
+            // missing/wrong top-up row. The identical saved state must now reach chain recovery.
+            journal.execute("DELETE FROM transactions WHERE sender=?1 AND operation=?2",
+                params![quote.payload.consumer_wallet, operation]).unwrap();
+            journal.execute(
+                "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,created_at)
+                 VALUES(?1,?2,'1',?3,?4,'submitted',?5)",
+                params![quote.payload.consumer_wallet, operation, envelope.tx_hash, raw,
+                    quote.payload.issued_at]).unwrap();
+            let repaired = originals();
+            assert_eq!(repaired.len(), 2);
+            let reopened = Consumer::new(config).unwrap();
+            let result = match method {
+                "resume" => reopened.resume(id).await,
+                "topup" => reopened.topup(id, "1000").await,
+                "fund" => reopened.fund(&fixture.provider.offer, &quote).await,
+                _ => unreachable!(),
+            };
+            assert!(result.is_err(), "the unavailable RPC stops the positive control before submission");
+            let rpc = requests.lock().unwrap();
+            assert!(!rpc.is_empty(), "restoring the exact original must unblock chain reconciliation");
+            assert!(rpc.iter().all(|request| request["method"] != "eth_sendRawTransaction"));
+            drop(rpc);
+            assert_eq!(originals(), repaired, "recovery cannot replace either original or its nonce");
+            assert_eq!(*controls.lock().unwrap(), controls_before);
+            assert_eq!(std::fs::read(&account_path).unwrap(), saved_bytes);
+            assert_eq!(reopened.credential_export(id, None).unwrap(), exported);
+            assert_eq!(provider_records(), provider_before);
+            assert_eq!(journal.query_row("SELECT COUNT(*) FROM cancellations",
+                [], |row| row.get::<_, u64>(0)).unwrap(), 0);
+            let untouched: (u64, u64, u64, u64) = provider_db.query_row(
+                "SELECT (SELECT COUNT(*) FROM funding_attempts),(SELECT COUNT(*) FROM fee_obligations),
+                        (SELECT COUNT(*) FROM fee_batches),(SELECT COUNT(*) FROM requests)",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
+            assert_eq!(untouched, (0, 0, 0, 0));
+            let (status, account) = fixture.send("GET", &format!("/v1/contracts/{id}"),
+                &bearer(&opened.credential), Vec::new()).await;
+            assert_eq!(status, StatusCode::OK, "{account}");
+            assert_eq!(account, serde_json::to_value(&opened.account).unwrap());
+            assert_eq!(provider_records(), provider_before);
+            stop.send(()).unwrap();
+            provider_server.await.unwrap();
+            rpc_server.abort();
+            assert!(rpc_server.await.unwrap_err().is_cancelled());
+        }
+    }
+}

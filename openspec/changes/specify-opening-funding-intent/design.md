@@ -370,6 +370,14 @@ This closes only the provider-side quote-storage exclusion for top-up credit/rec
 
 Quote-counter preservation is checked across each top-up, replay and account read after acquiring fresh owner authority. Challenge housekeeping may legitimately expire older minute rows; this test neither pins that cleanup timing nor treats the quote-storage scenario as issuance-budget exhaustion. The definite full-quote refusal must roll back its own counter changes.
 
+## Task 2.8.2.4 native pending-top-up original-ownership guard
+
+`native_topup_recovery_refuses_missing_or_different_original_journal` covers the prerequisite original-payment boundary for later native capacity-pressure tests. Each isolated case has complete signed paid-opening state, its retained provider acknowledgement/payment and a coherent accepted opening journal entry. Saved native account/credential and pending top-up state are explicit restored prerequisites, not observed preparation, submission or execution. A genuine native owner-authenticated account refresh and credential export establish that the restored agreement is usable without resuming or clearing its top-up.
+
+The pending top-up has either no journal row or an internally consistent different signed original with the same payer, recipient, amount and commitment but another nonce. Each reopened native entry point (`resume`, repeated `topup` and repeated `fund`) must refuse before any RPC or further provider request. All saved bytes, exported credential authority, complete journal rows, provider account/funding/credential/intent records and control budgets remain unchanged. This is not malformed-envelope or different-amount rejection hiding the original-identity guard.
+
+Six explicit fixture repairs restore only the exact top-up journal row, leaving saved bytes untouched. The same reopened native call must then reach the isolated unavailable RPC while preserving both originals and their nonce ownership, with no submission, provider control request, replacement operation, cancellation or monetary change. Reconciliation may update journal status/error metadata; immutable original fields remain exact. Existing bearers still read their original accounts. This demonstrates the guard and its non-vacuous recovery control, not automatic repair, successful top-up settlement, capacity exhaustion, actual historical broadcast, live-chain or power-loss evidence. Parent 2.8.2 remains open.
+
 ## Acceptance gaps and evidence limits
 
 - Audit existing schema/signature/envelope tests before adding consumer-visible missing cases. Prefer worker-owned integration targets and real fixture signatures, explicit times and isolated disk state. Do not copy owner-untracked modules into the commit or widen production APIs solely to bypass ownership.
