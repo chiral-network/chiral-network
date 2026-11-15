@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Managed embeddings could select a generation chat template
+
+- **Native-CFX mismatch:** inventory validation accepted an embedding artifact's selected template file when its hashes matched, and ignored a non-null template selector. The provisioner already prohibited such selection.
+- **Correction:** require explicit `chat_template_name: null` and no inventoried selected template file for embeddings, including zero-length files. Refuse missing/non-null selectors rather than defaulting or discarding them. Keep shared byte/size, model identity and empty-template-digest checks; generation handling is unchanged.
+- **Verification:** three native regressions reject correctly bound templates and invalid selectors, admit a template-free inventory, reject same-size model-byte corruption and a mismatched empty-template identity, and restore admission after correction. All 488 available tests, available builds/checks and strict commercial-change validation pass. Synthetic inventory bytes and native executable headers are not executable GGUF, readiness or hardware qualification; these tests launch no engine.
+
 ### Native embedding configuration permitted nonzero output prices
 
 - **Native-CFX mismatch:** direct provider configuration checked canonical monetary syntax but did not enforce the input-only embedding rule. Only the optional reference provisioner rejected a nonzero embedding output rate.

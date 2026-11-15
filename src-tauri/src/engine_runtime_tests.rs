@@ -36,6 +36,99 @@ fn fixture() -> (tempfile::TempDir, ModelConfig) {
     (directory, config)
 }
 
+fn embedding_fixture() -> (tempfile::TempDir, ModelConfig) {
+    let (directory, mut config) = fixture();
+    let root = &config.runtime.as_ref().unwrap().artifact_dir;
+    let path = root.join("chiral-artifact-sha256.json");
+    let mut manifest = read_json(&path).unwrap();
+    config.model.capabilities = vec!["embeddings".into()];
+    config.model.max_output_tokens = 0;
+    config.model.chat_template_sha256 = hex::encode(Sha256::digest(b""));
+    manifest["task"] = json!("embeddings");
+    manifest["capabilities"] = json!(config.model.capabilities);
+    manifest["max_output_tokens"] = json!(0);
+    manifest["chat_template_name"] = Value::Null;
+    manifest["files"].as_object_mut().unwrap().remove("chiral-chat-template.jinja");
+    std::fs::remove_file(root.join("chiral-chat-template.jinja")).unwrap();
+    std::fs::write(root.join("chiral-model.json"), protocol::canonical_json(&config.model).unwrap()).unwrap();
+    std::fs::write(path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+    (directory, config)
+}
+
+#[test]
+fn embedding_inventory_rejects_selected_templates_even_when_hashes_match() {
+    for source in [b"{{ messages }}".as_slice(), b"".as_slice()] {
+        for selected in [Value::Null, json!("default")] {
+            let (_directory, mut config) = embedding_fixture();
+            let root = &config.runtime.as_ref().unwrap().artifact_dir;
+            let path = root.join("chiral-artifact-sha256.json");
+            let mut manifest = read_json(&path).unwrap();
+            // Bind the exact selected bytes in both metadata and inventory; this
+            // must not be rejected merely for a stale digest or missing file.
+            config.model.chat_template_sha256 = hex::encode(Sha256::digest(source));
+            manifest["chat_template_name"] = selected;
+            manifest["files"]["chiral-chat-template.jinja"] = json!({
+                "sha256": config.model.chat_template_sha256, "size_bytes": source.len(),
+                "upstream_repo": null, "upstream_path": null, "upstream_digest": null
+            });
+            std::fs::write(root.join("chiral-chat-template.jinja"), source).unwrap();
+            std::fs::write(root.join("chiral-model.json"), protocol::canonical_json(&config.model).unwrap()).unwrap();
+            std::fs::write(path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+            assert!(validate_inventory(&config).is_err());
+        }
+    }
+}
+
+#[test]
+fn embedding_inventory_requires_explicit_null_template_selection() {
+    let (_directory, config) = embedding_fixture();
+    let path = config.runtime.as_ref().unwrap().artifact_dir.join("chiral-artifact-sha256.json");
+    let mut manifest = read_json(&path).unwrap();
+    for selected in [
+        Some(json!("default")), Some(json!("tool_use")), Some(json!("")),
+        Some(json!(false)), Some(json!(0)), Some(json!([])), Some(json!({})), None,
+    ] {
+        if let Some(value) = selected {
+            manifest["chat_template_name"] = value;
+        } else {
+            manifest.as_object_mut().unwrap().remove("chat_template_name");
+        }
+        std::fs::write(&path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+        assert!(validate_inventory(&config).is_err());
+    }
+    manifest["chat_template_name"] = Value::Null;
+    std::fs::write(path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+    let validated = validate_inventory(&config).unwrap();
+    assert_eq!(validated.task, "embeddings");
+    assert!(validated.template.is_none());
+}
+
+#[test]
+fn template_free_embedding_inventory_still_binds_model_bytes_and_empty_digest() {
+    // Reuse synthetic inventory bytes, not an executable GGUF or engine qualification.
+    let (_directory, mut config) = embedding_fixture();
+    let root = &config.runtime.as_ref().unwrap().artifact_dir;
+    let model_path = root.join("model-Q4_K_M.gguf");
+    let validated = validate_inventory(&config).unwrap();
+    assert_eq!(validated.task, "embeddings");
+    assert!(validated.template.is_none());
+    assert_eq!(validated.model_file, model_path.canonicalize().unwrap());
+
+    let mut bytes = std::fs::read(&model_path).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&model_path, &bytes).unwrap();
+    assert!(validate_inventory(&config).is_err());
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&model_path, &bytes).unwrap();
+
+    config.model.chat_template_sha256 = hex::encode(Sha256::digest(b"{{ messages }}"));
+    std::fs::write(root.join("chiral-model.json"), protocol::canonical_json(&config.model).unwrap()).unwrap();
+    assert!(validate_inventory(&config).is_err());
+    config.model.chat_template_sha256 = hex::encode(Sha256::digest(b""));
+    std::fs::write(root.join("chiral-model.json"), protocol::canonical_json(&config.model).unwrap()).unwrap();
+    assert!(validate_inventory(&config).unwrap().template.is_none());
+}
+
 #[test]
 fn inventories_bind_every_selected_byte_and_reject_unlisted_libraries() {
     let (_directory, config) = fixture();

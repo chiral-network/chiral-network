@@ -10,7 +10,7 @@ Goals:
 - Cover the complete typed offer/model/profile/quote vocabulary without duplicating the foundation's signing/money algorithms.
 - Distinguish receiver syntax/consistency checks, native issuer policy, native deployment qualification and consumer agreement checks.
 - Preserve immutable accepted terms and the narrow evidence-only renewal exception.
-- Expose the native embedding output-price gap as work to prove and fix, not silently declare it implemented.
+- Enforce native embedding output-price/template constraints at their actual boundaries without treating acceptance as runtime qualification.
 
 Non-goals:
 - Deploy a provider, qualify real hardware, collect funding, change an account or alter the whitepaper.
@@ -80,7 +80,7 @@ Task 2.1.4 corrects static acceptance of `localhost.` and names below `*.localho
 
 The origin regression covers plain, case-folded, percent-encoded and IDNA dot spellings, nested localhost subdomains and repeated terminal dots, with HTTPS/443 and development-style HTTP(S) ports in both modes. Each case first establishes that URL parsing accepts the spelling. Positive controls retain public absolute DNS names, including `localhost.example.org.`, and existing exact-localhost/literal-loopback behavior. These are deterministic static admission checks, not DNS, reachability or transport-bypass evidence.
 
-The shared validator remains the gate for offer-registry insertion, provider public-endpoint configuration and safe outbound client construction. DNS address validation/pinning, disabled redirects/proxies and private-engine configuration are unchanged. Embedding template enforcement and the other incomplete commercial tasks remain open; this correction does not complete the change or authorize archival.
+The shared validator remains the gate for offer-registry insertion, provider public-endpoint configuration and safe outbound client construction. DNS address validation/pinning, disabled redirects/proxies and private-engine configuration are unchanged. Remaining schema/time and proposal/recovery acceptance tasks keep the change open; the native corrections do not authorize archival.
 
 ## Native embedding-price implementation
 
@@ -88,11 +88,19 @@ Task 2.2 enforces zero output price inside `ProviderConfig::validate`, which is 
 
 Two regressions in `inference_commercial_terms_test.rs` exercise both direct validation and actual configuration-file loading. They pair free/paid input and zero-output controls with one-wei/maximal nonzero rates and noncanonical zero spellings, preserve priced development generation, and reject an invalid embedding price in either model position. Synthetic paths and CPU settings test configuration admission only: no keys, artifact inventories, engines, RPC or qualification are supplied.
 
-Invalid configurations must be corrected explicitly; no rate is normalized, no existing quote/account/balance is rewritten, and no ledger migration is introduced. The distinct managed-inventory template requirement remains task 2.3.
+Invalid configurations must be corrected explicitly; no rate is normalized, no existing quote/account/balance is rewritten, and no ledger migration is introduced. The distinct managed-inventory template requirement is covered by task 2.3 below.
+
+## Native embedding-template implementation
+
+Task 2.3 closes the inventory boundary used by managed startup and native preflight. Embeddings require an explicit `chat_template_name: null` and no inventoried `chiral-chat-template.jinja`, even if the file is empty and all hashes agree. A missing selector is not silently defaulted: the existing provisioner requires that manifest field and permits only null for embeddings. A non-null selector without a template file is also rejected.
+
+The validator reuses one selected-template inventory lookup, refuses rather than discards forbidden metadata/files, and retains the existing runtime/artifact identity, byte/size and empty-template-digest checks. There is no embedding-specific inventory bypass or alteration of generation-template handling. No signed model, artifact inventory or accepted financial state is migrated.
+
+Three native regressions cover correctly hashed nonempty/empty selected templates with null/named selectors, missing/non-null selectors without a file, and successful template-free admission followed by same-size model-byte corruption and a jointly altered configured/base template digest. Restoring the original bytes and empty digest restores admission. These tests use the existing synthetic runtime-header/model-byte fixture and launch no process; they do not establish valid executable GGUF content, readiness, capability probes or hardware qualification.
 
 ## Historical implementation gaps and ownership constraints
 
-The initial native embedding-price gap was that configuration accepted any canonical output rate while only the reference provisioner enforced zero. Task 2.2 now closes that configuration gap as documented above; inventory/template acceptance remains separate.
+The initial native embedding-price gap was that configuration accepted any canonical output rate while only the reference provisioner enforced zero. Task 2.2 closes that configuration gap; task 2.3 separately closes selected-template admission as documented above.
 
 `provider_config.rs`, `engine_runtime.rs`, `contracts.rs`, `consumer.rs`, `billing_store.rs`, `offer_registry.rs`, `performance.rs` and `protocol.rs` include pre-existing uncommitted work (several are entirely untracked). A new standalone integration test can be committed independently. A source fix must not absorb the owner's surrounding uncommitted implementation. If the necessary native-boundary edit cannot be committed separately, record that source-ownership blocker, leave the fix task unticked, and continue another unblocked slice rather than claiming the gap closed or publishing the owner's files.
 
@@ -109,7 +117,7 @@ The native quote cutover is also open owner-source work: remove both public wall
 
 ## Migration Plan
 
-This change began as specifications and now includes isolated acceptance tests and native origin/embedding-price corrections. Remaining tasks include embedding-template enforcement, without migrating money or changing accepted agreement bytes. Archive normally only after all implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
+This change began as specifications and now includes isolated acceptance tests and native origin/embedding-price/template corrections. Remaining work includes schema/time and proposal/recovery acceptance, without migrating money or changing accepted agreement bytes. Archive normally only after all implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
 
 ## Open Questions
 

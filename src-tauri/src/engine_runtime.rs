@@ -156,8 +156,14 @@ pub fn validate_inventory(model: &ModelConfig) -> Result<ValidatedRuntime, Strin
     if !model_name.ends_with(".gguf") || !files.contains_key(model_name) { return Err("GGUF entry point is not inventoried".into()); }
     let repo = artifact["model"]["repo_id"].as_str().ok_or("missing model repository")?;
     if base.id != format!("{repo}/{}", relative_path(model_name)?.file_name().and_then(|s| s.to_str()).ok_or("invalid GGUF filename")?) { return Err("model API alias differs from selected GGUF identity".into()); }
-    let template = if files.contains_key("chiral-chat-template.jinja") { Some(config.artifact_dir.join("chiral-chat-template.jinja").canonicalize().map_err(|_| "cannot resolve selected template")?) } else { None };
-    if files.get("chiral-chat-template.jinja").is_some_and(|entry| entry.size_bytes > 1024 * 1024) { return Err("selected template exceeds 1 MiB".into()); }
+    let template_entry = files.get("chiral-chat-template.jinja");
+    if task == "embeddings"
+        && (artifact.get("chat_template_name") != Some(&Value::Null) || template_entry.is_some())
+    {
+        return Err("embedding artifacts require null template selection and no template file".into());
+    }
+    let template = if template_entry.is_some() { Some(config.artifact_dir.join("chiral-chat-template.jinja").canonicalize().map_err(|_| "cannot resolve selected template")?) } else { None };
+    if template_entry.is_some_and(|entry| entry.size_bytes > 1024 * 1024) { return Err("selected template exceeds 1 MiB".into()); }
     let template_bytes = match &template { Some(path) => std::fs::read(path).map_err(|_| "cannot read template")?, None => Vec::new() };
     if std::str::from_utf8(&template_bytes).is_err() || template_digest(&template_bytes) != base.chat_template_sha256 || (base.capabilities.iter().any(|c| c == "chat") && template.is_none()) { return Err("selected chat template identity mismatch".into()); }
     let validated = ValidatedRuntime { executable, model_file: config.artifact_dir.join(relative_path(model_name)?).canonicalize().map_err(|_| "cannot resolve GGUF model")?, template, task: task.into(), runtime_sha256: manifest_hash(&runtime_value)?, artifact_manifest_sha256: manifest_hash(&artifact)? };
