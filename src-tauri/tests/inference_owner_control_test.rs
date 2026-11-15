@@ -3108,3 +3108,240 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
     assert!(client_server.await.unwrap_err().is_cancelled());
     assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
 }
+
+#[tokio::test]
+async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 59_000);
+    let other = fixture.open_free().await;
+    // Opening credit is a post-verification prerequisite; this test neither runs an
+    // engine nor observes chain execution. Settlement inputs stand for validated usage.
+    let (opened, _) = fixture.paid_account().await;
+    let id = &opened.account.contract_id;
+    let now = protocol::now().unwrap();
+    let app = fixture.provider.state.ledger.issue_credential(id, &CredentialIssueRequest {
+        expires_at: now + 3600, spend_cap_wei: Some("2".into()),
+        max_concurrency: 1, scopes: vec!["infer".into()],
+    }, now).unwrap();
+    let read = fixture.scoped_credential(id, "read");
+    let other_before = fixture.credential_state(&other.account.contract_id);
+    let mut expected_account = serde_json::to_value(&opened.account).unwrap();
+    let mut expected_credentials = serde_json::to_value(
+        fixture.provider.state.ledger.credentials(id).unwrap()).unwrap();
+    let known = fixture.provider.state.ledger.reserve(id, &app.id, "pressure-known",
+        1, 512, now, &opened.account.model).unwrap();
+    assert_eq!(known.max_cost_wei, "2");
+    let mut expected_known = json!({
+        "id":known.id, "request_id":"pressure-known", "contract_id":id, "credential_id":app.id,
+        "status":"reserved", "usage":{"prompt_tokens":0,"completion_tokens":0},
+        "cost_wei":"0", "max_cost_wei":"2", "provider_loss_wei":"0",
+        "prompt_tokens_reserved":1, "max_output_tokens":512,
+        "created_at":now, "settled_at":null, "performance":null, "waived_wei":"0"
+    });
+
+    let pending = fixture.quote("100").await;
+    let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    // One genuine quote plus 9,999 complete signed restored records: storage
+    // occupancy, not historical issuance or exhausted signing-work/rate budgets.
+    restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
+    let fingerprint = |query: &str| {
+        let mut hash = Keccak::v256();
+        let mut count = 0_u64;
+        let mut statement = db.prepare(query).unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            hash.update(row.get::<_, String>(0).unwrap().as_bytes());
+            count += 1;
+        }
+        let mut digest = [0; 32];
+        hash.finalize(&mut digest);
+        (count, digest)
+    };
+    let protected_state = || [
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash",
+        "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
+        "SELECT json_array(id,record) FROM fee_batches ORDER BY id",
+        "SELECT json_array(id,owner,quote,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,revoked,json_remove(record,'$.spent_wei','$.reserved_wei')) FROM credentials ORDER BY id",
+    ].map(&fingerprint);
+    let quote_rates = || fingerprint(
+        "SELECT json_array(bucket,window,count) FROM rate_limits WHERE bucket LIKE 'quote:%' ORDER BY bucket");
+    let full_quotes = || {
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM quotes WHERE expires>?1",
+            [protocol::now().unwrap()], |row| row.get::<_, u64>(0)).unwrap(), 10_000);
+    };
+    let protected = protected_state();
+    assert_eq!(protected.map(|row| row.0), [10_000, 1, 1, 0, 0, 2, 4]);
+    let rates_before = quote_rates();
+    full_quotes();
+    assert!(rate_records(&fixture.provider.ledger_path).iter()
+        .filter(|(bucket, _, _)| bucket.starts_with("quote:"))
+        .all(|(bucket, _, count)| *count < if bucket == "quote:global" { 600 } else { 12 }));
+    let (status, refused) = fixture.post("/v1/contracts/propose", json!({
+        "offer_id":fixture.provider.offer_id,
+        "consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),"funding_wei":"100"
+    })).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    assert_eq!(refused["error"]["code"], "rate_limit");
+    assert_eq!(protected_state(), protected);
+    assert_eq!(quote_rates(), rates_before);
+
+    // Fresh ledger reservations remain independent of quote storage, while their
+    // own scope, balance, concurrency and cap checks remain in force.
+    let unknown = fixture.provider.state.ledger.reserve(id, &opened.credential.id,
+        "pressure-unknown", 1000, 512, now, &opened.account.model).unwrap();
+    assert_eq!(unknown.max_cost_wei, "3");
+    let mut expected_unknown = json!({
+        "id":unknown.id, "request_id":"pressure-unknown", "contract_id":id,
+        "credential_id":opened.credential.id, "status":"reserved",
+        "usage":{"prompt_tokens":0,"completion_tokens":0},
+        "cost_wei":"0", "max_cost_wei":"3", "provider_loss_wei":"0",
+        "prompt_tokens_reserved":1000, "max_output_tokens":512,
+        "created_at":now, "settled_at":null, "performance":null, "waived_wei":"0"
+    });
+    expected_account["available_wei"] = json!("95");
+    expected_account["reserved_wei"] = json!("5");
+    for credential in expected_credentials.as_array_mut().unwrap() {
+        if credential["id"] == app.id { credential["reserved_wei"] = json!("2"); }
+        if credential["id"] == opened.credential.id { credential["reserved_wei"] = json!("3"); }
+    }
+    for (credential, key, error) in [
+        (&read, "read-cannot-infer", "forbidden:"),
+        (&opened.credential, "account-saturated", "saturation:"),
+        (&app, "application-saturated", "saturation:"),
+    ] {
+        let refused = fixture.provider.state.ledger.reserve(id, &credential.id, key,
+            1, 512, now, &opened.account.model).unwrap_err();
+        assert!(refused.starts_with(error), "{refused}");
+        assert!(fixture.provider.state.ledger.request_view(id, key).unwrap_err().starts_with("not_found:"));
+    }
+    fixture.provider.state.accepting.store(false, Ordering::Release);
+    fixture.provider.state.funding_ready.store(false, Ordering::Release);
+    fixture.provider.state.qualified_models.write().unwrap().clear();
+    assert_eq!(quote_rates(), rates_before);
+    let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
+    for phase in 0..3 {
+        let before_accounting = quote_rates();
+        // Reopen the real ledger/router before each transition. Explicit invocation
+        // of startup's recovery method is not a daemon/process-kill experiment.
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path,
+            &state.config.network.identity).unwrap());
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        full_quotes();
+        if phase == 1 {
+            expected_known["status"] = json!("completed");
+            expected_known["usage"] = serde_json::to_value(&usage).unwrap();
+            expected_known["cost_wei"] = json!("1");
+            expected_known["settled_at"] = json!(now + 1);
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger
+                .settle(&known.id, &usage, "completed", now + 1).unwrap()).unwrap(), expected_known);
+            expected_account["available_wei"] = json!("96");
+            expected_account["reserved_wei"] = json!("3");
+            expected_account["spent_wei"] = json!("1");
+            expected_account["usage"] = serde_json::to_value(&usage).unwrap();
+            for credential in expected_credentials.as_array_mut().unwrap() {
+                if credential["id"] == app.id {
+                    credential["reserved_wei"] = json!("0");
+                    credential["spent_wei"] = json!("1");
+                }
+            }
+            let refused = fixture.provider.state.ledger.reserve(id, &app.id, "cap-after-spend",
+                1, 512, now + 1, &opened.account.model).unwrap_err();
+            assert!(refused.starts_with("spend_cap:"), "{refused}");
+            assert!(fixture.provider.state.ledger.request_view(id, "cap-after-spend").is_err());
+        } else if phase == 2 {
+            assert_eq!(fixture.provider.state.ledger.recover_requests(now + 2).unwrap(), 1);
+            assert_eq!(fixture.provider.state.ledger.recover_requests(now + 3).unwrap(), 0);
+            expected_unknown["status"] = json!("restart_unknown_usage");
+            expected_unknown["provider_loss_wei"] = json!("3");
+            expected_unknown["settled_at"] = json!(now + 2);
+            expected_account["available_wei"] = json!("99");
+            expected_account["reserved_wei"] = json!("0");
+            for credential in expected_credentials.as_array_mut().unwrap() {
+                if credential["id"] == opened.credential.id { credential["reserved_wei"] = json!("0"); }
+            }
+            // Late plausible usage cannot turn an unknown terminal result into a debit.
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.settle(&unknown.id,
+                &TokenUsage { prompt_tokens:1000, completion_tokens:512 },
+                "completed", now + 4).unwrap()).unwrap(), expected_unknown);
+        }
+        if phase > 0 {
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.settle(&known.id,
+                &TokenUsage { prompt_tokens:1, completion_tokens:512 },
+                "cancelled", now + 4).unwrap()).unwrap(), expected_known);
+        }
+        for (key, credential) in [("pressure-known", &app), ("pressure-unknown", &opened.credential)] {
+            let refused = fixture.provider.state.ledger.reserve(id, &credential.id, key,
+                1, 1, now + 4, &opened.account.model).unwrap_err();
+            assert!(refused.starts_with("duplicate_request:"), "{refused}");
+        }
+        assert_eq!(quote_rates(), before_accounting);
+        let expected_requests = json!([expected_unknown, expected_known]);
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.account(id).unwrap()).unwrap(), expected_account);
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.credentials(id).unwrap()).unwrap(), expected_credentials);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get::<_, u64>(0)).unwrap(), 2);
+
+        let base = format!("/v1/contracts/{id}");
+        for (path, expected) in [
+            (base.clone(), expected_account.clone()),
+            (format!("{base}/credentials"), expected_credentials.clone()),
+            (format!("{base}/requests"), expected_requests.clone()),
+            (format!("{base}/requests/{}", known.id), expected_known.clone()),
+            (format!("{base}/requests/pressure-unknown"), expected_unknown.clone()),
+        ] {
+            let (status, value) = fixture.send("GET", &path, &bearer(&read), Vec::new()).await;
+            assert_eq!(status, StatusCode::OK, "{value}");
+            assert_eq!(value, expected);
+        }
+        let request_path = format!("{base}/requests/pressure-known");
+        let proof = fixture.proof(OWNER_KEY, "GET", &request_path, b"").await;
+        let (status, value) = fixture.send("GET", &request_path, &proof.headers, Vec::new()).await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value, expected_known);
+        fixture.consumed(&proof);
+        denied(fixture.send("GET", &request_path, &proof.headers, Vec::new()).await, StatusCode::UNAUTHORIZED);
+        let receipt_path = format!("{base}/receipt");
+        for path in [&request_path, &receipt_path] {
+            denied(fixture.send("GET", path, &HeaderMap::new(), Vec::new()).await, StatusCode::UNAUTHORIZED);
+            for credential in [&other.credential, &app] {
+                denied(fixture.send("GET", path, &bearer(credential), Vec::new()).await, StatusCode::FORBIDDEN);
+            }
+        }
+        // Both authorization forms recover the same accounting; each receipt alone
+        // advances the persistent sequence, never money, request evidence or authority.
+        let proof = fixture.proof(OWNER_KEY, "GET", &receipt_path, b"").await;
+        let before_reads = quote_rates();
+        for (index, headers) in [bearer(&read), proof.headers].into_iter().enumerate() {
+            let (status, value) = fixture.send("GET", &receipt_path, &headers, Vec::new()).await;
+            assert_eq!(status, StatusCode::OK, "{value}");
+            let receipt: Signed<UsageReceipt> = serde_json::from_value(value).unwrap();
+            protocol::verify(RECEIPT_DOMAIN, &receipt, &fixture.provider.state.wallet).unwrap();
+            assert_eq!(receipt.payload.network, fixture.provider.state.config.network.identity);
+            assert_eq!(receipt.payload.provider_wallet, fixture.provider.state.wallet);
+            assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), expected_account);
+            assert_eq!(serde_json::to_value(&receipt.payload.requests).unwrap(), expected_requests);
+            assert_eq!(receipt.payload.sequence, phase * 2 + index as u64 + 1);
+        }
+        assert_eq!(db.query_row("SELECT sequence FROM accounts WHERE id=?1", [id],
+            |row| row.get::<_, u64>(0)).unwrap(), (phase + 1) * 2);
+        assert_eq!(fixture.credential_state(id), json!({"account":expected_account,"credentials":expected_credentials}));
+        assert_eq!(fixture.credential_state(&other.account.contract_id), other_before);
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.requests(id, None).unwrap()).unwrap(), expected_requests);
+        fixture.credentials_usable(&[&opened.credential, &app, &read, &other.credential]);
+        assert_eq!(protected_state(), protected);
+        assert_eq!(quote_rates(), before_reads);
+        assert_eq!(db.query_row("SELECT sequence FROM accounts WHERE id=?1",
+            [&other.account.contract_id], |row| row.get::<_, u64>(0)).unwrap(), 0);
+        full_quotes();
+    }
+    let journal = Connection::open(fixture.provider.state.config.network
+        .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+    let operations: (u64, u64) = journal.query_row(
+        "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)",
+        [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    assert_eq!(operations, (0, 0));
+}
