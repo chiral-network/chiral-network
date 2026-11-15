@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Funding registration could predate signed quote issuance
+
+- **Native-CFX defect:** fresh registration rejected expiry but not a clock sample before quote issuance, permitting a signed acknowledgement that the native consumer's unchanged interval guard rejects.
+- **Correction:** enforce `issued_at <= registered_at < expires_at` after acquiring the ledger write transaction. Refuse a pre-issuance sample with `invalid_quote`; do not clamp signed time, change terms or borrow a rate watermark. Previously accepted acknowledgements remain recoverable without a fresh clock or renewed lease.
+- **Verification:** two ledger regressions cover exact interval endpoints, unavailable time, exact state conservation/reopening, same-original recovery and real writer contention with deterministic time advancement. A separate writer probe requires the registration transaction to own the write lock when sampling. All 481 available tests and available builds/checks pass. Prior account credit is a disclosed post-verification prerequisite; these are not live-chain, elapsed HTTP/native lost-response or power-loss results.
+
 ### Rejected quote insertions did not bound signing work
 
 - **Current native-CFX defect:** the public proposal route signed before storage admission, so its committed-issuance counter did not bound signatures for rejected insertions.

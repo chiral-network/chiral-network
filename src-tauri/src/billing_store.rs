@@ -1655,6 +1655,7 @@ impl BillingStore {
             // Sample time only after obtaining the write transaction: a request
             // queued behind another writer must not backdate its acceptance.
             let now=clock()?;
+            if now < q.issued_at { return Err("invalid_quote: funding intent cannot precede quote issuance".into()); }
             if q.expires_at <= now { return Err("expired_quote: funding intent must be registered before quote expiry".into()); }
             if !accepting { return Err("provider_draining: provider is not accepting new funding".into()); }
             require_execution(tx, &q.model, execution_model)?;

@@ -911,6 +911,172 @@ fn registration_rejects_expiry_wrong_owner_network_and_replacement() {
 }
 
 #[test]
+fn registration_preserves_signed_time_boundaries_and_cached_recovery() {
+    for sample in [Ok(99), Ok(100), Ok(399), Ok(400), Ok(401), Err("clock unavailable")] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let mut store = BillingStore::open(&path, &network()).unwrap();
+        paid(&store); // Explicit post-verification history, not observed chain execution.
+        store.store_quote(&quote(1000, false), 100).unwrap();
+        let q = quote(1000, false);
+        store.store_quote(&q, 100).unwrap();
+        let data = protocol::opening_data(&q.payload).unwrap();
+        let original = crate::chain_client::sign_transaction(
+            OWNER_KEY, network().chain_id, 2, &q.payload.provider_wallet, 1000,
+            &data, 1, native_fixture_gas(&data),
+        ).unwrap();
+        let before = quote_work_protected_snapshot(&store);
+        let result = store.register_funding_intent(
+            &q, &q.payload.consumer_wallet, &original.raw_transaction, &original.tx_hash,
+            2, PROVIDER_KEY, || sample.map_err(str::to_owned), true, &q.payload.model,
+        );
+        let (ack, accepted_at) = match sample {
+            Ok(now @ 100..=399) => (result.unwrap(), now),
+            _ => {
+                let failure = result.unwrap_err();
+                match sample {
+                    Ok(99) => assert!(failure.starts_with("invalid_quote:"), "{failure}"),
+                    Ok(_) => assert!(failure.starts_with("expired_quote:"), "{failure}"),
+                    Err(message) => assert_eq!(failure, message),
+                }
+                assert_eq!(quote_work_protected_snapshot(&store), before);
+                drop(store);
+                store = BillingStore::open(&path, &network()).unwrap();
+                assert_eq!(quote_work_protected_snapshot(&store), before);
+                // A refused sample cannot poison this quote or its original nonce.
+                let recovered = store.register_funding_intent(
+                    &q, &q.payload.consumer_wallet, &original.raw_transaction, &original.tx_hash,
+                    2, PROVIDER_KEY, || Ok(100), true, &q.payload.model,
+                ).unwrap();
+                (recovered, 100)
+            }
+        };
+        protocol::verify(protocol::INTENT_DOMAIN, &ack, &q.payload.provider_wallet).unwrap();
+        assert_eq!(serde_json::to_value(&ack.payload).unwrap(), serde_json::json!({
+            "network": q.payload.network,
+            "provider_wallet": q.payload.provider_wallet,
+            "consumer_wallet": q.payload.consumer_wallet,
+            "quote_id": q.payload.id,
+            "tx_hash": original.tx_hash,
+            "registered_at": accepted_at,
+        }));
+        // Only the matching standalone quote moves to permanent intent retention.
+        // All prior money, roots, requests, rates and unrelated terms stay exact.
+        let mut expected = before;
+        let pending = serde_json::json!([
+            q.payload.id, q.payload.consumer_wallet, q.payload.expires_at, encode(&q).unwrap()
+        ]).to_string();
+        expected[2].retain(|record| record != &pending);
+        expected[9].push(serde_json::json!([
+            q.payload.id, original.tx_hash, original.raw_transaction, encode(&ack).unwrap(),
+            encode(&q).unwrap(), q.payload.consumer_wallet, "2", q.payload.expires_at
+        ]).to_string());
+        expected[9].sort();
+        assert_eq!(quote_work_protected_snapshot(&store), expected);
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        assert_eq!(quote_work_protected_snapshot(&store), expected);
+        for recovery_time in [Ok(99), Ok(400), Err("clock unavailable")] {
+            let sampled = std::cell::Cell::new(false);
+            let cached = store.register_funding_intent(
+                &q, &q.payload.consumer_wallet, &original.raw_transaction, &original.tx_hash,
+                2, PROVIDER_KEY,
+                || {
+                    sampled.set(true);
+                    recovery_time.map_err(str::to_owned)
+                },
+                false, &q.payload.model,
+            ).unwrap();
+            assert!(!sampled.get(), "cached acceptance must not sample fresh registration time");
+            assert_eq!(encode(&cached).unwrap(), encode(&ack).unwrap());
+            assert_eq!(quote_work_protected_snapshot(&store), expected);
+        }
+    }
+}
+
+#[test]
+fn registration_samples_time_after_waiting_for_the_writer() {
+    use std::{
+        cell::RefCell,
+        sync::{atomic::{AtomicU64, AtomicUsize, Ordering}, mpsc, Arc},
+        time::Duration,
+    };
+    // rusqlite accepts a function pointer. Keep its one-shot handshake local to
+    // this dedicated writer thread, never in shared process-wide test state.
+    thread_local! {
+        static WRITER_WAIT: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> =
+            const { RefCell::new(None) };
+    }
+    fn wait_for_release(_: i32) -> bool {
+        WRITER_WAIT.with(|slot| match slot.borrow_mut().take() {
+            Some((blocked, release)) => blocked.send(()).is_ok()
+                && release.recv_timeout(Duration::from_secs(10)).is_ok(),
+            None => false,
+        })
+    }
+
+    for after_wait in [99, 400] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        paid(&store);
+        let q = quote(1000, false);
+        store.store_quote(&q, 100).unwrap();
+        let data = protocol::opening_data(&q.payload).unwrap();
+        let original = crate::chain_client::sign_transaction(
+            OWNER_KEY, network().chain_id, 2, &q.payload.provider_wallet, 1000,
+            &data, 1, native_fixture_gas(&data),
+        ).unwrap();
+        let before = quote_work_protected_snapshot(&store);
+        let writer = BillingStore::open(&path, &network()).unwrap();
+        writer.db.lock().unwrap().busy_handler(Some(wait_for_release)).unwrap();
+        let mut blocker = Connection::open(&path).unwrap();
+        let held = blocker.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let clock = Arc::new(AtomicU64::new(100));
+        let samples = Arc::new(AtomicUsize::new(0));
+        let worker_clock = clock.clone();
+        let worker_samples = samples.clone();
+        let probe_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            WRITER_WAIT.with(|slot| *slot.borrow_mut() = Some((blocked_tx, release_rx)));
+            writer.register_funding_intent(
+                &q, &q.payload.consumer_wallet, &original.raw_transaction, &original.tx_hash,
+                2, PROVIDER_KEY,
+                || {
+                    worker_samples.fetch_add(1, Ordering::SeqCst);
+                    // The blocker has been released. Only registration's own
+                    // write transaction can now exclude this independent writer.
+                    let probe = Connection::open(&probe_path).unwrap();
+                    probe.busy_timeout(Duration::ZERO).unwrap();
+                    let failure = probe.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+                    assert!(matches!(&failure, rusqlite::Error::SqliteFailure(code, _)
+                        if code.code == rusqlite::ErrorCode::DatabaseBusy), "{failure}");
+                    Ok(worker_clock.load(Ordering::SeqCst))
+                },
+                true, &q.payload.model,
+            )
+        });
+        blocked_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let early_samples = samples.load(Ordering::SeqCst);
+        clock.store(after_wait, Ordering::SeqCst);
+        held.commit().unwrap();
+        release_tx.send(()).unwrap();
+        let result = worker.join().unwrap();
+        assert_eq!(early_samples, 0, "arrival time must not be sampled before writer admission");
+        assert_eq!(samples.load(Ordering::SeqCst), 1);
+        let failure = result.unwrap_err();
+        let prefix = if after_wait == 99 { "invalid_quote:" } else { "expired_quote:" };
+        assert!(failure.starts_with(prefix), "{failure}");
+        assert_eq!(quote_work_protected_snapshot(&store), before);
+        drop(store);
+        let reopened = BillingStore::open(&path, &network()).unwrap();
+        assert_eq!(quote_work_protected_snapshot(&reopened), before);
+    }
+}
+
+#[test]
 fn pending_capacity_rejects_new_intents_without_losing_accepted_obligations() {
     let store = memory();
     let q = quote(1000, false);
