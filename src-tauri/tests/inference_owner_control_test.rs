@@ -3501,6 +3501,233 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
 }
 
 #[tokio::test]
+async fn paid_topup_recovers_under_each_quote_budget_with_spend_and_hold_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    for (case, exhausted_bucket) in ["quote-work:global", "quote:global"].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 73_000 + case as u64);
+        let unrelated = fixture.open_free().await;
+        // Opening credit and supplied prior usage are ledger prerequisites,
+        // not live-chain or engine evidence for this top-up.
+        let (opened, _) = fixture.paid_account().await;
+        let id = &opened.account.contract_id;
+        let root = opened.credential.as_ref().unwrap();
+        let read = fixture.scoped_credential(id, "read");
+        let quote = fixture.provider.state.ledger.quote(id).unwrap();
+        let pending = fixture.quote("100").await;
+        let now = protocol::now().unwrap();
+        let ledger = &fixture.provider.state.ledger;
+        let spent = ledger.reserve(id, &root.id, "spent-before-topup", 1, 1, now, &opened.account.model).unwrap();
+        ledger.settle(&spent.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", now).unwrap();
+        let held = ledger.reserve(id, &root.id, "held-through-topup", 1000, 512, now, &opened.account.model).unwrap();
+        let mut expected_account = serde_json::to_value(ledger.account(id).unwrap()).unwrap();
+        assert_eq!(expected_account["funded_wei"], "100");
+        assert_eq!(expected_account["fee_wei"], "0");
+        assert_eq!(expected_account["spent_wei"], "1");
+        assert_eq!(expected_account["reserved_wei"], "3");
+        assert_eq!(expected_account["available_wei"], "96");
+        let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        // Restore one exhausted resource, not 600 observed public issuances.
+        // Keep both logical minutes ahead without changing any signed timestamp.
+        let minute = now / 60 + 10;
+        let tx = db.transaction().unwrap();
+        for (bucket, watermark) in [
+            ("quote:global", "quote_committed_minute"),
+            ("quote-work:global", "quote_work_minute"),
+        ] {
+            assert_eq!(tx.execute(
+                "UPDATE rate_limits SET window=?1,count=CASE WHEN bucket=?2 THEN 600 ELSE count END WHERE bucket=?3",
+                params![minute, exhausted_bucket, bucket]).unwrap(), 1);
+            assert_eq!(tx.execute("UPDATE metadata SET value=?1 WHERE key=?2", params![minute, watermark]).unwrap(), 1);
+        }
+        tx.commit().unwrap();
+        let budgets = || {
+            let mut statement = db.prepare(
+                "SELECT json_array(bucket,window,count) FROM rate_limits
+                 WHERE bucket IN ('quote:global','quote-work:global') ORDER BY bucket").unwrap();
+            let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+            rows
+        };
+        let mut before_refusal = ledger_snapshot(&db);
+        assert_eq!(before_refusal[3].len(), 1, "quote storage is not the exhausted resource");
+        for bucket in ["quote:global", "quote-work:global"] {
+            let row = before_refusal[9].iter().find(|row| row[0] == bucket).unwrap();
+            let count = row[2].as_u64().unwrap();
+            if bucket == exhausted_bucket { assert_eq!(count, 600); }
+            else { assert!((1..600).contains(&count)); }
+        }
+        let (status, document) = fixture.post("/v1/contracts/propose", json!({
+            "offer_id":fixture.provider.offer_id,
+            "consumer_wallet":opened.account.consumer_wallet,"funding_wei":"100"
+        })).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{document}");
+        assert_eq!(document["error"]["code"], "rate_limit");
+        if exhausted_bucket == "quote:global" {
+            // Committed-issuance refusal cannot refund the independently spent
+            // signing permit; work exhaustion itself spends no extra permit.
+            let work = before_refusal[9].iter_mut().find(|row| row[0] == "quote-work:global").unwrap();
+            work[2] = json!(work[2].as_u64().unwrap() + 1);
+        }
+        assert_eq!(ledger_snapshot(&db), before_refusal);
+        let exhausted = budgets();
+        let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+        let path = format!("/v1/contracts/{id}/topup");
+        let body = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: raw.clone() }).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc_url = format!("http://{}", listener.local_addr().unwrap());
+        let rpc = Arc::new(TopupRecoveryRpc {
+            quote: quote.payload.clone(), tx_hash: envelope.tx_hash.clone(),
+            phase: AtomicU64::new(0), timestamp: AtomicU64::new(protocol::now().unwrap()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let app = Router::new().route("/", post(topup_recovery_rpc)).with_state(rpc.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let mut credited = false;
+        let mut pending_record = None;
+        for (attempt, phase) in [0, 1, 2, 2].into_iter().enumerate() {
+            fixture.app = Router::new();
+            let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+            Arc::get_mut(&mut state.config).unwrap().network.rpc_url = rpc_url.clone();
+            state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+            state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+            state.accepting.store(false, Ordering::Release);
+            state.funding_ready.store(false, Ordering::Release);
+            state.qualified_models.write().unwrap().clear();
+            fixture.app = contracts::router(fixture.provider.state.clone());
+            rpc.phase.store(phase, Ordering::Release);
+            rpc.timestamp.store(protocol::now().unwrap(), Ordering::Release);
+            assert_eq!(budgets(), exhausted);
+            if attempt == 0 {
+                let before = ledger_snapshot(&db);
+                for headers in [HeaderMap::new(), bearer(root), bearer(&read)] {
+                    denied(fixture.send("POST", &path, &headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+                    assert_eq!(ledger_snapshot(&db), before);
+                }
+                let wrong = fixture.proof(OTHER_KEY, "POST", &path, &body).await;
+                let mut expected = ledger_snapshot(&db);
+                denied(fixture.send("POST", &path, &wrong.headers, body.clone()).await, StatusCode::FORBIDDEN);
+                fixture.consumed(&wrong);
+                expected[11].retain(|row| row[0].as_str() != Some(wrong.nonce.as_str()));
+                assert_eq!(ledger_snapshot(&db), expected);
+                assert!(rpc.requests.lock().unwrap().is_empty());
+            }
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let mut expected = ledger_snapshot(&db);
+            let start = rpc.requests.lock().unwrap().len();
+            let (status, document) = fixture.send("POST", &path, &proof.headers, body.clone()).await;
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            let after = ledger_snapshot(&db);
+            {
+                let calls = rpc.requests.lock().unwrap();
+                let calls = &calls[start..];
+                let observations = if phase < 2 { 1 } else { 2 };
+                for method in ["eth_getTransactionReceipt", "eth_syncing"] {
+                    assert_eq!(calls.iter().filter(|call| call["method"] == method).count(), observations);
+                }
+                for tag in ["safe", "latest", "0x8"] {
+                    assert_eq!(calls.iter().filter(|call| call["method"] == "eth_getBlockByNumber"
+                        && call["params"][0] == tag).count(), if phase < 2 && tag == "0x8" { 0 } else { observations });
+                }
+            }
+            if phase < 2 {
+                assert_eq!(status, StatusCode::CONFLICT, "{document}");
+                assert_eq!(document["error"]["code"], "funding_pending");
+                assert_eq!(after[5].len(), 1);
+                let record = &after[5][0];
+                assert_eq!(record[0], envelope.tx_hash);
+                assert_eq!(record[1], *id);
+                assert_eq!(record[3], raw);
+                assert_eq!(record[2]["status"], "pending");
+                assert_eq!(record[2]["value_wei"], Value::Null);
+                assert_eq!(record[2]["fee_wei"], Value::Null);
+                if let Some(previous) = &pending_record { assert_eq!(&record[2], previous); }
+                else { pending_record = Some(record[2].clone()); }
+                expected[5] = after[5].clone();
+            } else {
+                assert_eq!(status, StatusCode::OK, "{document}");
+                expected_account["funded_wei"] = json!("1100");
+                expected_account["fee_wei"] = json!("5");
+                expected_account["available_wei"] = json!("1091");
+                assert_eq!(document, expected_account);
+                if !credited {
+                    expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3] = expected_account.clone();
+                    assert_eq!(after[4].len(), expected[4].len() + 1);
+                    let funding = after[4].iter().find(|row| row[0] == envelope.tx_hash).unwrap();
+                    assert_eq!(funding[1], *id);
+                    assert_eq!(funding[2]["tx_hash"], envelope.tx_hash);
+                    assert_eq!(funding[2]["contract_id"], *id);
+                    assert_eq!(funding[2]["status"], "accepted");
+                    assert_eq!(funding[2]["value_wei"], "1000");
+                    assert_eq!(funding[2]["fee_wei"], "5");
+                    assert!(funding[2]["created_at"].as_u64().is_some());
+                    assert_eq!(funding[4], "accepted");
+                    assert_eq!(funding[5], funding[2]["created_at"]);
+                    let evidence = VerifiedPayment {
+                        network: quote.payload.network.clone(), tx_hash: envelope.tx_hash.clone(),
+                        from: envelope.from.clone(), to: envelope.to.clone(), value_wei: "1000".into(),
+                        data: envelope.data.clone(), block_hash: format!("0x{:064x}", 8),
+                        block_number: 8, raw_transaction: raw.clone(),
+                    };
+                    assert_eq!(funding[3], serde_json::to_value(evidence).unwrap());
+                    expected[4].push(funding.clone());
+                    expected[4].sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+                    assert!(expected[7].is_empty());
+                    expected[7].push(json!([envelope.tx_hash, quote.payload.platform_wallet, "5",
+                        funding[2]["created_at"], "pending", null]));
+                    expected[5].clear();
+                    credited = true;
+                }
+            }
+            assert_eq!(after, expected, "{exhausted_bucket}, recovery phase {attempt}");
+            assert_eq!(budgets(), exhausted);
+            assert!(!fixture.provider.state.accepting.load(Ordering::Acquire));
+            assert!(!fixture.provider.state.funding_ready.load(Ordering::Acquire));
+            assert!(fixture.provider.state.qualified_models.read().unwrap().is_empty());
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.quote(&pending.payload.id).unwrap()).unwrap(),
+                serde_json::to_value(&pending).unwrap());
+            assert_eq!(fixture.provider.state.ledger.request_view(id, &held.id).unwrap().status, "reserved");
+            let calls = rpc.requests.lock().unwrap().len();
+            denied(fixture.send("POST", &path, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(rpc.requests.lock().unwrap().len(), calls);
+            for (credential, account) in [
+                (root, expected_account.clone()), (&read, expected_account.clone()),
+                (unrelated.credential.as_ref().unwrap(), serde_json::to_value(&unrelated.account).unwrap()),
+            ] {
+                let (status, document) = fixture.send("GET", &format!("/v1/contracts/{}", credential.contract_id),
+                    &bearer(credential), Vec::new()).await;
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(document, account);
+            }
+            assert_eq!(ledger_snapshot(&db), after);
+        }
+        // Recovery neither releases the running hold nor spends it. Its original
+        // terminal operation remains usable after credit and closed admission.
+        let settled = fixture.provider.state.ledger.settle(&held.id,
+            &TokenUsage { prompt_tokens: 1000, completion_tokens: 512 }, "completed", protocol::now().unwrap()).unwrap();
+        assert_eq!(settled.cost_wei, "3");
+        expected_account["spent_wei"] = json!("4");
+        expected_account["reserved_wei"] = json!("0");
+        expected_account["usage"] = json!({"prompt_tokens": 1001, "completion_tokens": 513});
+        assert_eq!(serde_json::to_value(fixture.provider.state.ledger.account(id).unwrap()).unwrap(), expected_account);
+        let (status, document) = fixture.send("GET", &format!("/v1/contracts/{id}/requests/{}", held.id),
+            &bearer(&read), Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(document, serde_json::to_value(settled).unwrap());
+        assert_eq!(budgets(), exhausted);
+        fixture.credentials_usable(&[root, &read, unrelated.credential.as_ref().unwrap()]);
+        let journal = Connection::open(fixture.provider.state.config.network
+            .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+        let operations: (u64, u64) = journal.query_row(
+            "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)",
+            [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(operations, (0, 0));
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
     use std::io::Write;
 
