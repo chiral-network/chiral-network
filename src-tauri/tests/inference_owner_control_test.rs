@@ -328,6 +328,10 @@ impl Fixture {
     }
 
     fn signed_payment(&self, data: &[u8], value: u64, nonce: u64) -> (String, ValidatedPaymentEnvelope) {
+        self.signed_payment_for(OWNER_KEY, data, value, nonce)
+    }
+
+    fn signed_payment_for(&self, signer: &str, data: &[u8], value: u64, nonce: u64) -> (String, ValidatedPaymentEnvelope) {
         // Independent EIP-155 fixture construction; never expose the runtime's private signer.
         let chain_id = self.provider.offer.payload.network.chain_id;
         let to = hex::decode(self.provider.state.wallet.strip_prefix("0x").unwrap()).unwrap();
@@ -342,7 +346,7 @@ impl Fixture {
         let mut keccak = Keccak::v256();
         keccak.update(&unsigned.out());
         keccak.finalize(&mut hash);
-        let key = SecretKey::from_slice(&hex::decode(OWNER_KEY).unwrap()).unwrap();
+        let key = SecretKey::from_slice(&hex::decode(signer).unwrap()).unwrap();
         let (recovery, signature) = Secp256k1::signing_only()
             .sign_ecdsa_recoverable(&Message::from_digest_slice(&hash).unwrap(), &key).serialize_compact();
         let mut signed = RlpStream::new_list(9);
@@ -353,7 +357,7 @@ impl Fixture {
             signed.append(&&limb[first..]);
         }
         let raw = format!("0x{}", hex::encode(signed.out()));
-        let owner = wallet::address_from_private_key(OWNER_KEY).unwrap();
+        let owner = wallet::address_from_private_key(signer).unwrap();
         let envelope = self.provider.state.chain.validate_payment_envelope(
             &raw, &owner, &self.provider.state.wallet, &value.to_string(), data).unwrap();
         (raw, envelope)
@@ -3734,6 +3738,20 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
         let mut fixture = Fixture::new(directory.path(), if ledger_wide { 74_001 } else { 74_000 });
         let mut free_offer = fixture.provider.offer.payload.clone();
         let seed = fixture.open_free().await;
+        // Give the free-eligibility probe a different real owner. The paid owner
+        // needs seven setup, one refusal and four recovery challenges: exactly
+        // twelve, without relying on a minute rollover to replenish its budget.
+        let (status, document) = fixture.post("/v1/contracts/propose", json!({
+            "offer_id":fixture.provider.offer_id,
+            "consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),"funding_wei":"0"
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{document}");
+        let other_quote: Signed<Quote> = serde_json::from_value(document).unwrap();
+        let other_body = serde_json::to_vec(&json!({"quote_id":other_quote.payload.id,"raw_transaction":null})).unwrap();
+        let other_proof = fixture.proof(OTHER_KEY, "POST", OPEN, &other_body).await;
+        let (status, document) = fixture.send("POST", OPEN, &other_proof.headers, other_body).await;
+        assert_eq!(status, StatusCode::OK, "{document}");
+        let other: OpenResult = serde_json::from_value(document).unwrap();
         // Paid opening and supplied prior usage are post-verification ledger
         // prerequisites, not the chain/engine observations under test here.
         let (opened, _) = fixture.paid_account().await;
@@ -3754,13 +3772,13 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
         free_offer.revision = fixture.provider.offer.payload.revision + 1;
         fixture.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, free_offer, &fixture.provider.state.private_key).unwrap();
         fixture.provider.offer_id = fixture.provider.state.offers.insert(fixture.provider.offer.clone()).unwrap();
-        let mut earlier = vec![seed];
+        let mut earlier = vec![other, seed];
         let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
         db.pragma_update(None, "foreign_keys", true).unwrap();
         if ledger_wide {
-            // Complete signed account/root records, not 9,998 observed HTTP openings.
+            // Complete signed account/root records, not 9,997 observed HTTP openings.
             // Distinct restored owners keep the owned-account bound unexhausted.
-            let restored = restore_free_accounts(&mut db, &fixture, &earlier[0], 9_998, None);
+            let restored = restore_free_accounts(&mut db, &fixture, &earlier[0], 9_997, None);
             earlier.extend(restored);
         } else {
             for _ in 0..6 { earlier.push(fixture.open_free().await); }
@@ -3776,7 +3794,7 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
                          AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract))",
                 params![opened.account.consumer_wallet, protocol::now().unwrap()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
-            assert_eq!(counts, if ledger_wide { (2, 10_000, 1, 0) } else { (8, 8, 1, 0) });
+            assert_eq!(counts, if ledger_wide { (2, 10_000, 1, 0) } else { (8, 9, 1, 0) });
             if ledger_wide {
                 assert_eq!(db.query_row(
                     "SELECT MAX(owned) FROM (SELECT COUNT(*) AS owned FROM accounts GROUP BY owner)",
@@ -3829,7 +3847,7 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
         let protected = protected_state();
         let before_credit = monetary_state();
         let no_attempts = attempts();
-        assert_eq!(before_credit.map(|row| row.0), [if ledger_wide { 10_000 } else { 8 }, 1, 0]);
+        assert_eq!(before_credit.map(|row| row.0), [if ledger_wide { 10_000 } else { 9 }, 1, 0]);
         assert_eq!(no_attempts.0, 0);
 
         let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
@@ -3899,10 +3917,10 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
                 // Full free-opening capacity cannot make an existing free account
                 // eligible for paid top-up, even with its real owner's proof.
                 let free_path = format!("/v1/contracts/{}/topup", earlier[0].account.contract_id);
-                let (free_raw, _) = fixture.signed_payment(
+                let (free_raw, _) = fixture.signed_payment_for(OTHER_KEY,
                     &protocol::topup_data(&earlier[0].account.contract_id).unwrap(), 1000, 2);
                 let free_topup = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: free_raw }).unwrap();
-                let proof = fixture.proof(OWNER_KEY, "POST", &free_path, &free_topup).await;
+                let proof = fixture.proof(OTHER_KEY, "POST", &free_path, &free_topup).await;
                 let remaining = challenges(&proof.nonce);
                 let before_rates = rates();
                 let (status, document) = fixture.send("POST", &free_path, &proof.headers, free_topup).await;
@@ -3957,7 +3975,7 @@ async fn paid_topup_recovers_at_each_free_opening_limit() {
                 expected_account["available_wei"] = json!("1091");
                 assert_eq!(document, expected_account);
                 let current = monetary_state();
-                assert_eq!(current.map(|row| row.0), [if ledger_wide { 10_000 } else { 8 }, 2, 1]);
+                assert_eq!(current.map(|row| row.0), [if ledger_wide { 10_000 } else { 9 }, 2, 1]);
                 if let Some(previous) = credited { assert_eq!(current, previous); }
                 else { credited = Some(current); }
                 assert_eq!(attempts(), no_attempts);
