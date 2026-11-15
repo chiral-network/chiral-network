@@ -32,6 +32,10 @@ The current request-record windows allow at most 120 recent credential requests 
 
 Reservations already retain the actual admitted report under otherwise identical serving terms. Terminal outcomes must agree with that report/policy. An eligible waiver changes the charge, not known authoritative token counts, funding fees or report identity. Unknown restart may retain a waiver classification while nominal waived cost remains zero because usage is unavailable. The full classifier, per-token timing and durable withdrawal window remain governed by the whitepaper and separate future specification work; this change must not claim that ledger tests qualify a GPU or speed class.
 
+Native receipts retain the original account model and price alongside each request's actual admitted report digest. The consumer therefore validates a canonical lowercase SHA-256 report identity, the contracted policy, remedy and accounting invariants, not equality with the original quote's report digest. Otherwise a correctly signed receipt becomes unreadable after the explicitly permitted evidence-only renewal, including while a renewed request is still reserved.
+
+This is provider attribution, not independent qualification verification: `UsageReceipt` carries the report digest but neither the report bytes nor its measurement timestamp. Strictly newer, otherwise-identical renewal is enforced at provider admission and bound durably before dispatch. Receipt acceptance cannot independently reconstruct that check or attest actual execution. Preserve this trust limit rather than replacing the original agreement, requiring a still-current discovery offer for historical reads, or inventing missing report metadata.
+
 ### Recovery reads remain bounded and attributable
 
 Preserve the current 100-request pages and signed receipt snapshots, persistent per-account receipt sequences, existing account-scoped read authorization and absence of content replay. Timestamp-only `before` pagination can omit other requests sharing the boundary timestamp when a client treats the last item as an exhaustive cursor; the contract therefore makes no exhaustive-history claim. Do not silently introduce a new cursor/response shape in this specification step.
@@ -147,6 +151,14 @@ At each reserved/known/unknown stage the actual control router serves exact acco
 
 Fresh-admission/funding gates are closed and qualification cleared during recovery. This is ledger/control acceptance with no engine invocation, not public inference admission, actual usage validation, native client recovery, a daemon/process-kill experiment, safe-chain execution or public quote-policy mitigation. The existing gateway/independent-budget tasks remain open. Verification results are recorded in APAS progress.
 
+
+### Native renewal receipt acceptance
+
+`native_receipts_preserve_renewed_evidence_through_settlement_and_reopening` reproduced the native reader's rejection of a production-ledger receipt containing a newly admitted report while the request was still reserved. The corrected reader passes original-report, renewed-reserved, known-charge, known-waiver and reopened unknown-release receipts through the actual owner-authenticated HTTP routes. Checks retain exact balances, known usage, unknown exposure, original quote/model/price, funding fees, exported credential, payment journal and the original report's withdrawal latch.
+
+Six response-only mutations cover short, uppercase and nonhex digests, changed policy/price and an invalid signature. Each reaches the receipt response rather than being masked by an admission/rate refusal, preserves native account bytes across reopening and leaves ledger financial/request/credential/funding state unchanged. A final valid receipt succeeds after the sequence gaps. The provider still advances its own sequence when producing a receipt whose response is subsequently corrupted; the consumer advances only after acceptance.
+
+The regression restores actual ledger-created opening/payment/credential records as setup, uses synthetic profiles with explicit logical ledger times and supplies accounting usage. Clean ledger/router reopening and explicit recovery are not a daemon crash, power-loss, live-chain, engine-usage or hardware-qualification experiment. Task 3.2.1 is complete; the wider gateway/performance inventory and receipt snapshot/failure boundaries remain open.
 
 ## Acceptance sequence and ownership
 

@@ -4944,6 +4944,241 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
 }
 
 #[tokio::test]
+async fn native_receipts_preserve_renewed_evidence_through_settlement_and_reopening() {
+    use chiral_network::performance;
+    use std::io::Write;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 65_000);
+    let (quote, opened) = fixture.accounting_account(true).await;
+    let id = &quote.payload.id;
+    let credential = opened.credential.as_ref().unwrap();
+    let original = &quote.payload.model;
+    let mut renewed = original.clone();
+    let qualification = &mut renewed.serving.as_mut().unwrap().qualification;
+    qualification.evidence_sha256 = "d".repeat(64);
+    qualification.measured_at += 1;
+    // Logical ledger times and synthetic reports exercise binding, not qualification.
+    let now = qualification.measured_at;
+    assert!(original.accepts_execution(&renewed));
+    let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 2 };
+    let outcome = |model: &protocol::ModelSpec, miss: bool| {
+        let profile = model.serving.as_ref().unwrap();
+        performance::outcome(profile, true,
+            Some(if miss { 2_000_001 } else { 1 }), Some(50_000), Some(&usage),
+            "completed", false, Some(2_050_001), &profile.qualification.evidence_sha256)
+    };
+    for index in 0..3 {
+        let ledger = &fixture.provider.state.ledger;
+        let reservation = ledger.reserve(id, &credential.id, &format!("old-miss-{index}"),
+            1, 2, now, original).unwrap();
+        ledger.settle_measured(&reservation.id, &usage, "completed",
+            Some(&outcome(original, true)), now).unwrap();
+    }
+    assert!(fixture.provider.state.ledger.performance_withdrawn(original).unwrap());
+
+    // Restore the actual accepted agreement, payment evidence and credential as setup.
+    // Native HTTP receipt acceptance below is not a new funding or engine workflow.
+    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    let evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
+        [id], |row| row.get(0)).unwrap();
+    let payment: VerifiedPayment = serde_json::from_str(&evidence).unwrap();
+    let ack = fixture.provider.state.ledger.funding_intent(
+        &quote.payload, &payment.raw_transaction).unwrap().unwrap();
+    let config = ConsumerConfig {
+        network: fixture.provider.state.config.network.clone(),
+        data_dir: directory.path().join("native-receipts"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, OWNER_KEY).unwrap();
+    assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
+    let scoped = config.network.scoped_dir(&config.data_dir);
+    let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    wallet::secure_directory(account_path.parent().unwrap()).unwrap();
+    let mut saved = json!({
+        "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
+        "raw_transaction":payment.raw_transaction,"tx_hash":ack.payload.tx_hash,
+        "funding_intent":ack,"funding_broadcast_started":true,
+        "funding_cancellation_requested":false,"funding_cancellation":null,
+        "credentials":[credential],"active_credential":credential.id,
+        "receipt_sequence":0,"topup":null
+    });
+    let mut file = wallet::create_secret_file(&account_path).unwrap();
+    file.write_all(&serde_json::to_vec(&saved).unwrap()).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
+    journal.execute(
+        "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,evidence,created_at)
+         VALUES(?1,?2,'0',?3,?4,'accepted',?5,?6)",
+        params![quote.payload.consumer_wallet, format!("open:{id}"), payment.tx_hash,
+            payment.raw_transaction, evidence, quote.payload.issued_at]).unwrap();
+    let original_journal = native_payment_journal_snapshot(&journal);
+    let exported = consumer.credential_export(id, None).unwrap();
+    assert_eq!(exported["api_key"], credential.bearer);
+    drop(consumer);
+    drop(db);
+
+    let tamper = Arc::new(Mutex::new(""));
+    let delivered = Arc::new(AtomicU64::new(0));
+    let listener = fixture._listeners[0].try_clone().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let signer = fixture.provider.state.private_key.clone();
+    let serve = |app: Router| {
+        let tamper = tamper.clone();
+        let delivered = delivered.clone();
+        let signer = signer.clone();
+        let app = app.layer(from_fn(move |request: Request, next: Next| {
+            let tamper = tamper.clone();
+            let delivered = delivered.clone();
+            let signer = signer.clone();
+            async move {
+                let receipt = request.uri().path().ends_with("/receipt");
+                let response = next.run(request).await;
+                if !receipt || response.status() != StatusCode::OK { return response; }
+                delivered.fetch_add(1, Ordering::SeqCst);
+                let mutation = *tamper.lock().unwrap();
+                if mutation.is_empty() { return response; }
+                // Hostile signed counterparty claims, never mutations of ledger evidence.
+                let (mut parts, body) = response.into_parts();
+                let bytes = to_bytes(body, 96 * 1024).await.unwrap();
+                let mut receipt: Signed<UsageReceipt> = serde_json::from_slice(&bytes).unwrap();
+                let measured = receipt.payload.requests[0].performance.as_mut().unwrap();
+                match mutation {
+                    "short_digest" => measured.evidence_sha256 = "d".repeat(63),
+                    "uppercase_digest" => measured.evidence_sha256 = "D".repeat(64),
+                    "nonhex_digest" => measured.evidence_sha256 = "g".repeat(64),
+                    "policy" => measured.policy = "unqualified".into(),
+                    "price" => receipt.payload.account.price.input_wei_per_1k = "2".into(),
+                    "signature" => {}
+                    _ => panic!("unknown receipt mutation"),
+                }
+                receipt = protocol::sign(RECEIPT_DOMAIN, receipt.payload, &signer).unwrap();
+                if mutation == "signature" { receipt.signature = "00".repeat(65); }
+                parts.headers.remove(header::CONTENT_LENGTH);
+                Response::from_parts(parts, Body::from(serde_json::to_vec(&receipt).unwrap()))
+            }
+        }));
+        let listener = tokio::net::TcpListener::from_std(listener.try_clone().unwrap()).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                .await.unwrap();
+        });
+        (stop, server)
+    };
+
+    for phase in 0..5 {
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        state.ledger = Arc::new(BillingStore::open(
+            &fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        let ledger = &fixture.provider.state.ledger;
+        match phase {
+            0 => {}
+            1 => { ledger.reserve(id, &credential.id, "renewed-known", 1, 2, now, &renewed).unwrap(); }
+            2 => {
+                let request = ledger.request_view(id, "renewed-known").unwrap();
+                ledger.settle_measured(&request.id, &usage, "completed",
+                    Some(&outcome(&renewed, false)), now).unwrap();
+            }
+            3 => {
+                let request = ledger.reserve(id, &credential.id, "renewed-waiver",
+                    1, 2, now, &renewed).unwrap();
+                ledger.settle_measured(&request.id, &usage, "completed",
+                    Some(&outcome(&renewed, true)), now).unwrap();
+            }
+            4 => {
+                assert_eq!(ledger.recover_requests(now).unwrap(), 1);
+                assert_eq!(ledger.recover_requests(now).unwrap(), 0);
+            }
+            _ => unreachable!(),
+        }
+        assert!(ledger.performance_withdrawn(original).unwrap());
+        assert!(!ledger.performance_withdrawn(&renewed).unwrap());
+        let (stop, server) = serve(fixture.app.clone());
+        let mut consumer = Consumer::new(config.clone()).unwrap();
+        let receipt = consumer.receipt(id).await
+            .unwrap_or_else(|error| panic!("native receipt phase {phase}: {error}"));
+        assert_eq!(receipt.payload.sequence, phase + 1);
+        assert_eq!(receipt.payload.account.model, *original);
+        assert_eq!(receipt.payload.account.price, quote.payload.price);
+        assert_eq!(receipt.payload.account.funded_wei, "1000");
+        assert_eq!(receipt.payload.account.fee_wei, "5");
+        assert_eq!(receipt.payload.account.spent_wei, if phase < 2 { "0" } else { "1" });
+        assert_eq!(receipt.payload.account.reserved_wei, if phase == 1 { "1" } else { "0" });
+        assert_eq!(receipt.payload.account.available_wei, if phase == 0 { "995" } else { "994" });
+        assert_eq!(receipt.payload.account.waived_wei, if phase < 3 { "3" } else { "4" });
+        assert_eq!((receipt.payload.account.usage.prompt_tokens, receipt.payload.account.usage.completion_tokens),
+            if phase < 2 { (3, 6) } else if phase == 2 { (4, 8) } else { (5, 10) });
+        assert_eq!(receipt.payload.requests.len(), [3, 4, 4, 5, 6][phase as usize]);
+        for request in &receipt.payload.requests {
+            let renewed_request = request.request_id.starts_with("renewed-");
+            let measured = request.performance.as_ref().unwrap();
+            assert_eq!(measured.evidence_sha256, if renewed_request { "d" } else { "c" }.repeat(64));
+            if request.request_id == "renewed-known" {
+                assert_eq!(request.status, if phase == 1 { "reserved" } else { "completed" });
+                assert_eq!(request.cost_wei, if phase == 1 { "0" } else { "1" });
+                assert_eq!(measured.attained, if phase == 1 { None } else { Some(true) });
+            } else if request.request_id == "renewed-unknown" {
+                assert_eq!(request.status, "restart_unknown_usage");
+                assert_eq!((request.usage.prompt_tokens, request.usage.completion_tokens), (0, 0));
+                assert_eq!(request.cost_wei, "0");
+                assert_eq!(request.waived_wei, "0");
+                assert_eq!(request.provider_loss_wei, "1");
+                assert_eq!(measured.remedy, "inference_waiver");
+            } else {
+                assert_eq!((request.usage.prompt_tokens, request.usage.completion_tokens), (1, 2));
+                assert_eq!(request.cost_wei, "0");
+                assert_eq!(request.waived_wei, "1");
+                assert_eq!(measured.remedy, "inference_waiver");
+            }
+        }
+        saved["receipt_sequence"] = json!(receipt.payload.sequence);
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), saved);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+
+        if phase == 4 {
+            let snapshot = || json!([ledger.account(id).unwrap(), ledger.requests(id, None).unwrap(),
+                ledger.credentials(id).unwrap(), ledger.funding_history(id).unwrap()]);
+            let before = snapshot();
+            let bytes = std::fs::read(&account_path).unwrap();
+            for mutation in ["short_digest", "uppercase_digest", "nonhex_digest", "policy", "price", "signature"] {
+                *tamper.lock().unwrap() = mutation;
+                let count = delivered.load(Ordering::SeqCst);
+                consumer.receipt(id).await.expect_err(mutation);
+                assert_eq!(delivered.load(Ordering::SeqCst), count + 1, "must reach receipt validation");
+                assert_eq!(std::fs::read(&account_path).unwrap(), bytes);
+                assert_eq!(snapshot(), before);
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+                assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+            }
+            *tamper.lock().unwrap() = "";
+            let corrected = consumer.receipt(id).await.unwrap();
+            assert_eq!(corrected.payload.sequence, 12);
+            assert_eq!(serde_json::to_value(&corrected.payload.requests).unwrap(),
+                serde_json::to_value(&receipt.payload.requests).unwrap());
+            assert_eq!(snapshot(), before);
+            saved["receipt_sequence"] = json!(12);
+            assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), saved);
+        }
+        assert_eq!(native_payment_journal_snapshot(&journal), original_journal);
+        assert_eq!(serde_json::to_value(ledger.quote(id).unwrap()).unwrap(), serde_json::to_value(&quote).unwrap());
+        if phase == 3 {
+            ledger.reserve(id, &credential.id, "renewed-unknown", 1, 2, now, &renewed).unwrap();
+        }
+        drop(consumer);
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
     let directory = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(directory.path(), 59_000);

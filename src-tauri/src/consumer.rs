@@ -1388,7 +1388,11 @@ impl Consumer {
             if let Some(measured) = &request.performance {
                 match &saved.quote.payload.model.serving {
                     Some(profile) => {
-                        if measured.evidence_sha256 != profile.qualification.evidence_sha256
+                        // Renewal keeps account terms but binds a newer report per request.
+                        // This signed digest is attribution, not qualification attestation.
+                        if measured.evidence_sha256.len() != 64
+                            || !measured.evidence_sha256.bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                             || measured.policy != profile.policy
                             || (measured.attained == Some(false)) != (measured.remedy == "inference_waiver")
                             || (measured.remedy == "inference_waiver" && cost != 0) {

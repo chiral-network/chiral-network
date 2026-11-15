@@ -45,6 +45,13 @@ This register applies to the **LLM-only runtime**, not the retired file-sharing 
 
 The evidence below is from the **historical isolated chiral-coin prototype** unless explicitly labeled otherwise. It records real fixes/results, not requalification of the native CFX/performance cutover.
 
+### Native-CFX receipts rejected renewed qualification evidence
+
+- **Where:** `src-tauri/src/consumer.rs::receipt`, request `PerformanceOutcome.evidence_sha256`.
+- **Observed failure:** an actual provider-ledger receipt for a reserved request admitted under a strictly newer, otherwise-identical report failed native acceptance with `receipt performance identity or remedy mismatch`. The ledger correctly retained the new digest and original agreement; the reader incorrectly required the quote's original digest.
+- **Correction:** validate the report's canonical lowercase SHA-256 identity while retaining signature, original account/price, policy, remedy, money and sequence checks. No wire or ledger migration. The receipt attributes the provider's report claim; it contains neither report bytes nor measurement timestamps and does not independently certify qualification or execution.
+- **Verification:** the new native HTTP regression failed before correction and passes original/renewed reserved, known, waived and recovered-unknown receipts across reopening, plus six hostile-response refusals without saved-state advancement. Original terms, fees, credentials, payment journal and old withdrawal remain intact. All 452 Rust tests, 15 frontend tests, 46 provisioning tests, available builds/checks, strict request-accounting validation and protected-document checks passed. Synthetic profiles and supplied usage are not hardware/engine or live-chain evidence.
+
 ### Signed receipts accepted malformed request-loss amounts
 
 - **Where:** `src-tauri/src/consumer.rs::receipt`, `RequestView.provider_loss_wei`.
