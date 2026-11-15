@@ -1,988 +1,640 @@
-# Chiral Network
+# Chiral Network: LLM inference exchange
 
-Chiral Network is a decentralized marketplace for cloud resources. Independent providers sell **storage**, **containerized compute**, and **LLM inference**; consumers discover providers without a central operator, use them over standard HTTP APIs, and pay in a native proof-of-work currency. It runs as a desktop application (Tauri 2 + Svelte 5 + Rust) and as a headless daemon for running providers and for automated testing.
+This is the current design reference and white paper for Chiral. **GPU sharing means selling inference from a provider-operated model endpoint**, not renting a GPU VM, handing a customer shell access, or combining strangers' VRAM. A provider selects and runs a model; a consumer chooses that provider and pays for metered inference.
 
-This book is in two parts:
+Part I explains the product, architecture and trust assumptions. Part II defines the implemented protocol, financial invariants and operational boundaries. The [provider qualification guide](provider-qualification.md) supplies executable installation/calibration procedures; the [Mac walkthrough](macos-testing.md) supplies a free local first test. The [migration plan](llm-serving-migration-plan.md) retains dated evidence and release gates, not a competing current design. Deployment-specific facts live in the [private zoo-6 runbook](zoo6-private-pilot.md).
 
-- **[Part I: White Paper](#part-i-white-paper)** — the conceptual design: what the system guarantees and why, at the level of mechanisms rather than code, with no implementation detail.
-- **[Part II: Design and Implementation](#part-ii-design-and-implementation)** — the concrete realization: architecture, the offer record, the resource interfaces, settlement, reputation, APIs, deployment, and operations.
+## Contents
 
----
+- [Part I: White paper](#part-i-white-paper): [direction](#direction-precedence-and-status), [product and trust](#product-and-trust-model), [architecture](#architecture-and-responsibilities), [engine choice](#why-llamacpp), [hardware participation](#hardware-participation-and-platform-status).
+- [Part II: Design and implementation](#part-ii-design-and-implementation): [identities and signatures](#protocol-identities-signed-offers-and-canonical-bytes); [discovery](#discovery-freshness-withdrawal-and-live-state); [HTTP boundaries](#http-origins-and-trust-boundaries); [authorization and requests](#consumer-control-credentials-and-request-lifecycle); [reputation](#payment-gated-subjective-reputation); [configuration](#configuration-and-state); [funding](#agreements-and-exact-funding-order); [accounting](#durable-accounting-and-fees); [performance](#performance-accounting-and-withdrawal); [API compatibility](#api-compatibility-and-model-qualification); [provider lifecycle](#native-provider-provisioning-and-operations); [security and recovery](#listener-and-secret-boundaries); [release gates](#release-gates-and-source-map).
 
-# Part I: White Paper
+## Part I: White paper
 
-*Chiral Network: A Peer-to-Peer Market for Cloud Resources*
+### Direction, precedence, and status
 
-**Abstract.** Cloud computing is delivered almost entirely by central operators who set prices, hold the data, and constitute a single point of failure and censorship. Decentralized alternatives exist for narrow slices — a network for storage here, a market for GPU time there — but each is a silo with its own token and its own trust assumptions. Chiral Network is a single market in which heterogeneous resources — bytes at rest, running containers, model inference — are advertised, discovered, and paid for under one identity and one currency. Providers advertise offers signed by their wallet keys, so a listing's capacity, price, and payment address cannot be forged or redirected by whichever node relays it. Consumers reach providers directly over standard interfaces — an S3-compatible API for storage, an OpenAI-compatible API for inference, a submission API for containers — and pay by funding a prepaid balance that the provider draws down as it meters usage. The network verifies cryptographically that money moved and to whom, but deliberately does not try to prove that a meter was fair; instead it makes dishonesty expensive, because only a consumer with an on-chain-verified payment to a provider may rate it, and that rating is weighted by what was spent. The result is a market where pricing is left to providers, honesty is disciplined by reputation rather than by a referee, and no intermediary can forge, reprice, or redirect what providers publish.
+**The implemented runtime is LLM inference only, settled with native CFX on Conflux eSpace testnet.** Chain ID **71**, genesis **`0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804`** are the selected identity. Chiral-coin is deferred; neither mainnet nor a new mining pool is authorized. Dynamic HF artifacts and evidence-bound performance/admission/waiver contracts are implemented, but **no GPU speed class or public release is qualified**. Historical storage/Drive/CDN/Core-Geth/in-app-mining guides are not current runtime instructions.
 
-## 1. Introduction
+Current evidence includes live native eSpace funding/top-up recovery, on-chain platform fee arrival, stock Python/Node SDKs, native Linux desktop generation/accounting and failure recovery. **The user approved 8 GB capacity and dedicated zoo-6 to private inference testing; public rollout remains deferred.** The RTX 4060 has now served actual CFX-funded small-model requests. This limited GPU smoke is not a complete performance-qualification report. Earlier container evidence belongs to the historical chiral-coin stack; current GPU containers and supported-platform installers remain unqualified. See the plan's [dated execution evidence](llm-serving-migration-plan.md#14-execution-evidence-and-open-release-checklist).
 
-The economics of the cloud are the economics of a landlord. A handful of operators own the storage, the compute, and the accelerators; they set the prices, meter the usage, keep the logs, and can revoke access at will. Tenants accept this because the alternative — assembling reliable infrastructure from strangers — has historically been impossible to make safe. Decentralized projects have chipped at individual pieces (distributed storage, volunteer compute, GPU spot markets), but each solves one resource in isolation, under its own currency and its own assumptions, and none offers the thing a tenant actually wants: one place to rent whatever it needs, from whoever will sell it cheapest, without trusting a central operator to be fair.
+### Product and trust model
 
-What makes a single, operator-free market hard is not discovery or payment — public-key identity and a mined currency solve those — but *metering*. An atomic file download can be escrowed: pay the exact price, receive the exact bytes, verify the hash. A month of storage, an hour of a running container, or a million tokens of inference cannot be escrowed per unit without a machinery of proofs that does not yet exist in practice. Chiral Network makes this trade explicit rather than pretending otherwise. It keeps everything that public-key cryptography can guarantee — that a listing is authentic, that a payment reached the right wallet, that a record cannot be hijacked — and for the part that cryptography cannot cheaply guarantee, fair metering and honest service, it substitutes an incentive: bind every payment to an identity, let only paying customers rate a provider, and weight their verdicts by what they spent. A provider that over-meters or under-delivers then loses future revenue faster than it can defraud its present customers.
+Providers operate whole llama.cpp model endpoints on Windows, macOS or Linux, behind their own HTTPS gateways. Consumers discover signed offers, choose a provider, fund a small prepaid balance, and call a bounded OpenAI-compatible subset. Desktop, CLI and SDK clients share agreements and accounting. **llama.cpp is the only selected engine; the vLLM path is retired by this cutover.** The engine runs as a private managed subprocess, not embedded FFI. Models may span GPUs inside one provider's trusted network, **not arbitrary Internet peers**. Native desktop support does not remove public reachability or HTTPS requirements.
 
-The system combines four mechanisms:
+Three planes remain distinct:
 
-1. a **content-addressed discovery layer** in which every resource offer is signed by its provider's key;
-2. **direct provider interfaces** over standard HTTP APIs, so a consumer's existing tools work unchanged;
-3. a **native proof-of-work currency** with prepaid, provider-drawn settlement; and
-4. a **payment-gated reputation function** that admits subjective judgment without admitting forgery.
+- **Discovery:** libp2p/Kademlia indexes identify candidate peers; bounded manifest retrieval and a verified relay catalog yield signed offers. Consumers verify signatures, network, lifetime, and revision. Discovery is bounded and incomplete, not a census of all providers. A relay may omit an offer but cannot legitimately rewrite its signed price or payee.
+- **Serving:** direct provider HTTPS/SSE. The gateway authenticates, validates, reserves, invokes a private model engine, and settles authoritative usage. The relay and blockchain do not carry prompts or model output.
+- **Settlement:** separately operated Conflux eSpace RPC verifies native CFX funding. No blockchain transaction occurs per generated token. The application never starts a node or miner on login; Core mining payouts require an explicit Core-to-eSpace transfer before use.
 
-## 2. System Overview
+**Risk disclosure:** provider balances are non-refundable, non-transferable between providers, and not escrow. A provider can disappear, refuse service, misrepresent a model, meter dishonestly, or fail to remit platform fees. Keep deposits small. The provider sees prompts and responses in plaintext at its endpoint; TLS does not hide them from the provider. Signed metadata and receipts prove who made a statement, **not model execution, correct inference, fair measurement, or confidential computing**. Testnet currency and payment-gated reputation are experimental and offer weak economic Sybil resistance.
 
-The network is organized as three planes that share one identity system.
+### Architecture and responsibilities
 
-**Discovery plane.** A Kademlia distributed hash table stores small signed records — *resource offers*: a provider announcing that it sells a given class of resource, at a given price, reachable at a given endpoint. Any peer may store and serve these records; none is trusted to have authored them.
+The marketplace exchanges **model-specific service**, not ownership of hardware. Quantization, context length, capability, concurrency, price, memory kind and measured performance are separate properties. A larger GPU does not imply better model quality or a particular speed. Providers bear hardware, electricity, bandwidth and remittance-gas costs; token prices and testnet activity are not a profitability promise.
 
-**Interaction plane.** Once a consumer has chosen a provider, it talks to that provider's public endpoint **directly**, over a standard HTTP API appropriate to the resource. There is no protocol-level intermediary between consumer and provider on the data path. In v1 a provider must be publicly reachable — a real IP address, ideally a domain name with TLS — so this plane requires no relayed reachability or NAT traversal.
-
-**Settlement plane.** A proof-of-work blockchain (Ethash, account-based) carries the native currency, CHI. A consumer funds a prepaid balance by paying a provider on-chain; the provider verifies the payment against the chain and draws the balance down as it meters usage. Miners issue currency and order transactions.
-
-**Identity.** A participant's identity is a single ECDSA keypair — the same key that controls its currency balance signs its published offers. The entity that *gets paid* for a resource is cryptographically the entity that *advertised* it, and reputation attaches to the address that actually receives money. A peer's network-transport identity (its DHT node ID) is distinct, but every offer binds the two by signature.
-
-Participants play four roles, in any combination: **providers** advertise resources and set prices; **consumers** discover, use, and pay for them; **miners** secure settlement and earn block rewards; and **bootstrap/relay operators** provide the DHT entry points and host shared services such as the reputation registry.
-
-## 3. Signed Offers as the Trust Primitive
-
-The foundational rule is unchanged from a content network and applies just as well to a resource market: *data is trusted because of who signed it, never because of where it came from.* A DHT is an adversarial place — any node can claim to hold any key and answer with anything — so Chiral Network treats it purely as an untrusted bulletin board.
-
-Every long-lived record carries an ECDSA signature by the wallet that owns it. The central record is the **resource offer** — "wallet *W* sells resource class *C*, with capacity/spec *S*, at price schedule *P*, reachable at endpoint *E*" — signed by *W*. Because the endpoint and the price live *inside* the signed payload, a relaying node cannot substitute its own endpoint to intercept traffic, nor its own price or wallet to divert payment.
-
-Two symmetric rules enforce the contract. *Writers refuse to publish unsigned:* a client that cannot sign (its key locked or absent) declines to write rather than emit an unverifiable record. *Readers drop invalid:* a record whose signature is missing or wrong is treated as nonexistent, however plausible its contents.
-
-Signatures are computed over a canonical, length-prefixed, domain-tagged encoding of the record's fields. Length prefixing makes the serialization injective, and the domain tag prevents a signature produced for one record type from being replayed as another. Records under a given key are owned by first claim: only the wallet that first wrote a key can overwrite it. And because authenticity lives in the record, a reader may act on the *first* replica whose signature verifies rather than waiting for a replication quorum — collapsing lookup latency without weakening integrity.
-
-## 4. Resources and Discovery
-
-A resource offer names, at minimum: the provider's wallet, the resource **class** (storage, container, or inference), a capacity or capability descriptor, a price schedule in CHI per metered unit, a public endpoint, and a validity window. It is signed by the provider's wallet.
-
-To publish, a provider writes its signed offer under a key derived from the resource class and its own identity, and refreshes it periodically. To discover, a consumer queries by class, collects the offers, discards any whose signatures fail, and ranks the survivors by price and by the provider's reputation (Section 7). Offers expire if not refreshed, so the catalog self-cleans: a provider that goes offline simply stops refreshing and drops out, rather than lingering as a dead listing.
-
-Discovery is deliberately thin. It tells a consumer *who* is selling *what*, at *what price*, *where* — and nothing that must be trusted, because everything a consumer acts on is either signed by the provider or verified directly against the provider's endpoint once contact is made.
-
-## 5. The Three Resource Classes
-
-The planes above — identity, discovery, settlement, reputation — are shared. The classes differ only in the interface a consumer speaks and the unit a provider meters.
-
-**Storage.** A provider exposes an **S3-compatible object interface**: buckets and objects, `PUT`/`GET`/`DELETE`, listing, and presigned URLs. Usage is metered as capacity stored over time (GB-month) plus egress (GB transferred). An object may be addressed by the hash of its content, which makes storage self-certifying — a consumer checks what it retrieves against the name it asked for — and subsumes the older use case of sharing a file by its hash: a shared file is simply a public-read object. (The bespoke peer-to-peer file transports of earlier designs — a custom chunked protocol, BitTorrent, magnet links — are retired in favor of the standard S3 interface.)
-
-**Containerized compute.** A provider advertises CPU, memory, and optional GPU capacity at a per-hour price. A consumer submits a container specification — an image reference, a resource request, ports, and environment — and receives an endpoint at which the running container is reachable. Usage is metered as runtime; the consumer tears the container down to stop billing.
-
-**LLM serving.** A provider advertises the models it hosts and a price per thousand input and output tokens, and exposes an **OpenAI-compatible HTTP API**. A consumer sends inference requests with existing tooling; the provider meters tokens consumed.
-
-Each class admits its own honesty checks (Section 9): storage can in principle be challenged for retrievability, compute for liveness, inference for latency — but the quality of what is served (was the model good? was the container stable?) is a subjective judgment, which the reputation system is designed to carry.
-
-## 6. Settlement
-
-Payment precedes service, as before — but for a metered resource "service" is continuous rather than a single delivery, so payment takes the form of a **prepaid balance** rather than a per-transfer transaction.
-
-A consumer funds a balance by paying the provider's advertised address on-chain and presenting the transaction. The provider verifies the payment directly against the chain — that it is mined, that the recipient is its own address, that the amount is what it credits, and that the transaction was made on this network's chain (the chain-identifier check rejects cross-chain replays) — and credits the balance. As the consumer uses the resource, the provider meters usage and draws the balance down at its published rates. When the balance is exhausted, service pauses until the consumer tops it up.
-
-Balances are **non-refundable**: a consumer funds what it intends to spend and tops up incrementally, rather than parking a large deposit it must later reclaim. This keeps settlement to a single primitive — an on-chain payment the provider verifies — with no escrow, no refund path, and no withdrawal protocol. From each funded payment a small platform fee (0.5% by default, adjustable down to a 0.1% floor) is split off with exact integer arithmetic, so the provider's credit and the fee sum precisely to the amount paid; there is no floating-point rounding anywhere in the settlement path.
-
-This is the deliberate trade of Section 1 made concrete. The network proves that money moved and to whom; it does not prove that the meter was fair. What disciplines the meter is that the consumer watches its balance drain against *observable* usage — objects it can list, tokens returned in responses, container uptime it can measure — and that any discrepancy feeds a reputation score the provider cannot afford to lose. Resources offered at a rate of zero skip settlement entirely.
-
-## 7. Reputation
-
-Consumers choosing among providers need a signal of reliability, and for a resource market that signal is unavoidably subjective — was the storage durable, the model useful, the container stable? An earlier, content-only version of this network computed reputation *only* from objective transfer outcomes and deliberately **rejected** subjective ratings, on the grounds that ratings are free to fabricate. A resource market cannot do without subjective judgment, so Chiral Network admits user feedback but **gates** it: only a wallet with an on-chain-verified payment to a provider may rate that provider, and each rating is weighted by the amount paid and by how recently.
-
-This preserves exactly the property the old rejection was protecting. Fabricating a favorable history still costs real, fee-bearing payments — a provider that wants to buy itself a reputation must pay itself through wallets whose payments are enumerable on-chain, losing the platform fee on every wash and moving the score only in proportion to money actually spent. The single change is that the admitted signal is now a *judgment* (a score) rather than a *completion bit*; its resistance to forgery is identical, because it rests on the same verified-payment gate.
-
-Each wallet carries a score on a 0–100 scale, initialized to 50, updated per event in the style of the Elo rating system. For an event with score-outcome $S \in [0,1]$ (the normalized user rating) against a provider whose current score is $r$:
-
-$$E = \frac{1}{1 + 10^{(50 - r)/12}}, \qquad r \leftarrow \mathrm{clamp}\big(r + K\,(S - E),\ 0,\ 100\big), \qquad K = 4\,w_t\,w_a$$
-
-The expected-outcome term $E$ gives the update curvature: a high-scored provider gains little from another good review but loses sharply from a bad one. The time weight $w_t$ decays linearly to zero over a 180-day lookback, so reputation reflects recent conduct. The amount weight $w_a = 1 + \min(1, \ln(1+a)/\ln 51)$, where $a$ is the CHI paid, lets larger verified payments move the score up to twice as much as trivial ones, growing only logarithmically so reputation cannot be bought in one large transaction. Scores are displayed alongside offers in discovery, so reliability directly affects a provider's ability to win business.
-
-## 8. Incentives
-
-Every behavior the network needs is paid for; none relies on altruism.
-
-**Providing.** Providers earn their published metered rates on every unit of resource sold. Pricing is theirs to set; the market and the reputation score, not a central schedule, discipline it.
-
-**Mining.** Proof-of-work miners earn a fixed block reward of 5 CHI, which is also the currency's issuance mechanism, giving new participants a path to acquiring CHI by contributing computation rather than only by selling resources. Transactions carry no gas price — settlement is free to users, and the chain's security budget is the block reward alone.
-
-The loop closes: consumers obtain CHI by mining or by themselves providing; they spend it renting resources; providers earn it for supplying them; miners earn it for ordering everyone's settlement.
-
-## 9. Trust Model
-
-It is as important to state what the network does *not* protect as what it does.
-
-**Out of scope: anonymity.** Chiral Network is not an anonymity network. Wallet addresses, provider endpoints, IP addresses, and which resources a peer offers or consumes are observable, as in any unencrypted system. The guarantees below are of *integrity and authenticity*, not of unlinkability.
-
-**In scope (cryptographic).** The signed-record discipline of Section 3, applied end to end, yields:
-
-- **No forged listings.** A record not signed by its owner is dropped by every reader. Discovery can lie about *availability* but not about a provider's price, endpoint, or payee.
-- **No payment redirection.** The payee lives inside the signed offer; diverting payment requires the provider's private key.
-- **No replay.** Cross-chain replay of a funding transaction is rejected by the chain-identifier check; double-crediting of the same transaction is prevented by a spent-transaction ledger; signature malleability is eliminated by accepting only canonical (low-*s*) signatures.
-- **No name hijacking.** First-claim-wins ownership means an existing offer is replaceable only by its original signer.
-
-**Rests on reputation (the honest-provider assumption).** The network does *not* cryptographically guarantee that a provider meters fairly, that stored bytes remain retrievable, that a container keeps running, or that inference is what was advertised. These rest on the incentive of Section 7: a provider that takes a balance and cheats can do so once per victim, the loss bounded by what that victim pre-funded, and the conduct is recorded against the wallet that got paid, pricing its future business accordingly.
-
-**v1 constraints.** Providers must be publicly reachable — there is no NAT traversal for providers in v1, so a would-be storage or compute seller needs its own public IP (ideally a domain with TLS). Prepaid balances are non-refundable.
-
-## 10. Limitations and Future Work
-
-- **Trustless metering.** The honest-provider assumption is the largest gap. Future work: proofs of retrievability for storage, verifiable or attested compute, signed token-count receipts for inference, and escrow contracts that release funds only against consumer-signed usage receipts.
-- **Refunds and escrow.** Non-refundable prepaid is the v1 simplification; a withdrawal/escrow protocol would let consumers reclaim unused balance and reduce the trust placed in providers.
-- **NAT'd providers.** Requiring public reachability excludes home providers; a relay/circuit path for providers is deferred.
-- **Dispute resolution.** Beyond the reputation penalty, there is no arbitration of a contested charge.
-- **Currency and registry.** Proof-of-work settlement is only as strong as the honest hash-power share, modest on a young chain; and the reputation registry is currently a trusted aggregator that tallies verified events (Part II).
-
-## 11. Conclusion
-
-Chiral Network treats cloud resources the way a content network treated files: as goods in a market, named and priced by their owners, discovered without an operator, and paid for in a mined currency. Where cryptography can enforce a guarantee — authenticity of a listing, destination of a payment, ownership of a name — it does. Where it cannot cheaply do so — the fairness of a meter, the quality of a service — the network does not pretend, and instead makes dishonesty a losing trade by binding reputation to verified payment. What remains is a market in which anyone with spare storage, compute, or a served model can sell it, anyone can buy it, and neither side has to trust an intermediary that could forge, reprice, or redirect what the other publishes.
-
----
-
-# Part II: Design and Implementation
-
-This part covers the concrete realization of Chiral Network — architecture, the offer record, the resource interfaces, settlement, reputation, APIs, deployment, and operations. For the conceptual design (what the system guarantees and why), read [Part I](#part-i-white-paper) first.
-
-> **Current scope (v1).** Three resource classes — **S3-compatible storage**, **container compute**, **LLM serving**. Discovery is via signed DHT **resource offers**; the blockchain is the **settlement** layer only. Payment is a **prepaid, non-refundable balance** the provider draws down as it meters. Providers must be **publicly reachable** (own IP, ideally a domain + TLS); there is **no NAT traversal** for providers in v1. Reputation is **payment-gated user feedback** running on the existing Elo engine.
->
-> **Superseded.** The earlier file-sharing transports — the bespoke chunked libp2p protocol, BitTorrent, magnet/`.torrent` — are retired; storage now speaks S3 over HTTP. Several primitives are **reused and generalized** rather than rebuilt: the signed-record discovery discipline, the wallet and on-chain payment verification, the platform-fee split, the Elo reputation engine, version enforcement, and the headless daemon / CLI / relay. This section flags forward-looking (not-yet-built) mechanics with a **Status** note.
-
----
-
-## Table of Contents
-
-- [Architecture](#architecture)
-- [Resource Offers (Discovery)](#resource-offers-discovery)
-- [Resource Interfaces](#resource-interfaces)
-- [Service Contracts and the Handshake](#service-contracts-and-the-handshake)
-- [Wire Protocol & API Reference](#wire-protocol--api-reference-contract-spine)
-- [Data-Plane API: Storage (S3)](#data-plane-api-storage-s3)
-- [Data-Plane API: Compute (Containers)](#data-plane-api-compute-containers)
-- [Data-Plane API: Inference (LLM)](#data-plane-api-inference-llm)
-- [Reputation System](#reputation-system)
-- [Design Decisions](#design-decisions)
-- [Implementation Plan (Milestones)](#implementation-plan-milestones)
-- [Identity and Wallet](#identity-and-wallet)
-- [Blockchain and Mining](#blockchain-and-mining)
-- [Version Enforcement](#version-enforcement)
-- [Application Surface](#application-surface)
-- [Backend Modules](#backend-modules)
-- [Headless Mode and CLI](#headless-mode-and-cli)
-- [Security Implementation](#security-implementation)
-- [Deployment](#deployment)
-- [Getting Started](#getting-started)
-- [Testing](#testing)
-- [Configuration](#configuration)
-
----
-
-## Architecture
-
-The application consists of three layers:
-
-1. **Frontend** — Svelte 5 with TypeScript, rendered in a Tauri webview or browser: the marketplace UI, a provider dashboard, wallet, and mining controls.
-2. **Backend** — Rust, handling P2P discovery (libp2p Kademlia), blockchain interaction (Geth), the provider-side resource interfaces, settlement accounting, and local storage.
-3. **Blockchain** — a private Ethash proof-of-work chain (chain ID 98765) where users mine CHI and fund provider balances.
-
-### Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| Desktop shell | Tauri | 2.x |
-| Frontend framework | Svelte | 5.38 |
-| Frontend language | TypeScript | 5.7 |
-| Build tool | Vite | 7.1 |
-| Styling | TailwindCSS | 3.4 |
-| Backend language | Rust | 2021 edition |
-| P2P discovery | libp2p | 0.53 |
-| HTTP server | Axum | 0.7 |
-| Blockchain client | Core-Geth | 1.12.20 |
-| Crypto | ethers.js (frontend), secp256k1 + ed25519-dalek (backend) |
-
-### Planes
-
-```
-+-------------------------------------------------------------+
-|  DISCOVERY  — libp2p Kademlia DHT (untrusted bulletin board)|
-|  signed resource offers: chiral_offer_<class>_<wallet>      |
-+-------------------------------------------------------------+
-          |  (verify signature, rank by price + reputation)
-          v
-+-------------------------------------------------------------+
-|  INTERACTION — direct consumer -> provider HTTP(S)          |
-|   storage: S3-compatible   compute: submit/lifecycle        |
-|   inference: OpenAI-compatible                              |
-|   (providers are publicly reachable; no NAT traversal)      |
-+-------------------------------------------------------------+
-          |  (meter usage, draw down balance)
-          v
-+-------------------------------------------------------------+
-|  SETTLEMENT — Ethash PoW chain (CHI), RPC localhost:8545    |
-|   prepaid balance funded on-chain; provider verifies + credits |
-+-------------------------------------------------------------+
-          |
-          v
-+-------------------------------------------------------------+
-|  RELAY / BOOTSTRAP  130.245.173.73                          |
-|   :4001 libp2p (DHT bootstrap)   :8080 HTTP (reputation,    |
-|   version policy)   — no provider NAT relay in v1           |
-+-------------------------------------------------------------+
+```mermaid
+flowchart LR
+    C[Consumer: desktop / CLI / SDK] -->|Signed offer discovery| D[DHT and provider manifests]
+    P[Provider gateway] -->|Publish offers| D
+    C -->|Catalog / policy / feedback| R[Relay]
+    C -->|Direct HTTPS control and inference| P
+    P -->|Reserve and settle| L[(Provider ledger)]
+    P -->|Private authenticated HTTP| E[Managed llama.cpp]
+    C -->|Signed funding| B[Conflux eSpace]
+    P -->|Verify funding / remit fees| B
+    R -->|Verify feedback payment| B
 ```
 
-### Data Flow: Renting a Resource
+| Actor / component | Responsibility and authority boundary |
+|---|---|
+| Consumer | Holds its signing key locally, verifies offers/quotes, chooses a provider and privacy boundary, authorizes deposits, manages application credentials and checks receipts. |
+| Provider gateway | Holds its own signing key, verifies funding, owns the account ledger and engine lifecycle, admits bounded work, meters usage and signs statements. It can still lie or disappear. |
+| Private engine | Executes the pinned model and reports tokens/usage. It neither authenticates Chiral payers nor owns accounts, payments, reputation or wallet keys. |
+| DHT and relay catalog | Discover signed candidate offers. Neither is an exhaustive directory, execution attestor, inference proxy or custodian. |
+| Relay reputation service | Verifies and stores payment-gated feedback. This is a registry operated by the selected relay, not blockchain consensus over reputation. |
+| Chain/RPC | Supplies identity-checked transaction/canonicality evidence. Settlement trusts the configured RPC's view within the application's acceptance policy; the chain does not verify tokens or model quality. |
+| Policy authority / platform | Signs accepted client-version policy and receives provider-remitted fees. Its configured authority and fee wallet are explicit, not discovered from arbitrary peers. |
 
-1. **Discover.** Consumer searches the DHT for offers of a class (e.g. `storage`), verifies each offer's signature, drops invalid/expired ones, and ranks survivors by price, provider Elo, and region.
-2. **Handshake.** Consumer contacts the chosen provider's endpoint and proposes terms referencing the offer; the provider confirms the exact terms and returns a fresh anti-replay `nonce`.
-3. **Contract on-chain.** Consumer builds a **contract transaction** — recipient = provider wallet, `value` = the amount to prepay, `data` = the agreed contract commitment (offer reference, terms hash, nonce) — signs it, and broadcasts it. The signed tx is an immutable, timestamped record of the deal.
-4. **Verify + open.** Consumer hands the `tx_hash` to the provider; the provider verifies it on-chain (recipient, value, decoded terms, `from` = consumer, chain ID), records `(tx_hash, provider)` in its contract ledger, credits the balance (`value − platform fee` via `split_payment`), and opens the contract.
-5. **Use.** Consumer uses the resource over the provider's HTTP API (S3 / container / OpenAI-compatible), authenticated to the contract.
-6. **Meter + draw down.** Provider meters usage and decrements the balance at the contract's rates, reporting usage back to the consumer. When the balance runs low the consumer tops up (a further payment referencing the contract); when it hits zero, service pauses.
-7. **Rate.** The consumer submits a payment-gated rating keyed to the contract tx; the provider's Elo updates.
+The native desktop and CLI share Rust consumer logic; SDKs use exported application credentials, not wallet private keys. Headless provider, relay and bounded RPC-gateway binaries are separately operated. Discovery may be decentralized without making metering, reputation availability, RPC evidence or version governance trustless.
 
----
+The consumer workflow is: inspect a verified offer and current readiness/reputation, choose the exact model/provider/terms, inspect a signed quote, authorize small funding, wait for accepted credit, then call the provider directly. Inspect usage and request status before retrying an ambiguous operation; top up the same agreement deliberately. Switching providers requires another selection and account; neither prompts nor balances automatically follow it.
 
-## Resource Offers (Discovery)
+### Why llama.cpp
 
-> **Status: the offer record generalizes today's signed host-advertisement machinery (`hosting.rs`, `hosting/publish-ad`, `hosting/registry`) from a single "hosting" type to a typed, multi-class offer.** The signing, publish/refresh, and read-verify paths are reused. (`main` has moved substantially since this was drafted — reconcile exact symbol names at implementation time.)
+The selected tradeoff is native Windows/macOS/Linux participation, Apple Silicon Metal, small quantized GGUF models and direct control of an inspected native runtime. The earlier vLLM choice targeted Linux GPU serving and batching; its adapter is now retired. This is **not a claim that llama.cpp beats vLLM on throughput**. Any future comparison needs matched hardware, model, quantization, context, concurrency and correct billing; maintaining a second engine is not part of this design.
 
-A resource offer is a signed DHT record. The signed payload is a canonical, length-prefixed, domain-tagged (`chiral-offer-v1`) encoding of:
+Chiral reuses the upstream server rather than implementing inference kernels or embedding C++ through FFI. Rust starts and supervises a pinned private `llama-server` subprocess, supplies explicit settings and verifies artifacts before use. Native operation needs no Python inference environment, Docker, WSL or separately operated model-manager service. Provisioning may use Python; it does not execute model-supplied Python.
+
+The subprocess is a process-lifecycle and failure boundary, **not an OS security sandbox**. Running it under the same OS identity does not prevent that identity from reading accessible files. Keep installations trusted and inventory-verified; protect the host and keys. No automatic downloads, floating model updates or fallback engines are allowed at request time.
+
+Multi-device configuration selects devices of the managed local runtime explicitly. Private operator-owned endpoints may exist inside one trusted provider network; that does not implement automatic multi-host scheduling, WAN tensor parallelism, cross-provider failover or customer-supplied code execution. Home NAT traversal, raw GPU rental, training, S3 and container-job submission are outside scope.
+
+### Hardware participation and platform status
+
+Capacity labels describe physical memory, not model fit, quality, throughput or available memory:
+
+| Signed capacity tier | Minimum physical memory | Counting rule |
+|---|---:|---|
+| `8gb` | 7,500 MiB | Each selected dedicated device must meet the threshold. |
+| `16gb` | 15,000 MiB | Each selected dedicated device must meet the threshold. |
+| `32gb` | 30,000 MiB | Each selected dedicated device must meet the threshold. |
+| `higher` | 45,000 MiB | May sum selected devices within the provider runtime. |
+
+Apple unified memory is signed as `unified`, counted once as one device; dedicated GPU memory is signed as `dedicated`. The same tier threshold applies to the reported physical memory. Two 4 GB GPUs are not an `8gb` device. A 16 GB Apple Silicon Mac can be a `16gb` unified provider, but is not a 16 GB dedicated GPU: **at least 4,096 MiB headroom** is required for shared-memory operation, versus at least **256 MiB per dedicated device**. Headroom is subtracted from the fit budget, not the nominal capacity label. These checks are not an exclusive OS memory reservation.
+
+Weights, KV cache, batching, context, concurrency, system RAM, loading overhead and competing processes affect fit. The managed launch allocates total context as **per-slot context × maximum concurrency**, disables automatic fitting/context shifting and does not silently reduce the contract to make a model fit. Small quantized models permit participation on constrained machines; a successfully loaded model is not yet a qualified paid speed class.
+
+| Runtime path | Current evidence / limitation |
+|---|---|
+| Linux CUDA | Native private CPU/CUDA work and the zoo-6 RTX 4060 pilot are recorded; no qualified speed class or public release. |
+| Windows CUDA | Native path implemented; Windows hardware execution and installer qualification remain open. |
+| macOS Metal | Apple Silicon native path and first-test guide implemented; archive inspection on Linux is not a Metal execution result. Actual Mac qualification remains open. |
+| Linux / Windows Vulkan | Execution path exists; the qualification runner rejects missing trustworthy per-device memory measurements. Do not advertise a speed qualification from runtime support alone. |
+| CPU development | Useful for API/accounting smoke tests; system RAM and CPU throughput cannot establish a GPU capacity/speed badge. |
+
+Cross-platform support is the current product decision, superseding the old Linux-only provider scope. It does not promise simultaneous public release or authorize public deployment: each OS/backend/model profile and installer must pass its own gates. Linux evidence cannot qualify Windows or Metal. Hardware/model license and redistribution rights remain operator obligations.
+
+## Part II: Design and implementation
+
+### Protocol identities, signed offers, and canonical bytes
+
+This section defines the signed wire contract. Bounds below distinguish receiver validation from stricter local provisioning and qualification requirements. Schemas and equations are not instructions to broadcast payments.
+
+#### Identity glossary
+
+| Name | Exact role |
+|---|---|
+| `NetworkIdentity` | `{chain_id, genesis_hash, deployment_id}`. Equality of all three fields scopes offers, quotes, funding acknowledgements, receipts, feedback, discovery, and durable stores. Chain ID alone is insufficient. The network deployment ID separates resets/application deployments; it is not a provider ID. |
+| Provider wallet | Canonical lowercase `0x` plus 40 hex digits. Signs commercial offers, quotes, funding acknowledgements and usage receipts; receives the consumer's opening/top-up payments. A signature establishes attribution, not honest execution. |
+| Consumer wallet / payer | Signs control challenges and subjective feedback and supplies the funding transaction. Public knowledge of its address or transaction hash is not authority to operate its account. |
+| Platform wallet | Signed destination of the provider's platform-fee obligation; distinct from the provider's inference engine credentials and administrator token. |
+| `peer_id` | Persisted libp2p identity used to retrieve an authenticated manifest. The signed offer must name the peer that supplied it. It is not the wallet signing key. |
+| Offer `deployment_id` | Provider deployment namespace, distinct from `network.deployment_id`. The current provider fills it with its persisted DHT peer ID. Together with provider wallet and model API ID it identifies an offer's revision stream. |
+| Model `id` | Consumer-visible API model identifier, unique within one provider configuration. A name is not an artifact hash and alone does not specify execution terms. |
+| Offer ID | `0x` plus lowercase Keccak-256 of the domain-framed canonical offer payload. It identifies one exact set of signed fields, including revision and validity times; it is not a permanent provider/account ID. |
+| Quote / agreement / contract / account ID | The quote's random 32-byte `0x`-prefixed ID, reused for the prepaid account. “Contract” here means the signed commercial agreement and provider ledger account, not a newly deployed on-chain smart contract. |
+| Request key / request ID | An account-scoped client idempotency key identifies an attempted inference operation; the ledger also has an opaque globally unique request identifier. Treat returned request IDs as opaque and retain the original key for uncertain requests. |
+| Qualification identity | `{evidence_sha256, measured_at}` inside the serving profile. It attributes a measured report for one deployment; neither the report hash nor the provider's signature is independent hardware/model attestation. |
+
+Money in signed/public JSON is an unsigned canonical decimal **base-unit string**, never a JSON float: `0` is valid, leading zeroes/signs/decimal points are not, and the implementation bounds money to `u128` (at most 39 decimal digits, with range checked). One CFX is `10^18` base units. Protocol timestamps are integer Unix seconds; revisions and capacity values are integer JSON numbers, not floating-point encodings. Implementations in languages with limited integer precision must preserve integer values exactly when processing signed JSON.
+
+Sources: `src-tauri/src/protocol.rs:13–41,143–201,319–336,389–421`; `src-tauri/src/offer_registry.rs:31–51,271–294`; `src-tauri/src/app.rs:358–376`.
+
+#### Signed offer schema
+
+The wire envelope is `{"payload": <InferenceOffer>, "signature": <hex recoverable signature>}`. `Signed<T>`, `InferenceOffer`, `NetworkIdentity`, `ModelSpec`, price and serving-profile structures reject unknown fields. The field names below are the actual snake_case JSON names, not aliases.
+
+| Offer payload field | Meaning / receiver validation |
+|---|---|
+| `network` | Complete `NetworkIdentity`, exactly equal to the selected network. |
+| `provider_wallet` | Canonical provider wallet; recovered offer signer must equal it. |
+| `peer_id` | Valid libp2p PeerId. DHT manifest receivers additionally require equality with the authenticated responding peer. |
+| `deployment_id` | 1–128 ASCII letters, digits, `_` or `-`; current publisher uses `peer_id`. |
+| `endpoint` | Public HTTPS origin on port 443, subject to the outbound-origin boundary below. No credentials, path prefix, query or fragment. |
+| `model` | Immutable model and optional serving-profile schema below. |
+| `price` | `{input_wei_per_1k, output_wei_per_1k}`; canonical decimal strings per 1,000 authoritative tokens. |
+| `min_funding_wei` | Minimum opening funding for a paid offer. Current publisher emits `"0"` for a genuinely free offer. |
+| `platform_wallet` | Canonical wallet to which the provider owes the platform fee. |
+| `fee_bps` | Exactly `50` in this protocol release (0.5% of funding), not an open negotiated range. |
+| `max_concurrency` | Integer 1–256; must equal serving-profile concurrency when a profile is present. It is not a guarantee that every caller will always obtain a slot. |
+| `revision` | Positive `u64`, monotonic within provider-wallet/deployment/model namespace. |
+| `issued_at`, `expires_at` | Integer Unix seconds. Receiver allows at most 30 seconds future issuance, requires unexpired `expires_at > issued_at`, and accepts at most a 3,600-second lifetime. Current publisher uses 120 seconds. |
+
+`ModelSpec` contains exactly:
+
+- `id`: nonempty API identifier, at most 256 bytes, no control characters;
+- `revision`, `tokenizer_revision`: immutable content revisions, each 40 or 64 hexadecimal characters (not branch names);
+- `chat_template_sha256`: 64 hexadecimal characters;
+- `quantization`: nullable string; when present, nonempty and at most 64 bytes;
+- `context_length`: 1–1,048,576 tokens;
+- `max_output_tokens`: no greater than context length; positive when `chat` or `completions` is advertised and zero for a nongenerating model;
+- `capabilities`: 1–6 unique members of `chat`, `completions`, `embeddings`, `tools`, `structured_output`, `streaming`, including at least one of the first three inference endpoints;
+- `serving`: nullable `ServingProfile`. Absence is not a speed/capacity claim. Production provider configuration rejects generation without a qualified profile; explicit development/calibration is a separate path, not paid-service qualification. Basic signature/offer validation alone does not independently prove that a remote provider completed qualification.
+
+`ServingProfile` carries all of the following, and all are covered by the offer, quote and receipt signatures:
+
+| Group | Fields |
+|---|---|
+| Artifact | `hf_repo`, `tokenizer_repo`, `artifact_manifest_sha256` |
+| Runtime | `engine`, `engine_version`, `runtime_sha256`, `platform`, `backend` |
+| Physical inventory | `memory_kind`, `devices`, `memory_reserve_mib` |
+| Execution settings | `gpu_layers`, `split_mode`, `tensor_split`, `cache_type_k`, `cache_type_v`, `flash_attention`, `batch_size`, `ubatch_size` |
+| Admission/performance | `capacity_tier`, `region`, `max_concurrency`, `arrival_milli_rps`, `output_tokens_per_second`, `policy` |
+| Evidence | `qualification: {evidence_sha256, measured_at}` |
+
+Each `devices` entry is `{id, name, memory_mib, driver_version, engine_device}`. Memory is a physical inventory claim; unified memory is not added again for every device. `policy` and the performance chapter define the qualifying workload and waiver, not an unrestricted Internet latency SLA. Profile consistency is checked by `performance::validate_profile`; current-time validation rejects qualification measurement in the future. Signing a field does not independently verify its real-world truth.
+
+Source of exact types and validation: `src-tauri/src/protocol.rs:13–181`; `src-tauri/src/offer_registry.rs::validate_model`, `OfferRegistry::insert_at` (`52–115,245–292`); `src-tauri/src/provider_config.rs:118–141`. Keep the serving-profile field list synchronized with `protocol.rs::ServingProfile`, not a manually invented alternate wire format.
+
+#### Canonical encoding, domains, signatures and commitments
+
+The byte contract is deliberately narrower than arbitrary RFC 8785 JSON canonicalization:
+
+1. Serialize the typed value to `serde_json::Value`. Recursively reject numeric values that are neither signed nor unsigned integers. `serde_json::Map` uses its default sorted map representation: object keys are sorted recursively; array order remains significant. Serialize compact UTF-8 JSON using `serde_json::to_vec`, without extra whitespace. The `preserve_order` feature must not replace that map behavior. Null optional fields are part of the typed serialization. Cross-language implementations must reproduce this encoder's string escaping and integer representation; use `protocol.rs::canonical_json` as the exact reference, rather than assuming any “sorted JSON” library is interchangeable.
+2. For domain `D` and canonical bytes `J`, build `P = u32_be(byte_length(D)) || UTF8(D) || u32_be(byte_length(J)) || J`. Lengths count bytes. There is no trailing NUL, newline or JSON envelope included in `P`.
+3. Sign `Keccak256(0x19 || "Ethereum Signed Message:\n" || ASCII(decimal byte_length(P)) || P)` with recoverable secp256k1 ECDSA. The signature is compact 32-byte `r`, 32-byte `s`, then recovery byte 27 or 28; signer emits 130 lowercase hex characters without `0x`. Verification accepts an optional `0x`, requires 65 decoded bytes, accepts only recovery parity 0/1 after subtracting 27, rejects high-`s`, recovers the canonical wallet, and compares it to the required signer.
+4. Object IDs and payment commitments hash `P` directly with **Keccak-256**, not SHA-256 and not the personal-sign prefixed digest. Explicitly named artifact/evidence `sha256` fields use their separately defined SHA-256 contracts.
+
+`hash_hex(bytes)` below means `"0x" + lowercase_hex(Keccak256(bytes))`. It is not the SHA-256 hash of JSON or a signature.
+
+Domains are exact ASCII strings:
+
+| Payload | Domain | Signer |
+|---|---|---|
+| Offer | `chiral-inference-offer-v1` | Provider |
+| Quote | `chiral-inference-quote-v1` | Provider |
+| Funding-intent acknowledgement | `chiral-inference-funding-intent-v1` | Provider |
+| Usage receipt | `chiral-inference-receipt-v1` | Provider |
+| Control challenge | `chiral-inference-auth-v1` | Payer |
+| Subjective feedback | `chiral-inference-feedback-v1` | Payer |
+
+`offer_id = "0x" || lowercase_hex(Keccak256(P_offer))`. Opening transaction data is the six literal bytes `CHRL1\0` followed by `Keccak256(P_quote)` (38 bytes total). Top-up data is `CHRL2\0` followed by the 32 decoded bytes of the account ID (also 38 bytes). An opening therefore commits to the entire immutable quote, including full network, parties, model/profile, rates, funding, platform fee, concurrency, nonce and validity. Domain separation prevents interpreting an offer signature as a feedback or control signature.
+
+Exact byte references: `src-tauri/src/protocol.rs:6–11,326–414`; `src-tauri/src/wallet.rs:216–275`. These functions, not prose approximations of Ethereum signing, are the interoperation reference. Cross-language test vectors are not supplied by this section; no interoperability run is claimed here.
+
+### Discovery, freshness, withdrawal, and live state
+
+#### Bounded DHT and manifest discovery
+
+Kademlia advertises **candidate peers**, not trusted arbitrary offer blobs. Current DHT storage disables ordinary value records (`max_records = 0`); a peer serves its own bounded manifest over a separate authenticated request-response stream. The provider wallet's signature supplies commercial authenticity, while libp2p authenticates the responding peer.
+
+Network scoping and wire formats are explicit:
+
+- `scope = hash_hex(canonical_json(network))`; Kademlia protocol is `/chiral/inference/kad/1/{scope}`, Identify protocol is `/chiral/inference/id/1/{scope}`.
+- An index key is `Keccak256(canonical_json([network, model_selector]))`, where `model_selector` is `null` for all models or the exact model-ID string. This tuple/array encoding is distinct from the signed-object domain frame.
+- Manifest protocol is `/chiral/inference/manifest/1`. Request is `{network, model, offset}`; response is `{offers, next}`. Each direction has a four-byte big-endian JSON-byte length followed by JSON. Maximum request frame is 2,048 bytes; response frame 262,144 bytes.
+- A manifest contains at most 64 locally published offers, paged in groups of 8. Request offsets are aligned multiples of 8 below 64. Follow `next` only when it equals the previous offset plus 8. Each signed offer is independently bounded to 16 KiB and validated before registry insertion.
+- A search has an 8-second collection window, samples at most 64 distinct peers, and admits at most four simultaneous searches per DHT service. Manifest RPC timeout is 4 seconds. The public `discover` caller has a 10-second response wait, not a guarantee that connection/bootstrap plus the whole application operation completes in 8 seconds. Connected bootstrap peers are also candidates, never authorities.
+- Provider records have a 600-second TTL and a 120-second publication interval; these are **not** the signed-offer lifetime. Bootstrap is retried every 30 seconds. At most 32 bootstrap multiaddresses are configured, each ending in `/p2p/<peer-id>` at startup.
+
+The search merges verified responses until its deadline rather than taking the first answer as the marketplace. Bad signatures, malformed offers, mismatched network/model/peer identities or failed replies do not prevent independent peers from contributing. Results include matching unexpired entries in that service's verified registry; a long-running relay can therefore include previously verified cached offers as well as this search's replies. The registry holds at most 8,192 namespace entries. Bounds and adversarial peers make discovery incomplete: absence is not proof that no provider exists, nor does a first reply establish market-best price or quality.
+
+Sources: `src-tauri/src/dht.rs:24–36,49–131,213–247,279–363,378–434,435–557`; `src-tauri/src/offer_registry.rs:11–18,245–330`.
+
+#### Revision and withdrawal semantics
+
+The registry namespace is `provider_wallet/deployment_id/model.id`. A higher revision replaces its predecessor; a lower revision is rejected. Equal revision with different content is equivocation and rejected. Replaying an identical still-present offer is idempotent and does not extend the revision-retention horizon. Withdrawal removes the content-ID lookup but preserves the revision watermark/tombstone; replay of the same withdrawn revision is rejected. Watermarks are retained until 3,630 seconds after the accepted update was first observed, bounding memory while covering the maximum allowed lifetime plus issuance skew. This is local in-memory anti-rollback state, not a globally persistent consensus log. Consumers create a fresh verification registry for each discovery call; do not describe revision comparison as permanent cross-session consensus.
+
+A peer's complete valid authenticated manifest may withdraw **that peer's** previously cached offers omitted from the requested model scope. Partial or invalid manifests do not authorize deletion. Expiry also removes offers from visible results. Provider local withdrawal stops advertising indexes when they have no remaining local offers, but it does not instantly erase already distributed provider records or every remote cache. Remote disappearance is bounded by refreshed complete manifests and signed expiry, not an instantaneous global revocation broadcast.
+
+The current provider persists its revision counter, refreshes nominally every 30 seconds, and publishes 120-second offers only for models currently acceptable for publication. Development models without a serving profile are kept local to that provider's registry rather than announced through the DHT. Preserve the provider's DHT identity, durable revision, ledger and keys: deleting them is not recovery.
+
+Sources: `src-tauri/src/offer_registry.rs:225–340`; `src-tauri/src/dht.rs:409–434,453–489,523–545`; `src-tauri/src/app.rs:219–254,347–396,418–438`.
+
+#### Catalog precedence and catalog-specific reputation
+
+`Consumer::discover` chooses **direct DHT when `dht` is configured**. It does not merge catalog offers into those results and does not silently fall back to `catalog_url` when DHT discovery fails or returns no offers. Only when DHT is absent does it use the configured catalog origin. If neither is configured, discovery errors.
+
+Catalog offer API is `GET /api/offers?offset=0&limit=50` with optional exact `model` filter, returning `{offers: [Signed<InferenceOffer>, ...], next_offset: number|null}`. Server limit defaults to 50 and must be 1–100; offset is at most 8,192. The native consumer requests 50 per page, independently verifies every offer, rejects oversized pages and nonincreasing/cyclic pagination, and stops after at most 100 pages (otherwise asks the user to narrow the model filter). The relay refreshes its verified registry through DHT every 15 seconds. Pagination is a view over a changing bounded registry, not a snapshot-isolated exhaustive crawl.
+
+A configured `catalog_url` has a **separate role** even when DHT takes discovery precedence: native provider inspection reads reputation there, and feedback is submitted there. DHT does not transport reputation events/snapshots. Without a configured catalog, offers can still be discovered over DHT but reputation is explicitly unavailable and native feedback submission errors. The catalog's snapshot is a catalog-served calculation, not a provider-signed score or global consensus. This release exposes no feedback replication/merge protocol guaranteeing that distinct catalog operators have the same event set.
+
+Sources: `src-tauri/src/consumer.rs:373–430,628–698,1786–1827`; `src-tauri/src/bin/relay_server.rs:46–95,210–245`.
+
+#### Immutable terms versus current availability
+
+An offer is an attributable proposal at its issue time, not a health certificate. `GET /healthz` reports process liveness; `GET /readyz` returns `{ready, funding_ready}` with HTTP 200 or 503 based on serving readiness. **Serving readiness is deliberately separate from new-funding readiness.** A temporary chain outage can pause new funding/publication while existing settled balances remain usable; wrong-network evidence, administrative drain, runtime failure, unqualified models or durable performance withdrawal can prevent admission. Provider-wide readiness is not proof that every model has a free slot. Model-specific qualification and concurrency are checked again at execution.
+
+Native inspection returns `observed_at`, point-in-time health/readiness observations, and a separately fetched reputation result. Its readiness summary presently exposes `ready`, not the separate raw `funding_ready` field. Clients needing that distinction must interpret the provider's `/readyz` response; they must not infer it from the desktop summary. Readiness observations are unsigned HTTPS responses and do not change signed prices, account balances or agreement terms.
+
+Quotes copy exact selected offer model/profile, rates, fee terms and concurrency, bind the payer and provider, specify funding and a random nonce, and currently expire 300 seconds after issuance. Once accepted funding terms are durably acknowledged, offer refresh/expiry cannot renegotiate them. For existing accounts the sole supported evidence substitution is a strictly newer qualification measurement of an otherwise identical model/deployment profile; it does not replace prices, funds or other terms. Readiness/withdrawal gates admission, not the existence of an old agreement or settlement recovery.
+
+The [approved non-reserving quote decision](#approved-non-reserving-quotes) permits more outstanding quotes than the provider can accept for funding. It changes the quote/admission contract, not accepted financial obligations; implementation and specification alignment remain pending.
+
+Sources: `src-tauri/src/app.rs:54–70,256–396,477–482`; `src-tauri/src/protocol.rs::ModelSpec::accepts_execution`, `ServingProfile::same_terms` (`44–140`); `src-tauri/src/contracts.rs:245–297,314–345,366–412,476–504`; `src-tauri/src/consumer.rs:237–263,373–430,699–745`.
+
+### HTTP origins and trust boundaries
+
+Remote provider/catalog origins must be public HTTPS on port 443. Validation rejects username/password, query, fragment, non-root paths, loopback, `.localhost`, single-label remote hostnames, and forbidden literal addresses. A `development` exception allows HTTP(S)/non-443 only for literal loopback or exact `localhost`; it does **not** authorize arbitrary private LAN endpoints or remote cleartext HTTP. Development provider public listeners themselves must bind loopback.
+
+Advertise `https://provider.example`, not `https://provider.example/v1` or `https://provider.example:8443`. An OpenAI SDK's `base_url` adds `/v1` **after** validating the provider origin; a catalog URL is its origin, not `/api/offers`.
+
+Before connecting, `safe_http_client` resolves the validated origin once under a five-second DNS deadline, inspects up to 33 answers, and rejects an empty answer set, more than 32 answers, or **any** disallowed result. Accepted addresses are pinned into that client. It disables environment proxies and all redirect following and sets a ten-second connect timeout. Construct the client for each validated origin; do not reuse it for arbitrary hosts. Resolving again when a later client is built repeats validation; DNS pinning is not certificate pinning and does not claim a stable IP forever. HTTPS still supplies its normal certificate/hostname verification. A provider-controlled redirect is not authorization to send secrets to its target.
+
+The public address predicate excludes IPv4 private, loopback, link-local, multicast, broadcast, unspecified, CGNAT, benchmark/documentation and selected special-use ranges; IPv4-mapped IPv6 is subjected to the IPv4 predicate. IPv6 must satisfy the implemented global-unicast filter, excluding the documented transition/documentation/special ranges. Treat `offer_registry.rs::public_ip` as the exact predicate, not a promise to classify every future IANA allocation. This boundary protects outbound HTTP requests; it is not a claim that all libp2p addresses obey the HTTP-origin policy.
+
+Provider administration and engine traffic have different authorization/boundaries:
+
+- Administration is on a distinct nonzero **loopback-only** listener with its protected administrator bearer. `/admin/*` is not mounted in the public router. An account bearer or wallet control challenge is not an admin token.
+- The inference engine URL is private operator configuration, not the advertised endpoint. It must be an HTTP(S) origin on literal loopback/private IPv4, IPv6 loopback/unique-local, or exact `localhost`. A named arbitrary internal DNS hostname is not accepted by current validation. The current managed llama.cpp subprocess is private; engine credentials are distinct from account/admin/wallet secrets. Private-engine clients disable proxies and redirects as well.
+- A TLS reverse proxy may front the public provider listener, but must not expose the loopback administration listener, private engine, credentials or filesystem. Public HTTPS reachability is still required; libp2p relay support does not turn the inference HTTP endpoint into NAT traversal.
+
+Sources: `src-tauri/src/offer_registry.rs:117–216`; `src-tauri/src/provider_config.rs:91–103,143–160,190–211`; `src-tauri/src/app.rs:440–470,540–562`; `src-tauri/src/inference_backend.rs:527–549`.
+
+### Consumer control, credentials, and request lifecycle
+
+#### Authorization matrix
+
+| Operation | Current authorization |
+|---|---|
+| `POST /v1/auth/challenge` | Public bounded challenge issuance; issuing a challenge does not authorize an account. |
+| `POST /v1/contracts/propose` | Public proposal for an unexpired local offer. **This endpoint is not owner-authenticated.** Naming a consumer does not prove wallet control or authorize payment. See [approved non-reserving quotes](#approved-non-reserving-quotes) for the selected admission design and current implementation gap. |
+| `POST /v1/contracts/:id/funding-intent`, `POST /v1/contracts/open` | One-use payer challenge; quote must belong to that wallet. Signed raw transaction evidence is additional payment proof, not a replacement for owner authorization. |
+| `POST /v1/contracts/:id/topup` | One-use account-owner challenge and exact original signed payment evidence. |
+| `GET /v1/contracts/:id` and `/receipt`, `/funding`, `/requests`, `/requests/:request_id`, `/credentials` | Owner challenge **or** bearer with `read` scope belonging to that account. GET bodies must be empty. Request list accepts only optional `before=<unix_seconds>`. |
+| `POST /v1/contracts/:id/credentials`; `DELETE /v1/contracts/:id/credentials/:credential_id`; `POST /v1/contracts/:id/credentials/:credential_id/rotate` | Owner challenge; a read/infer bearer cannot mint, rotate or revoke credentials. |
+| `GET /v1/models`; `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | Account bearer with inference authorization; listing/capabilities are account/model scoped, not the public marketplace. |
+| `GET /v1/requests/:id` | Account bearer with `read` scope. |
+| `POST /v1/requests/:id/cancel` | Account bearer with `infer` scope. |
+
+Owner-proof exchange: send `{wallet, method, path, body_hash}` to `/v1/auth/challenge`, where `body_hash = hash_hex(exact outgoing body bytes)` and `path` includes the exact query when present. Response is `{nonce, payload_hex, expires_at}`. The challenge has a 120-second lifetime and signs `{network, provider_wallet, wallet, method, path, body_hash, nonce, expires_at}` using the auth domain. Reconstruct/verify the returned bytes against the intended request before signing; never sign arbitrary server-provided bytes blindly. Submit the operation with `X-Chiral-Owner`, `X-Chiral-Nonce`, `X-Chiral-Signature` and the exact body. The ledger atomically consumes the one-use challenge after signature/binding checks. A retry requires a fresh proof but retains the same account/payment operation; the old stateless `X-Owner-Sig` scheme is not this protocol.
+
+The current public middleware checks `X-Chiral-Client-Version` when provided; native onboarding supplies it. It is not required from ordinary stock inference clients. This is not a universal guarantee that missing-version requests are rejected. Control bodies are limited to 96 KiB with a five-second body deadline and 64 concurrent control slots.
+
+Credential issuance accepts `{expires_at, spend_cap_wei, max_concurrency, scopes}`; scopes are `infer` and/or `read`, spend cap is nullable canonical base-unit money, and credential concurrency cannot exceed its account. Provider stores token hashes, not plaintext tokens. The returned credential secret is separate from its public metadata ID; keep it only in protected native storage and export intentionally for an application. Normal native credential management outputs metadata rather than printing secrets. A credential cap limits authority on the same prepaid balance; it is not a new balance or refund guarantee. Do not put tokens/private keys on command lines, into prompts or in diagnostics.
+
+Sources: `src-tauri/src/contracts.rs:25–51,86–176,177–243,245–537`; `src-tauri/src/auth.rs:9–111`; `src-tauri/src/consumer.rs:789–834,1432–1560`; `src-tauri/src/billing_store.rs:35–57,757–809`; `src-tauri/src/inference_gateway.rs:145–172,242–303`; `src-tauri/src/app.rs:506–538`.
+
+#### Request and account integration
+
+Follow [the exact funding order](#agreements-and-exact-funding-order) for paid onboarding. Free sessions still require authentication and admission, but no fabricated transfer; they cannot vote.
+
+For inference, use a stable `Idempotency-Key` before dispatch. Current keys allow 1–128 ASCII letters/digits or `. _ : -`; absent a key the gateway generates a new UUID, which does not let an application safely recover a previously lost request. The account isolates the key. A duplicate returns HTTP 409 `duplicate_request` with request ID/status; it does **not** replay generation or recover saved response text. Response content is not retained for replay. Keep `x-request-id`, inspect the account's status/request/receipt history after uncertainty, and do not issue a new chargeable operation just because the output stream was interrupted.
+
+Admission, exact token preparation, maximum-cost reservation, execution, authoritative-usage settlement, performance waiver and unknown-usage release are separate stages. Account and credential limits are enforced against the same ledger. Cancellation requests signal the live operation and may return 202 `cancelling`; that does not mean already generated work is free. Known usage can still settle; missing/invalid authoritative usage uses the explicit unknown-usage policy rather than invented token counts. Stream fragments, visible text length and client receipt of the last event are not authoritative billing evidence.
+
+Signed receipts contain `{network, provider_wallet, account, requests, sequence, issued_at}` and cover a bounded recent request page, including recorded performance outcomes. A receipt is an attributable provider accounting statement, not complete prompt/output storage, an on-chain proof of execution, or an automatic dispute/refund mechanism. Preserve prior verified receipts if an application needs its own history. Receipt/account reads, top-up settlement and credential recovery are not renegotiation of the original model/pricing contract.
+
+Sources: `src-tauri/src/protocol.rs:183–218,234–279`; `src-tauri/src/contracts.rs:299–412,414–504`; `src-tauri/src/inference_gateway.rs:174–210,260–303`; `src-tauri/src/consumer.rs::fund`, `resume`, `receipt`, `request_status`, `cancel_request`.
+
+### Payment-gated subjective reputation
+
+#### Evidence, admission, and endpoints
+
+This release implements **payer-signed subjective feedback backed by the quote's opening payment**. It does not require a completed inference request, usage receipt, minimum token count, duration, provider's acknowledgement, or proof that the provider's model was correct. It is not the retired transfer-success rating endpoint. Faucet-funded identities, colluding wallets and multiple paid agreements remain economic/Sybil limitations; self-feedback by the same payer/provider address is specifically forbidden, not all beneficial-owner overlap.
+
+The catalog exposes:
+
+- `POST /api/ratings/feedback` with `FeedbackSubmission`;
+- `GET /api/ratings/:wallet` returning `{network, provider_wallet, experimental_testnet: true, elo, base_elo: 50.0, vote_count}`.
+
+There is no current batch-rating endpoint or public event-history endpoint in this router. POST success is `{accepted: true, quote_id, revision, experimental_testnet: true}`. Requests are bounded to 64 KiB; four verification slots are shared by submission, reads and background reconciliation.
+
+`FeedbackSubmission` is exactly:
+
+```text
+{
+  feedback: Signed<{
+    network,
+    provider_wallet,
+    consumer_wallet,
+    quote_id,
+    tx_hash,
+    score,
+    revision,
+    issued_at
+  }>,
+  quote: Signed<Quote>,
+  raw_transaction: <original signed opening transaction hex>
+}
+```
+
+It carries no prompt text, explanation/comment, top-up list or client-reported transfer outcome. Score is an integer 0–100, consumed as `score / 100`; the code does not impose finer category labels such as stars. `revision` is positive. The feedback signature must recover the consumer and the quote signature the provider using their respective domains. Full network identities must match the catalog. Provider, consumer and quote ID must match the quote; consumer and provider must differ. Wallets and `tx_hash`, `quote_id`, `offer_id` are canonical lowercase hex. Feedback cannot predate quote issuance, be more than 30 seconds in the future, or arrive more than 300 seconds after its signed timestamp. Quote expiry must follow issuance, concurrency must be positive, fee must be 50 bps, and the model must pass validation. The quote need not remain unexpired when a later vote is submitted.
+
+Free sessions cannot vote: quote funding must be positive and at least one quoted token rate nonzero. Raw transaction evidence is at most 32,768 characters. Catalog verification independently decodes the signed payment, checks network/chain, payer, provider recipient, **exact quoted funding amount**, exact `CHRL1\0 || quote commitment`, and matching transaction hash. It then requires successful canonical execution at or below the healthy eSpace safe frontier, observed consistently twice. `safe` is the application settlement policy, not irreversible PoS finality. A bare tx hash, arbitrary payment to that provider, top-up commitment, failed transaction, pending transaction or free quote is insufficient.
+
+The native `feedback` operation reads the saved original opening payment and signed quote, signs current feedback locally, and sends it to the configured catalog. Catalog credentials are not provider account bearers, and the feedback route uses the submission's payer signature rather than an inference owner-challenge exchange. Sending the original **already signed** payment bytes exposes payment evidence; it never requires sending the payer private key. Do not print raw evidence as a diagnostic shortcut.
+
+Sources: `src-tauri/src/reputation.rs:9–90`; `src-tauri/src/rating_api.rs:24–52,85–175`; `src-tauri/src/chain_client.rs:774–852`; `src-tauri/src/consumer.rs:1786–1827`.
+
+#### Replacement, deduplication, and bounded persistence
+
+The SQLite store is bound to the entire network identity and refuses reuse on a different network. It has one row per quote/account (`quote_id` primary key) and a unique opening `tx_hash`; one payment cannot create votes for multiple agreements. A valid vote update replaces the row rather than adding another weight. Both revision **and** `issued_at` must strictly increase for changed evidence; same revision with different evidence is rejected. Identical same-revision stored evidence is idempotent after current admission/chain checks, and can restore eligibility. The old 300-second submission must nevertheless be freshly revised for a later POST rather than bypassing admission freshness.
+
+An agreement cannot change its opening payment hash or verified amount. First-accepted `created_at` and verified amount are preserved across updates, so score editing does not rejuvenate its age or increase its amount weight. The store currently caps 100,000 total feedback rows and 1,000 per provider. These are storage/admission bounds, not a promise of automatic expiry/pruning or an unlimited public registry. Each independently operated catalog holds its own such store.
+
+Sources: `src-tauri/src/rating_storage.rs:15–152`; `src-tauri/src/rating_api.rs:103–145`.
+
+#### Exact amount/time-weighted Elo calculation
+
+Start from `E = 50`. Select eligible rows in the exact network and provider scope whose **first-acceptance age** is at most 180 days. Order ascending by `(created_at, quote_id)`; this deterministic tie-break matters because updates are sequential. For each row, let:
+
+```text
+age_days = max(0, now - created_at) / 86400
+w_time   = max(0, 1 - age_days / 180)
+amount   = verified_opening_amount_wei / 10^18
+w_amount = 1 + clamp(ln(1 + amount) / ln(51), 0, 1)
+signal   = score / 100
+expected = 1 / (1 + 10^((50 - E) / 12))
+E        = clamp(E + 4 * w_time * w_amount * (signal - expected), 0, 100)
+```
+
+The amount weight uses the gross canonical opening value in CFX, **not** token spend, balance, net credit after fee, cumulative top-ups or the user's claimed amount. It ranges from 1 to 2 and reaches its cap at 50 CFX. Time weight decays linearly; votes exactly 180 days old still count in `vote_count` but have zero incremental weight. Updates replace the subjective signal at its original position/age. Round final `E` to one decimal place; `base_elo` stays 50, and `vote_count` counts the selected eligible rows. No votes yields the neutral baseline, not a successful service history. This rating arithmetic uses `f64`; it is separate from exact integer monetary settlement.
+
+Source: `src-tauri/src/reputation.rs:92–152`.
+
+#### RPC failures, reorgs, and what “unavailable” means
+
+Before returning a provider's snapshot, the catalog revalidates stored provider/payer signatures and the opening payments. Invalid evidence, rejected execution or pending/noncanonical payment makes a row ineligible. The evidence is retained so a later canonical recovery may restore eligibility. A missing receipt is treated as pending for this rating verification and removes the vote from the current score; that is **not** proof of a ledger funding reversal and must not be described as such. The funding ledger's stricter reversal rules remain separate.
+
+If required RPC evidence is unavailable, a snapshot fails with HTTP 503 `chain_unavailable` rather than serving a known-stale score; a 30-second verification/revalidation deadline produces 503 `chain_timeout`. Submission of pending evidence gives 409 `payment_pending`; rejected evidence gives 400 `payment_rejected`. Busy verification gives 429 `feedback_busy`; invalid/stale/conflicting submissions return the corresponding `invalid_feedback`, `expired_feedback` or `feedback_conflict` errors. Background reconciliation visits providers in bounded pages of 32, nominally every 30 seconds, reusing the same validation and preserving orphaned evidence. This is not a fixed global revalidation completion bound.
+
+Native provider inspection displays reputation unavailability separately from liveness/readiness; it must not replace an unavailable score with fabricated zero/baseline or imply the provider is untrustworthy solely because a catalog/RPC is down. A returned neutral baseline reflects no eligible history in that catalog, not universal absence of payments. No ranking authority, slashing, escrow, automatic refund or automatic rerouting follows from this score.
+
+Sources: `src-tauri/src/rating_api.rs:53–83,96–175,176–206`; `src-tauri/src/rating_storage.rs:135–151`; `src-tauri/src/consumer.rs:408–430`.
+
+### Configuration and state
+
+There are no implicit chain presets, bootstrap addresses, faucet authorities, or legacy RPC fallbacks. JSON configurations reject unknown fields. Paths in consumer/provider configurations are resolved relative to their configuration file. Select a profile deliberately in native desktop Settings or use `chiral --config consumer.json`.
+
+A consumer profile has these fields (use real operator-supplied values, not guessed public endpoints):
 
 | Field | Meaning |
-|-------|---------|
-| `provider_wallet` | secp256k1 address; the payee, reputation subject, and offer signer |
-| `resource_class` | `storage` \| `container` \| `inference` |
-| `capacity` | class-specific descriptor (below) |
-| `price_schedule` | class-specific CHI-per-unit rates (below) |
-| `endpoint` | public base URL of the provider's HTTPS API (host + optional port) |
-| `region` | optional locality hint (e.g. `us-east`) |
-| `min_funding` | smallest contract the provider will open (CHI) |
-| `offer_nonce` | monotonic; lets the provider supersede a prior offer under first-claim ownership |
-| `valid_until` | Unix-seconds; readers ignore expired offers |
-| `signature` | secp256k1 over the canonical payload above |
-
-**Class-specific `capacity` / `price_schedule`:**
-
-| Class | `capacity` | `price_schedule` |
-|-------|-----------|------------------|
-| `storage` | `gb_available`, `max_object_bytes` | `per_gb_month`, `per_gb_egress` |
-| `container` | `cpu_cores`, `mem_gb`, `gpu_model?`, `gpu_count?` | `per_vcpu_hour`, `per_gb_mem_hour`, `per_gpu_hour?` |
-| `inference` | `models: [{id, context_len, quantization?}]` | per-model `per_1k_input_tokens`, `per_1k_output_tokens` |
-
-- **DHT keys.** Each offer is stored at `chiral_offer_<class>_<wallet>`; the provider also registers as a Kademlia provider under a per-class index (`chiral_offers_<class>`) so consumers can enumerate sellers of a class. Reserved namespaces reject raw `dht_put` (403) — offers are writable only through the signed publish command.
-- **Publish / refresh / expire.** A provider republishes on a short interval (≈ every 2–3 min) with `valid_until` a few minutes out; one that stops refreshing falls out of the catalog. First-claim ownership means only the provider's wallet can overwrite its own offer key.
-- **Discovery + ranking.** `search_offers(class)` resolves the class index, fetches each offer, verifies signatures, drops unsigned/invalid/expired, attaches provider Elo via batch reputation lookup, and ranks by price × reputation (with an optional region filter). The first signature-valid replica may be used without waiting for quorum convergence.
-- **Relay aggregation (convenience, advisory).** The relay may cache a verified per-class offer list (mirroring today's host registry) so light clients get a fast catalog; clients re-verify every signature, so the cache is never trusted — it only accelerates discovery.
-
----
-
-## Resource Interfaces
-
-Each class is a standard HTTP API the provider serves over HTTPS at its offer's `endpoint`. A consumer authenticates to the API **against its open contract** (see [Service Contracts](#service-contracts-and-the-handshake) and the auth decision in [Design Decisions](#design-decisions)); the desktop app ships a client for each class, and existing third-party tooling works via the **contract-scoped session credential** the provider issues when the contract opens (an S3 key / OpenAI bearer / container token bound to `contract_id`); a local wallet-signing proxy is available for users who want no shared secret.
-
-### Storage — S3-compatible
-
-> **Status: new provider-side server (may wrap an existing S3 implementation, e.g. MinIO, behind the contract/auth layer).**
-
-- **API.** S3 object semantics: `PUT`/`GET`/`HEAD`/`DELETE` object, multipart upload for large objects, `GET` bucket (list), and presigned URLs for time-boxed anonymous access. Path-style and virtual-host-style addressing.
-- **Namespacing.** One bucket namespace per contract (seeded by the contract tx hash); object keys are arbitrary UTF-8, up to the offer's `max_object_bytes`.
-- **Integrity & content addressing.** The object ETag is its SHA-256, so a consumer verifies bytes against the name it requested. A public-read object addressed by its hash is the successor to "sharing a file by its hash"; such objects are served unauthenticated (presigned or public ACL).
-- **Metering.** Capacity is sampled (GB-hours accumulated into GB-month); egress is metered on `GET` bytes; the balance is drawn down each interval at `per_gb_month` / `per_gb_egress`.
-- **Exhaustion & durability.** At zero balance the provider stops accepting writes and (after a grace window — see [Design Decisions](#design-decisions)) may delete stored objects. **v1 is single-provider: durability is the consumer's responsibility** — replicate across providers client-side if you need it. The book states this risk plainly rather than hiding it.
-
-### Containerized compute — hardened OCI
-
-> **Status: specified; v1 reference provider runs OCI containers under a hardened Docker/Podman runtime.**
-
-- **Submit.** `POST /containers` with `{ image, cmd?, env?, ports, resources{ vcpu, mem_gb, gpu? } }`; the provider pulls the image (from allowed registries), schedules it within the contract's resource cap, and returns a handle + a public endpoint (an assigned subdomain/port reverse-proxied to the container).
-- **Isolation (both directions).** Containers run **non-privileged**, with user-namespace remapping, a seccomp/AppArmor profile, dropped capabilities, a read-only rootfs by default, no host bind-mounts, cgroup CPU/memory/PID caps, and an egress network policy. This protects the *provider's* host from hostile workloads; the *consumer* in turn trusts the provider not to introspect its container — a mutual-trust boundary that reputation, not cryptography, polices. MicroVM isolation (Firecracker/Kata) is the noted hardening path beyond v1.
-- **Lifecycle.** `GET /containers/:id` (status, stats, logs), `DELETE /containers/:id` (stop — halts metering). The container is force-stopped when the balance is exhausted.
-- **Persistence.** v1 rootfs is ephemeral; a container may mount a Storage-class bucket for durable state (composition across classes). Local persistent volumes are future work.
-- **Metering.** Wall-clock runtime × the contract's `per_vcpu_hour` / `per_gb_mem_hour` / `per_gpu_hour`, billed per second and drawn down periodically.
-
-### LLM serving — OpenAI-compatible
-
-> **Status: specified; provider fronts one or more served models with a token meter.**
-
-- **API.** Mirrors the OpenAI HTTP API: `GET /v1/models`, `POST /v1/chat/completions` (including streaming SSE), `POST /v1/completions`, `POST /v1/embeddings`. Standard OpenAI SDKs point at the provider's endpoint with the contract session as the bearer key.
-- **Model selection.** The consumer sets `model` to an ID the offer advertises. A provider cannot cheaply *prove* it runs the claimed model rather than a smaller/quantized one — a reputation-policed quality property (see [Design Decisions](#design-decisions) for optional model attestation).
-- **Metering.** Input + output tokens (the response `usage` block) at the model's `per_1k_input_tokens` / `per_1k_output_tokens`; streaming responses meter tokens as they emit. The consumer can approximately re-count with a local tokenizer to reconcile against balance drain.
-- **Limits.** Per-contract concurrency and rate limits; requests are refused (not queued indefinitely) when the balance cannot cover the maximum possible completion.
-
----
-
-## Service Contracts and the Handshake
-
-> **Status: new. Built from the existing on-chain payment-verification primitives (wallet tx verification: mined + recipient + amount + chain-id, and the `(tx, …)` spent-tx ledger) plus the `split_payment` fee cut. No smart contract is introduced — the chain carries only signed, value-bearing transactions.**
-
-A **service contract** is the agreement between a consumer and a provider, committed as a single signed on-chain transaction. The transaction *is* the contract: it moves the prepaid CHI to the provider and carries the agreed terms in its `data` field, so the deal is immutable, timestamped, and attributable to the consumer's wallet.
-
-### The handshake
-
-1. **Propose.** Consumer → `POST {endpoint}/contracts/propose` with the accepted `offer` reference and desired terms (`funding_amount`, class-specific parameters such as bucket name / resource shape / model). Over HTTPS to the provider's public endpoint.
-2. **Quote.** Provider → returns the exact terms it will honor, a fresh `contract_nonce` (anti-replay), and the `terms_hash` to commit. It rejects proposals below the offer's `min_funding`.
-3. **Commit on-chain.** Consumer builds the **contract transaction**:
-   - `to` = `provider_wallet`, `value` = `funding_amount`
-   - `data` = domain-tagged (`chiral-contract-v1`) canonical encoding of `{ offer_ref, terms_hash, contract_nonce }`
-   - signs it with the consumer wallet and broadcasts it to the chain.
-4. **Open.** Consumer → `POST {endpoint}/contracts/open { tx_hash }`. The provider verifies on-chain: mined for a large contract, or accepted optimistically from the mempool for a small one (see [Design Decisions](#design-decisions)), `to` = self, `value` = the quoted amount, `data` decodes to the quoted `terms_hash` + unused `contract_nonce`, `from` = the consumer, `chainId == geth::chain_id()`. It records `(tx_hash, provider)` in the contract ledger (one tx ⇒ one contract, no replay), credits the balance = `value − fee` (via `split_payment`; the fee — default 0.5%, 0.1% floor — is forwarded to the platform wallet), and returns the **contract handle** (`contract_id = tx_hash`) plus a **contract-scoped session credential** — an S3 access-key/secret, an OpenAI-style bearer, or a container token bound to `contract_id` — which is the handle standard tooling authenticates with (proof of contract control, not an independent grant of authority).
-
-### Balance, metering, and top-ups
-
-- **Drawdown.** The provider meters usage per class ([Resource Interfaces](#resource-interfaces)) and decrements the contract balance at the agreed rates. Metering is provider-side — the honest-provider assumption of [Part I §9](#9-trust-model) — and the provider reports running usage to the consumer (response headers / a `GET {endpoint}/contracts/:id` endpoint) so the consumer can reconcile against observable output.
-- **Top-up.** When the balance runs low, the consumer sends a further payment transaction whose `data` references `contract_id`; the provider verifies it and adds to the same balance. No new handshake is needed.
-- **Signed receipts.** On demand (`GET {endpoint}/contracts/:id/receipt`) and periodically, the provider returns a **usage receipt signed by its wallet** — `{contract_id, funded_wei, spent_wei, balance_wei, usage, as_of}` — so the consumer holds portable, attributable evidence of what it was charged. Reputation ratings and disputes cite these ([wire format](#wire-protocol--api-reference-contract-spine)).
-- **Exhaustion.** At zero balance the provider pauses service (class-specific: storage may enter a read-only grace window; containers are stopped; inference is refused).
-- **Non-refundable.** There is no withdrawal path. A consumer funds what it intends to spend and tops up incrementally.
-
-### What binds — cryptographically vs by trust
-
-- **Cryptographic:** the payee and amount (the tx), the consumer's identity (`from`), the agreed terms (`terms_hash` in `data`, matched against the provider's signed offer), and no replay/double-open (contract ledger + chain-id + low-`s`).
-- **By reputation:** that the provider then *delivers* the metered resource and meters it honestly. A provider that takes a contract and cheats can do so once per victim, bounded by that victim's prepaid balance, and the conduct is recorded against the paid wallet.
-
----
-
-## Wire Protocol & API Reference (Contract Spine)
-
-> **Status: normative spec for v1 of the shared spine** — the signed encodings, the handshake, the contract transaction, and the session credential. The three class data-plane APIs (S3, container, LLM) get their own reference in a later pass. Reconcile exact symbol names with current `main` at implementation time.
-
-### Conventions
-
-- **Transport.** HTTPS to the provider's offer `endpoint`; control-plane paths live under `/v1/`. JSON bodies are `Content-Type: application/json; charset=utf-8`.
-- **Hashing & signatures.** `keccak256` for all digests. Signatures are secp256k1 **recoverable**, low-`s` (EIP-2), 65 bytes `r ‖ s ‖ v` as `0x`-hex; the signer is recovered with `ecrecover` and must equal the claimed wallet (same primitive as `wallet::recover_signer`).
-- **Hex & numbers.** Binary fields (addresses, hashes, nonces, signatures) are `0x`-prefixed lower-case hex. Wei amounts are decimal **strings** (they exceed JS safe-integer range).
-- **Canonical byte encoding** for signed records:
-  ```
-  lp(b)                 = uint32_be(len(b)) ‖ b        # length-prefixed bytes
-  jcs(obj)              = RFC-8785 canonical JSON (sorted keys, no space), UTF-8
-  canonical(tag, f₁…fₙ) = lp(ascii(tag)) ‖ lp(f₁) ‖ … ‖ lp(fₙ)
-  digest                = keccak256(canonical(…))
-  ```
-  Addresses are 20 raw bytes; `u128`/`u64` integers are fixed big-endian (16 / 8 bytes); structured sub-objects (`capacity`, `price_schedule`, `params`) are `jcs(...)` bytes. The domain tag makes a signature for one record type unusable as another.
-- **Versioning.** Every request carries `X-Chiral-Client-Version: <semver>`; a provider returns `426 Upgrade Required` (policy JSON in the body) below `minRequired` — the same gate as the rest of the network.
-- **Error envelope** (all non-S3 endpoints; S3 data-plane uses S3-native XML for tool compatibility):
-  ```json
-  { "error": { "code": "below_min_funding", "message": "human text",
-               "retryable": false, "detail": {} } }
-  ```
-
-### Signed encodings
-
-**Resource offer** — domain tag `chiral-offer-v1`, fields in order:
-```
-provider_wallet : addr(20)
-resource_class  : u8          # 1=storage 2=container 3=inference
-capacity        : jcs(...)    # class-specific (see Resource Offers)
-price_schedule  : jcs(...)
-endpoint        : utf8        # "https://host[:port]"
-region          : utf8
-min_funding_wei : u128(16)
-offer_nonce     : u64(8)
-valid_until     : u64(8)      # unix seconds
-```
-`offer_signature = sign(keccak256(canonical("chiral-offer-v1", …)))`.
-`offer_ref = keccak256(canonical("chiral-offer-v1", …))` — 32 bytes; names the exact signed offer the consumer accepted (any change to price / endpoint / etc. changes `offer_ref`).
-
-**Contract terms** — the full negotiated deal, hashed into the on-chain commitment. A JSON object hashed with JCS:
-```json
-{ "offer_ref":"0x…", "provider_wallet":"0x…", "consumer_wallet":"0x…",
-  "resource_class":"storage", "funding_amount_wei":"…", "rates":{…},
-  "params":{…}, "contract_nonce":"0x…16", "expiry":1712345678 }
-```
-`terms_hash = keccak256(jcs(terms))`. Both sides compute it identically; the consumer commits it on-chain, the provider recomputes and checks equality at `open`.
-
-**Contract transaction `data`** — compact fixed layout, 84 bytes:
-```
-MAGIC(4)=0x43485231 "CHR1" ‖ offer_ref(32) ‖ terms_hash(32) ‖ contract_nonce(16)
-```
-The tx itself: `to = provider_wallet`, `value = funding_amount_wei`, signed by the consumer wallet. **Top-up** txs use `MAGIC=0x43485232 "CHR2" ‖ contract_id(32)` (36 bytes) so the provider credits the right open contract.
-
-### Handshake endpoints
-
-#### `POST /v1/contracts/propose`
-Request:
-```json
-{ "offer_ref":"0x…32", "consumer_wallet":"0x…20",
-  "funding_amount_wei":"1000000000000000000", "params":{ /* class-specific */ } }
-```
-`200 OK`:
-```json
-{ "provider_wallet":"0x…", "resource_class":"storage",
-  "contract_nonce":"0x…16", "terms":{ /* full terms object */ },
-  "terms_hash":"0x…32", "quote_expires_at":1712345678 }
-```
-| Status | `error.code` | Meaning |
-|---|---|---|
-| 400 | `invalid_request` | malformed body / params fail the class schema |
-| 404 | `offer_not_found` | `offer_ref` unknown or expired |
-| 409 | `below_min_funding` | `funding_amount_wei < min_funding` |
-| 409 | `capacity_unavailable` | provider cannot currently honor the shape |
-| 426 | `upgrade_required` | client below `minRequired` |
-
-The `contract_nonce` is single-use and ties this quote to the eventual on-chain commitment; `quote_expires_at` bounds how long the consumer has to commit.
-
-#### `POST /v1/contracts/open`
-Request: `{ "tx_hash":"0x…32" }`
-`201 Created`:
-```json
-{ "contract_id":"0x…32", "status":"open",
-  "funded_wei":"1000000000000000000", "fee_wei":"5000000000000000",
-  "balance_wei":"995000000000000000",
-  "credential":{ /* see Session credential */ },
-  "opened_at":1712345678, "expires_at":1712432078 }
-```
-`202 Accepted` (optimistic; tx seen but not yet confirmed): `{ "contract_id":"0x…", "status":"pending", "retry_after_s":15 }`.
-| Status | `error.code` | `retryable` | Meaning |
-|---|---|---|---|
-| 402 | `payment_invalid` | false | wrong recipient / amount / chain, or `terms_hash`/`offer_ref` mismatch |
-| 404 | `tx_not_found` | true | not yet visible on-chain — retry after `retry_after_s` |
-| 409 | `already_open` | — | idempotent: returns the existing contract body |
-| 410 | `quote_expired` | false | `contract_nonce` / quote no longer valid |
-
-Verification at `open`: `to == provider_wallet`, `value == terms.funding_amount_wei`, `chainId == geth::chain_id()`, `data` parses to the quoted `offer_ref` + `terms_hash` + an unused `contract_nonce`, and `from == terms.consumer_wallet`; then `(tx_hash, provider)` is recorded in the contract ledger (replay-proof), `split_payment` cuts the fee, and the balance is credited. The 402-vs-404 split mirrors the seeder `PaymentProof` handler (permanent vs retryable).
-
-#### `GET /v1/contracts/:contract_id`
-Auth: `Authorization: Bearer <session bearer>`.
-`200 OK`:
-```json
-{ "contract_id":"0x…", "status":"open|paused|closed",
-  "funded_wei":"…", "spent_wei":"…", "balance_wei":"…",
-  "rates":{…}, "usage":{ /* class-specific meters */ }, "updated_at":1712345678 }
-```
-`401 unauthorized` on a bad/absent credential; `404` if unknown.
-
-#### `POST /v1/contracts/:contract_id/topup`
-Request `{ "tx_hash":"0x…" }` (a `CHR2` tx referencing this contract). `200 OK` returns the updated balance; same 402 / 404 semantics as `open`.
-
-#### `GET /v1/contracts/:contract_id/receipt`
-Auth: `Authorization: Bearer <session bearer>`. Returns a **provider-wallet-signed** usage statement — portable evidence a consumer can cite in a rating or dispute:
-```json
-{ "contract_id":"0x…", "funded_wei":"…", "spent_wei":"…", "balance_wei":"…",
-  "usage":{ /* class-specific meters */ }, "as_of":1712349278,
-  "provider_wallet":"0x…", "signature":"0x…65" }
-```
-`signature = sign(keccak256(canonical("chiral-receipt-v1", contract_id, funded_wei, spent_wei, balance_wei, jcs(usage), as_of)))`; the consumer checks `ecrecover == provider_wallet`.
-
-### Session credential
-
-Issued in the `open` response, bound to `contract_id`, scoped to that contract's resources only:
-```json
-{ "bearer":"chi_sess_<≥43 base64url chars>",
-  "s3":{ "endpoint":"https://host", "region":"chiral",
-         "access_key_id":"AKIA…", "secret_access_key":"…",
-         "bucket":"c-<contract_id[:16]>" },
-  "expires_at":1712432078 }
-```
-- **Bearer** — an opaque, high-entropy token (≥256 bits) the provider maps server-side to the contract. Presented as `Authorization: Bearer <bearer>` on the control-plane, container, and LLM APIs. Treat it as a password: whoever holds it can spend the contract's balance-worth of service until `expires_at`.
-- **S3** — an access-key/secret pair for standard SigV4; the provider maps `access_key_id → contract`, so unmodified S3 SDKs/CLIs work.
-- **Lifetime & rotation** — valid while the contract is `open` and before `expires_at`; rotate with `POST /v1/contracts/:id/credential:rotate` (invalidates the prior credential). The credential grants no authority beyond the contract — it is a transport convenience over the on-chain proof of contract control, not an independent grant.
-- *Optional variant:* a provider-signed capability token — `base64url(jcs{contract_id,scope,exp}) . base64url(sig)` — for stateless verification without server-side session state. Opaque bearer is the v1 default.
-
-### Metering headers (data-plane)
-
-Every storage / container / inference response carries drawdown telemetry so any client can watch billing in real time:
-```
-X-Chiral-Contract-Id: 0x…
-X-Chiral-Cost-Wei:     12500000000000      # cost attributed to this request
-X-Chiral-Balance-Wei:  982500000000000     # remaining after this request
-```
-
----
-
-## Data-Plane API: Storage (S3)
-
-> **Status: normative v1 spec for the storage data plane.** It wraps standard S3 semantics behind the contract/credential layer of the [Wire Protocol spine](#wire-protocol--api-reference-contract-spine), so unmodified S3 SDKs/CLIs work against it. Container and inference data planes follow in later passes.
-
-### Auth, endpoint, addressing
-
-- **Auth.** AWS **SigV4** with the contract's issued `access_key_id` / `secret_access_key` (the [session credential](#session-credential)); `region = chiral`, `service = s3`. Presigned URLs use SigV4 query signing for anonymous, time-boxed access.
-- **Bucket.** Exactly one bucket per contract, named `c-<contract_id[:16]>` and returned in the credential. There is no `CreateBucket` / `ListBuckets` — the bucket lives for the life of the contract.
-- **Addressing.** Path-style (`https://host/c-<id>/<key>`) and virtual-host-style (`https://c-<id>.host/<key>`) both accepted. Keys are arbitrary UTF-8 up to 1024 bytes; single-`PUT` bodies up to the offer's `max_object_bytes`, larger via multipart.
-
-### Object operations
-
-| Operation | Request | Success | Notes |
-|---|---|---|---|
-| Put object | `PUT /{bucket}/{key}` body=bytes | `200` + `ETag` | `Content-Length` required; optional `Content-Type`, `x-amz-meta-*`, `x-amz-checksum-sha256` |
-| Get object | `GET /{bucket}/{key}` | `200` / `206` (`Range`) | streams bytes; egress metered |
-| Head object | `HEAD /{bucket}/{key}` | `200` (headers only) | size, ETag, content-type, checksum |
-| Delete object | `DELETE /{bucket}/{key}` | `204` | idempotent |
-| List objects | `GET /{bucket}?list-type=2&prefix=&delimiter=&max-keys=&continuation-token=` | `200` XML `ListBucketResult` | paginated |
-| Initiate multipart | `POST /{bucket}/{key}?uploads` | `200` XML (`UploadId`) | for large objects |
-| Upload part | `PUT /{bucket}/{key}?partNumber=N&uploadId=U` body=bytes | `200` + part `ETag` | parts ≥ 5 MiB except the last |
-| Complete multipart | `POST /{bucket}/{key}?uploadId=U` body=`<CompleteMultipartUpload>…</…>` | `200` XML result | assembles parts |
-| Abort multipart | `DELETE /{bucket}/{key}?uploadId=U` | `204` | frees parts |
-
-Data-plane responses carry the standard `ETag` / `Content-Length` / `Content-Type` / `Last-Modified` **plus** the metering trio `X-Chiral-Contract-Id` / `X-Chiral-Cost-Wei` / `X-Chiral-Balance-Wei`.
-
-### Integrity & content addressing
-
-- **ETag** is the object's **MD5** (quoted hex) for single-part puts — the AWS convention, so integrity-checking clients keep working; multipart ETags use the AWS `"<md5-of-part-md5s>-<n>"` form.
-- **Content SHA-256** rides the native `x-amz-checksum-sha256` header (base64), settable on `PUT` and returned on `GET`/`HEAD` (with `x-amz-checksum-algorithm: SHA256`). This is the content-addressing hook: a **content-addressed object** uses the hex SHA-256 as its key and the checksum header to verify — the standards-aligned successor to "sharing a file by its hash."
-
-### Metering, balance & exhaustion
-
-- **Billed:** stored capacity (sampled into GB-month at `per_gb_month`) and **egress** on `GET`/part downloads (at `per_gb_egress`). Ingress is not billed beyond the capacity it creates.
-- Every response reports live drawdown via the `X-Chiral-*` headers.
-- **Insufficient balance:** an operation that cannot be covered returns `402` with S3-XML `<Code>InsufficientBalance</Code>`. On full exhaustion the provider blocks writes immediately and serves reads for a grace window (default — see [Design Decisions](#design-decisions)), after which objects may be deleted. **Single-provider durability is the consumer's responsibility.**
-
-### Errors (S3-native XML)
-
-```xml
-<Error><Code>NoSuchKey</Code><Message>…</Message>
-       <Resource>/c-…/key</Resource><RequestId>…</RequestId></Error>
-```
-
-| HTTP | `Code` | Meaning |
-|---|---|---|
-| 404 | `NoSuchKey` / `NoSuchBucket` | object / bucket absent |
-| 403 | `AccessDenied` / `SignatureDoesNotMatch` | bad SigV4 or wrong contract |
-| 400 | `EntityTooLarge` | body exceeds `max_object_bytes` |
-| 400 | `InvalidArgument` / `MalformedXML` | bad request |
-| 402 | `InsufficientBalance` | balance cannot cover the op *(Chiral extension)* |
-| 403 | `ContractPaused` | exhausted, in read-only grace *(Chiral extension)* |
-| 410 | `ContractClosed` | contract ended *(Chiral extension)* |
-
-### Public-read objects (distribution)
-
-A consumer exposes an object anonymously two ways: a **presigned GET** (SigV4 query URL bounded by `X-Amz-Expires`), or a **public-read ACL** (`x-amz-acl: public-read` on `PUT`) that serves the object at its bucket URL without auth. Egress on anonymous reads still draws down the owning contract's balance, so a popular public object drains the balance and pauses when exhausted — the intended "pay for the availability you provide" behavior, and the direct successor to the old file-sharing use case.
-
-### Deviations from AWS S3 (v1)
-
-| Area | Chiral v1 |
 |---|---|
-| Buckets | one per contract, auto-provisioned; no `CreateBucket` / `ListBuckets` |
-| Region | fixed `chiral` |
-| Credentials | contract-scoped, ephemeral (expire with the contract), rotatable |
-| Billing | per-op against the contract balance; `InsufficientBalance` (402) |
-| Integrity | ETag = MD5; content hash via `x-amz-checksum-sha256` |
-| Durability | single-provider, non-refundable; no cross-region replication |
-| Not in v1 | versioning, lifecycle rules, bucket policies / CORS config, object tagging, SSE-KMS |
+| `network.identity.chain_id` | `71`, selected Conflux eSpace testnet |
+| `network.identity.genesis_hash` | `0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804` |
+| `network.identity.deployment_id` | Reset/deployment name, 1–128 ASCII letters, digits, `_` or `-` |
+| `network.rpc_url` | Qualified RPC endpoint; HTTPS remotely, literal-loopback HTTP only for local operation |
+| `network.rpc_bearer_file` | Optional protected RPC bearer file; never put a token in the URL |
+| `network.faucet_url`, `explorer_url`, `policy_url` | Optional operator-supplied endpoints; `null` if not deployed |
+| `data_dir` | Protected persistent **shared signing-wallet journal base**, described below |
+| `catalog_url` | Relay origin, not `/api/offers`; used for offer discovery only when `dht` is absent, and independently for reputation/feedback |
+| `development` | Defaults false; enables explicit loopback-only consumer/provider HTTP development |
+| `dht` | Optional `{listen, bootstrap, identity_file}`; configured DHT takes discovery precedence without catalog fallback; `bootstrap` lists peer multiaddresses |
 
----
+Use an operator-provided profile with this exact identity and a deliberate deployment namespace. The historical isolated chiral-coin identity in the plan is not a current profile. Remote RPC identity is checked against chain ID and genesis; deployment identity additionally scopes records and local state. Do not reuse a deployment namespace after a reset. CFX uses `10^18` wei per unit; amounts on JSON boundaries are decimal strings, not floating-point numbers. The public eSpace network does not imply a released Chiral catalog/provider.
 
-## Data-Plane API: Compute (Containers)
+#### Shared signing-wallet directory
 
-> **Status: normative v1 spec for the container data plane** — a Chiral-native control API over a hardened OCI runtime (isolation model in [Resource Interfaces](#resource-interfaces)). Bearer-authenticated against the contract; MicroVM isolation is the noted post-v1 path.
+Every process spending the **same signing wallet** on a network—including consumer funding and provider fee remittance—must use the **same configured `data_dir` base** and coordinated journal. `ChainClient` adds `inference/<hash-of-full-network-identity>/wallet-journal/transactions.sqlite3`. Do not pre-append that suffix, give each process a different copy, or put different copies on separate hosts. The nonce journal's interprocess locking cannot coordinate independent databases. Prefer distinct provider and consumer wallets when their storage cannot be shared safely.
 
-### Auth & envelope
+Provider ledger, lock, and offer-revision state are separately isolated as `<data_dir>/<network-hash>/<signing-wallet>/<DHT-peer-ID>/`; the shared nonce journal above is **not** moved into that deployment directory. Consumer accounts, credentials, request keys, and wallet state are also network-scoped. Different provider deployments need distinct persistent DHT identities but must still share the wallet journal when spending the same wallet. Preserve the DHT identity along with ledger, acknowledgements, offer revision, wallet journal, keys and credentials across restarts; a new peer ID creates a different deployment, not recovery of its predecessor. This is not shared multi-host SQLite. Changing paths or restoring an older layout without deliberate state preservation is not an upgrade strategy.
 
-- **Auth.** `Authorization: Bearer <session bearer>` (the [session credential](#session-credential)). Paths under `/v1/`, JSON bodies, the spine's [error envelope](#conventions) and `X-Chiral-*` metering headers on every response.
-- **Resource envelope.** The contract `terms.params` fix what the contract may consume — `max_vcpu`, `max_mem_gb`, `max_gpu` (model + count), and the allowed image registries. A contract may run **one or more** containers concurrently as long as their summed requests fit the envelope; metering sums all running containers.
+Wallet keys are native protected files, not JavaScript state or public HTTP responses. CLI wallet import/export accepts protected file paths; explicit export refuses to overwrite existing files. Unix secrets must not be group/world accessible; native Windows uses owner-protected storage. Provider signing, admin, engine, and RPC credentials are separate protected files. Do not place private keys or bearer tokens on command lines, in prompts, source control, diagnostics, or screenshots. Explicit credential export reveals an API secret; SDK examples capture it in-process and never print it. Back up sensitive state with equally protected access.
 
-### Endpoints
+### Agreements and exact funding order
 
-| Operation | Request | Success |
-|---|---|---|
-| Run container | `POST /v1/containers` | `201` container object |
-| List | `GET /v1/containers` | `200` `{ "containers": [...] }` |
-| Inspect | `GET /v1/containers/:id` | `200` container object |
-| Logs | `GET /v1/containers/:id/logs?since=&tail=&follow=` | `200` text (or SSE if `follow=true`) |
-| Stats | `GET /v1/containers/:id/stats` | `200` utilization snapshot |
-| Stop | `POST /v1/containers/:id/stop` | `200` (halts metering; allocation released) |
-| Delete | `DELETE /v1/containers/:id` | `204` (stop + remove) |
+The [authorization matrix](#authorization-matrix) defines the control routes and their different authentication requirements.
 
-#### `POST /v1/containers`
-Request:
-```json
-{ "image": "docker.io/library/nginx:1.27",
-  "cmd": ["nginx","-g","daemon off;"],
-  "env": { "KEY": "value" },
-  "ports": [ { "container_port": 80, "protocol": "tcp" } ],
-  "resources": { "vcpu": 2, "mem_gb": 4, "gpu": { "model": "a100", "count": 1 } },
-  "pull_secret": { "registry": "…", "auth": "…" } }
-```
-`201 Created`:
-```json
-{ "container_id": "ctr_<base32>", "status": "provisioning",
-  "image_digest": "sha256:…",
-  "resources": { "vcpu": 2, "mem_gb": 4, "gpu": { "model": "a100", "count": 1 } },
-  "endpoints": [ { "container_port": 80, "url": "https://ctr-<id>-80.<provider-host>", "proto": "https" } ],
-  "created_at": 1712345678 }
-```
-The provider pulls `image` (allowed registries only), enforces the [isolation profile](#resource-interfaces) (non-privileged, read-only rootfs, dropped caps, seccomp, cgroup caps, egress policy), and reverse-proxies each exposed `container_port` at an assigned HTTPS subdomain (TLS terminated at the provider).
+Owner-authorized operations use a one-use payer-signed challenge bound to provider/network, method/path, body hash, nonce, and expiry; public quote proposal does not require that proof. Possession of a public transaction hash is not owner authentication. Quotes bind consumer/provider, model revision and capabilities, prices, limits, fee wallet/rate, network, funding amount, nonce, and expiry. Opening a paid account follows this order:
 
-#### `GET /v1/containers/:id`
-```json
-{ "container_id": "ctr_…", "status": "running",
-  "resources": {…}, "endpoints": [...],
-  "uptime_s": 3600,
-  "usage": { "vcpu_seconds": 7200, "gpu_seconds": 3600, "cost_wei": "…" },
-  "health": "healthy", "restart_count": 0, "updated_at": 1712349278 }
-```
+1. Verify the selected signed offer and quote and persist the selected terms locally.
+2. Prepare and durably journal **one exact signed opening transaction**, including its terms commitment in calldata, nonce, value, intrinsic gas, and hash. It has not yet been broadcast by the client.
+3. Submit those signed bytes through payer-authenticated `funding-intent`. The provider validates them and atomically stores the intent and signed acknowledgement **before returning the acknowledgement**. New intents must be registered before quote expiry.
+4. The consumer verifies the acknowledgement's provider signature and exact quote/network/payer/hash binding, then durably saves it. Accepted terms survive quote expiry; retries recover the same acknowledgement.
+5. Only then does the client mark broadcast started durably and broadcast the **original bytes**. An uncertain broadcast never authorizes preparing a replacement payment automatically.
+6. The provider credits through authenticated open only after independently checking signed-byte evidence and stable successful canonical execution at the healthy eSpace `safe` frontier. Pending or executed-but-not-safe transactions are not spendable credit.
 
-#### `GET /v1/containers/:id/logs`
-`follow=false` (default) returns the buffered tail as `text/plain`; `follow=true` streams new lines as `text/event-stream` (SSE) until the client disconnects or the container exits.
+**Residual registration risk:** signed bytes are already sufficient for anyone holding them to broadcast. A malicious provider may broadcast before acknowledging, or an acknowledgement may be lost after durable acceptance. The ordering protects the honest client's behavior and durable terms; it is not cryptographic escrow. Inspect `pending` and `resume CONTRACT_ID`, never assume an HTTP error means no money moved.
 
-#### `GET /v1/containers/:id/stats`
-```json
-{ "cpu_pct": 41.2, "mem_used_mb": 812, "mem_limit_mb": 4096,
-  "gpu_pct": 88.0, "net_rx_bytes": 0, "net_tx_bytes": 0, "sampled_at": 1712349278 }
-```
+An acknowledged opening retains its signed quote, exact raw payment and signed acknowledgement durably. Quote expiry releases its temporary admission lease, not the obligation to honor an accepted payment. New opening intents require the payer's current nonce and enough balance for value plus the transaction's full gas limit; nonce ownership remains durable across terminal outcomes and reorg recovery.
 
-### Ingress & networking
+`fund` with the same signed terms and `resume` recover the existing locally saved account; they must not rotate its exported application credentials. The previously observed rotation regression and its verification status are tracked in [bugs](bugs.md). Explicit credential rotation/revocation remains intentional. Top-ups bind the existing immutable agreement, journal their original payment, and deduplicate it; they do not renegotiate a new quote or require another opening-intent acknowledgement. Free offers authenticate and apply admission limits but require no fabricated zero-value transfer and cannot establish payment-gated reputation eligibility.
 
-- Each exposed `container_port` gets an assigned **HTTPS subdomain** (`https://ctr-<id>-<port>.<provider-host>`), TLS-terminated at the provider and reverse-proxied to the container. Raw TCP port mapping is a post-v1 option.
-- Outbound egress is permitted under the provider's abuse policy; egress bandwidth is billed at the offer's `per_gb_egress` when set, otherwise folded into the runtime rate.
+Settlement of an existing top-up remains available when the engine is unavailable or its offer has been withdrawn: readiness gates new admission, not recovery of a previously funded immutable agreement. Repeated settlement cannot credit twice. If the default credential has expired or been revoked, `resume` does not silently replace it; explicitly issue or rotate a credential. Issuing a key restores a missing usable default without replacing an existing valid default.
 
-### Isolation constraints (wire-visible)
+#### Approved non-reserving quotes
 
-A request for `privileged: true`, host networking, host bind-mounts, or capabilities outside the allowed set is rejected with `400 invalid_spec`. The rootfs is read-only unless the spec declares an ephemeral, size-capped writable scratch. Durable state is achieved by mounting a Storage-class bucket, not a local volume (v1).
+**Author decision, 2026-11-14; implementation and specification alignment pending.** Providers may issue more quotes than they can accept for funding. A quote is a signed statement of exact commercial terms, not a capacity reservation or a promise to admit its payment. This decision supersedes conflicting pending-proposal and proposal-rate requirements; it does not claim that the current implementation already complies.
 
-### Metering, states & exhaustion
+- **Public quoting does not reserve admission.** An unauthenticated proposal must not occupy serving capacity or consume the named wallet's pending-quote or proposal-rate allowance. Merely increasing the eight-quote limit, or removing it while keeping an unauthenticated named-payer rate limit, does not meet this requirement.
+- **Overbooking is not unlimited resource use.** Quote issuance, signing work, request bodies and retained unaccepted state must remain bounded. Provider-wide and request-source abuse controls may reject quote requests, but a caller-supplied wallet address is not an authenticated requester identity. Quoting is not an availability guarantee or Sybil defense.
+- **Accept or reject before client broadcast.** For a paid opening, the admission decision belongs at the payer-authenticated `funding-intent` step above. Validate the exact quote and payment, then atomically check current admission capacity and record any accepted commitment with its durable signed acknowledgement. Concurrent attempts must not over-admit the available capacity. If full, reject without accepting the intent or issuing its acknowledgement; the client must not broadcast that rejected payment, and an honest provider must not broadcast it either. Quote issuance alone cannot make this decision.
+- **Acceptance is durable, not revocable overbooking.** Once the provider durably acknowledges an intent, later capacity pressure or quote/admission-lease expiry cannot cancel its terms, erase sender/nonce ownership, or justify refusing recovery/credit of its valid payment. Canonical successful execution and the healthy `safe` frontier remain prerequisites for credit. Acknowledgement does not promise immediate execution of every inference request; existing per-request concurrency, reservation and performance rules remain in force.
+- **Ambiguity is recovery, not rejection.** A lost acknowledgement or timeout may follow durable acceptance. Recover the same intent/acknowledgement and original transaction rather than creating a new payment or automatically replacing it. The provider already receives broadcastable signed bytes: the existing residual registration trust risk remains, and no off-chain rejection can reverse an on-chain transfer.
+- **Free openings remain authenticated.** Apply their capacity decision at authenticated account opening without a fabricated zero-value payment. Existing accepted-account, top-up and settlement recovery must not acquire a new quote-capacity gate.
 
-- **Billed:** per-second wall-clock × the contract's `per_vcpu_hour` / `per_gb_mem_hour` / `per_gpu_hour`, summed over running containers, plus egress if priced. GPU time is billed while allocated.
-- **States:** `provisioning → running → (stopped | exited | failed) → removed`. `stopped` (via `/stop` or balance exhaustion) releases the allocation and halts metering; the ephemeral rootfs does **not** survive a stop.
-- **Exhaustion:** at zero balance running containers are stopped and the contract enters `ContractPaused`; a top-up re-enables new runs (previous ephemeral state is gone).
+**Implementation gap and required evidence:** the worker's isolated regression demonstrates that public proposals currently consume an eight-slot allowance for their named payer; the current proposal-rate design also charges that unauthenticated name. That targeted availability exposure remains until the implementation and specifications adopt this decision. Acceptance evidence must cover unrelated public proposals not consuming a wallet-specific allowance, bounded quote resources, competing funding intents at the capacity boundary, full-capacity refusal without acknowledgement or transaction submission, and recovery of accepted intents across lost replies, restart and expiry. Documentation alone is not mitigation or public-release approval.
 
-### Errors
+#### Settlement and recovery risks
 
-| HTTP | `error.code` | Meaning |
-|---|---|---|
-| 400 | `invalid_spec` | bad image ref / resources / a rejected privileged or host option |
-| 402 | `insufficient_balance` | balance cannot cover the requested shape |
-| 403 | `contract_paused` | balance exhausted |
-| 404 | `container_not_found` | unknown id |
-| 409 | `envelope_exceeded` | request + running containers exceed the contract cap |
-| 409 | `capacity_unavailable` | provider cannot currently place the workload |
-| 422 | `image_not_allowed` | registry not in the offer's allowlist |
-| 422 | `image_pull_failed` | pull or auth error |
+The chain client decodes supported signed envelopes and verifies sender, recipient, value, chain binding, canonical signature, exact commitment and transaction hash. Receipt and canonical-block evidence come from its configured identity-checked RPC, never a payer-supplied arbitrary source. Signed bytes supply value/calldata evidence that a receipt alone lacks. Native `eth_*` RPC replaces the historical `chiral_*` contract; wallet history remains a durable local journal, not a complete indexer. RPC requests and ordinary responses/errors are bounded to **64 KiB**; only hash-only `eth_getBlockByNumber` responses with `false` for full transactions have an **8 MiB** bound, because eSpace blocks can contain many transaction hashes.
 
-### v1 limits
+The policy is `canonical-successful-receipt-at-espace-safe-v1`: successful execution whose receipt block hash matches the canonical block at or below the healthy `safe` frontier, observed consistently twice before credit. Head and safe-frontier freshness are checked. Pending, executed, safe-accepted and PoS `finalized` are distinct; safe acceptance is an application risk policy, **not irreversible finality**. Credited funding is monitored. A missing receipt alone is unavailable/contradictory evidence, **not proof of a reorg**: reversal requires stable canonical evidence that the previously accepted block was replaced. A proven orphan freezes spending, reverses unused credit and journals consumed provider loss rather than making available balance negative. Outages withhold unverifiable new credit without inventing a loss or switching networks.
 
-Ephemeral rootfs only (durable state via a mounted Storage bucket); HTTP(S) ingress only (no raw TCP); hardened-OCI isolation (no microVM); one spec = one container (no autoscaling/orchestration); bring a prebuilt image (no in-provider build).
+`chiral --config consumer.json cancel-funding CONTRACT_ID --accept-gas-and-race-risk` explicitly authorizes a fixed-fee same-nonce self-transfer. It costs gas, is **not a refund**, and can lose to the original non-refundable payment. The replacement price is original gas price plus `floor(price/8) + 1` wei. Repeating cancellation resubmits that same replacement, never automatically bumps again. Only a trusted canonical successful replacement confirms cancellation. Resume and cancellation are distinct paths; retain all journals while either transaction is unresolved.
 
----
+Cancellation targets a pending top-up or an unopened opening by default. For an already-open account without a pending operation, inspect `funding-recovery CONTRACT_ID` and supply the exact `--operation-id`; an old opening must not be cancelled accidentally while recovering a top-up. Historical operations remain available for reconciliation after a cancellation or chain reorg. A displaced payment that becomes canonical again must be reconciled without a second credit or an automatic replacement transfer.
 
-## Data-Plane API: Inference (LLM)
+Do not replay paid inference after a timeout, partial stream, or lost response. Use a stable `Idempotency-Key` and inspect `/v1/requests/:id` or the CLI `request`/`requests` commands. Reusing a key must not silently execute a second generation. SDK automatic retries are disabled in the examples; a new key means a new potentially chargeable request. No prompt is rerouted to a different provider without a new privacy/payment choice.
 
-> **Status: normative v1 spec for the inference data plane** — an OpenAI-compatible API, so standard OpenAI SDKs work by pointing `base_url` at the provider's `endpoint` and using the contract session as the API key. Bearer-authenticated against the contract.
+### Durable accounting and fees
 
-### Auth & base
+SQLite transactions enforce atomic reservations, unique funding credit, and at-most-once request settlement. Base-unit money is exact, with checked wide arithmetic and decimal-string persistence. The ordinary balance identity is:
 
-- **Auth.** `Authorization: Bearer <session bearer>` — the OpenAI convention; set the SDK's `api_key` to the [session credential](#session-credential)'s bearer and `base_url` to `<endpoint>/v1`.
-- **Error shape.** Errors use the **OpenAI** envelope (not the spine envelope) so SDKs parse them: `{ "error": { "message", "type", "param", "code" } }`. The `X-Chiral-Client-Version` gate and `X-Chiral-*` metering headers still apply.
+`funded = fees + spent + reserved + available`
 
-### Endpoints
+For each accepted funding payment, `fee = floor(funding_wei * 50 / 10000)` (50 basis points = 0.5%); net prepaid credit is funding minus fee. This is a funding charge, **not an additional charge per inference request**. Provider-remitted fee obligations are durable and separately tracked as pending/batched/submitted/confirmed. Default automatic aggregation is at least `10^15` wei or the oldest obligation reaching 86,400 seconds; local `fees/remit` is an explicit operator action. Recording a fee obligation is not proof that the platform received it. Consumer funding gas and provider remittance gas are separate from prepaid inference cost; the provider pays remittance gas.
 
-| Operation | Request | Notes |
-|---|---|---|
-| List models | `GET /v1/models` | the models the offer advertises |
-| Chat completion | `POST /v1/chat/completions` | primary; `stream:true` → SSE |
-| Text completion | `POST /v1/completions` | legacy compatibility |
-| Embeddings | `POST /v1/embeddings` | billed on input tokens only |
+Before execution the gateway validates supported options, obtains exact prompt tokens from the configured tokenizer/template path, calculates maximum cost, and atomically reserves available credit. It requires bounded output, `n = 1`, bounded batch/concurrency/context/time, and rejects unsupported expansion rather than under-reserving. Embeddings reserve input-only cost.
 
-#### `POST /v1/chat/completions`
-Request (OpenAI-shaped):
-```json
-{ "model": "llama-3.1-70b-instruct",
-  "messages": [ { "role": "user", "content": "…" } ],
-  "max_tokens": 512, "temperature": 0.7,
-  "stream": true, "stream_options": { "include_usage": true } }
-```
-Non-streaming `200 OK` is the OpenAI `chat.completion` object, including `usage`:
-```json
-{ "id":"chatcmpl-…", "object":"chat.completion", "model":"llama-3.1-70b-instruct",
-  "choices":[ { "index":0, "message":{"role":"assistant","content":"…"}, "finish_reason":"stop" } ],
-  "usage":{ "prompt_tokens":42, "completion_tokens":128, "total_tokens":170 } }
-```
-Non-streaming responses carry the actual `X-Chiral-Cost-Wei` / `X-Chiral-Balance-Wei` headers.
+At completion:
 
-**Streaming** (`stream:true`) is Server-Sent Events — `data: {chat.completion.chunk}` lines then `data: [DONE]`. Because HTTP headers precede the body, cost/balance cannot ride in headers; with `stream_options.include_usage:true` the **final chunk** carries `usage` plus Chiral fields:
-```
-data: {"id":"chatcmpl-…","object":"chat.completion.chunk",
-       "choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
-       "usage":{"prompt_tokens":42,"completion_tokens":128,"total_tokens":170},
-       "x_chiral":{"cost_wei":"…","balance_wei":"…"}}
+`cost_wei = ceil((prompt_tokens * input_wei_per_1k + completion_tokens * output_wei_per_1k) / 1000)`
 
-data: [DONE]
-```
+Only authoritative engine usage is settled, once per request; SSE fragments and character counts are not tokens. Prompt/cache inputs use the quoted input rate. Output accounting includes attributable generated tokens, not an estimate from visible text. Unsupported or unreliable reasoning/tool semantics must not be advertised. Unused hold is released; releasing a hold is **not refunding an on-chain deposit**.
 
-#### `POST /v1/embeddings`
-```json
-{ "model":"bge-large-en", "input":["text a","text b"] }
-```
-`200 OK`: an OpenAI `list` of `{ object:"embedding", index, embedding:[…] }` + `usage:{ prompt_tokens, total_tokens }`. Billed on input tokens only.
+Cancellation/disconnection propagates upstream. If authoritative usage is known, it can still be billed. If usage is absent, invalid, or lost on failure/restart, settlement charges zero and releases the whole unsettled hold with an explicit `*_unknown_usage` outcome. `restart_unknown_usage` is the crash-recovery outcome for orphaned reservations. `provider_loss_wei` records the reservation-sized exposure, **not a measured count of GPU work or a known actual monetary loss**. Unknown-usage abuse is rate-limited. Never infer an exact zero-token execution from a zero charge.
 
-#### `GET /v1/models`
-`200 OK` reflects the offer's `capacity.models` and `price_schedule`:
-```json
-{ "object":"list", "data":[ { "id":"llama-3.1-70b-instruct", "object":"model",
-    "context_length":131072,
-    "chiral":{ "per_1k_input_wei":"…", "per_1k_output_wei":"…" } } ] }
-```
+With orphaned funding, explicit reversal/loss entries extend the balance identity: `net_credit = accepted_funding - net_fee_charges - funding_reversals + provider_loss_credits = spent + reserved + available`. A loss credit offsets already consumed orphaned funding; it is not fresh spendable balance. Provider-signed account receipts give attributable cumulative usage and accounting, not independent execution attestation.
 
-### Model selection & identity
+#### Performance accounting and withdrawal
 
-The consumer sets `model` to an advertised id; an unknown id returns `404 model_not_found`. A provider cannot cheaply prove it runs the claimed model rather than a smaller/quantized one — a **reputation-policed** quality property; model attestation is deferred to future work (see [Design Decisions](#design-decisions)).
+Generation profiles bind model/GGUF/tokenizer/artifact, native engine inventory hash/version, platform/backend, physical device identities, memory kind/headroom, layer/split/KV/attention/batch settings, concurrency, sustained arrival rate, region and qualification evidence. Capacity rules are defined in [hardware participation](#hardware-participation-and-platform-status); capacity and speed are independent.
 
-### Metering & pre-authorization
+**Policy `warm-generation-v1`:** a declared class is 20, 50 or 100 output tokens/second, with time to first token (TTFT) at most 2 seconds and at least 95% joint attainment during qualification. It is a warm, admitted-workload commitment, not a cold-loading or arbitrary-Internet latency guarantee.
 
-- **Billed:** `prompt_tokens × per_1k_input + completion_tokens × per_1k_output` (embeddings: input only), drawn down on completion.
-- **Pre-authorization:** before generating, the provider checks the balance covers the *worst case* — `prompt_tokens + max_tokens` — and returns `402` if not, so a request never exhausts mid-stream. The actual (usually lower) cost is billed on completion.
-- **Reporting:** non-streaming → the `usage` block + `X-Chiral-*` headers; streaming → the final chunk's `usage` + `x_chiral` fields (headers are already sent). A local tokenizer lets the consumer reconcile.
-
-### Errors (OpenAI-shaped)
-
-```json
-{ "error": { "message":"…", "type":"insufficient_quota", "param":null, "code":"insufficient_balance" } }
-```
-
-| HTTP | `type` / `code` | Meaning |
-|---|---|---|
-| 401 | `invalid_request_error` / `invalid_api_key` | bad / expired session bearer |
-| 404 | `invalid_request_error` / `model_not_found` | model not served |
-| 400 | `invalid_request_error` / `context_length_exceeded` | prompt + `max_tokens` > context |
-| 402 | `insufficient_quota` / `insufficient_balance` | balance can't cover worst-case cost *(Chiral uses 402, not OpenAI's 429)* |
-| 403 | `invalid_request_error` / `contract_paused` | balance exhausted |
-| 426 | `invalid_request_error` / `upgrade_required` | client below `minRequired` |
-| 429 | `rate_limit_exceeded` | per-contract concurrency / rate cap |
-
-### Deviations from OpenAI (v1)
-
-| Area | Chiral v1 |
+| Runtime guarantee condition | Exact rule |
 |---|---|
-| Auth | bearer = contract session credential (ephemeral), not a long-lived API key |
-| Billing | per-token against the contract balance; **402 `insufficient_quota`** on exhaustion (not 429) |
-| Models | only what the provider serves; identity is reputation-policed, no attestation |
-| Streaming usage | via `stream_options.include_usage`; final chunk carries `usage` + `x_chiral` cost/balance |
-| Endpoints | `chat/completions`, `completions`, `embeddings`, `models` |
-| Not in v1 | assistants / threads, files, fine-tuning, batch, images, audio, moderations; function/tool calling passes through to the model but is not separately guaranteed |
+| Endpoint | Generation (`chat` or `completions`), not embeddings. |
+| Prompt size | Exact prepared prompt tokens ≤2,048, including the applicable template. |
+| Output budget | **Requested maximum**, not eventual output, ≤256 tokens. |
+| Total request envelope | Prepared prompt plus requested output budget ≤4,096 tokens. |
+| Short actual output | Fewer than two output tokens cannot establish decode rate; TTFT, completion and usage validity still apply. |
 
----
+For example, a request allowing 512 output tokens is outside this guarantee even if it ends after 100. Conversely, an in-envelope request that ends normally after 100 tokens can be evaluated on its actual decode interval. Ordinary model/context/admission limits still apply; an out-of-envelope request is not necessarily invalid, but has no speed-waiver entitlement.
 
-## Reputation System
+TTFT starts **after the complete bounded request body arrives**, includes validation/admission/tokenization, and ends at the first generated token ID. For `N ≥ 2`, decode rate is `(N - 1) / (last_token_time - first_token_time)` in tokens/second; TPOT is its inverse. Comparisons use integer microseconds, not rounded displayed throughput. Nonpositive or missing timing is not evidence of attainment.
 
-> **Status: the Elo engine, on-chain verification of the rating event, and the batch lookup are reused as-is (`rating_api.rs`, `rating_storage.rs`, the relay `/api/ratings/*` routes). The change is admitting a subjective score in the event, gated by verified payment.**
+The gateway observes private engine **per-token IDs**, not SSE event counts or retokenized text. Qualified generation uses internal streaming even for non-streaming clients, reconstructs their normal response and strips instrumentation IDs from public output. The token clock requires one generated ID per output event and agreement with final authoritative usage; batched/missing/malformed IDs do not establish a valid decode measurement. Overload is rejected before paid dispatch rather than queued. Controlled external timings are recorded separately.
 
-The design rationale and formula are in [Part I](#part-i-white-paper), §7. A rating event is keyed to a **service contract**: it carries the provider wallet, the rater wallet, a normalized subjective score, the contract's CHI `funding_amount`, the contract `tx_hash`, and a timestamp. Before admission the relay verifies the `tx_hash` on-chain (it is a contract-funding tx: `from` = rater, `to` = provider, `value` = amount) — the backend never trusts client-submitted event data — so **only the consumer who actually opened a contract with a provider can move that provider's score**, weighted by the contract amount and recency. A star/thumbs rating normalizes to `S ∈ [0,1]`; the latest rating for a given contract supersedes earlier ones (a consumer may revise after longer use), so a single contract yields a single live vote whose weight is its funding amount.
+Qualification is a deployment-specific experiment, not a synthetic configuration flag:
 
-### Parameters
+- `chiral-performance-evidence-v2` binds the canonical runtime observation, model/profile digest, measurement time, probe location, physical memory measurements and execution settings. The profile digest excludes its own `qualification` field to avoid a circular evidence hash; the signed model binds the resulting evidence-file SHA-256.
+- Sweep both private engine and paid gateway at **every concurrency from one through the advertised maximum**. Actual observed concurrency must match. Exercise every advertised generation endpoint; engine measurements stream, and gateway measurements cover both streaming and non-streaming clients.
+- Each endpoint/mode has at least 100 samples; the runner accepts 100–1,000 samples per mode. Exercise unique prepared prompts at the 128/512/1,024/2,048-token boundaries (within eight tokens below each target), with at least 20 per boundary and exactly 256 output tokens for a passing qualification sample.
+- Require ≥95% **joint** TTFT/decode/valid-usage attainment in each endpoint/mode and each prompt boundary, as well as overall. Errors count against attainment. Average speed or a favorable aggregate percentile cannot hide a failing boundary.
+- Sustained offered rate must match signed `arrival_milli_rps` within ±5%; 1,000 milli-rps means one request/second. Record peak memory, minimum free headroom, TTFT/TPOT/latency distributions, errors and attained goodput. Unsupported memory counters fail closed.
+- The generation model must allow context ≥4,096 and output ≥256. Embeddings, CPU smoke, old vLLM/Docker reports and another OS's evidence cannot qualify this profile.
 
-| Parameter | Value |
-|-----------|-------|
-| Score range | 0 to 100 (clamped) |
-| Base score for new wallets | 50 |
-| Lookback window | 180 days |
-| Time weight `w_time` | Linear decay from 1.0 (today) to 0.0 (180 days ago) |
-| Amount weight `w_amount` | `1.0 + clamp(ln(1 + chi) / ln(51), 0, 1)` — 1.0 (small) to 2.0 (50+ CHI) |
-| Outcome `S` | normalized user rating in `[0, 1]` |
-| Expected score | `1 / (1 + 10^((50 - elo) / 12))` |
-| K factor | `4 * w_time * w_amount` |
-| Update | `elo = clamp(elo + K * (S - expected), 0, 100)` |
+Eligible misses settle once with `inference_waiver`: inference cost is zero while actual known input/output usage remains recorded. This is not a funding/platform-fee/gas refund, synthetic zero-token execution or a second transferable credit. Missing usage retains the explicit unknown-usage policy. Client interruption does not erase an already measured miss; interruption before a measured miss is not an automatic waiver. Provider-incomplete execution cannot masquerade as success. Short-output TTFT successes do not dilute the normal decode-performance observation window.
 
-### API Endpoints (Relay Server)
+Withdrawal is durable and keyed by model plus evidence digest: three misses in the last up-to-20 observations, or two misses once the window reaches 20, latch withdrawal in the settlement transaction. Later successes, restart, admin resume or offer refresh do not clear it.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/ratings/:wallet` | GET | Elo score and event history for a provider |
-| `/api/ratings/batch` | POST | Batch lookup for ranking offers in discovery |
-| `/api/ratings/feedback` | POST | Record a payment-gated rating (verified on-chain before admission) |
+**Approved evidence-only renewal:** a freshly qualified report with a strictly newer measurement time may restore service to existing prepaid accounts only when every model/artifact/tokenizer/hardware/engine/context/admission/speed/policy term is identical. Existing agreement, prices, fees and balances are not rewritten or transferred. Each reservation durably binds the report actually admitted before dispatch; settlement, signed request receipts and unknown-usage crash recovery retain that report. Withdrawal remains attached to the old report; the replacement must pass qualification and starts its own observation window. Changed terms require a distinct agreement, not silent migration. All of this is provider-attributed evidence, not independent GPU attestation.
 
----
+Implementation: [`performance.rs`](../src-tauri/src/performance.rs), [`inference_gateway.rs`](../src-tauri/src/inference_gateway.rs) and the [qualification procedure](provider-qualification.md).
 
-## Design Decisions
+### API compatibility and model qualification
 
-The decisions that shaped this design, now settled — each records the choice; the mechanics live in the linked sections.
+Public inference uses ordinary bearer authentication; stock clients do not need a custom version header. Chiral control-protocol compatibility is enforced during onboarding. Implemented endpoints:
 
-1. **Post-handshake auth** — the provider issues a **contract-scoped session credential** (S3 access-key/secret, OpenAI-style bearer, or container token bound to `contract_id`) at `open`, so off-the-shelf S3/OpenAI tooling works directly; a local wallet-signing proxy is the no-shared-secret alternative. The credential is proof of contract control, not an independent grant of authority.
-2. **Optimistic service start** — a small contract starts on *mempool-seen* with a short confirmation deadline; a large one waits for the tx to be *mined*. Bounds start latency without exposing the provider to large unconfirmed value. ([Service Contracts](#service-contracts-and-the-handshake))
-3. **On-chain contract payload** — the contract tx commits only `{offer_ref, terms_hash, contract_nonce}` (compact, private); full terms are exchanged in the handshake and stored on both sides, bound by `terms_hash`. ([Wire Protocol](#wire-protocol--api-reference-contract-spine))
-4. **Storage retention at exhaustion** — at zero balance, writes stop immediately and reads continue for a bounded grace window, after which objects may be deleted; single-provider durability is the consumer's responsibility. ([Storage](#data-plane-api-storage-s3))
-5. **Provider usage receipts** — the provider issues **wallet-signed usage receipts** (`GET /v1/contracts/:id/receipt`) so a consumer holds portable, attributable evidence of what it was charged, for disputes and reputation. ([Service Contracts](#service-contracts-and-the-handshake))
-6. **Discovery aggregation** — both: the DHT is the source of truth; the relay caches a verified per-class offer list for speed; clients always re-verify signatures. ([Resource Offers](#resource-offers-discovery))
-7. **LLM model attestation** — v1 relies on reputation for model identity; a provider-published model fingerprint / attested runtime is future work. ([Inference](#data-plane-api-inference-llm))
-8. **Container persistence** — v1 rootfs is ephemeral; durable state is a mounted Storage-class bucket; local persistent volumes are future work. ([Compute](#data-plane-api-compute-containers))
+| Endpoint | Scope |
+|---|---|
+| `GET /v1/models` | Credential-scoped model listing |
+| `POST /v1/chat/completions` | Qualified text-chat models; non-streaming and SSE |
+| `POST /v1/completions` | Qualified text-completion models; non-streaming and SSE |
+| `POST /v1/embeddings` | Separately configured embedding deployment only |
+| `GET /v1/requests/:id`, `POST /v1/requests/:id/cancel` | Request status and explicit cancellation, with account isolation |
 
----
+A route's existence does not establish capability for every model. Offers pin immutable model/tokenizer revisions, chat-template digest, precision/quantization description, context/output limits, and supported capabilities. Readiness probes exercise actual preparation/inference behavior before publication. Authentication failure, invalid options, model mismatch, insufficient prepaid credit, saturation, context overflow, unavailable engines, and failed streams must surface honestly, not produce fake responses.
 
-## Implementation Plan (Milestones)
+GGUF provisioning derives `completions` for generation, adds `chat` only with a selected embedded template, and uses `embeddings` only for a separate task. The selected full Hugging Face revision, GGUF shard inventory, quantization and template hash define the artifact. The tokenizer revision equals the GGUF revision; no separate Python tokenizer or safetensors execution path remains. Exact engine token IDs prepare the input and bound reservations; usage reconciliation must reject truncation, retokenization mismatches and unsupported behavior instead of estimating counts.
 
-A build order that reaches a working single-resource marketplace early, then adds classes on the same contract/auth spine:
+Readiness must verify llama.cpp's actual model/template/context and probe every advertised API capability, including streaming, echo/logprobs and tools/structured output when offered. Model-card claims and successful downloads do not establish compatibility. Engine instrumentation stays private; content is never used as an approximate token counter.
 
-1. **Offers + discovery.** Generalize the signed host-ad into the typed `resource_offer` (publish/refresh/search by class); marketplace browse UI with signature verification + Elo ranking.
-2. **Contract spine.** Handshake endpoints, the on-chain contract transaction (encode/verify `data`), the provider contract ledger + balance accounting, the `split_payment` fee cut, and top-ups. This is the reusable core for all three classes.
-3. **Storage provider (first end-to-end).** S3-compatible server behind the contract/auth layer; consumer client + tool compatibility; metering (capacity + egress); exhaustion policy.
-4. **Reputation.** Payment-gated `/api/ratings/feedback` keyed to contracts; rating UI; ranking wired into discovery.
-5. **LLM provider.** OpenAI-compatible front-end + token meter over the contract spine (reuses steps 2 & 4).
-6. **Container provider.** Hardened-OCI runtime, ingress proxy, lifecycle + runtime meter.
-7. **Provider dashboard & ops.** Offers / earnings / contracts views, signed usage receipts, diagnostics, headless provider mode.
+Completion `echo:true` preserves the exact prompt. llama.cpp does not supply prompt-token probabilities: a streamed prompt-only chunk has `logprobs:null`, and non-streaming logprobs cover generated tokens only, with offsets starting after the echoed prompt. Unknown input probabilities are never invented. Generated-token probabilities and authoritative usage remain available. A full-context terminal stop is accepted only with consistent exact usage; early truncation, changed prompt counts and excess output fail settlement.
 
-Reused throughout: wallet + on-chain verification, the DHT signed-record discipline, the Elo engine, version enforcement, and the headless daemon / CLI / relay.
+Embedding response dimensions must match the requested dimensions. The pinned Nomic GGUF was exercised at its native 768 dimensions; arbitrary dimension reduction is not advertised or silently substituted.
 
----
+Tools and JSON-schema output require separate capability qualification and are not added automatically by a model card. Responses API, image/audio/video, fine-tuning, batch jobs, arbitrary uploads/LoRA loading, tool execution and cross-provider sharding are outside this release. Embeddings have zero output limit/rate, no generation template and no generated-token speed badge. Historical embedding artifacts and results remain in the migration plan, not hard-coded current profiles.
 
-## Identity and Wallet
+For actual client onboarding, use the [CLI funding and SDK workflow](../README.md#developer-api-quick-start), [Python example](../examples/openai_client.py) and [JavaScript example](../examples/openai-client.mjs). Export only an intentionally scoped application bearer; SDK code does not need a wallet private key. Use the selected origin plus `/v1`, disable automatic paid retries and retain request keys. Treat generated text and tool arguments as untrusted data, not HTML or executable instructions; the provider API does not run returned tools on a consumer's behalf.
 
-Reused unchanged. A single secp256k1 keypair is a participant's identity, offer signer, and payee.
+### Native provider provisioning and operations
 
-- Generate from a 12-word BIP39 mnemonic; import via private key or recovery phrase; optional one-time email backup.
-- Send/receive CHI; transaction history classified (send, receive, balance funding, provider earnings).
-- All wallet logic lives in `wallet.rs`; `lib.rs` holds thin command wrappers. RPC reads walk an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → the relay's `/api/chain/rpc` proxy, so either path can be down without taking the wallet offline. Write paths pin a single endpoint to avoid double-broadcast.
+Use the [complete provider qualification guide](provider-qualification.md) for pinned model/runtime installation, the full strict provisioning-input schema, separate native service startup, authenticated runtime observation, candidate construction, funded measurement and promotion. For a first Apple Silicon test, use the [free Mac walkthrough](macos-testing.md); it is deliberately not paid qualification. The [zoo-6 runbook](zoo6-private-pilot.md) records one private deployment, not defaults for other providers.
 
----
+Provider configuration is defined by [`provider_config.rs`](../src-tauri/src/provider_config.rs): explicit network, persistent money state and keys, public/admin listeners, exact prices, model contracts and DHT configuration. Each model can carry `runtime`; the reference managed qualification path requires it. An operator-owned external private llama.cpp endpoint is available for calibration, not a substitute for managed runtime evidence.
 
-## Blockchain and Mining
+#### Artifact and execution identity
 
-A private Ethereum-compatible chain using Ethash proof-of-work.
+Provision an immutable full Hugging Face revision and every selected GGUF shard. Preserve model license acknowledgement, tensor/shard structure, exact file inventory, quantization and embedded tokenizer/template identity. `chat_template_sha256` binds the pinned Jinja lexer's effective source, including line-ending normalization and single trailing-newline removal; the artifact inventory separately binds original bytes. Do not equate a model name or card with an executable contract.
 
-### Chain Parameters
+The reviewed engine pin is **v0.9.0**, source `cd959bae99ff4bed22bef2604f45241c09bbb8c8`, official binary build **b12110** (CLI version `0.9.0-dev`). Verify platform/architecture/backend and archive hashes, then verify the installed `chiral-runtime.json` inventory of server/libraries/resources before each launch. Safe in-package library aliases are materialized; escaping/cyclic paths, unexpected code and altered inventories are rejected. A differently packaged native build has a different runtime identity, even at the same upstream commit.
 
-| Parameter | Value |
-|-----------|-------|
-| Chain ID / Network ID | 98765 |
-| Consensus | Ethash |
-| Block reward | 5 CHI |
-| Genesis difficulty | 0x400000 (4,194,304) |
-| Gas price | 0 (free transactions) |
-| Sync mode | `full` (configurable via `CHIRAL_GETH_SYNCMODE`) |
-| GC mode | `archive` (keeps all state; prevents height regression on restart) |
-| Client | Core-Geth v1.12.20 |
-| Bootstrap enode | `130.245.173.73:30303` |
-| RPC | local `127.0.0.1:8545`; remote fallback `130.245.173.73:8545` |
+Runtime settings explicitly bind devices, offload layers, split mode/weights, KV types, flash attention, batch/microbatch sizes, context and concurrency. `CUDA0`, `MTL0` and `Vulkan0` are engine selectors; the launcher independently observes physical device identities, drivers and memory. Model fit/headroom is checked after actual loading as well as before startup, and sustained memory behavior is measured during qualification. Competing workloads can still invalidate subsequent performance; the declaration is not exclusive GPU ownership.
 
-Embedded Geth binds its HTTP RPC to loopback only, exposes only the `eth,net,web3,miner` namespaces (no `admin`, so `admin_stopRPC` cannot be reached remotely), and does not enable wildcard browser CORS; public read-only RPC access goes through the relay's `/api/chain/rpc` proxy allowlist. Mining auto-starts Geth with the wallet as coinbase; CPU threads are configurable; status is polled every 10 s via batch RPC.
+The child receives a minimal environment and a protected API-key **file path**, not the secret in argv. Wallet credentials, proxy overrides, dynamic-library injection variables and inherited engine options are not passed through. Required native driver/runtime dependencies must be installed through the platform loader or a verified package; the Linux CUDA archive alone does not supply all runtime/cuBLAS dependencies. Engine stdout/stderr and prompt logging are disabled in the managed launch.
 
----
+#### Provider lifecycle and immutable agreements
 
-## Version Enforcement
+Engine liveness, model readiness, serving admission, new-funding readiness, publication and ledger health are separate facts:
 
-Unchanged from the content design — a defence-in-depth scheme keeping vulnerable builds off the network, layered so one bypass does not disable it. `VersionPolicy` (`version.rs`) carries `minRequired`, `recommended`, `downloadUrl`, `message`, `issuedAt`, `validUntil`, and an Ed25519 `signature`. Layers: the `UpdateGate.svelte` UI (soft banner / hard modal), the `ensure_version_supported` Tauri gate, an `X-Chiral-Client-Version` HTTP middleware (426 below `minRequired`), and a libp2p Identify check (`agent_version = chiral/<v>`, disconnect on mismatch). The relay serves `/api/version-policy`; desktops promote it if `is_acceptable_remote_policy` accepts. Operators activate signed policies at deploy time via `CHIRAL_POLICY_PUBLIC_KEY`; `chiral-policy-sign` handles keygen / sign / verify.
+| Condition | Required behavior / recovery boundary |
+|---|---|
+| Invalid inventory/configuration or failed startup | Do not serve or advertise the model. An occupied private port is an error, not permission to adopt another process. |
+| Engine loaded | Actual model/template/tokenization/capability probes still gate readiness. A process or `/health` response alone is not qualification. |
+| Ready and accepting | Admit only bounded authenticated work with usable balance, compatible immutable terms and available capacity. |
+| Temporary chain/RPC unavailability | Withhold unverifiable new credit/publication. Existing settled credit can remain usable when the serving, ledger and policy gates remain healthy; proven chain rejection is different. |
+| Operator drain | Stop new admission/funding readiness and withdraw published offers. Let in-flight work settle before maintenance; draining is not a refund or deletion of agreements. |
+| Managed child failure | Withdraw admission/publication and retain administration/recovery where the daemon remains alive. No automatic generation replay or engine restart. Reconcile requests before operator restart. |
+| Performance withdrawal | Keep the model/evidence latch durable. Resume/refresh cannot clear it; only the defined, actually qualified evidence-only renewal can preserve service under unchanged terms. |
+| Shutdown / restart | Stop owned children and preserve keys, identity, journals, reservations and accepted terms. Recover orphaned reservations under the unknown-usage policy. |
 
----
+`GET /healthz` reports daemon liveness. `GET /readyz` reports serving readiness and a separate `funding_ready` field; do not interpret HTTP 200 as permission to accept fresh money. Authenticated `/admin/status` provides model, chain, maintenance, ledger and discovery diagnostics; `/admin/runtime` reports managed-process observations, not a complete signed serving profile.
 
-## Application Surface
+Offer maintenance normally refreshes every 30 seconds and issues 120-second offers. Withdrawal cannot instantly erase an already cached signed offer on every peer; consumers must still validate expiry and negotiate current availability. Expiring an offer or draining a deployment does not cancel an accepted funding acknowledgement or move existing credit.
 
-| Route | Page | Description |
-|-------|------|-------------|
-| `/marketplace` | Marketplace | Browse offers by resource class; view price and provider Elo; fund a balance and connect. |
-| `/provider` | My Resources | Provider dashboard: publish/refresh offers, view balances and earnings, manage running resources. |
-| `/wallet` | Wallet | Create, import, or restore a wallet; optional email backup. |
-| `/account` | Account | Wallet address, CHI balance, transaction history, reputation. Send CHI. |
-| `/network` | Network | P2P connections, local Geth control, peer list, bootstrap and DHT health. |
-| `/mining` | Mining | CPU/GPU mining controls; hash rate, block height, total mined CHI. |
-| `/settings` | Settings | Appearance, notifications, provider defaults. |
-| `/diagnostics` | Diagnostics | Event log, DHT health, bootstrap and Geth status, log viewer. |
+The current lifecycle is configuration-driven, not hot-swapping model weights underneath paid accounts. Price/model/runtime/hardware/admission changes require their appropriate new offer and distinct agreement terms; preserve the old accounts and recovery evidence. Do not spend old balances on silently substituted models. Evidence-only renewal is the narrowly defined exception above, not a general migration facility.
 
----
+Linux uses parent-death termination; Windows uses a kill-on-close Job Object. macOS normal shutdown/drop stops the child group, but abrupt parent `SIGKILL` can leave an orphan requiring operator cleanup. Never restart over an occupied engine port.
 
-## Backend Modules
+Native provisioning starts no service. Optional Linux Compose is deployment machinery, not container rental; it has no standalone engine service. Native runtime/model files are verified and mounted read-only in that deployment. The standalone RPC gateway has its own inbound bearer and persistent journal, distinct from engine/admin credentials.
 
-Rust backend under `src-tauri/src/` (selected; adapted for the resource exchange):
+#### Version policy and upgrades
 
-| Module | File | Responsibility |
-|--------|------|---------------|
-| Command Layer | `lib.rs` | Thin Tauri command wrappers, AppState |
-| Wallet | `wallet.rs` | Balance, tx signing (EIP-155), history, on-chain payment verification |
-| RPC Client | `rpc_client.rs` | Connection-pooled HTTP, batch JSON-RPC, response cache |
-| DHT Service | `dht.rs` | libp2p Kademlia, peer management, signed offer publish/search |
-| Offers / Marketplace | `hosting.rs`, `hosting_server.rs` | Offer record types, signing, publish/registry (generalized from host ads) |
-| Settlement | `speed_tiers.rs`, `wallet.rs` | `split_payment` (fee cut, default 0.5% / 0.1% floor) + balance funding verification |
-| Storage provider | *(new)* | S3-compatible object server + metering |
-| Compute / inference providers | *(new)* | container submission + OpenAI-compatible token meter |
-| Rating API | `rating_api.rs`, `rating_storage.rs` | Elo computation + payment-gated feedback endpoints |
-| Geth Process | `geth.rs`, `geth_bootstrap.rs` | Core-Geth lifecycle, mining, bootstrap health |
-| Chain RPC | `chain_rpc_api.rs` | Blockchain RPC proxy |
-| Version Policy | `version.rs` | `VersionPolicy`, Ed25519 sign/verify, effective-policy slot |
+Release builds require a non-placeholder `CHIRAL_POLICY_PUBLIC_KEY` **at compile time**. Separately, the current runtime resolves a valid nonzero environment variable of the same name on first use as an **effective authority override**, then caches it for that process; absent, malformed or zero overrides fall back to the compiled key. This does not remove the release-build requirement. Protect service environments: changing this value changes the accepted policy authority and its cache scope, not merely a display setting. Do not use an arbitrary key to bypass public-release policy. Keep the authority's private signing key offline. Ordinary OpenAI inference does not require a custom Chiral header; native control/onboarding supplies its version.
 
-Binary targets: `chiral-network` (desktop), `chiral` (CLI), `chiral_daemon` (headless provider/node), `relay_server` (bootstrap + reputation), `chiral-policy-sign` (operator CLI).
+Authenticated policy rollback protection persists under protected storage, scoped to authority and network. A fresh process cannot accept an older policy because memory was empty. Preserve the watermark across restart and expired-policy refresh; corrupt/insecure caches fail closed. Debug placeholder authority is private-development behavior only.
 
----
+Upgrades must preserve accepted ledgers, acknowledgements, identity, shared nonce journals, credentials and evidence. Runtime/artifact changes are not evidence-only renewal or permission to transfer old credit. Qualification of an installer, a container image, public TLS ingress and the selected OS/backend remain distinct release gates.
 
-## Headless Mode and CLI
+#### Listener and secret boundaries
 
-The daemon runs the backend without a GUI — used to **run a provider** on a public host, and for automated testing. It exposes an HTTP API (default port 9419).
+Reference topology places Caddy TLS ingress in front of provider public HTTP (`127.0.0.1:9419`), relay HTTP (`127.0.0.1:8081`), and the bounded authenticated chain RPC gateway (`127.0.0.1:8547`). Provider administration (`127.0.0.1:9421`) and engine (`127.0.0.1:8000`) are private. Engine endpoints may be a literal private IP for a protected trusted-network deployment, but must never be reachable as a public paid-service bypass. Engine tokenization, metrics, model-loading, distributed-worker ports, and local admin routes are not public API. Firewall exposure independently of ingress allowlists.
+
+Admin requests require a separate protected bearer and are local-only. The helper never places the bearer in argv:
 
 ```bash
-chiral_daemon --port 9419 --auto-start-dht --auto-mine --miner-address 0xABC
+python scripts/provider-admin.py --token-file /srv/chiral/deployment/secrets/admin.token status
+python scripts/provider-admin.py --token-file /srv/chiral/deployment/secrets/admin.token fees
+python scripts/provider-admin.py --token-file /srv/chiral/deployment/secrets/admin.token drain
+python scripts/provider-admin.py --token-file /srv/chiral/deployment/secrets/admin.token fees/remit
 ```
 
-| Category | Endpoints (prefix `/api/headless/` unless noted) |
-|----------|-----------|
-| Health | `GET /api/health`, `GET /api/ready` |
-| Version policy | `GET /api/version-policy` (mounted on the gateway router) |
-| Wallet | `GET wallet`; `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/history` |
-| DHT | `POST dht/start`, `dht/stop`, `dht/get`, `dht/ping`; `GET dht/health`, `dht/peers`, `dht/peer-id` |
-| Offers | `POST offers/publish` (signed), `offers/unpublish`; `GET offers/search?class=` |
-| Settlement | `POST settlement/fund` (verify + credit), `settlement/meter`; `GET settlement/balance` |
-| Geth | `POST geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
-| Mining | `POST mining/start`, `mining/stop`; `GET mining/status`, `mining/blocks` |
-| Reputation | `POST ratings/feedback`; `GET ratings/:wallet` |
+Other actions are `offers`, `accounts`, `requests`, `resume`, and `offers/refresh`. Drain before maintenance or model/pricing changes. Preserve existing agreements' exact terms; only the evidence-only renewal above can serve them under a newer report. `resume` and `offers/refresh` do not clear a performance-withdrawal latch. Distinguish readiness, admission/draining, ledger health, settlement and publication. The bounded RPC gateway exposes an exact `eth_*` method allowlist, not arbitrary node administration.
 
-The CLI talks to a running daemon over HTTP: `chiral daemon status`, `chiral wallet create`, `chiral offers search --class storage`, `chiral mining start --threads 4`.
+#### Backup, incident response, and cutover
 
----
+Keep prompt/completion logging off. Logs and receipts should contain request IDs, statuses, token counts, costs, and timings, not content or credentials. The desktop does not automatically publish/persist conversations on the DHT. Do not treat bearer access, TLS, or signed outputs as permission to retain user content without disclosure.
 
-## Security Implementation
+Before upgrades, drain, let requests settle where possible, stop services cleanly, and take a consistent protected backup of ledger, funding acknowledgements, shared wallet journal, consumer account/credential state, keys, and configuration. SQLite live copying must include a consistent WAL state or use its backup mechanism; copying only a live main file is unsafe. Restore must preserve exact transaction bytes and deduplication. Do not roll a stale journal or ledger onto the live chain, run two restored provider copies concurrently, reset nonce state to unlock a pending transaction, or advertise an old signed offer revision as new. Practice recovery before public service; a SIGKILL smoke is not a complete disaster-recovery exercise.
 
-The trust model is in [Part I](#part-i-white-paper) (§3, §6, §9). Implementation inventory:
+Include the authenticated policy cache in protected backups. The performance protocol uses **ledger schema 3** and **refuses older schemas**; it does not migrate or convert historical agreements/credit. Preserve old ledgers, signed acknowledgements, accepted funding and transaction/nonce ownership under their original identities. A fresh network-scoped ledger is not authority to erase obligations or reinterpret CHI/CHR as CFX. Explicit file-lock release protects process ownership even if another process retains an inherited descriptor.
 
-**Signed records (writers refuse to publish unsigned; readers drop unsigned/invalid):**
-- Resource offers (`chiral_offer_<class>_<wallet>`) — signed by the provider wallet over a length-prefixed canonical payload including price, endpoint, and payee, so a relaying node cannot substitute any of them.
-- Reserved namespaces reject raw `dht_put` (403); offers are writable only through the signed publish command.
+For an incident, stop new admission/publication and funding ingress as needed while preserving accepted balances and recovery evidence. Do not delete accounts or keys to clear an error. Reconcile pending chain submissions and fee batches before resuming. Consumers should inspect existing requests/funding and revoke compromised credentials instead of blindly repeating operations. Public incident and restore drills remain release gates.
 
-**Settlement verification:**
-- Funding tx checked on-chain before credit: mined, recipient = provider, amount, and `chainId == geth::chain_id()` (cross-chain replay rejected).
-- Spent-tx ledger keyed on `(tx_hash, provider)` so one funding payment credits exactly one balance.
-- Exact `u128` split (`split_payment`) — no `f64`, no rounding tolerance; `credit + fee == amount`.
-- ECDSA signatures enforce low-`s` (EIP-2), so signature hex is unique per (key, message).
+The cutover creates separate inference namespaces and removes legacy runtime/API paths; it does **not** delete or migrate existing Drive files, chain databases, wallet exports, old CHI history, or file-transfer reputation. Preserve them independently before upgrading. Existing supported private keys can be explicitly imported into native protected storage, but old balances, contracts, reputation, and data are not new-network credit. There is no automatic legacy data importer, token bridge, or claim that every historical installation has been upgraded.
 
-**HTTP authentication (owner-proof):**
-- Authenticated provider-management routes require `X-Owner: 0x<wallet>` + `X-Owner-Sig: <unix_ts>:<hex_sig>` over a canonical `(wallet, ts, method, path)` payload; the server recovers the signer and rejects on mismatch/expiry (±5-minute window). Private keys never leave the desktop process (`compute_owner_proof`).
+### Release gates and source map
 
-**Rests on reputation (not cryptographically enforced):** fair metering, storage retrievability, container liveness, and inference quality — disciplined by payment-gated reputation (§7), not by proofs. This is the deliberate v1 trade.
+Implementation and documentation are not release approval. The [open release checklist](llm-serving-migration-plan.md#open-release-checklist--partial-evidence-does-not-close-a-gate) retains the executable acceptance matrix; [known limitations](bugs.md) distinguishes defects from unexercised qualification. Before any public testnet admission:
 
----
+1. Publish the intended network/deployment identity, discovery configuration, policy authority, patched chain/RPC provenance and legitimate funding procedure. Do not infer these from historical public servers.
+2. Qualify native payment ownership, exact commitment, canonicality, safe-frontier stalls, reorg/loss, conflicting nonce/cancellation, ambiguous broadcast and durable acknowledgement recovery.
+3. Exercise account/credential boundaries, nearly empty balances under concurrency, fee remittance and restarts, exact reservations/debits/reversals, free sessions and feedback eligibility.
+4. Run real per-model/OS/backend capability and performance sweeps, SDK flows, cancellation, missing/malformed usage, timeout/backpressure, engine/OOM/gateway failures and evidence renewal. Do not fabricate reports to enable publication.
+5. Exercise multiple independently operated providers/consumers, bounded discovery and stale/forged records, reputation updates, relay outage, malicious URLs/DNS rebinding and provider disappearance.
+6. Verify real native desktop surfaces, protected state, signed installers where applicable, public HTTPS/firewall separation, version rollback protection, load/soak behavior and consistent backup/incident recovery.
 
-## Deployment
+Public ingress and hardware rental still need authorization; documenting these gates does not authorize deployment. Mainnet, a new mining pool and the retired product domains are not part of this release.
 
-**Running a provider (v1).** A provider must be **publicly reachable**: its offer's `endpoint` has to resolve to a public IP that consumers can connect to directly. A domain name with TLS is strongly recommended — consumers connect over HTTPS, and a stable hostname survives IP changes. There is **no NAT traversal or circuit relay for providers** in v1; a provider behind NAT is not reachable and its offers are dead listings. Consumers, which only make outbound calls, may be behind NAT.
+| Contract / subsystem | Implementation entry point |
+|---|---|
+| Wire schemas, canonical signing, model/offer/quote identity | [`protocol.rs`](../src-tauri/src/protocol.rs) |
+| Offer validation and bounded peer discovery | [`offer_registry.rs`](../src-tauri/src/offer_registry.rs), [`dht.rs`](../src-tauri/src/dht.rs) |
+| Consumer recovery and native frontend boundary | [`consumer.rs`](../src-tauri/src/consumer.rs), [`desktop.rs`](../src-tauri/src/desktop.rs) |
+| Funding/control API and transactional ledger | [`contracts.rs`](../src-tauri/src/contracts.rs), [`billing_store.rs`](../src-tauri/src/billing_store.rs) |
+| Chain evidence and signing journal | [`chain_client.rs`](../src-tauri/src/chain_client.rs), [`rpc_client.rs`](../src-tauri/src/rpc_client.rs) |
+| Inference admission, normalization and private engine | [`inference_gateway.rs`](../src-tauri/src/inference_gateway.rs), [`inference_backend.rs`](../src-tauri/src/inference_backend.rs) |
+| Runtime ownership, readiness and performance | [`engine_runtime.rs`](../src-tauri/src/engine_runtime.rs), [`app.rs`](../src-tauri/src/app.rs), [`performance.rs`](../src-tauri/src/performance.rs) |
+| Payment-gated feedback and scoring | [`reputation.rs`](../src-tauri/src/reputation.rs), [`rating_api.rs`](../src-tauri/src/rating_api.rs), [`rating_storage.rs`](../src-tauri/src/rating_storage.rs) |
+| Version authority and rollback protection | [`version.rs`](../src-tauri/src/version.rs) |
 
-**Relay / bootstrap.** The canonical box `130.245.173.73` runs the DHT bootstrap (libp2p :4001) and the HTTP gateway (:8080) serving the reputation registry (`/api/ratings/*`), the version policy (`/api/version-policy`), and the chain-RPC proxy (`/api/chain/rpc`). Its former role relaying data for NAT'd peers is **not** part of the v1 provider path.
+### Historical context (non-normative)
 
-**Blockchain.** Geth is spawned locally (RPC 8545, P2P 30303) or reached via the canonical fallback; the CDN/always-on infrastructure of earlier designs is retired.
+Earlier Chiral versions implemented file sharing, Drive, ChiralDrop, CDN/site publication, download payments, and bundled Core-Geth/Ethash mining. A subsequent unimplemented design proposed a general S3/container/inference exchange. Neither is the current destination. The reusable ideas are signed discovery, wallet identity, provider-specific prepayment, and payment-gated feedback; their old payloads, RPC assumptions, fee collection, admission, and lifecycle semantics are **not** compatibility contracts.
 
----
-
-## Getting Started
-
-```bash
-npm install                                   # frontend deps
-npm run tauri:dev                             # desktop dev
-npm run build                                 # frontend build
-npm test                                      # frontend tests
-cargo test  --manifest-path src-tauri/Cargo.toml   # rust tests
-cargo check --manifest-path src-tauri/Cargo.toml   # rust type-check
-```
-
-Prerequisites: Node.js 20+, the Rust toolchain (rustup), npm.
-
----
-
-## Testing
-
-- **Frontend (vitest):** `npm test` — store/service unit tests, load/stress, and network tests (skipped in CI).
-- **Rust:** `cargo test --manifest-path src-tauri/Cargo.toml` — wallet CHI/Wei conversion, payment verification, offer signing/verification, the split-payment invariant (`credit + fee == amount`), reputation storage, and version-policy sign/verify.
-- **Scaled:** Docker/k3s multi-node harness for DHT discovery and offer propagation across many nodes.
-
----
-
-## Configuration
-
-### Environment Variables (selected)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHIRAL_RPC_ENDPOINT` | `http://130.245.173.73:8545` | Remote blockchain RPC fallback |
-| `CHIRAL_GETH_SYNCMODE` | `full` | Geth sync mode (`full` or `snap`) |
-| `CHIRAL_DAEMON_PORT` | `9419` | Daemon HTTP port |
-| `CHIRAL_AUTO_START_DHT` | `false` | Auto-start DHT on daemon boot |
-| `CHIRAL_AUTO_MINE` | `false` | Auto-start mining (implies DHT + Geth) |
-| `CHIRAL_MINER_ADDRESS` | none | Wallet address for mining rewards |
-| `CHIRAL_MINING_THREADS` | `1` | CPU mining thread count |
-| `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex Ed25519 key that activates signed `VersionPolicy` updates |
-
-### Data Directories
-
-| Platform | Path |
-|----------|------|
-| Linux | `~/.local/share/chiral-network/` |
-| macOS | `~/Library/Application Support/chiral-network/` |
-| Windows | `%APPDATA%/chiral-network/` |
-
-Subdirectories include `geth/` (blockchain data, archive mode), provider stores for served resources, and `tx_metadata.json` (persisted transaction metadata).
+The former book's three-resource roadmap, mempool-credit discussion, CHI/zero-gas parameters, first-hit marketplace assumptions, and operational commands have been superseded. Historical design text and implementation details remain available in repository history, not as a second authoritative runbook. The [migration plan](llm-serving-migration-plan.md) retains the rationale, original migration criteria, and current unfulfilled public-release gates.
