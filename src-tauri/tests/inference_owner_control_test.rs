@@ -4346,6 +4346,41 @@ async fn native_topup_rpc(
     Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
 }
 
+fn native_payment_journal_snapshot(journal: &Connection) -> [Vec<String>; 2] {
+    [
+        "SELECT json_array(sender,operation,nonce,tx_hash,raw,status,error,evidence,created_at) FROM transactions ORDER BY sender,operation",
+        "SELECT json_array(sender,operation,raw,status,error,evidence) FROM cancellations ORDER BY sender,operation",
+    ].map(|query| journal.prepare(query).unwrap()
+        .query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>().unwrap())
+}
+
+async fn assert_native_topup_amount_refusals(
+    consumer: &Consumer, id: &str, account_path: &std::path::Path,
+    ledger: &Connection, journal: &Connection, traffic: impl Fn() -> [usize; 4],
+) {
+    let saved = std::fs::read(account_path).unwrap();
+    let pending = !serde_json::from_slice::<Value>(&saved).unwrap()["topup"].is_null();
+    let conflicting: &[&str] = if pending {
+        &["1", "999", "1001", "340282366920938463463374607431768211455"]
+    } else { &[] };
+    let before = (
+        ledger_snapshot(ledger), native_payment_journal_snapshot(journal),
+        traffic(), consumer.credential_export(id, None).unwrap(),
+    );
+    for amount in [
+        "", "0", "00", "01", "01000", "+1000", "-1", " 1000", "1000 ",
+        "1000.0", "1e3", "0x3e8", "١٠٠٠", "340282366920938463463374607431768211456",
+    ].into_iter().chain(conflicting.iter().copied()) {
+        consumer.topup(id, amount).await.expect_err("invalid or conflicting native amount must be refused");
+        assert_eq!(std::fs::read(account_path).unwrap(), saved, "amount {amount:?}");
+        assert_eq!(ledger_snapshot(ledger), before.0, "amount {amount:?}");
+        assert_eq!(native_payment_journal_snapshot(journal), before.1, "amount {amount:?}");
+        assert_eq!(traffic(), before.2, "amount {amount:?}");
+        assert_eq!(consumer.credential_export(id, None).unwrap(), before.3, "amount {amount:?}");
+    }
+}
+
 enum NativeRecoveryPressure {
     QuoteStorage,
     QuoteSigningWork,
@@ -4361,7 +4396,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
 }
 
 #[tokio::test]
-async fn native_topup_recovers_lost_credit_response_at_full_quote_work() {
+async fn native_topup_rejects_invalid_amounts_and_recovers_at_full_quote_work() {
     native_topup_recovery_under_pressure(NativeRecoveryPressure::QuoteSigningWork).await;
 }
 
@@ -4653,6 +4688,14 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
     let provider_rpc_server = tokio::spawn(async move { axum::serve(provider_listener, provider_app).await.unwrap(); });
     let exchanges = Arc::new(Mutex::new(Vec::new()));
     let lose_next = Arc::new(AtomicBool::new(false));
+    // Exercise the local input edges once, using the small retained-ledger case.
+    let amount_cases = exhausted_bucket == Some("quote-work:global");
+    let unavailable_requests = amount_cases.then(|| Arc::new(Mutex::new(Vec::<Value>::new())));
+    let traffic = || [
+        exchanges.lock().unwrap().len(), client_view.requests.lock().unwrap().len(),
+        provider_view.requests.lock().unwrap().len(),
+        unavailable_requests.as_ref().map_or(0, |requests| requests.lock().unwrap().len()),
+    ];
     let listener = fixture._listeners[0].try_clone().unwrap();
     listener.set_nonblocking(true).unwrap();
     let serve = |app: Router| {
@@ -4713,9 +4756,48 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
         assert_resources();
         assert_eq!(quote_rates(), expected_rates);
         let (stop, server) = serve(fixture.app.clone());
-        let consumer = Consumer::new(config.clone()).unwrap();
         let start = exchanges.lock().unwrap().len();
         let provider_start = provider_view.requests.lock().unwrap().len();
+        let (consumer, unprepared_topup) = if amount_cases && attempt == 0 {
+            // A real failed preparation leaves a durable intent without a signed
+            // original. Do not manufacture or rewrite the native pending record.
+            let requests = unavailable_requests.as_ref().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut unavailable = config.clone();
+            unavailable.network.rpc_url = format!("http://{}", listener.local_addr().unwrap());
+            let app = Router::new().route("/", post(
+                |State(requests): State<Arc<Mutex<Vec<Value>>>>, Json(request): Json<Value>| async move {
+                    assert_ne!(request["method"], "eth_sendRawTransaction");
+                    let id = request["id"].clone();
+                    requests.lock().unwrap().push(request);
+                    Json(json!({"jsonrpc":"2.0","id":id,
+                        "error":{"code":-32000,"message":"isolated preparation RPC unavailable"}}))
+                },
+            )).with_state(requests.clone());
+            let failed_server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+            let consumer = Consumer::new(unavailable).unwrap();
+            assert_native_topup_amount_refusals(&consumer, id, &account_path, &db, &journal, &traffic).await;
+            let before_journal = native_payment_journal_snapshot(&journal);
+            consumer.topup(id, "1000").await.expect_err("unavailable RPC must prevent preparation");
+            assert!(!requests.lock().unwrap().is_empty());
+            assert_eq!(native_payment_journal_snapshot(&journal), before_journal);
+            assert_eq!(protected_state(), protected);
+            assert_eq!(monetary_state(), before_credit);
+            let saved: Value = serde_json::from_slice(&std::fs::read(&account_path).unwrap()).unwrap();
+            let intent = saved["topup"].clone();
+            uuid::Uuid::parse_str(intent["id"].as_str().unwrap()).unwrap();
+            assert_eq!(intent["amount_wei"], "1000");
+            assert_eq!(intent["raw_transaction"], Value::Null);
+            let mut expected = saved_opening.clone();
+            expected["topup"] = intent.clone();
+            assert_eq!(saved, expected);
+            drop(consumer);
+            failed_server.abort();
+            assert!(failed_server.await.unwrap_err().is_cancelled());
+            let consumer = Consumer::new(config.clone()).unwrap();
+            assert_native_topup_amount_refusals(&consumer, id, &account_path, &db, &journal, &traffic).await;
+            (consumer, Some(intent))
+        } else { (Consumer::new(config.clone()).unwrap(), None) };
         let result = match attempt {
             0 | 2 => consumer.topup(id, "1000").await,
             1 => consumer.resume(id).await,
@@ -4804,6 +4886,10 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
         else { retained_originals = Some(current_originals); }
         let bytes = std::fs::read(&account_path).unwrap();
         let saved: Value = serde_json::from_slice(&bytes).unwrap();
+        if let Some(mut intent) = unprepared_topup {
+            intent["raw_transaction"] = json!(raw);
+            assert_eq!(saved["topup"], intent, "preparation must retain the reopened intent's identity and amount");
+        }
         if attempt == 0 {
             retained_topup = saved["topup"].clone();
             assert_eq!(retained_topup["raw_transaction"], raw);
@@ -4837,6 +4923,9 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
             assert_eq!(value, account);
         }
         assert_eq!(monetary_state(), credited.unwrap_or(before_credit));
+        if amount_cases {
+            assert_native_topup_amount_refusals(&consumer, id, &account_path, &db, &journal, &traffic).await;
+        }
         drop(consumer);
         stop.send(()).unwrap();
         server.await.unwrap();
