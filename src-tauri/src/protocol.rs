@@ -541,14 +541,29 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Signed<T> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for TokenUsage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            prompt_tokens: u64,
+            completion_tokens: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            prompt_tokens: fields.prompt_tokens,
+            completion_tokens: fields.completion_tokens,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AccountView {
     pub contract_id: String,
     pub network: NetworkIdentity,
@@ -568,6 +583,52 @@ pub struct AccountView {
     /// Cumulative foregone inference charges; not a balance credit or refundable money.
     pub waived_wei: String,
     pub max_concurrency: u32,
+}
+
+impl<'de> Deserialize<'de> for AccountView {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            contract_id: String,
+            network: NetworkIdentity,
+            provider_wallet: String,
+            consumer_wallet: String,
+            model: ModelSpec,
+            price: PriceSchedule,
+            status: String,
+            funded_wei: String,
+            fee_wei: String,
+            spent_wei: String,
+            reserved_wei: String,
+            available_wei: String,
+            reversed_wei: String,
+            provider_loss_wei: String,
+            usage: TokenUsage,
+            waived_wei: String,
+            max_concurrency: u32,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            contract_id: fields.contract_id,
+            network: fields.network,
+            provider_wallet: fields.provider_wallet,
+            consumer_wallet: fields.consumer_wallet,
+            model: fields.model,
+            price: fields.price,
+            status: fields.status,
+            funded_wei: fields.funded_wei,
+            fee_wei: fields.fee_wei,
+            spent_wei: fields.spent_wei,
+            reserved_wei: fields.reserved_wei,
+            available_wei: fields.available_wei,
+            reversed_wei: fields.reversed_wei,
+            provider_loss_wei: fields.provider_loss_wei,
+            usage: fields.usage,
+            waived_wei: fields.waived_wei,
+            max_concurrency: fields.max_concurrency,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

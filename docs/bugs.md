@@ -45,6 +45,13 @@ This register applies to the **LLM-only runtime**, not the retired file-sharing 
 
 The evidence below is from the **historical isolated chiral-coin prototype** unless explicitly labeled otherwise. It records real fixes/results, not requalification of the native CFX/performance cutover.
 
+### Native-CFX accounting decoders accepted non-object projections
+
+- **Where:** `src-tauri/src/protocol.rs::AccountView` and `TokenUsage`, shared by account responses and signed receipts.
+- **Observed behavior:** a disposable typed-wire probe accepted extra account members, a complete positional account and positional accounting usage. Each decoded to the original typed receipt and verified with its unchanged provider signature. This did not demonstrate an authorized operation, native HTTP acceptance or financial-state mutation.
+- **Correction:** reuse the direct object visitor for both types and deny unknown account members. Preserve required exact counters, nested schemas, named-field serialization and monetary representation; no `Value` buffer, defaulted missing usage, signing change or ledger migration.
+- **Verification:** seven deterministic decoder regressions pass raw/pre-parsed shapes, required-member/type/duplicate refusals, exact integer limits and canonical/signature success controls. Native containing-response/state-preservation, persisted-record and client/export acceptance remain explicit tasks in `specify-inference-account-snapshot`; this is not full accounting or release qualification.
+
 ### Native-CFX receipts rejected renewed qualification evidence
 
 - **Where:** `src-tauri/src/consumer.rs::receipt`, request `PerformanceOutcome.evidence_sha256`.

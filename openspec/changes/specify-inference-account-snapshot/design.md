@@ -42,13 +42,21 @@ A disposable `src-tauri/examples/apas_account_snapshot_probe.rs` executable cons
 - A positional usage array inside that account likewise decoded and verified.
 - An extra `total_tokens` member in accounting usage was rejected, confirming the existing leaf member restriction.
 
-In all three accepted noncanonical projections, the reserialized typed receipt exactly equaled the original signed receipt. This demonstrates decoder/signature behavior, not native HTTP acceptance, a forged authorized operation or a financial-state mutation. The probe was removed after observation; no executable or permanent test is part of this specification commit.
+In all three accepted noncanonical projections, the reserialized typed receipt exactly equaled the original signed receipt. This demonstrates decoder/signature behavior, not native HTTP acceptance, a forged authorized operation or a financial-state mutation. The probe was removed after observation; no executable or permanent test was part of the initial specification-only commit `9ba4c56f`.
+
+## Implemented decoder acceptance — 2026-11-15
+
+Snapshot tasks 2.1–2.2 now use the shared direct object visitor for both `AccountView` and `TokenUsage`, retaining the derived closed-field checks without buffering through `Value`. `AccountView` no longer silently drops extra members. Both types reject positional containers; `TokenUsage::default()` remains an explicit internal constructor, never a missing-field decoding fallback. The public fields, serialization, monetary representation and nested model semantics are unchanged.
+
+`cargo test --locked --no-default-features --manifest-path src-tauri/Cargo.toml --test inference_account_snapshot_test` passed all seven deterministic regressions. They exercise raw and pre-parsed shapes, all required-member omissions/nulls/wrong types, unknown members, raw duplicates, counter boundaries through `u64::MAX`, fractions/exponents/signs/overflow, reordered named objects and nullable model members. Independent declared account fields and explicit counter bytes retain their canonical representations; unchanged provider signatures verify reordered valid receipts but no longer admit account/usage projections.
+
+This is shared-decoder and signed-statement evidence, not native HTTP installation/recovery, complete persisted-record acceptance, client/export precision or chain/engine qualification. Those remaining tasks stay open.
 
 ## Source and retained acceptance map
 
 | Boundary | Inspected implementation or retained evidence | Required work |
 |---|---|---|
-| Payload and leaf | `protocol.rs::AccountView`, `TokenUsage`, `UsageReceipt`, `OpenResult`; shared direct object visitor | Close account member decoding and both object containers; raw duplicate/type/boundary and canonical-signature acceptance |
+| Payload and leaf | `protocol.rs::AccountView` and `TokenUsage` now use the direct object visitor with closed members; seven `inference_account_snapshot_test.rs` regressions pass | Tasks 2.1–2.2 complete; actual containing native replies and durable recovery remain below |
 | Native account installation | `consumer.rs::account_matches`, `resume_inner`, `topup`, `accept_topup`, `refresh_account`, `receipt`; matching precedes credential/account installation | Fill complete term/money/shape refusal and protected-state assertions for each containing response |
 | Producer and local records | `billing_store.rs::open_account`, `account`, `receipt`, `get_account`, `save_account`; genuine account construction and signed snapshots | Verify unchanged serialized/stored schema-3 records through strict decoding; no money migration |
 | Funding meanings/status | `credit_funding`, `balance_funding`, `transition_funding` preserve gross funding, current reversals/loss compensation, retained fee liability and pending/frozen status | Preserve these observable meanings; do not claim full reorg/fee lifecycle qualification from snapshot tests |
