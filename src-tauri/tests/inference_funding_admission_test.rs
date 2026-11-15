@@ -3,6 +3,8 @@
 //! All envelopes are independently signed with public test scalars; nothing is broadcast.
 #[path = "support/proposal.rs"]
 mod proposal;
+#[path = "support/funding.rs"]
+mod funding;
 
 use axum::{
     body::{to_bytes, Body},
@@ -1534,41 +1536,6 @@ async fn failed_intent_persistence_rolls_back_the_entire_retention_handoff() {
     }
 }
 
-fn restore_retained_intents(db: &mut Connection, fixture: &Fixture, count: u64) {
-    // Restore complete signed originals, not observed historical owner/spendability
-    // admissions. Each envelope is independently validated before fixture insertion.
-    let retained_key = format!("{:064x}", 123_456);
-    let retained_payer = wallet::address_from_private_key(&retained_key).unwrap();
-    assert_ne!(retained_payer, fixture.quote.payload.consumer_wallet);
-    let tx = db.transaction().unwrap();
-    {
-        let mut insert = tx.prepare(
-            "INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").unwrap();
-        for sequence in 1..=count {
-            let mut payload = fixture.quote.payload.clone();
-            payload.id = format!("0x{:064x}", 0xfeed_0000 + sequence);
-            payload.nonce = format!("0x{:064x}", 0xcafe_0000 + sequence);
-            payload.consumer_wallet = retained_payer.clone();
-            let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
-            let raw = signed_payment(&PaymentFields::opening(&quote.payload, sequence, 11),
-                &retained_key, 0, &[0xc0]);
-            let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
-                &retained_payer, &quote.payload.provider_wallet, &quote.payload.funding_wei,
-                &protocol::opening_data(&quote.payload).unwrap()).unwrap();
-            let ack = protocol::sign(protocol::INTENT_DOMAIN, FundingIntent {
-                network: quote.payload.network.clone(), provider_wallet: quote.payload.provider_wallet.clone(),
-                consumer_wallet: retained_payer.clone(), quote_id: quote.payload.id.clone(),
-                tx_hash: envelope.tx_hash.clone(), registered_at: quote.payload.issued_at,
-            }, &fixture.provider.state.private_key).unwrap();
-            insert.execute(params![quote.payload.id, envelope.tx_hash, raw,
-                serde_json::to_string(&ack).unwrap(), serde_json::to_string(&quote).unwrap(),
-                retained_payer, sequence.to_string(), quote.payload.expires_at]).unwrap();
-        }
-    }
-    tx.commit().unwrap();
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
     let directory = tempfile::tempdir().unwrap();
@@ -1576,7 +1543,13 @@ async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
     let unrelated_quote = fixture.quote.clone();
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
 
-    restore_retained_intents(&mut db, &fixture, 9_999);
+    funding::restore_retained_intents(&mut db, &fixture.provider, &fixture.quote, 9_999, |quote, key, sequence| {
+        let raw = signed_payment(&PaymentFields::opening(quote, sequence, 11), key, 0, &[0xc0]);
+        let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
+            &quote.consumer_wallet, &quote.provider_wallet, &quote.funding_wei,
+            &protocol::opening_data(quote).unwrap()).unwrap();
+        (raw, envelope)
+    });
 
     // Issue both competing quotes after fixture restoration. Keep the unrelated signed
     // proposal intact, and do not mistake seed generation time for a fresh chain observation.
@@ -2084,7 +2057,13 @@ async fn native_lost_fresh_acknowledgement_recovers_after_provider_and_client_re
         // 9,999 observed admissions or public issuances within one rate window.
         {
             let mut pressure_db = Connection::open(&fixture.provider.ledger_path).unwrap();
-            restore_retained_intents(&mut pressure_db, &fixture, 9_999);
+            funding::restore_retained_intents(&mut pressure_db, &fixture.provider, &fixture.quote, 9_999, |quote, key, sequence| {
+                let raw = signed_payment(&PaymentFields::opening(quote, sequence, 11), key, 0, &[0xc0]);
+                let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
+                    &quote.consumer_wallet, &quote.provider_wallet, &quote.funding_wei,
+                    &protocol::opening_data(quote).unwrap()).unwrap();
+                (raw, envelope)
+            });
             let tx = pressure_db.transaction().unwrap();
             {
                 let mut insert = tx.prepare(
@@ -2281,7 +2260,13 @@ async fn paid_topup_recovers_at_full_paid_intent_capacity_without_fresh_admissio
     db.pragma_update(None, "foreign_keys", true).unwrap();
     // Reuse complete signed originals, acknowledgements and independent envelope
     // validation. This is restored history, not 10,000 observed admissions.
-    restore_retained_intents(&mut db, &fixture, 10_000);
+    funding::restore_retained_intents(&mut db, &fixture.provider, &fixture.quote, 10_000, |quote, key, sequence| {
+        let raw = signed_payment(&PaymentFields::opening(quote, sequence, 11), key, 0, &[0xc0]);
+        let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw,
+            &quote.consumer_wallet, &quote.provider_wallet, &quote.funding_wei,
+            &protocol::opening_data(quote).unwrap()).unwrap();
+        (raw, envelope)
+    });
     fixture.rpc.observed_at.store(protocol::now().unwrap(), Ordering::Release);
     let (status, document) = request(&mut fixture.app, "/v1/contracts/propose", &HeaderMap::new(),
         serde_json::to_vec(&json!({"offer_id":fixture.provider.offer_id,

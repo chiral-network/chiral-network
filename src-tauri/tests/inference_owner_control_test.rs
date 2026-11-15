@@ -3,6 +3,8 @@
 //! Synthetic execution/frontier observations are not live-chain qualification; no real funds move.
 #[path = "support/proposal.rs"]
 mod proposal;
+#[path = "support/funding.rs"]
+mod funding;
 
 use axum::{
     body::{to_bytes, Body},
@@ -3311,6 +3313,29 @@ async fn topup_recovery_rpc(
     Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
 }
 
+async fn native_paid_intent_capacity_rpc(
+    State(rpc): State<Arc<TopupRecoveryRpc>>, Json(request): Json<Value>,
+) -> Json<Value> {
+    let args = &request["params"];
+    let result = match request["method"].as_str().unwrap() {
+        "eth_getTransactionCount" => {
+            assert_eq!(args[0], rpc.quote.consumer_wallet);
+            assert!(matches!(args[1].as_str(), Some("latest" | "pending")));
+            json!("0x1")
+        }
+        "eth_getBalance" => {
+            assert_eq!(args, &json!([rpc.quote.consumer_wallet, "latest"]));
+            json!("0x100000000")
+        }
+        "eth_chainId" | "eth_syncing" | "eth_getBlockByNumber" => {
+            return topup_recovery_rpc(State(rpc), Json(request)).await;
+        }
+        method => panic!("unexpected RPC at native paid-intent admission: {method}"),
+    };
+    rpc.requests.lock().unwrap().push(request.clone());
+    Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
+}
+
 #[tokio::test]
 async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
     let directory = tempfile::tempdir().unwrap();
@@ -4327,6 +4352,7 @@ enum NativeRecoveryPressure {
     QuoteCommittedIssuance,
     OwnedFreeOpening,
     GlobalFreeOpening,
+    PaidIntent,
 }
 
 #[tokio::test]
@@ -4354,19 +4380,26 @@ async fn native_topup_recovers_lost_credit_response_at_global_free_opening_limit
     native_topup_recovery_under_pressure(NativeRecoveryPressure::GlobalFreeOpening).await;
 }
 
+#[tokio::test]
+async fn native_topup_recovers_lost_credit_response_at_paid_intent_limit() {
+    native_topup_recovery_under_pressure(NativeRecoveryPressure::PaidIntent).await;
+}
+
 async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) {
     use std::io::Write;
     use protocol::TokenUsage;
 
     let directory = tempfile::tempdir().unwrap();
-    let (case, quote_count, exhausted_bucket, free_capacity) = match pressure {
-        NativeRecoveryPressure::QuoteStorage => (58_000, 10_000_u64, None, None),
-        NativeRecoveryPressure::QuoteSigningWork => (76_000, 1, Some("quote-work:global"), None),
-        NativeRecoveryPressure::QuoteCommittedIssuance => (76_001, 1, Some("quote:global"), None),
-        NativeRecoveryPressure::OwnedFreeOpening => (77_000, 1, None, Some(false)),
-        NativeRecoveryPressure::GlobalFreeOpening => (77_001, 1, None, Some(true)),
+    let (case, quote_count, exhausted_bucket, free_capacity, paid_capacity) = match pressure {
+        NativeRecoveryPressure::QuoteStorage => (58_000, 10_000_u64, None, None, false),
+        NativeRecoveryPressure::QuoteSigningWork => (76_000, 1, Some("quote-work:global"), None, false),
+        NativeRecoveryPressure::QuoteCommittedIssuance => (76_001, 1, Some("quote:global"), None, false),
+        NativeRecoveryPressure::OwnedFreeOpening => (77_000, 1, None, Some(false), false),
+        NativeRecoveryPressure::GlobalFreeOpening => (77_001, 1, None, Some(true), false),
+        NativeRecoveryPressure::PaidIntent => (78_000, 1, None, None, true),
     };
     let account_count = match free_capacity { Some(false) => 8_u64, Some(true) => 10_000, None => 2 };
+    let intent_count = if paid_capacity { 10_001_u64 } else { 1 };
     let mut fixture = Fixture::new(directory.path(), case);
     let free_offer = free_capacity.map(|_| fixture.provider.offer.payload.clone());
     let other = fixture.open_free().await;
@@ -4390,6 +4423,12 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
     let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
     db.pragma_update(None, "foreign_keys", true).unwrap();
+    if paid_capacity {
+        let amount = quote.payload.funding_wei.parse().unwrap();
+        funding::restore_retained_intents(&mut db, &fixture.provider, &quote, 10_000, |quote, key, sequence| {
+            fixture.signed_payment_for(key, &protocol::opening_data(quote).unwrap(), amount, sequence)
+        });
+    }
     let restored = if let Some(ledger_wide) = free_capacity {
         // Complete signed account/root prerequisites, not observed admissions.
         // Restoring six owned accounts also avoids spending the native owner's
@@ -4466,7 +4505,7 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
                      AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract))",
             params![opened.account.consumer_wallet, protocol::now().unwrap()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
-        assert_eq!(counts, (if free_capacity == Some(false) { 8 } else { 2 }, account_count, 0));
+        assert_eq!(counts, (if free_capacity == Some(false) { 8 } else { 2 }, account_count, intent_count - 1));
         if free_capacity == Some(true) {
             assert_eq!(db.query_row(
                 "SELECT MAX(owned) FROM (SELECT COUNT(*) AS owned FROM accounts GROUP BY owner)",
@@ -4475,7 +4514,7 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
     };
     let protected = protected_state();
     let before_credit = monetary_state();
-    assert_eq!(protected.0.map(|entry| entry.0), [quote_count, account_count, 1, account_count, 2, 2]);
+    assert_eq!(protected.0.map(|entry| entry.0), [quote_count, account_count, intent_count, account_count, 2, 2]);
     assert_eq!(protected.1.0, account_count - 1);
     assert_eq!(before_credit.map(|entry| entry.0), [account_count, 1, 0, 0]);
     assert_resources();
@@ -4487,7 +4526,41 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
         if row[0].as_str() == exhausted_bucket { assert_eq!(count, 600); }
         else { assert!((1..600).contains(&count)); }
     }
-    let (status, refused) = if free_capacity.is_some() {
+    let (status, refused) = if paid_capacity {
+        let (raw, refused_envelope) = fixture.signed_payment(&protocol::opening_data(&pending.payload).unwrap(), 100, 1);
+        let rpc = Arc::new(TopupRecoveryRpc {
+            quote: pending.payload.clone(), tx_hash: refused_envelope.tx_hash.clone(),
+            phase: AtomicU64::new(0), timestamp: AtomicU64::new(protocol::now().unwrap()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc_url = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route("/", post(native_paid_intent_capacity_rpc)).with_state(rpc.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        Arc::get_mut(&mut state.config).unwrap().network.rpc_url = rpc_url;
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        let path = format!("/v1/contracts/{}/funding-intent", pending.payload.id);
+        let body = serde_json::to_vec(&json!({"raw_transaction":raw})).unwrap();
+        let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+        let response = fixture.send("POST", &path, &proof.headers, body).await;
+        fixture.consumed(&proof);
+        {
+            let calls = rpc.requests.lock().unwrap();
+            assert_eq!(calls.iter().filter(|call| call["method"] == "eth_getBalance").count(), 1);
+            assert_eq!(calls.iter().filter(|call| call["method"] == "eth_getTransactionCount").count(), 4);
+            assert!(calls.iter().all(|call| call["method"] != "eth_sendRawTransaction" && call["method"] != "eth_getTransactionReceipt"));
+        }
+        assert_eq!(db.query_row(
+            "SELECT COUNT(*) FROM funding_intents WHERE contract=?1 OR tx_hash=?2 OR (sender=?3 AND nonce='1')",
+            params![pending.payload.id, refused_envelope.tx_hash, pending.payload.consumer_wallet],
+            |row| row.get::<_, u64>(0)).unwrap(), 0);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        response
+    } else if free_capacity.is_some() {
         let body = serde_json::to_vec(&json!({"quote_id":pending.payload.id,"raw_transaction":null})).unwrap();
         let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
         let response = fixture.send("POST", OPEN, &proof.headers, body).await;
@@ -4501,7 +4574,7 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
     };
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
     assert_eq!(refused["error"]["code"], "rate_limit");
-    if free_capacity.is_some() {
+    if paid_capacity || free_capacity.is_some() {
         fixture.unopened(&pending);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM funding_attempts", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
     } else if exhausted_bucket != Some("quote-work:global") {
