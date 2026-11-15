@@ -4943,10 +4943,306 @@ async fn native_topup_recovery_under_pressure(pressure: NativeRecoveryPressure) 
     assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
 }
 
+fn restore_native_account(
+    fixture: &Fixture, quote: &Signed<Quote>, opened: &OpenResult, directory: PathBuf,
+) -> (ConsumerConfig, PathBuf, Connection, Value) {
+    use std::io::Write;
+
+    // Restore actual ledger prerequisites, not a newly observed native funding workflow.
+    let id = &quote.payload.id;
+    let credential = opened.credential.as_ref().unwrap();
+    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    let evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
+        [id], |row| row.get(0)).unwrap();
+    let payment: VerifiedPayment = serde_json::from_str(&evidence).unwrap();
+    let ack = fixture.provider.state.ledger.funding_intent(
+        &quote.payload, &payment.raw_transaction).unwrap().unwrap();
+    let config = ConsumerConfig {
+        network: fixture.provider.state.config.network.clone(), data_dir: directory,
+        catalog_url: None, development: true, dht: None,
+    };
+    let consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, OWNER_KEY).unwrap();
+    assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
+    let scoped = config.network.scoped_dir(&config.data_dir);
+    let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    wallet::secure_directory(account_path.parent().unwrap()).unwrap();
+    let saved = json!({
+        "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
+        "raw_transaction":payment.raw_transaction,"tx_hash":ack.payload.tx_hash,
+        "funding_intent":ack,"funding_broadcast_started":true,
+        "funding_cancellation_requested":false,"funding_cancellation":null,
+        "credentials":[credential],"active_credential":credential.id,
+        "receipt_sequence":0,"topup":null
+    });
+    let mut file = wallet::create_secret_file(&account_path).unwrap();
+    file.write_all(&serde_json::to_vec(&saved).unwrap()).unwrap();
+    file.sync_all().unwrap();
+    let journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
+    journal.execute(
+        "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,evidence,created_at)
+         VALUES(?1,?2,'0',?3,?4,'accepted',?5,?6)",
+        params![quote.payload.consumer_wallet, format!("open:{id}"), payment.tx_hash,
+            payment.raw_transaction, evidence, quote.payload.issued_at]).unwrap();
+    (config, account_path, journal, saved)
+}
+
+#[derive(Debug)]
+enum NativeSnapshotMutation {
+    Term(String),
+    Money(&'static str, &'static str),
+    Unbalanced(&'static str),
+    Field(&'static str, &'static str),
+    Shape(&'static str),
+}
+
+const SNAPSHOT_FIELDS: [&str; 17] = [
+    "contract_id", "network", "provider_wallet", "consumer_wallet", "model", "price", "status",
+    "funded_wei", "fee_wei", "spent_wei", "reserved_wei", "available_wei", "reversed_wei",
+    "provider_loss_wei", "usage", "waived_wei", "max_concurrency",
+];
+const SNAPSHOT_MONEY: [&str; 8] = [
+    "funded_wei", "fee_wei", "spent_wei", "reserved_wei", "available_wei",
+    "reversed_wei", "provider_loss_wei", "waived_wei",
+];
+
+fn snapshot_term_mutations(value: &Value, path: String, cases: &mut Vec<NativeSnapshotMutation>) {
+    if let Value::Object(members) = value {
+        for (name, value) in members {
+            snapshot_term_mutations(value, format!("{path}/{name}"), cases);
+        }
+    } else {
+        cases.push(NativeSnapshotMutation::Term(path.clone()));
+        if let Value::Array(values) = value {
+            for (index, value) in values.iter().enumerate() {
+                snapshot_term_mutations(value, format!("{path}/{index}"), cases);
+            }
+        }
+    }
+}
+
+fn wide_snapshot(account: &Value) -> Value {
+    // An unsigned response-only claim, not a provider ledger transition or funding proof.
+    // Both sides equal 2*u128::MAX; waived money is deliberately not part of that sum.
+    let mut value = account.clone();
+    for field in ["funded_wei", "provider_loss_wei", "reversed_wei", "waived_wei"] {
+        value[field] = json!(u128::MAX.to_string());
+    }
+    value["fee_wei"] = json!("5");
+    value["spent_wei"] = json!((u128::MAX - 15).to_string());
+    value["reserved_wei"] = json!("7");
+    value["available_wei"] = json!("3");
+    value
+}
+
+fn snapshot_mutation_bytes(case: &NativeSnapshotMutation, original: &Value) -> Vec<u8> {
+    let mut value = original.clone();
+    match case {
+        NativeSnapshotMutation::Term(path) => {
+            let target = value.pointer_mut(path).unwrap();
+            *target = match target {
+                Value::String(text) => {
+                    let changed = if path.contains("_wei_per_1k") {
+                        (text.parse::<u128>().unwrap() + 1).to_string()
+                    } else if text.starts_with("0x") {
+                        format!("0x{}{}", if &text[2..3] == "a" { "b" } else { "a" }, &text[3..])
+                    } else if [40, 64].contains(&text.len()) && text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        format!("{}{}", if &text[..1] == "a" { "b" } else { "a" }, &text[1..])
+                    } else {
+                        format!("{text}-different")
+                    };
+                    json!(changed)
+                }
+                Value::Number(number) => json!(number.as_u64().unwrap() + 1),
+                Value::Bool(flag) => json!(!*flag),
+                Value::Null => json!("Q8_0"),
+                Value::Array(values) => if values.is_empty() { json!([1]) } else { json!([]) },
+                Value::Object(_) => Value::Null, // The optional original serving profile.
+            };
+            // Term substitution must reach binding, not fail the wire's field decoder.
+            serde_json::from_value::<protocol::AccountView>(value.clone()).unwrap();
+        }
+        NativeSnapshotMutation::Money(field, form) => {
+            value = wide_snapshot(original);
+            let amount = value[*field].as_str().unwrap();
+            // Aliases preserve the mathematical value, so a balance mismatch cannot
+            // hide permissive parsing of a particular monetary field.
+            let malformed = match *form {
+                "empty" => String::new(),
+                "zero-prefix" => format!("0{amount}"),
+                "plus" => format!("+{amount}"),
+                "negative" => format!("-{amount}"),
+                "left-space" => format!(" {amount}"),
+                "right-space" => format!("{amount} "),
+                "decimal" => format!("{amount}.0"),
+                "exponent" => format!("{amount}e0"),
+                "hex" => format!("0x{:x}", amount.parse::<u128>().unwrap()),
+                "unicode" => amount.chars().map(|c| char::from_u32('٠' as u32 + c.to_digit(10).unwrap()).unwrap()).collect(),
+                "newline" => format!("{amount}\n"),
+                "tab" => format!("\t{amount}"),
+                "overflow" => "340282366920938463463374607431768211456".into(),
+                _ => panic!("unknown money form"),
+            };
+            value[*field] = json!(malformed);
+        }
+        NativeSnapshotMutation::Unbalanced(field) => {
+            value = wide_snapshot(original);
+            let amount = value[*field].as_str().unwrap().parse::<u128>().unwrap();
+            value[*field] = json!(if amount == u128::MAX { amount - 1 } else { amount + 1 }.to_string());
+        }
+        NativeSnapshotMutation::Field(field, form) => match *form {
+            "missing" => { value.as_object_mut().unwrap().remove(*field); }
+            "null" => value[*field] = Value::Null,
+            "type" => value[*field] = json!(false),
+            "duplicate" => {
+                let encoded = serde_json::to_string(&value).unwrap();
+                return format!("{{\"{field}\":{},{}", value[*field], &encoded[1..]).into_bytes();
+            }
+            _ => panic!("unknown field mutation"),
+        },
+        NativeSnapshotMutation::Shape(form) => match *form {
+            "null" => value = Value::Null,
+            "scalar" => value = json!("account"),
+            "array" => value = Value::Array(SNAPSHOT_FIELDS.iter().map(|field| value[*field].clone()).collect()),
+            "extra" => value["unverified_label"] = json!("not an account member"),
+            "usage-array" => value["usage"] = json!([value["usage"]["prompt_tokens"], value["usage"]["completion_tokens"]]),
+            "usage-missing" => { value["usage"].as_object_mut().unwrap().remove("completion_tokens"); }
+            "usage-extra" => value["usage"]["total_tokens"] = json!(0),
+            "usage-duplicate" => {
+                let encoded = serde_json::to_string(&value).unwrap();
+                let usage = serde_json::to_string(&value["usage"]).unwrap();
+                let duplicate = format!("{{\"prompt_tokens\":{},{}", value["usage"]["prompt_tokens"], &usage[1..]);
+                return encoded.replacen(&format!("\"usage\":{usage}"), &format!("\"usage\":{duplicate}"), 1).into_bytes();
+            }
+            _ => panic!("unknown shape mutation"),
+        },
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
+#[tokio::test]
+async fn native_account_refresh_preserves_original_terms_money_and_recovery_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(&directory.path().join("provider-0"), 66_000);
+    let (mut quote, mut opened) = fixture.accounting_account(true).await;
+    let original = serde_json::to_value(&opened.account).unwrap();
+    let mut cases = Vec::new();
+    for field in ["contract_id", "network", "provider_wallet", "consumer_wallet", "model", "price", "max_concurrency"] {
+        snapshot_term_mutations(&original[field], format!("/{field}"), &mut cases);
+    }
+    cases.push(NativeSnapshotMutation::Term("/model/serving".into()));
+    for field in SNAPSHOT_MONEY {
+        for form in ["empty", "zero-prefix", "plus", "negative", "left-space", "right-space",
+            "decimal", "exponent", "hex", "unicode", "newline", "tab", "overflow"] {
+            cases.push(NativeSnapshotMutation::Money(field, form));
+        }
+        if field != "waived_wei" { cases.push(NativeSnapshotMutation::Unbalanced(field)); }
+    }
+    for field in SNAPSHOT_FIELDS {
+        for form in ["missing", "null", "type", "duplicate"] {
+            cases.push(NativeSnapshotMutation::Field(field, form));
+        }
+    }
+    for form in ["null", "scalar", "array", "extra", "usage-array", "usage-missing", "usage-extra", "usage-duplicate"] {
+        cases.push(NativeSnapshotMutation::Shape(form));
+    }
+
+    // Four successful controls plus eight refusals fit the real 12/minute owner
+    // challenge budget. Each batch has independent state; never reset a budget,
+    // alter an accepted timestamp, sleep for expiry or change a production limit.
+    for (batch, cases) in cases.chunks(8).enumerate() {
+        if batch != 0 {
+            fixture = Fixture::new(&directory.path().join(format!("provider-{batch}")), 66_000 + batch as u64);
+            (quote, opened) = fixture.accounting_account(true).await;
+        }
+        let id = &quote.payload.id;
+        let original = serde_json::to_value(&opened.account).unwrap();
+        let (config, account_path, journal, _) = restore_native_account(
+            &fixture, &quote, &opened, directory.path().join(format!("native-{batch}")));
+        let original_journal = native_payment_journal_snapshot(&journal);
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let financial_state = || ledger_snapshot(&db).into_iter().enumerate()
+            // Owner-auth rate/clock/challenge bookkeeping is expected to advance.
+            .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
+        let replacement = Arc::new(Mutex::new(None::<Vec<u8>>));
+        let delivered = Arc::new(AtomicU64::new(0));
+        let app = fixture.app.clone().layer(from_fn({
+            let replacement = replacement.clone();
+            let delivered = delivered.clone();
+            let path = format!("/v1/contracts/{id}");
+            move |request: Request, next: Next| {
+                let replacement = replacement.clone();
+                let delivered = delivered.clone();
+                let account_read = request.method() == axum::http::Method::GET && request.uri().path() == path;
+                async move {
+                    let response = next.run(request).await;
+                    if !account_read || response.status() != StatusCode::OK { return response; }
+                    delivered.fetch_add(1, Ordering::SeqCst);
+                    let bytes = replacement.lock().unwrap().clone();
+                    let Some(bytes) = bytes else { return response; };
+                    // Modify only a successfully authorized production response.
+                    let (mut parts, _) = response.into_parts();
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    Response::from_parts(parts, Body::from(bytes))
+                }
+            }
+        }));
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                .await.unwrap();
+        });
+        let mut consumer = Consumer::new(config.clone()).unwrap();
+        let exported = consumer.credential_export(id, None).unwrap();
+        assert_eq!(exported["api_key"], opened.credential.as_ref().unwrap().bearer);
+        assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(), original);
+        let receipt = consumer.receipt(id).await.unwrap();
+        assert_eq!(receipt.payload.sequence, 1);
+        let provider_before = financial_state();
+        let wide = wide_snapshot(&original);
+        *replacement.lock().unwrap() = Some(serde_json::to_vec(&wide).unwrap());
+        assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(), wide);
+        let before = std::fs::read(&account_path).unwrap();
+        let saved: Value = serde_json::from_slice(&before).unwrap();
+        assert_eq!(saved["account"], wide);
+        assert_eq!(saved["receipt_sequence"], 1);
+        for case in cases {
+            *replacement.lock().unwrap() = Some(snapshot_mutation_bytes(case, &original));
+            let count = delivered.load(Ordering::SeqCst);
+            consumer.account(id).await.expect_err(&format!("{case:?}"));
+            assert_eq!(delivered.load(Ordering::SeqCst), count + 1, "must reach snapshot validation: {case:?}");
+            assert_eq!(std::fs::read(&account_path).unwrap(), before, "{case:?}");
+            assert_eq!(financial_state(), provider_before, "{case:?}");
+            assert_eq!(native_payment_journal_snapshot(&journal), original_journal, "{case:?}");
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported, "{case:?}");
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            assert_eq!(std::fs::read(&account_path).unwrap(), before, "{case:?}");
+            assert_eq!(serde_json::to_value(&consumer.accounts().unwrap()[0]).unwrap(), wide, "{case:?}");
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported, "{case:?}");
+        }
+        *replacement.lock().unwrap() = None;
+        assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(), original);
+        let mut expected = saved;
+        expected["account"] = original;
+        assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+        assert_eq!(financial_state(), provider_before);
+        assert_eq!(native_payment_journal_snapshot(&journal), original_journal);
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn native_receipts_preserve_renewed_evidence_through_settlement_and_reopening() {
     use chiral_network::performance;
-    use std::io::Write;
+
 
     let directory = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(directory.path(), 65_000);
@@ -4977,50 +5273,13 @@ async fn native_receipts_preserve_renewed_evidence_through_settlement_and_reopen
     }
     assert!(fixture.provider.state.ledger.performance_withdrawn(original).unwrap());
 
-    // Restore the actual accepted agreement, payment evidence and credential as setup.
-    // Native HTTP receipt acceptance below is not a new funding or engine workflow.
-    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
-    let evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
-        [id], |row| row.get(0)).unwrap();
-    let payment: VerifiedPayment = serde_json::from_str(&evidence).unwrap();
-    let ack = fixture.provider.state.ledger.funding_intent(
-        &quote.payload, &payment.raw_transaction).unwrap().unwrap();
-    let config = ConsumerConfig {
-        network: fixture.provider.state.config.network.clone(),
-        data_dir: directory.path().join("native-receipts"),
-        catalog_url: None, development: true, dht: None,
-    };
-    let consumer = Consumer::new(config.clone()).unwrap();
-    let import = config.data_dir.join("public-test-scalar.key");
-    wallet::save_private_key(&import, OWNER_KEY).unwrap();
-    assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
-    let scoped = config.network.scoped_dir(&config.data_dir);
-    let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
-        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
-    wallet::secure_directory(account_path.parent().unwrap()).unwrap();
-    let mut saved = json!({
-        "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
-        "raw_transaction":payment.raw_transaction,"tx_hash":ack.payload.tx_hash,
-        "funding_intent":ack,"funding_broadcast_started":true,
-        "funding_cancellation_requested":false,"funding_cancellation":null,
-        "credentials":[credential],"active_credential":credential.id,
-        "receipt_sequence":0,"topup":null
-    });
-    let mut file = wallet::create_secret_file(&account_path).unwrap();
-    file.write_all(&serde_json::to_vec(&saved).unwrap()).unwrap();
-    file.sync_all().unwrap();
-    drop(file);
-    let journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
-    journal.execute(
-        "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,evidence,created_at)
-         VALUES(?1,?2,'0',?3,?4,'accepted',?5,?6)",
-        params![quote.payload.consumer_wallet, format!("open:{id}"), payment.tx_hash,
-            payment.raw_transaction, evidence, quote.payload.issued_at]).unwrap();
+    let (config, account_path, journal, mut saved) = restore_native_account(
+        &fixture, &quote, &opened, directory.path().join("native-receipts"));
     let original_journal = native_payment_journal_snapshot(&journal);
+    let consumer = Consumer::new(config.clone()).unwrap();
     let exported = consumer.credential_export(id, None).unwrap();
     assert_eq!(exported["api_key"], credential.bearer);
     drop(consumer);
-    drop(db);
 
     let tamper = Arc::new(Mutex::new(""));
     let delivered = Arc::new(AtomicU64::new(0));

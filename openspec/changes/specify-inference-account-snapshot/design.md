@@ -52,12 +52,24 @@ Snapshot tasks 2.1–2.2 now use the shared direct object visitor for both `Acco
 
 This is shared-decoder and signed-statement evidence, not native HTTP installation/recovery, complete persisted-record acceptance, client/export precision or chain/engine qualification. Those remaining tasks stay open.
 
+## Native account-refresh acceptance — 2026-11-15
+
+`native_account_refresh_preserves_original_terms_money_and_recovery_state` passes actual `Consumer::account` HTTP reads through the production contracts router and owner challenge/signature checks. Its paid, profiled ledger account and signed payment evidence are explicit post-verification prerequisites; the native account file and original journal are restored from those records. This is not a newly observed native funding workflow, engine execution or live safe-chain credit.
+
+Response-only faults cover every immutable identity and nested model/profile/price/concurrency member, canonical-money aliases for each of the eight fields, and one-wei balance mismatches. The successful wide response conserves exactly `2*u128::MAX` with nonzero reversal/loss/fee/spend/hold/available terms and an excluded maximum waiver. It is an unsigned provider accounting claim for receiver validation, not a stored provider transition or proof that those amounts were funded.
+
+The same native path refuses null/scalar/positional accounts; every required member missing, null, wrong-type or raw-duplicated; extra account members; and missing/extra/positional/raw-duplicated usage. Each response is changed only after successful production authorization. A delivered-response counter prevents unrelated authorization/rate errors from passing the rejection cases. Independent batches use at most the real twelve owner challenges, including four success controls; no rate budget, accepted timestamp or production limit is changed.
+
+After every refusal, exact native saved bytes, the accepted receipt watermark, exported credential, original transaction/cancellation journal and provider financial rows remain intact through native reopening. Authentication/rate/clock bookkeeping is intentionally outside the financial comparison. Restoring the genuine response refreshes only the cached account while retaining all other saved evidence. The older renewed-evidence receipt test reuses the extracted prerequisite setup without changing its assertions.
+
+Tasks 2.3.1 and 3.1.1 are complete. Opening/replay, top-up and signed-receipt matrices, post-commit response recovery, lifecycle transitions, corrupt/unsupported persisted state and client/export precision remain open; this slice does not stand in for them.
+
 ## Source and retained acceptance map
 
 | Boundary | Inspected implementation or retained evidence | Required work |
 |---|---|---|
 | Payload and leaf | `protocol.rs::AccountView` and `TokenUsage` now use the direct object visitor with closed members; seven `inference_account_snapshot_test.rs` regressions pass | Tasks 2.1–2.2 complete; actual containing native replies and durable recovery remain below |
-| Native account installation | `consumer.rs::account_matches`, `resume_inner`, `topup`, `accept_topup`, `refresh_account`, `receipt`; matching precedes credential/account installation | Fill complete term/money/shape refusal and protected-state assertions for each containing response |
+| Native account installation | `consumer.rs::account_matches`, `resume_inner`, `topup`, `accept_topup`, `refresh_account`, `receipt`; matching precedes credential/account installation | Native GET term/money/shape/state preservation passes in tasks 2.3.1/3.1.1; opening/replay, top-up and signed-receipt matrices remain |
 | Producer and local records | `billing_store.rs::open_account`, `account`, `receipt`, `get_account`, `save_account`; genuine account construction and signed snapshots | Verify unchanged serialized/stored schema-3 records through strict decoding; no money migration |
 | Funding meanings/status | `credit_funding`, `balance_funding`, `transition_funding` preserve gross funding, current reversals/loss compensation, retained fee liability and pending/frozen status | Preserve these observable meanings; do not claim full reorg/fee lifecycle qualification from snapshot tests |
 | Original versus renewed evidence | `native_receipts_preserve_renewed_evidence_through_settlement_and_reopening` passes actual native/HTTP receipts with original account terms and renewed request identities, including waiver/recovery and hostile response refusals | Reuse request-accounting 3.2.1; this is not qualification attestation or complete receipt schema acceptance |
