@@ -3704,3 +3704,319 @@ async fn terminal_failure_matrix(faults: &[(&str, &str)]) {
         }
     }
 }
+
+#[tokio::test]
+async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latches() {
+    use chiral_network::performance;
+
+    const KEY: &str = "performance-write-fault";
+    let directory = tempfile::tempdir().unwrap();
+    let outcome = |model: &protocol::ModelSpec, usage: Option<&TokenUsage>,
+        status: &str, ttft: Option<u64>| {
+        let profile = model.serving.as_ref().unwrap();
+        performance::outcome(profile, true, ttft, ttft.map(|_| 1_000_000), usage,
+            status, false, ttft.map(|time| time + 1_000_000),
+            &profile.qualification.evidence_sha256)
+    };
+    for (mode_index, mode) in ["known", "unknown", "invalid"].into_iter().enumerate() {
+        for (point_index, point) in ["observation", "withdrawal", "commit"].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(),
+                62_000 + (mode_index * 3 + point_index) as u64);
+            let other = fixture.open_free().await;
+            let mut terms = fixture.paid_quote().await.payload;
+            // Signed profile/agreement and post-verification payment are ledger
+            // prerequisites, not observed enrollment, hardware or safe-chain evidence.
+            terms.id = protocol::random_id();
+            terms.nonce = protocol::random_id();
+            terms.funding_wei = "1000".into();
+            terms.model.serving = Some(protocol::ServingProfile {
+                hf_repo: "test/proposal".into(), tokenizer_repo: "test/tokenizer".into(),
+                artifact_manifest_sha256: "a".repeat(64),
+                engine: "llama.cpp".into(), engine_version: "test-only".into(),
+                runtime_sha256: "b".repeat(64), platform: "linux".into(),
+                backend: "cuda".into(), memory_kind: "dedicated".into(),
+                devices: vec![protocol::EngineDevice {
+                    id: "GPU-ledger-test".into(), name: "synthetic-ledger-test-device".into(),
+                    memory_mib: 8192, driver_version: "test".into(), engine_device: "CUDA0".into(),
+                }],
+                memory_reserve_mib: 256, gpu_layers: 999, split_mode: "none".into(),
+                tensor_split: vec![], cache_type_k: "f16".into(), cache_type_v: "f16".into(),
+                flash_attention: true, batch_size: 512, ubatch_size: 128,
+                capacity_tier: "8gb".into(), region: "test".into(), max_concurrency: 2,
+                arrival_milli_rps: 1000, output_tokens_per_second: 20,
+                policy: performance::POLICY.into(),
+                qualification: protocol::QualificationIdentity {
+                    evidence_sha256: "c".repeat(64), measured_at: terms.issued_at,
+                },
+            });
+            performance::validate_profile(&terms.model, terms.model.serving.as_ref().unwrap()).unwrap();
+            let mut offer = fixture.provider.offer.payload.clone();
+            offer.revision += 1;
+            offer.model = terms.model.clone();
+            fixture.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, offer,
+                &fixture.provider.state.private_key).unwrap();
+            fixture.provider.offer_id = fixture.provider.state.offers.insert(fixture.provider.offer.clone()).unwrap();
+            terms.offer_id = fixture.provider.offer_id.clone();
+            let quote = protocol::sign(protocol::QUOTE_DOMAIN, terms,
+                &fixture.provider.state.private_key).unwrap();
+            fixture.provider.state.ledger.store_quote(&quote, protocol::now().unwrap()).unwrap();
+            let (raw, envelope) = fixture.signed_payment(
+                &protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
+            fixture.acknowledge_fixture(&quote, &raw, &envelope);
+            let payment = VerifiedPayment {
+                network: quote.payload.network.clone(), tx_hash: envelope.tx_hash,
+                from: envelope.from, to: envelope.to, value_wei: envelope.value_wei,
+                data: envelope.data, raw_transaction: raw,
+                block_hash: protocol::hash_hex(b"isolated performance accounting prerequisite"),
+                block_number: 1,
+            };
+            let now = protocol::now().unwrap();
+            let opened = fixture.provider.state.ledger.open_account(&quote, Some(&payment), now).unwrap();
+            let id = &opened.account.contract_id;
+            let original = &quote.payload.model;
+            let mut current = original.clone();
+            let qualification = &mut current.serving.as_mut().unwrap().qualification;
+            qualification.evidence_sha256 = "d".repeat(64);
+            qualification.measured_at = now + 1;
+            let evidence = &current.serving.as_ref().unwrap().qualification.evidence_sha256;
+            let ledger = &fixture.provider.state.ledger;
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+                KEY, 1, 1, now, &other.account.model).unwrap();
+            ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
+                "completed", now).unwrap();
+            let historical_usage = TokenUsage { prompt_tokens: 1, completion_tokens: 256 };
+            let mut observations = Vec::new();
+            // Withdraw the original report, then retain one charge and two misses
+            // under an otherwise identical newer report. The target is miss three.
+            for (index, (model, missed)) in [
+                (original, true), (original, true), (original, true),
+                (&current, false), (&current, true), (&current, true),
+            ].into_iter().enumerate() {
+                let reservation = ledger.reserve(id, &opened.credential.id,
+                    &format!("performance-history-{index}"), 1, 256, now + 2, model).unwrap();
+                let measured = outcome(model, Some(&historical_usage), "completed",
+                    Some(if missed { 2_000_001 } else { 1_000_000 }));
+                let settled = ledger.settle_measured(&reservation.id, &historical_usage,
+                    "completed", Some(&measured), now + 3).unwrap();
+                assert_eq!(settled.cost_wei, if missed { "0" } else { "1" });
+                assert_eq!(settled.waived_wei, if missed { "1" } else { "0" });
+                assert_eq!((settled.usage.prompt_tokens, settled.usage.completion_tokens), (1, 256));
+                assert_eq!(settled.performance.as_ref(), Some(&measured));
+                observations.push(json!([index + 1, reservation.id, original.id,
+                    measured.evidence_sha256, if missed { 1 } else { 0 }]));
+            }
+            assert!(ledger.performance_withdrawn(original).unwrap());
+            assert!(!ledger.performance_withdrawn(&current).unwrap());
+            let app = ledger.issue_credential(id, &CredentialIssueRequest {
+                expires_at: now + 3600, spend_cap_wei: Some("2".into()),
+                max_concurrency: 1, scopes: vec!["infer".into()],
+            }, now + 4).unwrap();
+            let live = ledger.reserve(id, &opened.credential.id, "performance-live",
+                2048, 256, now + 4, &current).unwrap();
+            let target = ledger.reserve(id, &app.id, KEY, 1000, 256, now + 4, &current).unwrap();
+            assert_eq!(live.max_cost_wei, "3");
+            assert_eq!(target.max_cost_wei, "2");
+            assert_eq!(target.model, current);
+            let account = ledger.account(id).unwrap();
+            assert_eq!(account.model, *original);
+            assert_eq!(account.price, quote.payload.price);
+            assert_eq!((account.funded_wei.as_str(), account.fee_wei.as_str(),
+                account.available_wei.as_str(), account.reserved_wei.as_str(),
+                account.spent_wei.as_str(), account.waived_wei.as_str()),
+                ("1000", "5", "989", "5", "1", "5"));
+            assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), (6, 1536));
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let before = ledger_snapshot(&db);
+            assert_eq!(before[12], observations);
+            assert_eq!(before[13], vec![json!([original.id, "c".repeat(64)])]);
+            assert_eq!(before[7].len(), 1);
+            assert_eq!(before[7][0][2], "5");
+            let pending = ledger.request_view(id, KEY).unwrap();
+            assert_eq!(pending.performance.as_ref().unwrap().evidence_sha256, *evidence);
+            assert_eq!(pending.performance.as_ref().unwrap().eligibility, "pending");
+            let known = mode == "known";
+            let usage = if mode == "unknown" { TokenUsage::default() } else {
+                TokenUsage { prompt_tokens: 1000, completion_tokens: if known { 128 } else { 257 } }
+            };
+            let status = if mode == "unknown" { "backend_unknown_usage" } else { "completed" };
+            let measured = if known {
+                outcome(&current, Some(&usage), status, Some(2_000_001))
+            } else {
+                outcome(&current, None, "backend_unknown_usage", None)
+            };
+            assert_eq!(measured.attained, Some(false));
+            assert_eq!(measured.remedy, "inference_waiver");
+            assert_eq!(measured.output_tokens, if known { Some(128) } else { None });
+            if point == "commit" {
+                // This AFTER-latch trigger allows all five production writes;
+                // its deferred constraint rejects only COMMIT.
+                db.execute_batch(&format!(
+                    "PRAGMA foreign_keys=ON;
+                     CREATE TABLE performance_commit_parent(id TEXT PRIMARY KEY);
+                     CREATE TABLE performance_commit_witness(
+                         id TEXT PRIMARY KEY REFERENCES performance_commit_parent(id)
+                             DEFERRABLE INITIALLY DEFERRED);
+                     CREATE TRIGGER fail_performance_commit AFTER INSERT ON performance_withdrawals
+                     WHEN NEW.model='{}' AND NEW.evidence='{evidence}'
+                     BEGIN INSERT INTO performance_commit_witness(id) VALUES('{}'); END;",
+                    original.id, target.id
+                )).unwrap();
+            } else {
+                let (table, predicate) = if point == "observation" {
+                    ("performance_observations", format!("NEW.request='{}'", target.id))
+                } else {
+                    ("performance_withdrawals", format!("NEW.model='{}' AND NEW.evidence='{evidence}'", original.id))
+                };
+                db.execute_batch(&format!(
+                    "CREATE TRIGGER fail_performance_write AFTER INSERT ON {table}
+                     WHEN {predicate} BEGIN SELECT RAISE(FAIL,'injected performance {point}'); END;"
+                )).unwrap();
+            }
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path,
+                        &state.config.network.identity).unwrap());
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                let ledger = &fixture.provider.state.ledger;
+                assert_eq!(ledger_snapshot(&db), before);
+                for wrong_policy in [false, true] {
+                    let mut wrong = measured.clone();
+                    if wrong_policy { wrong.policy = "unqualified".into(); }
+                    else { wrong.evidence_sha256 = "c".repeat(64); }
+                    assert!(ledger.settle_measured(&target.id, &usage, status, Some(&wrong),
+                        now + 5).unwrap_err().contains("differs from admitted execution evidence"));
+                    assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}: binding refusal");
+                }
+                let error = ledger.settle_measured(&target.id, &usage, status, Some(&measured),
+                    now + 5).unwrap_err();
+                if point == "commit" {
+                    assert!(error.contains("FOREIGN KEY constraint failed"), "{error}");
+                    assert_eq!(db.query_row("SELECT COUNT(*) FROM performance_commit_witness", [],
+                        |row| row.get::<_, u64>(0)).unwrap(), 0);
+                    assert_eq!(db.query_row("SELECT COUNT(*) FROM performance_commit_parent", [],
+                        |row| row.get::<_, u64>(0)).unwrap(), 0);
+                } else {
+                    assert!(error.contains(&format!("injected performance {point}")), "{error}");
+                }
+                assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
+                assert_eq!(serde_json::to_value(ledger.request_view(id, KEY).unwrap()).unwrap(),
+                    serde_json::to_value(&pending).unwrap());
+                assert!(ledger.performance_withdrawn(original).unwrap());
+                assert!(!ledger.performance_withdrawn(&current).unwrap());
+                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), before);
+            }
+            // Explicit fixture repair permits accounting reconciliation, not
+            // another inference. Keep the commit trigger active as a witness.
+            if point == "commit" {
+                assert_eq!(db.execute("INSERT INTO performance_commit_parent(id) VALUES(?1)",
+                    [&target.id]).unwrap(), 1);
+            } else {
+                db.execute_batch("DROP TRIGGER fail_performance_write").unwrap();
+            }
+            let terminal_status = if mode == "invalid" { "invalid_usage_unknown_usage" } else { status };
+            let mut expected = before.clone();
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["available_wei"] = json!("991");
+            account["reserved_wei"] = json!("3");
+            account["waived_wei"] = json!(if known { "7" } else { "5" });
+            account["usage"] = json!({"prompt_tokens":if known { 1006 } else { 6 },
+                "completion_tokens":if known { 1664 } else { 1536 }});
+            expected[1].iter_mut().find(|row| row[0] == app.id).unwrap()[3]["reserved_wei"] = json!("0");
+            let row = expected[2].iter_mut().find(|row| row[0] == target.id).unwrap();
+            row[4] = json!(terminal_status);
+            let request = &mut row[6];
+            request["status"] = json!(terminal_status);
+            request["usage"] = if known { serde_json::to_value(&usage).unwrap() }
+                else { json!({"prompt_tokens":0,"completion_tokens":0}) };
+            request["provider_loss_wei"] = json!(if known { "0" } else { "2" });
+            request["settled_at"] = json!(now + 5);
+            request["performance"] = serde_json::to_value(&measured).unwrap();
+            request["waived_wei"] = json!(if known { "2" } else { "0" });
+            let terminal = request.clone();
+            expected[12].push(json!([7, target.id, original.id, evidence, 1]));
+            expected[13].push(json!([original.id, evidence]));
+            let result = fixture.provider.state.ledger.settle_measured(&target.id, &usage,
+                status, Some(&measured), now + 5);
+            if mode == "invalid" {
+                assert!(result.unwrap_err().starts_with("usage_over_reservation:"));
+            } else {
+                assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), terminal);
+            }
+            assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: first committed waiver");
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path,
+                        &state.config.network.identity).unwrap());
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                let ledger = &fixture.provider.state.ledger;
+                assert!(ledger.performance_withdrawn(original).unwrap());
+                assert!(ledger.performance_withdrawn(&current).unwrap());
+                for lookup in [KEY, target.id.as_str()] {
+                    assert_eq!(serde_json::to_value(ledger.request_view(id, lookup).unwrap()).unwrap(), terminal);
+                }
+                for (late_usage, late_status, late_outcome) in [
+                    (TokenUsage::default(), "restart_unknown_usage", None),
+                    (historical_usage.clone(), "completed",
+                        Some(outcome(original, Some(&historical_usage), "completed", Some(1_000_000)))),
+                ] {
+                    let replay = ledger.settle_measured(&target.id, &late_usage, late_status,
+                        late_outcome.as_ref(), now + 6).unwrap();
+                    assert_eq!(serde_json::to_value(replay).unwrap(), terminal);
+                    assert_eq!(ledger_snapshot(&db), expected);
+                }
+                assert!(ledger.reserve(id, &app.id, KEY, 1000, 256, now + 6, &current)
+                    .unwrap_err().starts_with("duplicate_request:"));
+                for model in [original, &current] {
+                    assert!(ledger.reserve(id, &app.id, "after-withdrawal", 1, 256, now + 6, model)
+                        .unwrap_err().starts_with("model_unqualified:"));
+                }
+                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: immutable result and latches");
+                if point == "commit" {
+                    assert_eq!(db.query_row("SELECT COUNT(*) FROM performance_commit_witness", [],
+                        |row| row.get::<_, u64>(0)).unwrap(), 1);
+                    assert_eq!(db.query_row("SELECT id FROM performance_commit_witness", [],
+                        |row| row.get::<_, String>(0)).unwrap(), target.id);
+                }
+            }
+            // New withdrawal cannot strand the other already-admitted hold, and
+            // its later success cannot clear either durable withdrawal latch.
+            let live_usage = TokenUsage { prompt_tokens: 2048, completion_tokens: 256 };
+            let live_outcome = outcome(&current, Some(&live_usage), "completed", Some(1_000_000));
+            let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+            account["reserved_wei"] = json!("0");
+            account["spent_wei"] = json!("4");
+            account["usage"] = json!({"prompt_tokens":if known { 3054 } else { 2054 },
+                "completion_tokens":if known { 1920 } else { 1792 }});
+            let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.id).unwrap()[3];
+            root["reserved_wei"] = json!("0");
+            root["spent_wei"] = json!("4");
+            let row = expected[2].iter_mut().find(|row| row[0] == live.id).unwrap();
+            row[4] = json!("completed");
+            row[6]["status"] = json!("completed");
+            row[6]["usage"] = serde_json::to_value(&live_usage).unwrap();
+            row[6]["cost_wei"] = json!("3");
+            row[6]["settled_at"] = json!(now + 7);
+            row[6]["performance"] = serde_json::to_value(&live_outcome).unwrap();
+            let live_terminal = row[6].clone();
+            expected[12].push(json!([8, live.id, original.id, evidence, 0]));
+            let settled = fixture.provider.state.ledger.settle_measured(&live.id, &live_usage,
+                "completed", Some(&live_outcome), now + 7).unwrap();
+            assert_eq!(serde_json::to_value(settled).unwrap(), live_terminal);
+            assert_eq!(ledger_snapshot(&db), expected);
+            let reopened = BillingStore::open(&fixture.provider.ledger_path, &quote.payload.network).unwrap();
+            assert!(reopened.performance_withdrawn(original).unwrap());
+            assert!(reopened.performance_withdrawn(&current).unwrap());
+            assert_eq!(serde_json::to_value(reopened.request_view(id, KEY).unwrap()).unwrap(), terminal);
+            assert_eq!(serde_json::to_value(reopened.request_view(id, &live.id).unwrap()).unwrap(), live_terminal);
+            assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: retained charge, waiver and fees");
+        }
+    }
+}
