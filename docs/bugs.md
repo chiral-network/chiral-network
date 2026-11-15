@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Enclosing commercial declarations accepted positional arrays
+
+- **Cause:** Derived model, serving-profile, offer and quote decoders accepted complete positional arrays instead of their required objects. Four regressions failed before the fix; three demonstrated native HTTP quote acceptance with the original signature despite the changed wire shape.
+- **Correction:** All four shared types reuse the direct map-only visitor with derived field checks. Preserve nullable model metadata, required fields, raw duplicate/unknown-field refusal, serialization and execution terms without a `Value` buffer, alias or financial-state migration.
+- **Verification:** All four regressions now pass, including raw/preparsed refusal and valid original-object controls preserving signatures, offer identity and opening commitments. All 496 available tests, available builds/checks and strict commercial-change validation passed. HTTP fixtures cover arrays; duplicate-member assertions exercise typed raw decoding. These isolated counterparties do not establish production issuance, chain funding or hardware qualification.
+
 ### Serving-profile leaf identities accepted positional arrays
 
 - **Cause:** Derived device and qualification identity decoders accepted complete positional arrays despite the whitepaper's explicit named-field objects. Both new regressions failed on the original decoders; existing empty-array and scalar checks did not cover this alias.

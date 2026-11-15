@@ -85,8 +85,7 @@ impl<'de> Deserialize<'de> for PriceSchedule {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ModelSpec {
     pub id: String,
     pub revision: String,
@@ -99,6 +98,36 @@ pub struct ModelSpec {
     pub capabilities: Vec<String>,
     /// None makes no speed/capacity claim; production generation requires a qualified profile.
     pub serving: Option<ServingProfile>,
+}
+
+impl<'de> Deserialize<'de> for ModelSpec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            id: String,
+            revision: String,
+            tokenizer_revision: String,
+            chat_template_sha256: String,
+            quantization: Option<String>,
+            context_length: u64,
+            max_output_tokens: u64,
+            capabilities: Vec<String>,
+            serving: Option<ServingProfile>,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            id: fields.id,
+            revision: fields.revision,
+            tokenizer_revision: fields.tokenizer_revision,
+            chat_template_sha256: fields.chat_template_sha256,
+            quantization: fields.quantization,
+            context_length: fields.context_length,
+            max_output_tokens: fields.max_output_tokens,
+            capabilities: fields.capabilities,
+            serving: fields.serving,
+        })
+    }
 }
 
 impl ModelSpec {
@@ -158,8 +187,7 @@ impl<'de> Deserialize<'de> for EngineDevice {
 
 /// Provider-declared deployment identity, not independent execution attestation.
 /// The entire object travels inside signed offers, immutable quotes and receipts.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServingProfile {
     pub hf_repo: String,
     pub tokenizer_repo: String,
@@ -189,6 +217,70 @@ pub struct ServingProfile {
     /// gateway-observed output times, 2s TTFT, 95% joint attainment; inference waiver.
     pub policy: String,
     pub qualification: QualificationIdentity,
+}
+
+impl<'de> Deserialize<'de> for ServingProfile {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            hf_repo: String,
+            tokenizer_repo: String,
+            artifact_manifest_sha256: String,
+            engine: String,
+            engine_version: String,
+            runtime_sha256: String,
+            platform: String,
+            backend: String,
+            memory_kind: String,
+            devices: Vec<EngineDevice>,
+            memory_reserve_mib: u64,
+            gpu_layers: u32,
+            split_mode: String,
+            tensor_split: Vec<u32>,
+            cache_type_k: String,
+            cache_type_v: String,
+            flash_attention: bool,
+            batch_size: u32,
+            ubatch_size: u32,
+            capacity_tier: String,
+            region: String,
+            max_concurrency: u32,
+            arrival_milli_rps: u32,
+            output_tokens_per_second: u32,
+            policy: String,
+            qualification: QualificationIdentity,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            hf_repo: fields.hf_repo,
+            tokenizer_repo: fields.tokenizer_repo,
+            artifact_manifest_sha256: fields.artifact_manifest_sha256,
+            engine: fields.engine,
+            engine_version: fields.engine_version,
+            runtime_sha256: fields.runtime_sha256,
+            platform: fields.platform,
+            backend: fields.backend,
+            memory_kind: fields.memory_kind,
+            devices: fields.devices,
+            memory_reserve_mib: fields.memory_reserve_mib,
+            gpu_layers: fields.gpu_layers,
+            split_mode: fields.split_mode,
+            tensor_split: fields.tensor_split,
+            cache_type_k: fields.cache_type_k,
+            cache_type_v: fields.cache_type_v,
+            flash_attention: fields.flash_attention,
+            batch_size: fields.batch_size,
+            ubatch_size: fields.ubatch_size,
+            capacity_tier: fields.capacity_tier,
+            region: fields.region,
+            max_concurrency: fields.max_concurrency,
+            arrival_milli_rps: fields.arrival_milli_rps,
+            output_tokens_per_second: fields.output_tokens_per_second,
+            policy: fields.policy,
+            qualification: fields.qualification,
+        })
+    }
 }
 
 impl ServingProfile {
@@ -257,8 +349,7 @@ pub struct PerformanceOutcome {
     pub remedy: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct InferenceOffer {
     pub network: NetworkIdentity,
     pub provider_wallet: String,
@@ -276,8 +367,47 @@ pub struct InferenceOffer {
     pub expires_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for InferenceOffer {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            network: NetworkIdentity,
+            provider_wallet: String,
+            peer_id: String,
+            deployment_id: String,
+            endpoint: String,
+            model: ModelSpec,
+            price: PriceSchedule,
+            min_funding_wei: String,
+            platform_wallet: String,
+            fee_bps: u16,
+            max_concurrency: u32,
+            revision: u64,
+            issued_at: u64,
+            expires_at: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            network: fields.network,
+            provider_wallet: fields.provider_wallet,
+            peer_id: fields.peer_id,
+            deployment_id: fields.deployment_id,
+            endpoint: fields.endpoint,
+            model: fields.model,
+            price: fields.price,
+            min_funding_wei: fields.min_funding_wei,
+            platform_wallet: fields.platform_wallet,
+            fee_bps: fields.fee_bps,
+            max_concurrency: fields.max_concurrency,
+            revision: fields.revision,
+            issued_at: fields.issued_at,
+            expires_at: fields.expires_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Quote {
     /// Random 32-byte hex identifier, also the account/contract identifier.
     pub id: String,
@@ -294,6 +424,46 @@ pub struct Quote {
     pub nonce: String,
     pub issued_at: u64,
     pub expires_at: u64,
+}
+
+impl<'de> Deserialize<'de> for Quote {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            id: String,
+            network: NetworkIdentity,
+            offer_id: String,
+            provider_wallet: String,
+            consumer_wallet: String,
+            model: ModelSpec,
+            price: PriceSchedule,
+            funding_wei: String,
+            platform_wallet: String,
+            fee_bps: u16,
+            max_concurrency: u32,
+            nonce: String,
+            issued_at: u64,
+            expires_at: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            id: fields.id,
+            network: fields.network,
+            offer_id: fields.offer_id,
+            provider_wallet: fields.provider_wallet,
+            consumer_wallet: fields.consumer_wallet,
+            model: fields.model,
+            price: fields.price,
+            funding_wei: fields.funding_wei,
+            platform_wallet: fields.platform_wallet,
+            fee_bps: fields.fee_bps,
+            max_concurrency: fields.max_concurrency,
+            nonce: fields.nonce,
+            issued_at: fields.issued_at,
+            expires_at: fields.expires_at,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

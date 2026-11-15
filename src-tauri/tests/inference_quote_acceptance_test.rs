@@ -229,6 +229,104 @@ async fn native_quote_accepts_the_complete_selected_signed_agreement() {
     assert_eq!(accepted.signature, expected.signature);
 }
 
+async fn reject_positional_quote_terms(case: u64, path: &str, fields: &[&str]) {
+    let fixture = Fixture::paid(case).await;
+    let expected = fixture.reply(fixture.quote.clone());
+    let commitment = protocol::opening_data(&expected.payload).unwrap();
+    assert_eq!(fixture.request("100").await.unwrap().payload, expected.payload);
+    let original = serde_json::to_value(&expected).unwrap();
+    let object = original.pointer(path).unwrap();
+    let encoded_object = serde_json::to_string(object).unwrap();
+    let encoded = serde_json::to_string(&original).unwrap();
+    for (field, value) in object.as_object().unwrap() {
+        let duplicate = format!("{{{}:{},{}", json!(field), value, &encoded_object[1..]);
+        let raw = encoded.replacen(&encoded_object, &duplicate, 1);
+        assert!(serde_json::from_str::<Signed<Quote>>(&raw).is_err(),
+            "raw duplicate {path}/{field} must not be projected out");
+    }
+    let positional = Value::Array(fields.iter()
+        .map(|field| object.get(*field).expect("complete declared field").clone()).collect());
+    let mut changed = original.clone();
+    *changed.pointer_mut(path).unwrap() = positional;
+    // Preserve the original signature and every value; change only object shape.
+    fixture.reply_raw(changed.clone());
+    assert!(fixture.request("100").await.is_err(),
+        "native quote acceptance must reject positional terms at {path}");
+    assert!(serde_json::from_slice::<Signed<Quote>>(
+        &serde_json::to_vec(&changed).unwrap()
+    ).is_err());
+    assert!(serde_json::from_value::<Signed<Quote>>(changed).is_err());
+
+    fixture.reply_raw(original);
+    let accepted = fixture.request("100").await.unwrap();
+    assert_eq!(accepted.payload, expected.payload);
+    assert_eq!(accepted.signature, expected.signature);
+    assert_eq!(protocol::opening_data(&accepted.payload).unwrap(), commitment);
+}
+
+#[tokio::test]
+async fn native_quote_rejects_positional_model_terms() {
+    reject_positional_quote_terms(300, "/payload/model", &[
+        "id", "revision", "tokenizer_revision", "chat_template_sha256", "quantization",
+        "context_length", "max_output_tokens", "capabilities", "serving",
+    ]).await;
+}
+
+#[tokio::test]
+async fn native_quote_rejects_positional_profile_terms() {
+    reject_positional_quote_terms(301, "/payload/model/serving", &[
+        "hf_repo", "tokenizer_repo", "artifact_manifest_sha256", "engine", "engine_version",
+        "runtime_sha256", "platform", "backend", "memory_kind", "devices",
+        "memory_reserve_mib", "gpu_layers", "split_mode", "tensor_split", "cache_type_k",
+        "cache_type_v", "flash_attention", "batch_size", "ubatch_size", "capacity_tier",
+        "region", "max_concurrency", "arrival_milli_rps", "output_tokens_per_second",
+        "policy", "qualification",
+    ]).await;
+}
+
+#[tokio::test]
+async fn native_quote_rejects_positional_quote_terms() {
+    reject_positional_quote_terms(302, "/payload", &[
+        "id", "network", "offer_id", "provider_wallet", "consumer_wallet", "model",
+        "price", "funding_wei", "platform_wallet", "fee_bps", "max_concurrency",
+        "nonce", "issued_at", "expires_at",
+    ]).await;
+}
+
+#[tokio::test]
+async fn native_offer_rejects_positional_offer_terms() {
+    let fixture = Fixture::paid(303).await;
+    let original = serde_json::to_value(&fixture.offer).unwrap();
+    let decoded: Signed<InferenceOffer> = serde_json::from_value(original.clone()).unwrap();
+    protocol::verify(OFFER_DOMAIN, &decoded, &fixture.offer.payload.provider_wallet).unwrap();
+    let id = protocol::offer_id(&decoded.payload).unwrap();
+    assert_eq!(decoded.payload, fixture.offer.payload);
+    assert_eq!(fixture.request("100").await.unwrap().payload.offer_id, id);
+
+    let object = &original["payload"];
+    let encoded_object = serde_json::to_string(object).unwrap();
+    let encoded = serde_json::to_string(&original).unwrap();
+    for (field, value) in object.as_object().unwrap() {
+        let duplicate = format!("{{{}:{},{}", json!(field), value, &encoded_object[1..]);
+        let raw = encoded.replacen(&encoded_object, &duplicate, 1);
+        assert!(serde_json::from_str::<Signed<InferenceOffer>>(&raw).is_err(),
+            "raw duplicate offer {field} must not be projected out");
+    }
+    let fields = [
+        "network", "provider_wallet", "peer_id", "deployment_id", "endpoint", "model",
+        "price", "min_funding_wei", "platform_wallet", "fee_bps", "max_concurrency",
+        "revision", "issued_at", "expires_at",
+    ];
+    let positional = Value::Array(fields.iter()
+        .map(|field| object.get(*field).expect("complete offer field").clone()).collect());
+    let mut changed = original;
+    changed["payload"] = positional;
+    assert!(serde_json::from_slice::<Signed<InferenceOffer>>(
+        &serde_json::to_vec(&changed).unwrap()
+    ).is_err(), "offer payload must be an object, not a positional array");
+    assert!(serde_json::from_value::<Signed<InferenceOffer>>(changed).is_err());
+}
+
 #[tokio::test]
 async fn provider_resigning_changed_commercial_terms_does_not_authorize_substitution() {
     let fixture = Fixture::paid(2).await;

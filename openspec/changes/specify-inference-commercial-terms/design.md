@@ -104,8 +104,16 @@ The whitepaper explicitly defines each device and qualification identity as a na
 
 Task 2.1.5 reuses the wire foundation's direct map-only visitor for these shared leaf types. Local derived field decoders retain required fields, exact integer/string types, unknown-field refusal and raw duplicate-member checks without buffering through `Value`. Serialization and model/evidence comparisons remain unchanged; no alias, state conversion or additional semantic validation is introduced.
 
-The regressions require array refusal directly and inside raw/preparsed offers, exercising both positions of a two-device inventory. Raw duplicate-member cases cover every leaf field. Existing profile/configuration, integer-boundary, signature and renewal tests remain in place. These are synthetic declaration tests, not live offer admission, measured qualification or proof of duplicate detection after an upstream `Value` parse. Enclosing model/profile/offer/quote object boundaries remain task 2.1.6.
+The regressions require array refusal directly and inside raw/preparsed offers, exercising both positions of a two-device inventory. Raw duplicate-member cases cover every leaf field. Existing profile/configuration, integer-boundary, signature and renewal tests remain in place. These are synthetic declaration tests, not live offer admission, measured qualification or proof of duplicate detection after an upstream `Value` parse. Enclosing model/profile/offer/quote object boundaries are handled separately by task 2.1.6 below.
 
+
+## Enclosing commercial object implementation
+
+Task 2.1.6 applies the same direct map visitor to `ModelSpec`, `ServingProfile`, `InferenceOffer` and `Quote`. Each local derived field decoder preserves the existing required/nullable field rules, widths and unknown/duplicate-member checks. Public serialization, array order, signed identities, opening commitments and execution-term comparisons are unchanged; no intermediate `Value`, wire alias or state migration is introduced.
+
+Four regressions reproduced the original acceptance. Three delivered complete positional model/profile/quote declarations with the original valid signature through the public native `Consumer::quote` HTTP path; the fourth exercised signed-offer byte decoding. The tests require rejection from raw bytes and preparsed values, raw duplicate-member refusal for every field at these boundaries, and usable original objects retaining their signatures, offer identity and opening commitment. Quote controls run before the malformed response and after restoration. Duplicate-member assertions are typed raw-decoder checks, not HTTP fixtures capable of preserving duplicate JSON keys.
+
+The counterparties and profiles are isolated synthetic fixtures, not production issuance, funded chain operations or measured qualification. This closes the named commercial declaration boundaries, not every control request or accounting response schema.
 
 ## Historical implementation gaps and ownership constraints
 
