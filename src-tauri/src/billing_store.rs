@@ -465,25 +465,12 @@ impl BillingStore {
         validate_quote(&quote.payload)?;
         self.bind_provider(&quote.payload.provider_wallet)?;
         self.transaction(|tx| {
+            proposal_rate_limit(tx, now)?;
             cleanup_pending(tx, now)?;
-            rate_limit(tx, "quote:global", now, 600)?;
-            rate_limit(
-                tx,
-                &format!("quote:{}", quote.payload.consumer_wallet),
-                now,
-                12,
-            )?;
             let total: i64 = tx
                 .query_row("SELECT COUNT(*) FROM quotes", [], |r| r.get(0))
                 .map_err(sql)?;
-            let owner: i64 = tx
-                .query_row(
-                    "SELECT COUNT(*) FROM quotes WHERE owner=?1",
-                    [&quote.payload.consumer_wallet],
-                    |r| r.get(0),
-                )
-                .map_err(sql)?;
-            if total >= MAX_PENDING || owner >= 8 {
+            if total >= MAX_PENDING {
                 return Err("rate_limit: too many pending quotes".into());
             }
             tx.execute(
@@ -540,10 +527,80 @@ fn cleanup_pending(tx: &Connection, now: u64) -> Result<(), String> {
         .map_err(sql)?;
     tx.execute("UPDATE funding_intents SET admission_until=0 WHERE admission_until>0 AND admission_until<=?1", [now]).map_err(sql)?;
     tx.execute("DELETE FROM funding_attempts WHERE updated<?1 AND json_extract(record,'$.status')='rejected' AND NOT EXISTS(SELECT 1 FROM funding_intents WHERE tx_hash=funding_attempts.tx_hash)", [now.saturating_sub(86_400)]).map_err(sql)?;
-    tx.execute("DELETE FROM rate_limits WHERE window<?1", [now / 60])
+    tx.execute("DELETE FROM rate_limits WHERE window<?1 AND bucket NOT GLOB 'quote:*'", [now / 60])
         .map_err(sql)?;
     Ok(())
 }
+// Committed issuance is independent of signing work and named payer identity.
+// Adoption, clock advancement and legacy retirement share the quote transaction.
+fn proposal_rate_limit(tx: &Connection, now: u64) -> Result<(), String> {
+    const INVALID: &str = "ledger invariant: inconsistent committed quote rate evidence";
+    let watermark: Option<String> = tx.query_row(
+        "SELECT value FROM metadata WHERE key='quote_committed_minute'",
+        [], |row| row.get(0),
+    ).optional().map_err(sql)?;
+    let global: Option<(u64, u64)> = tx.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket='quote:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(sql)?;
+    if global.is_some_and(|(minute, count)| minute > u64::MAX / 60 || !(1..=600).contains(&count)) {
+        return Err(INVALID.into());
+    }
+    if let Some(value) = &watermark {
+        if value.is_empty() || (value.len() > 1 && value.starts_with('0'))
+            || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(INVALID.into());
+        }
+        let minute = value.parse::<u64>().map_err(|_| INVALID.to_string())?;
+        if global.map(|(window, _)| window) != Some(minute) {
+            return Err(INVALID.into());
+        }
+    }
+    {
+        let mut statement = tx.prepare(
+            "SELECT window,count FROM rate_limits WHERE bucket GLOB 'quote:*' AND bucket<>'quote:global'",
+        ).map_err(sql)?;
+        let mut legacy = statement.query([]).map_err(sql)?;
+        while let Some(row) = legacy.next().map_err(sql)? {
+            // Installed state must have retired all old wallet rows atomically.
+            // Before installation they establish consistency, never allowance.
+            if watermark.is_some() {
+                return Err(INVALID.into());
+            }
+            let minute: u64 = row.get(0).map_err(sql)?;
+            let count: u64 = row.get(1).map_err(sql)?;
+            let Some((global_minute, global_count)) = global else {
+                return Err(INVALID.into());
+            };
+            if minute > global_minute || !(1..=12).contains(&count)
+                || (minute == global_minute && count > global_count) {
+                return Err(INVALID.into());
+            }
+        }
+    }
+    let sampled = now / 60;
+    let window = global.map_or(sampled, |(previous, _)| sampled.max(previous));
+    let spent = global.filter(|(previous, _)| *previous == window).map_or(0, |(_, count)| count);
+    if spent == 600 {
+        return Err("rate_limit: committed quote issuance limit exceeded".into());
+    }
+    tx.execute(
+        "INSERT INTO rate_limits(bucket,window,count) VALUES('quote:global',?1,?2)
+         ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=excluded.count",
+        params![window, spent + 1],
+    ).map_err(sql)?;
+    tx.execute(
+        "INSERT INTO metadata(key,value) VALUES('quote_committed_minute',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [window],
+    ).map_err(sql)?;
+    if watermark.is_none() {
+        tx.execute("DELETE FROM rate_limits WHERE bucket GLOB 'quote:*' AND bucket<>'quote:global'", [])
+            .map_err(sql)?;
+    }
+    Ok(())
+}
+
 fn rate_limit(tx: &Connection, bucket: &str, now: u64, maximum: u64) -> Result<(), String> {
     let window = now / 60;
     let (previous, count): (u64, u64) = tx

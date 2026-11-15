@@ -72,8 +72,32 @@ fn assert_capacity_rejected(ledger: &BillingStore, rejected: &Signed<Quote>) {
     assert!(missing.starts_with("not_found:"), "{missing}");
 }
 
+// Restore complete, genuinely signed standalone records as a storage-boundary prerequisite.
+// These are not store_quote admissions and do not claim to have spent issuance units.
+fn restore_standalone(path: &std::path::Path, count: usize, expires_at: u64) -> Vec<Signed<Quote>> {
+    let key = format!("{:064x}", 1);
+    let provider = wallet::address_from_private_key(&key).unwrap();
+    let mut connection = rusqlite::Connection::open(path).unwrap();
+    let transaction = connection.transaction().unwrap();
+    let mut records = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut payload = quote_payload(&provider, 100_000 + index as u64, PAYER,
+            "test/restored-storage", ("1", "2"));
+        payload.expires_at = expires_at;
+        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+        transaction.execute(
+            "INSERT INTO quotes(id,owner,expires,record) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![signed.payload.id, signed.payload.consumer_wallet,
+                signed.payload.expires_at, serde_json::to_string(&signed).unwrap()],
+        ).unwrap();
+        records.push(signed);
+    }
+    transaction.commit().unwrap();
+    records
+}
+
 #[test]
-fn pending_capacity_is_shared_across_models_offers_and_free_paid_terms_after_restart() {
+fn same_wallet_quotes_exceed_former_limits_across_terms_and_restart() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let ledger = BillingStore::open(&path, &network()).unwrap();
@@ -89,50 +113,26 @@ fn pending_capacity_is_shared_across_models_offers_and_free_paid_terms_after_res
         ledger.store_quote(&signed, NOW).unwrap();
         accepted.push(signed);
     }
-    // Check before and after reopening so neither live nor restored admission can evade the cap.
-    assert_capacity_rejected(&ledger, &quote(1, 100, PAYER, "test/new", ("0", "0")));
+    // Neither the ninth live quote nor the thirteenth issuance is a wallet boundary.
+    let ninth = quote(1, 100, PAYER, "test/new", ("0", "0"));
+    ledger.store_quote(&ninth, NOW).unwrap();
+    accepted.push(ninth);
     drop(ledger);
     let reopened = BillingStore::open(&path, &network()).unwrap();
     for (index, rates) in [("0", "0"), ("1", "0"), ("0", "2"), ("1", "2")]
         .into_iter().enumerate() {
-        assert_capacity_rejected(&reopened,
-            &quote(1, 101 + index as u64, PAYER, "test/new", rates));
-    }
-    // This is a payer budget, not an eight-record global or model budget.
-    for index in 0..8 {
-        let signed = quote(1, 200 + index, OTHER_PAYER, "test/alpha", ("1", "2"));
+        let signed = quote(1, 101 + index as u64, PAYER, "test/new", rates);
         reopened.store_quote(&signed, NOW).unwrap();
         accepted.push(signed);
     }
-    assert_capacity_rejected(&reopened,
-        &quote(1, 300, OTHER_PAYER, "test/alpha", ("1", "2")));
+    let other = quote(1, 200, OTHER_PAYER, "test/alpha", ("1", "2"));
+    reopened.store_quote(&other, NOW).unwrap();
+    accepted.push(other);
     drop(reopened);
     let persisted = BillingStore::open(&path, &network()).unwrap();
     for signed in &accepted { assert_preserved(&persisted, signed); }
-    for sequence in [100, 101, 102, 103, 104, 300] {
-        assert!(persisted.quote(&format!("0x{sequence:064x}"))
-            .unwrap_err().starts_with("not_found:"));
-    }
 }
 
-#[test]
-fn one_provider_ledger_cannot_consume_another_providers_pending_allowance() {
-    let directory = tempfile::tempdir().unwrap();
-    let first = BillingStore::open(&directory.path().join("first.sqlite"), &network()).unwrap();
-    let second = BillingStore::open(&directory.path().join("second.sqlite"), &network()).unwrap();
-    let mut accepted = Vec::new();
-    for (provider, ledger) in [(1, &first), (2, &second)] {
-        for sequence in 1..=8 {
-            let signed = quote(provider, sequence, PAYER, "test/alpha", ("1", "2"));
-            ledger.store_quote(&signed, NOW).unwrap();
-            accepted.push((ledger, signed));
-        }
-        assert_capacity_rejected(ledger,
-            &quote(provider, 9, PAYER, "test/alpha", ("1", "2")));
-    }
-    // The same IDs in independent ledgers still recover each provider's own signed terms.
-    for (ledger, signed) in accepted { assert_preserved(ledger, &signed); }
-}
 
 #[test]
 fn ledger_wide_pending_ceiling_rejects_new_payers_without_evicting_signed_terms() {
@@ -145,9 +145,9 @@ fn ledger_wide_pending_ceiling_rejects_new_payers_without_evicting_signed_terms(
     let provider = wallet::address_from_private_key(&key).unwrap();
     let mut accepted = Vec::with_capacity(CAPACITY);
     for index in 0..CAPACITY {
-        // Stay below the current rate ceiling, with at most eight proposals for each payer.
+        // Actual committed admissions use separate provider-wide minute windows.
         let now = NOW + (index / PER_MINUTE) as u64 * 60;
-        let payer = format!("0x{:040x}", 0x10000 + index / 8);
+        let payer = PAYER;
         let (model, rates) = if index % 2 == 0 {
             ("test/global-free", ("0", "0"))
         } else {
@@ -185,16 +185,11 @@ fn ledger_wide_pending_ceiling_rejects_new_payers_without_evicting_signed_terms(
 }
 
 #[test]
-fn competing_connections_admit_only_one_quote_into_the_final_payer_slot() {
+fn competing_connections_admit_only_one_quote_into_the_final_global_storage_slot() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let initial = BillingStore::open(&path, &network()).unwrap();
-    let mut accepted = Vec::with_capacity(7);
-    for sequence in 1..=7 {
-        let signed = quote(1, sequence, PAYER, "test/race", ("1", "2"));
-        initial.store_quote(&signed, NOW).unwrap();
-        accepted.push(signed);
-    }
+    let accepted = restore_standalone(&path, 9_999, NOW + 300);
     drop(initial);
 
     // Pre-open independent connections and sign before releasing the shared start barrier.
@@ -232,38 +227,21 @@ fn competing_connections_admit_only_one_quote_into_the_final_payer_slot() {
     assert!(reopened.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));
 }
 
-fn rejection_control_pair() -> (BillingStore, BillingStore, u64) {
-    let control = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
-    let exercised = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
-    let key = format!("{:064x}", 1);
-    let provider = wallet::address_from_private_key(&key).unwrap();
-    let reject_at = NOW + 8 * 60;
-    let mut accepted = Vec::with_capacity(8);
-    for index in 0..8 {
-        let mut payload = quote_payload(&provider, index + 1, PAYER, "test/rollback", ("1", "2"));
-        // Storage-only lifetimes keep eight pending records across distinct rate windows.
-        // No successful proposal has consumed allowance in the later rejection window.
-        payload.issued_at = NOW + index * 60;
-        payload.expires_at = reject_at + 1;
-        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-        control.store_quote(&signed, signed.payload.issued_at).unwrap();
-        exercised.store_quote(&signed, signed.payload.issued_at).unwrap();
-        accepted.push(signed);
-    }
-    let mut payload = quote_payload(&provider, 100, PAYER, "test/rollback", ("1", "2"));
-    payload.issued_at = reject_at;
-    payload.expires_at = reject_at + 300;
-    let rejected = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-    for _ in 0..1024 {
-        let error = exercised.store_quote(&rejected, reject_at).unwrap_err();
-        assert!(error.starts_with("rate_limit:"), "{error}");
-    }
-    assert!(exercised.quote(&rejected.payload.id).unwrap_err().starts_with("not_found:"));
+fn rejection_control_pair() -> (tempfile::TempDir, BillingStore, BillingStore, u64) {
+    let directory = tempfile::tempdir().unwrap();
+    let control_path = directory.path().join("control.sqlite");
+    let exercised_path = directory.path().join("exercised.sqlite");
+    let control = BillingStore::open(&control_path, &network()).unwrap();
+    let exercised = BillingStore::open(&exercised_path, &network()).unwrap();
+    let accepted = restore_standalone(&control_path, 10_000, NOW + 1);
+    restore_standalone(&exercised_path, 10_000, NOW + 1);
+    let rejected = quote(1, 100, PAYER, "test/rollback", ("1", "2"));
+    for _ in 0..3 { assert_capacity_rejected(&exercised, &rejected); }
     for signed in &accepted {
         assert_preserved(&control, signed);
         assert_preserved(&exercised, signed);
     }
-    (control, exercised, reject_at + 1)
+    (directory, control, exercised, NOW + 1)
 }
 
 fn matching_admission(control: &BillingStore, exercised: &BillingStore,
@@ -290,48 +268,17 @@ fn matching_admission(control: &BillingStore, exercised: &BillingStore,
 }
 
 #[test]
-fn rejected_pending_proposals_preserve_the_payers_rate_allowance() {
-    let (control, exercised, start) = rejection_control_pair();
-    let key = format!("{:064x}", 1);
-    let provider = wallet::address_from_private_key(&key).unwrap();
-    let mut admitted = 0;
-    // All probes stay in the rejection window. One-second storage fixtures reclaim pending
-    // slots between probes, so the eight-slot cap cannot hide a lost rate allowance.
-    for offset in 0..59 {
-        let now = start + offset;
-        let mut payload = quote_payload(&provider, 200 + offset, PAYER, "test/rollback", ("1", "2"));
-        payload.issued_at = now;
-        payload.expires_at = now + 1;
-        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-        if !matching_admission(&control, &exercised, &signed, now) { break; }
-        admitted += 1;
+fn storage_refusals_preserve_all_six_hundred_committed_units_after_expiry() {
+    let (_directory, control, exercised, now) = rejection_control_pair();
+    // Expiry releases the restored storage prerequisite within the same minute as refusal.
+    // Both the previously refused wallet and a different wallet share all 600 remaining units.
+    for index in 0..600 {
+        let payer = if index % 2 == 0 { PAYER } else { OTHER_PAYER };
+        let signed = quote(1, 200 + index, payer, "test/rollback", ("1", "2"));
+        assert!(matching_admission(&control, &exercised, &signed, now));
     }
-    assert!(admitted > 0, "the control must have fresh-window rate allowance");
-}
-
-#[test]
-fn rejected_pending_proposals_preserve_other_payers_shared_rate_allowance() {
-    let (control, exercised, now) = rejection_control_pair();
-    let key = format!("{:064x}", 1);
-    let provider = wallet::address_from_private_key(&key).unwrap();
-    let mut admitted = 0;
-    let mut refused = false;
-    // Distinct payers avoid individual caps. The pending ceiling bounds this trace even if
-    // the separate rate policy changes; no numerical rate limit is asserted here.
-    for index in 0..=10_000 {
-        let payer = format!("0x{:040x}", 0x10000 + index);
-        let mut payload = quote_payload(&provider, 200 + index, &payer, "test/rollback", ("1", "2"));
-        payload.issued_at = now;
-        payload.expires_at = now + 300;
-        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-        if !matching_admission(&control, &exercised, &signed, now) {
-            refused = true;
-            break;
-        }
-        admitted += 1;
-    }
-    assert!(admitted > 0, "the control must admit another payer");
-    assert!(refused, "the control must remain bounded");
+    let excess = quote(1, 800, PAYER, "test/rollback", ("1", "2"));
+    assert!(!matching_admission(&control, &exercised, &excess, now));
 }
 
 fn assert_rate_rejected_at(ledger: &BillingStore, rejected: &Signed<Quote>, now: u64) {
@@ -341,7 +288,7 @@ fn assert_rate_rejected_at(ledger: &BillingStore, rejected: &Signed<Quote>, now:
 }
 
 #[test]
-fn payer_rate_refusals_preserve_the_last_shared_unit_for_another_payer() {
+fn duplicate_insertions_preserve_the_last_global_unit_for_the_same_wallet() {
     let ledger = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
     let key = format!("{:064x}", 1);
     let provider = wallet::address_from_private_key(&key).unwrap();
@@ -364,9 +311,9 @@ fn payer_rate_refusals_preserve_the_last_shared_unit_for_another_payer() {
         ledger.store_quote(&signed, now).unwrap();
     }
     let retained = ledger.quote(&format!("0x{:064x}", 1000)).unwrap();
-    let rejected = quote(1, 2000, PAYER, "test/rate-refusal", ("1", "2"));
-    for _ in 0..2 { assert_rate_rejected_at(&ledger, &rejected, now); }
-    let last = quote(1, 2001, OTHER_PAYER, "test/rate-refusal", ("1", "2"));
+    // Duplicate IDs fail without spending the last unit, even after twelve same-wallet commits.
+    for _ in 0..2 { assert!(ledger.store_quote(&retained, now).is_err()); }
+    let last = quote(1, 2001, PAYER, "test/rate-refusal", ("1", "2"));
     ledger.store_quote(&last, now).unwrap();
     assert_preserved(&ledger, &last);
     assert_preserved(&ledger, &retained);
@@ -400,40 +347,21 @@ fn failed_insertion_rolls_back_rate_windows_counters_and_pending_cleanup() {
     assert_preserved(&exercised, &original);
     assert_preserved(&exercised, &expiring);
 
-    // No newer minute was committed: each payer still has eleven units in the original
-    // window, exactly as in the untouched control. Successful probes may now clean expiry.
-    for (owner_index, payer) in [PAYER, OTHER_PAYER].into_iter().enumerate() {
-        for offset in 0..11 {
-            let now = NOW + 1 + owner_index as u64 * 12 + offset;
-            let mut payload = quote_payload(&original.payload.provider_wallet,
-                100 + owner_index as u64 * 20 + offset, payer, "test/insertion", ("1", "2"));
-            payload.issued_at = now;
-            payload.expires_at = now + 1;
-            let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-            assert!(matching_admission(&control, &exercised, &signed, now));
-        }
-        let rejected = quote(1, 111 + owner_index as u64 * 20, payer,
-            "test/insertion", ("1", "2"));
-        assert!(!matching_admission(&control, &exercised, &rejected,
-            NOW + 12 + owner_index as u64 * 12));
-    }
-    // Twenty-four committed proposals leave exactly 576 shared units in both ledgers.
-    let now = NOW + 25;
-    for index in 0..576 {
-        let payer = format!("0x{:040x}", 0x10000 + index);
-        let payload = quote_payload(&original.payload.provider_wallet, 1000 + index, &payer,
-            "test/insertion", ("1", "2"));
-        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+    // No newer minute was committed: the original two insertions leave exactly 598
+    // global units, including for their own wallets. Successful probes may clean expiry.
+    let now = NOW + 1;
+    for index in 0..598 {
+        let payer = if index % 2 == 0 { PAYER } else { OTHER_PAYER };
+        let signed = quote(1, 100 + index, payer, "test/insertion", ("1", "2"));
         assert!(matching_admission(&control, &exercised, &signed, now));
     }
-    let excess = quote(1, 2000, &format!("0x{:040x}", 0x20000),
-        "test/insertion", ("1", "2"));
+    let excess = quote(1, 2000, OTHER_PAYER, "test/insertion", ("1", "2"));
     assert!(!matching_admission(&control, &exercised, &excess, now));
     for store in [&control, &exercised] { assert_preserved(store, &original); }
 }
 
 #[test]
-fn competing_connections_share_the_final_payer_rate_unit_without_leaking_global_units() {
+fn competing_same_wallet_quotes_cross_the_former_rate_limit_without_extra_charges() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let initial = BillingStore::open(&path, &network()).unwrap();
@@ -462,21 +390,14 @@ fn competing_connections_share_the_final_payer_rate_unit_without_leaking_global_
         })
     });
     let outcomes = workers.map(|worker| worker.join().unwrap());
-    assert_eq!(outcomes.iter().filter(|(_, result)| result.is_ok()).count(), 1);
+    assert_eq!(outcomes.iter().filter(|(_, result)| result.is_ok()).count(), 2);
     let reopened = BillingStore::open(&path, &network()).unwrap();
     for (signed, result) in outcomes {
-        match result {
-            Ok(()) => assert_preserved(&reopened, &signed),
-            Err(error) => {
-                assert!(error.starts_with("rate_limit:"), "{error}");
-                assert!(reopened.quote(&signed.payload.id).unwrap_err().starts_with("not_found:"));
-            }
-        }
+        result.unwrap();
+        assert_preserved(&reopened, &signed);
     }
-    assert_rate_rejected_at(&reopened,
-        &quote(1, 14, PAYER, "test/payer-rate-race", ("1", "2")), race_at);
-    // The losing writer and later refusal must leave all 588 shared units intact.
-    for index in 0..588 {
+    // Thirteen successful commits leave exactly 587 shared units.
+    for index in 0..587 {
         let payer = format!("0x{:040x}", 0x10000 + index);
         let payload = quote_payload(&provider, 1000 + index, &payer,
             "test/payer-rate-race", ("1", "2"));
@@ -529,7 +450,7 @@ fn competing_connections_admit_only_one_quote_at_the_global_rate_boundary() {
         }
     }
     assert_preserved(&reopened, &retained);
-    // Either race payer still has individual allowance, so only the global budget rejects.
+    // Naming either wallet cannot bypass the exhausted provider-wide budget.
     assert_rate_rejected_at(&reopened,
         &quote(1, 602, PAYER, "test/global-rate-race", ("1", "2")), race_at);
 }
@@ -672,7 +593,7 @@ fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budget
 }
 
 #[test]
-fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets() {
+fn same_wallet_quotes_across_terms_preserve_independent_control_authority() {
     let ledger = BillingStore::open(std::path::Path::new(":memory:"), &network()).unwrap();
     let key = format!("{:064x}", 1);
     let original = quote(1, 1, PAYER, "test/payer-scope-free", ("0", "0"));
@@ -682,7 +603,7 @@ fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets
     ledger.create_challenge(&before, NOW).unwrap();
     // A live reservation must neither spend a proposal unit nor prevent fresh proposals.
     let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
-        "before-payer-proposal-exhaustion", 1, 1, NOW, &original.payload.model).unwrap();
+        "before-more-same-wallet-quotes", 1, 1, NOW, &original.payload.model).unwrap();
     let terms = [
         ("test/payer-scope-a", ("0", "0")), ("test/payer-scope-b", ("1", "0")),
         ("test/payer-scope-a", ("0", "2")), ("test/payer-scope-b", ("1", "2")),
@@ -700,10 +621,13 @@ fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets
         assert_preserved(&ledger, &signed);
     }
     let now = NOW + 12;
-    let rejected: Vec<_> = terms.iter().enumerate().map(|(index, (_, rates))| {
+    let further: Vec<_> = terms.iter().enumerate().map(|(index, (_, rates))| {
         quote(1, 100 + index as u64, PAYER, "test/payer-scope-new", *rates)
     }).collect();
-    for signed in &rejected { assert_rate_rejected_at(&ledger, signed, now); }
+    for signed in &further {
+        ledger.store_quote(signed, now).unwrap();
+        assert_preserved(&ledger, signed);
+    }
 
     let after = rate_challenge(&original.payload, 2, now);
     ledger.create_challenge(&after, now).unwrap();
@@ -718,9 +642,9 @@ fn payer_rate_scope_spans_terms_without_blocking_other_payers_or_control_budgets
     let other_provider = quote(2, 100, PAYER, "test/payer-scope-new", ("0", "0"));
     independent.store_quote(&other_provider, now).unwrap();
     assert_preserved(&independent, &other_provider);
-    for signed in &rejected { assert_rate_rejected_at(&ledger, signed, now); }
+    for signed in &further { assert_preserved(&ledger, signed); }
     let request = ledger.request_view(&original.payload.id,
-        "before-payer-proposal-exhaustion").unwrap();
+        "before-more-same-wallet-quotes").unwrap();
     assert_eq!(request.id, reservation.id);
     assert_eq!(request.status, "reserved");
     assert_eq!(request.max_cost_wei, "0");
@@ -862,21 +786,15 @@ fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authori
     other_wallet.wallet = OTHER_PAYER.into();
     ledger.create_challenge(&other_wallet, NOW).unwrap();
 
-    // Preserve all eleven remaining same-wallet proposal units without the eight-slot gate masking them.
-    let key = format!("{:064x}", 1);
-    for sequence in 2..=12 {
-        let now = NOW + sequence - 1;
-        let mut payload = quote_payload(&original.payload.provider_wallet, sequence, &owner,
-            &original.payload.model.id, ("0", "0"));
-        payload.issued_at = now;
-        payload.expires_at = now + 1; // Valid storage fixture, not the native proposal lifetime.
-        let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
-        ledger.store_quote(&signed, now).unwrap();
+    // Exhausting owner challenges must not reinstate either former same-wallet quote gate.
+    for sequence in 2..=13 {
+        let signed = quote(1, sequence, &owner, "test/challenge-wallet", ("0", "0"));
+        ledger.store_quote(&signed, NOW).unwrap();
         assert_preserved(&ledger, &signed);
     }
     let now = NOW + 12;
-    let rejected_quote = quote(1, 13, &owner, "test/challenge-wallet", ("0", "0"));
-    assert_rate_rejected_at(&ledger, &rejected_quote, now);
+    let further_quote = quote(1, 14, &owner, "test/challenge-wallet", ("0", "0"));
+    ledger.store_quote(&further_quote, now).unwrap();
     assert_challenge_rate_rejected_at(&ledger, &rejected, now);
     assert_read_context(&ledger, &read, &original.payload, now);
 
@@ -892,7 +810,7 @@ fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authori
     drop(ledger);
     let reopened = BillingStore::open(&path, &network()).unwrap();
     assert_challenge_rate_rejected_at(&reopened, &rejected, now);
-    assert_rate_rejected_at(&reopened, &rejected_quote, now);
+    assert_preserved(&reopened, &further_quote);
     assert_read_context(&reopened, &read, &original.payload, now);
     assert_eq!(serde_json::to_value(reopened.challenge(&other_wallet.nonce).unwrap()).unwrap(),
         serde_json::to_value(&other_wallet).unwrap());
@@ -1045,7 +963,7 @@ fn challenge_global_rate_race_commits_only_one_candidate_across_connections() {
 }
 
 #[test]
-fn payer_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries() {
+fn global_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let mut ledger = BillingStore::open(&path, &network()).unwrap();
@@ -1061,31 +979,34 @@ fn payer_rate_budget_survives_expiry_reopening_and_fixed_minute_boundaries() {
     // Starting halfway through a minute distinguishes UTC buckets from elapsed/rolling time.
     // The last phase skips minutes: unused windows must not accumulate extra allowance.
     for (phase, start) in [NOW + 30, NOW + 60, NOW + 5 * 60].into_iter().enumerate() {
-        for offset in 0..12 {
-            let now = start + offset;
-            // Storage-only one-second lifetimes keep pending occupancy below eight.
-            // Expiry may reclaim that slot, but must not refund its committed rate unit.
-            let signed = fresh(phase as u64 * 100 + offset + 1, now, now + 1);
+        for offset in 0..600 {
+            let now = start + offset / 20;
+            // One-second fixtures reclaim storage, never committed issuance units.
+            let signed = fresh(phase as u64 * 1000 + offset + 1, now, now + 1);
             ledger.store_quote(&signed, now).unwrap();
             assert_preserved(&ledger, &signed);
-            if offset == 5 {
+            if offset == 299 {
                 drop(ledger);
                 ledger = BillingStore::open(&path, &network()).unwrap();
             }
         }
         let next_minute = (start / 60 + 1) * 60;
-        let rejected = fresh(phase as u64 * 100 + 13, start + 12, next_minute + 1);
-        assert_rate_rejected_at(&ledger, &rejected, start + 12);
+        let rejected = fresh(phase as u64 * 1000 + 601, next_minute - 1, next_minute + 1);
+        assert_rate_rejected_at(&ledger, &rejected, next_minute - 1);
         drop(ledger);
         ledger = BillingStore::open(&path, &network()).unwrap();
+        // A different control budget may observe a future sample, but cannot erase or
+        // advance committed-proposal evidence before an older quote admission arrives.
+        let challenge = rate_challenge(&rejected.payload, phase as u64 + 1, next_minute + 60);
+        ledger.create_challenge(&challenge, next_minute + 60).unwrap();
         assert_rate_rejected_at(&ledger, &rejected, next_minute - 1);
         // The next phase's first committed quote exercises the exact forward boundary,
-        // then a later skipped-to window, with all twelve units available again.
+        // then a later skipped-to window, with all 600 global units available again.
     }
 }
 
 #[test]
-fn acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate() {
+fn acknowledgement_neither_refunds_nor_charges_the_global_proposal_rate() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let mut ledger = BillingStore::open(&path, &network()).unwrap();
@@ -1093,8 +1014,8 @@ fn acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate() {
     let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
     let original = quote(1, 1, &payer, "test/rate-acknowledgement", ("1", "2"));
     ledger.store_quote(&original, NOW).unwrap();
-    for offset in 1..=10 {
-        let now = NOW + offset;
+    for offset in 1..=598 {
+        let now = NOW + offset / 20;
         let mut payload = quote_payload(&original.payload.provider_wallet, offset + 1, &payer,
             "test/rate-acknowledgement", ("1", "2"));
         payload.issued_at = now;
@@ -1102,16 +1023,16 @@ fn acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate() {
         let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
         ledger.store_quote(&signed, now).unwrap();
     }
-    let now = NOW + 11;
+    let now = NOW + 30;
     let (raw, envelope) = signed_opening(&original.payload, directory.path());
     let ack = ledger.register_funding_intent(&original, &payer, &raw, &envelope.tx_hash,
         envelope.nonce, &key, || Ok(now), true, &original.payload.model).unwrap();
     protocol::verify(protocol::INTENT_DOMAIN, &ack, &original.payload.provider_wallet).unwrap();
 
-    // Eleven committed quotes leave exactly one rate unit, regardless of the transferred slot.
-    let twelfth = quote(1, 12, &payer, "test/rate-acknowledgement", ("1", "2"));
-    ledger.store_quote(&twelfth, now).unwrap();
-    let rejected = quote(1, 13, &payer, "test/rate-acknowledgement", ("1", "2"));
+    // 599 committed quotes leave exactly one rate unit, regardless of the transferred slot.
+    let last = quote(1, 600, &payer, "test/rate-acknowledgement", ("1", "2"));
+    ledger.store_quote(&last, now).unwrap();
+    let rejected = quote(1, 601, &payer, "test/rate-acknowledgement", ("1", "2"));
     for restart in [false, true] {
         if restart {
             drop(ledger);
@@ -1125,7 +1046,7 @@ fn acknowledgement_neither_refunds_nor_charges_the_payers_proposal_rate() {
         assert_eq!(replay.signature, ack.signature);
         assert_rate_rejected_at(&ledger, &rejected, now + 1);
         assert_preserved(&ledger, &original);
-        assert_preserved(&ledger, &twelfth);
+        assert_preserved(&ledger, &last);
         assert!(ledger.prepare_fee_batches(now + 1, true).unwrap().is_empty());
     }
 }
@@ -1138,24 +1059,24 @@ fn free_opening_preserves_rate_allowance_and_credentials_at_exhaustion() {
     let key = format!("{:064x}", 1);
     let original = quote(1, 1, PAYER, "test/rate-opening", ("0", "0"));
     ledger.store_quote(&original, NOW).unwrap();
-    for offset in 1..=10 {
-        let now = NOW + offset;
+    for offset in 1..=598 {
+        let now = NOW + offset / 20;
         let mut payload = quote_payload(&original.payload.provider_wallet, offset + 1, PAYER,
             "test/rate-opening", ("0", "0"));
         payload.issued_at = now;
-        payload.expires_at = now + 1; // Only the original and latest probe occupy pending slots.
+        payload.expires_at = now + 1; // Expiry reclaims storage, not issuance units.
         let signed = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
         ledger.store_quote(&signed, now).unwrap();
     }
-    let now = NOW + 11;
+    let now = NOW + 30;
     // Ledger-call owner authorization is a precondition; free opening needs no chain evidence.
     let opened = ledger.open_account(&original, None, now).unwrap();
-    let twelfth = quote(1, 12, PAYER, "test/rate-opening", ("0", "0"));
-    ledger.store_quote(&twelfth, now).unwrap();
-    let rejected = quote(1, 13, PAYER, "test/rate-opening", ("0", "0"));
+    let last = quote(1, 600, PAYER, "test/rate-opening", ("0", "0"));
+    ledger.store_quote(&last, now).unwrap();
+    let rejected = quote(1, 601, PAYER, "test/rate-opening", ("0", "0"));
     assert_rate_rejected_at(&ledger, &rejected, now);
     // First opening is still allowed when fresh proposal allowance is already exhausted.
-    let last_opened = ledger.open_account(&twelfth, None, now).unwrap();
+    let last_opened = ledger.open_account(&last, None, now).unwrap();
 
     for restart in [false, true] {
         if restart {
@@ -1163,7 +1084,7 @@ fn free_opening_preserves_rate_allowance_and_credentials_at_exhaustion() {
             ledger = BillingStore::open(&path, &network()).unwrap();
         }
         assert_rate_rejected_at(&ledger, &rejected, now + 1);
-        for (signed, account) in [(&original, &opened), (&twelfth, &last_opened)] {
+        for (signed, account) in [(&original, &opened), (&last, &last_opened)] {
             let saved = ledger.quote(&signed.payload.id).unwrap();
             assert_eq!(saved.payload, signed.payload);
             assert_eq!(saved.signature, signed.signature);
@@ -1233,9 +1154,10 @@ fn acknowledgement_frees_exactly_one_slot_and_replay_preserves_its_replacement()
     let mut ledger = BillingStore::open(&path, &network()).unwrap();
     let key = format!("{:064x}", 1);
     let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
-    let pending: Vec<_> = (1..=8)
-        .map(|id| quote(1, id, &payer, "test/acknowledgement", ("1", "2"))).collect();
-    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original_quote = quote(1, 1, &payer, "test/acknowledgement", ("1", "2"));
+    ledger.store_quote(&original_quote, NOW).unwrap();
+    let mut pending = restore_standalone(&path, 9_999, NOW + 300);
+    pending.insert(0, original_quote);
     let replacement = quote(1, 9, &payer, "test/replacement", ("0", "0"));
     let excess = quote(1, 10, &payer, "test/excess", ("1", "2"));
     assert_capacity_rejected(&ledger, &replacement);
@@ -1270,6 +1192,33 @@ fn acknowledgement_frees_exactly_one_slot_and_replay_preserves_its_replacement()
         assert_capacity_rejected(&ledger, &excess);
         assert!(ledger.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
     }
+
+    // Standalone cleanup and lease expiry cannot discard an accepted original or its nonce.
+    let expiry = original.payload.expires_at;
+    let mut payload = quote_payload(&original.payload.provider_wallet, 11, &payer,
+        "test/after-acknowledgement-expiry", ("1", "2"));
+    payload.issued_at = expiry;
+    payload.expires_at = expiry + 300;
+    let fresh = protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap();
+    ledger.store_quote(&fresh, expiry).unwrap();
+    drop(ledger);
+    ledger = BillingStore::open(&path, &network()).unwrap();
+    let replay = ledger.register_funding_intent(original, &payer, &raw,
+        &envelope.tx_hash, envelope.nonce, &key, || Ok(expiry), false,
+        &original.payload.model).unwrap();
+    assert_eq!(replay.payload, ack.payload);
+    assert_eq!(replay.signature, ack.signature);
+    let (conflicting_raw, conflicting_envelope) = signed_opening(&fresh.payload, directory.path());
+    assert!(ledger.register_funding_intent(&fresh, &payer, &conflicting_raw,
+        &conflicting_envelope.tx_hash, conflicting_envelope.nonce, &key, || Ok(expiry),
+        true, &fresh.payload.model).is_err());
+    assert!(ledger.funding_intent(&fresh.payload, &conflicting_raw).unwrap().is_none());
+    let recovered = ledger.funding_intent(&original.payload, &raw).unwrap().unwrap();
+    assert_eq!(recovered.payload, ack.payload);
+    assert_eq!(recovered.signature, ack.signature);
+    assert_preserved(&ledger, original);
+    assert_preserved(&ledger, &fresh);
+    assert!(ledger.prepare_fee_batches(expiry, true).unwrap().is_empty());
 }
 
 #[test]
@@ -1280,9 +1229,10 @@ fn rejected_acknowledgements_preserve_pending_capacity_and_allow_original_regist
     let key = format!("{:064x}", 1);
     let wrong_key = format!("{:064x}", 3);
     let payer = wallet::address_from_private_key(&format!("{:064x}", 2)).unwrap();
-    let pending: Vec<_> = (1..=8)
-        .map(|id| quote(1, id, &payer, "test/rejection", ("1", "2"))).collect();
-    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original_quote = quote(1, 1, &payer, "test/rejection", ("1", "2"));
+    ledger.store_quote(&original_quote, NOW).unwrap();
+    let mut pending = restore_standalone(&path, 9_999, NOW + 300);
+    pending.insert(0, original_quote);
     let original = &pending[0];
     let replacement = quote(1, 9, &payer, "test/replacement", ("0", "0"));
     let (raw, envelope) = signed_opening(&original.payload, directory.path());
@@ -1318,9 +1268,10 @@ fn unpaid_first_opening_preserves_pending_capacity_and_signed_terms_after_reopen
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let mut ledger = BillingStore::open(&path, &network()).unwrap();
-    let pending: Vec<_> = (1..=8)
-        .map(|id| quote(1, id, PAYER, "test/unpaid", ("1", "2"))).collect();
-    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original = quote(1, 1, PAYER, "test/unpaid", ("1", "2"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let mut pending = restore_standalone(&path, 9_999, NOW + 300);
+    pending.insert(0, original);
     let replacement = quote(1, 9, PAYER, "test/replacement", ("0", "0"));
     assert_capacity_rejected(&ledger, &replacement);
 
@@ -1343,11 +1294,10 @@ fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_cre
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("billing.sqlite");
     let mut ledger = BillingStore::open(&path, &network()).unwrap();
-    let pending: Vec<_> = (1..=8).map(|id| {
-        let rates = if id == 1 { ("0", "0") } else { ("1", "2") };
-        quote(1, id, PAYER, "test/opening", rates)
-    }).collect();
-    for signed in &pending { ledger.store_quote(signed, NOW).unwrap(); }
+    let original_quote = quote(1, 1, PAYER, "test/opening", ("0", "0"));
+    ledger.store_quote(&original_quote, NOW).unwrap();
+    let mut pending = restore_standalone(&path, 9_999, NOW + 300);
+    pending.insert(0, original_quote);
     let original = &pending[0];
     let replacement = quote(1, 9, PAYER, "test/replacement", ("1", "2"));
     assert_capacity_rejected(&ledger, &replacement);
@@ -1380,7 +1330,7 @@ fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_cre
     assert_preserved(&ledger, &replacement);
     assert_recovery(&ledger, NOW);
 
-    // Reopen storage, not the account: another owner-authorized open command rotates its root.
+    // Reopen storage and recover using the original exported credential.
     drop(ledger);
     ledger = BillingStore::open(&path, &network()).unwrap();
     assert_recovery(&ledger, NOW + 1);
@@ -1403,14 +1353,15 @@ fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_cre
 
     // Expiry may exclude or delete standalone records. Assert reusable capacity, not deletion.
     ledger.store_quote(&fresh, expiry).unwrap();
-    let mut renewed = Vec::with_capacity(8);
+    let mut renewed = Vec::with_capacity(600);
     renewed.push(fresh);
-    for id in 12..=18 {
+    for id in 12..=610 {
         let signed = fresh_quote(id, expiry);
         ledger.store_quote(&signed, expiry).unwrap();
         renewed.push(signed);
     }
-    let excess = fresh_quote(19, expiry);
+    // Reclaimed storage admits 600 actual insertions; issuance, not storage, now rejects 601.
+    let excess = fresh_quote(611, expiry);
     let error = ledger.store_quote(&excess, expiry).unwrap_err();
     assert!(error.starts_with("rate_limit:"), "{error}");
     assert!(ledger.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));

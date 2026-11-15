@@ -1,8 +1,8 @@
 ## Context
 
-The author's approved non-reserving-quote contract replaces public named-wallet pending/rate allowances with provider-wide quote resources and authenticated opening admission. `specify-non-reserving-quotes` supplies the replacement quote-retention and pre-signing-work requirements; this change owns the separate committed-issuance counter. The current implementation still has the old wallet gates, and the public issuer canonicalizes the named payer and signs before calling `store_quote`.
+The author's approved non-reserving-quote contract replaces public named-wallet pending/rate allowances with provider-wide quote resources and authenticated opening admission. `specify-non-reserving-quotes` supplies the replacement quote-retention and pre-signing-work requirements; this change owns the separate committed-issuance counter. Native storage now removes both wallet gates. The public issuer still canonicalizes the named payer and signs before calling `store_quote`; pre-signing work admission remains a separate incomplete parent task.
 
-Inside one immediate transaction, `store_quote` cleans pending state, tentatively increments the global 600 and payer 12 rate counters, checks pending capacity and inserts the quote. An error rolls the transaction back. The current rate helper uses `window = now / 60`, retains the count only when the stored window equals that sample, and otherwise starts at zero. Shared cleanup deletes every rate row whose window is less than its supplied minute, including when invoked for challenges. The handler samples `protocol::now()` after body buffering but before ledger locking/signing/admission.
+Inside one immediate transaction, `store_quote` validates/adopts retained quote-rate evidence, increments the provider-global 600-unit counter at `max(now / 60, last_committed_minute)`, cleans pending state, checks total quote capacity and inserts the signed record. Errors roll back the counter, minute, cleanup and legacy retirement together. `quote_committed_minute` is durable metadata and must match the global counter's minute once installed. Generic challenge maintenance no longer deletes any `quote:*` evidence. The handler's sampled request time and signed quote timestamps remain unchanged; only rate-window selection uses the logical minute.
 
 ## Decisions
 
@@ -36,11 +36,11 @@ Retire only obsolete wallet-keyed quote-rate rows in the same successful adoptio
 
 Previously discarded legacy rate history cannot be reconstructed or retroactively certified. This is nonfinancial admission bookkeeping within the current ledger, not permission to convert older schemas, reset a network namespace or alter agreements, money, fees, credentials or nonce ownership.
 
-## Implementation gap and ownership
+## Implemented slice and remaining integration
 
-The old wallet rate/pending gates contradict the author decision. The `previous == window` branch also resets on an older minute, and generic cleanup can remove quote-rate evidence independently of admission. These source observations remain open gaps. Existing tests passing does not close them or establish the parent's pre-signing work limit.
+`proposal_rate_limit` adopts an existing positive global count of at most 600 without inventing a total from wallet rows. Before first successful adoption, retained wallet rows are checked for readable counts in the former 1–12 range, no newer window and no same-window individual count exceeding the global count. Missing global evidence with wallet rows, malformed/noncanonical metadata, inconsistent installed state or impossible global values fail closed. An installed watermark cannot coexist with unretired wallet rows. A successful insertion alone persists adoption and retirement; a refusal preserves the original evidence for diagnosis.
 
-`billing_store.rs` is entirely untracked owner source. A standalone unused helper would not fix the production path; copying the module or committing the surrounding migration is not acceptable. Pair the wallet-gate removal and clock/pruning/bootstrap fixes with their regressions when independently committable. The old wallet-ceiling tests must migrate with that cutover, not be weakened to pass the old implementation.
+The migration source is now committed and its incorporation authorized; the former ownership blocker is gone. Native regressions accompany both wallet-gate removal and committed-clock/adoption changes. Remaining parent work must implement actual pre-signing permits and prove their interaction with failed insertion and cleanup; passing committed-counter cases alone cannot establish those properties. Financial schemas and challenge policy are unchanged.
 
 ## Acceptance strategy
 

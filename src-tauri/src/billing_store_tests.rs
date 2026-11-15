@@ -2625,3 +2625,203 @@ fn evidence_renewal_preserves_existing_credit_and_request_identity() {
     assert!(store.performance_withdrawn(&model).unwrap());
     assert!(!store.performance_withdrawn(&current).unwrap());
 }
+
+fn quote_rate_snapshot(store: &BillingStore) -> [Vec<String>; 6] {
+    let db = store.db.lock().unwrap();
+    [
+        "SELECT json_array(key,value) FROM metadata ORDER BY key",
+        "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket",
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+    ].map(|query| db.prepare(query).unwrap().query_map([], |row| row.get(0)).unwrap()
+        .collect::<Result<Vec<_>, _>>().unwrap())
+}
+
+fn committed_quote_rate(store: &BillingStore) -> (Option<String>, u64, u64, u64) {
+    let db = store.db.lock().unwrap();
+    let watermark = db.query_row(
+        "SELECT value FROM metadata WHERE key='quote_committed_minute'", [], |row| row.get(0),
+    ).optional().unwrap();
+    let (window, count) = db.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket='quote:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    let legacy = db.query_row(
+        "SELECT COUNT(*) FROM rate_limits WHERE bucket GLOB 'quote:*' AND bucket<>'quote:global'",
+        [], |row| row.get(0),
+    ).unwrap();
+    (watermark, window, count, legacy)
+}
+
+#[test]
+fn quote_rate_adoption_preserves_totals_and_retires_wallet_rows_only_on_commit() {
+    for count in [599, 600] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("quote-adoption.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        let pending = quote(0, true);
+        store.store_quote(&pending, 110).unwrap();
+        // Retained old-limiter evidence, not claimed historical public issuances.
+        {
+            let db = store.db.lock().unwrap();
+            db.execute("DELETE FROM metadata WHERE key='quote_committed_minute'", []).unwrap();
+            db.execute("UPDATE rate_limits SET window=3,count=?1 WHERE bucket='quote:global'", [count]).unwrap();
+            db.execute("INSERT INTO rate_limits VALUES(?1,3,12),(?2,2,12)",
+                params![format!("quote:{}", agreement.payload.consumer_wallet), "quote:older-wallet"]).unwrap();
+        }
+        let before = quote_rate_snapshot(&store);
+        // A later minute tentatively adopts/retires evidence, but the duplicate
+        // insertion fails. Even legacy row deletion must roll back.
+        assert!(store.store_quote(&pending, 240).is_err());
+        assert_eq!(quote_rate_snapshot(&store), before);
+        let candidate = quote(1000, false);
+        if count == 599 {
+            store.store_quote(&candidate, 120).unwrap();
+            assert_eq!(committed_quote_rate(&store), (Some("3".into()), 3, 600, 0));
+            assert_eq!(store.quote(&candidate.payload.id).unwrap().payload, candidate.payload);
+        } else {
+            assert!(store.store_quote(&candidate, 120).unwrap_err().starts_with("rate_limit:"));
+            assert_eq!(quote_rate_snapshot(&store), before);
+            assert_eq!(committed_quote_rate(&store), (None, 3, 600, 2));
+        }
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let retained = committed_quote_rate(&store);
+        let challenge = crate::auth::AuthPayload {
+            network: network(), provider_wallet: agreement.payload.provider_wallet.clone(),
+            wallet: agreement.payload.consumer_wallet.clone(), method: "GET".into(),
+            path: "/v1/models".into(), body_hash: protocol::hash_hex(b""),
+            nonce: format!("0x{:064x}", 77), expires_at: 360,
+        };
+        store.create_challenge(&challenge, 240).unwrap();
+        assert_eq!(committed_quote_rate(&store), retained,
+            "later challenge cleanup cannot delete or advance committed quote evidence");
+        for sample in [120, 180, 239] {
+            let refused = quote(1000, false);
+            let before = quote_rate_snapshot(&store);
+            assert!(store.store_quote(&refused, sample).unwrap_err().starts_with("rate_limit:"));
+            assert_eq!(quote_rate_snapshot(&store), before);
+            assert!(store.quote(&refused.payload.id).unwrap_err().starts_with("not_found:"));
+        }
+        let fresh = quote(1000, false);
+        store.store_quote(&fresh, 240).unwrap();
+        assert_eq!(committed_quote_rate(&store), (Some("4".into()), 4, 1, 0));
+        assert_eq!(store.quote(&fresh.payload.id).unwrap().payload, fresh.payload);
+        assert_eq!(store.quote(&pending.payload.id).unwrap().payload, pending.payload);
+        assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
+            encode(&opened.account).unwrap());
+        assert_eq!(store.authenticate(&opened.credential.bearer, 240).unwrap().credential_id, opened.credential.id);
+        assert_eq!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().unwrap().payload.quote_id,
+            agreement.payload.id);
+    }
+}
+
+#[test]
+fn quote_rate_reordered_writers_share_the_retained_last_unit() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("quote-clock.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let first = quote(1000, false);
+    store.store_quote(&first, 180).unwrap();
+    let delayed = quote(1000, false);
+    store.store_quote(&delayed, 120).unwrap();
+    assert_eq!(committed_quote_rate(&store), (Some("3".into()), 3, 2, 0));
+    // Isolate the last-unit boundary without claiming 599 HTTP signing attempts.
+    store.db.lock().unwrap().execute(
+        "UPDATE rate_limits SET count=599 WHERE bucket='quote:global'", [],
+    ).unwrap();
+    let before = quote_rate_snapshot(&store);
+    assert!(store.store_quote(&first, 240).is_err());
+    assert_eq!(quote_rate_snapshot(&store), before, "failed future insertion must not advance the clock");
+    let candidates = [quote(1000, false), quote(1000, false)];
+    let writers = [120, 180].map(|sample|
+        (BillingStore::open(&path, &network()).unwrap(), sample));
+    let barrier = Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let [(left, left_sample), (right, right_sample)] = writers;
+        let handles = [(left, left_sample, &candidates[0]), (right, right_sample, &candidates[1])]
+            .map(|(ledger, sample, candidate)| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    ledger.store_quote(candidate, sample)
+                })
+            });
+        handles.map(|handle| handle.join().unwrap())
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(committed_quote_rate(&reopened), (Some("3".into()), 3, 600, 0));
+    for (candidate, result) in candidates.iter().zip(results) {
+        if result.is_ok() {
+            assert_eq!(reopened.quote(&candidate.payload.id).unwrap().payload, candidate.payload);
+        } else {
+            assert!(result.unwrap_err().starts_with("rate_limit:"));
+            assert!(reopened.quote(&candidate.payload.id).unwrap_err().starts_with("not_found:"));
+        }
+    }
+    for existing in [&first, &delayed] {
+        assert_eq!(reopened.quote(&existing.payload.id).unwrap().payload, existing.payload);
+    }
+    for sample in [120, 180] {
+        let before = quote_rate_snapshot(&reopened);
+        assert!(reopened.store_quote(&quote(1000, false), sample).unwrap_err().starts_with("rate_limit:"));
+        assert_eq!(quote_rate_snapshot(&reopened), before);
+    }
+}
+
+#[test]
+fn inconsistent_quote_rate_evidence_refuses_without_erasing_recoverable_accounts() {
+    for mutation in [
+        "DELETE FROM rate_limits WHERE bucket='quote:global'",
+        "DELETE FROM metadata WHERE key='quote_committed_minute'; DELETE FROM rate_limits WHERE bucket='quote:global'; INSERT INTO rate_limits VALUES('quote:legacy',1,1)",
+        "DELETE FROM metadata WHERE key='quote_committed_minute'; INSERT INTO rate_limits VALUES('quote:legacy',2,1)",
+        "DELETE FROM metadata WHERE key='quote_committed_minute'; INSERT INTO rate_limits VALUES('quote:legacy',1,2)",
+        "DELETE FROM metadata WHERE key='quote_committed_minute'; INSERT INTO rate_limits VALUES('quote:legacy',0,13)",
+        "DELETE FROM metadata WHERE key='quote_committed_minute'; INSERT INTO rate_limits VALUES('quote:legacy',0,'invalid')",
+        "INSERT INTO rate_limits VALUES('quote:legacy',1,1)",
+        "UPDATE metadata SET value='invalid' WHERE key='quote_committed_minute'",
+        "UPDATE metadata SET value='01' WHERE key='quote_committed_minute'",
+        "UPDATE metadata SET value='2' WHERE key='quote_committed_minute'",
+        "UPDATE rate_limits SET window=2 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET window=-1 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET window=9223372036854775807 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET count=-1 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET count=0 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET count=601 WHERE bucket='quote:global'",
+        "UPDATE rate_limits SET count='invalid' WHERE bucket='quote:global'",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-quote-rate.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        store.db.lock().unwrap().execute_batch(mutation).unwrap();
+        let before = quote_rate_snapshot(&store);
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let candidate = quote(1000, false);
+        assert!(store.store_quote(&candidate, 300).is_err(), "{mutation}");
+        assert_eq!(quote_rate_snapshot(&store), before, "{mutation}");
+        assert!(store.quote(&candidate.payload.id).unwrap_err().starts_with("not_found:"));
+        assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
+            encode(&opened.account).unwrap());
+        assert_eq!(store.authenticate(&opened.credential.bearer, 300).unwrap().credential_id, opened.credential.id);
+        assert_eq!(store.quote(&agreement.payload.id).unwrap().payload, agreement.payload);
+        assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
+        // Restore the exact valid fixture counter explicitly, not automatic repair.
+        store.db.lock().unwrap().execute_batch(
+            "DELETE FROM rate_limits WHERE bucket GLOB 'quote:*';
+             INSERT INTO rate_limits VALUES('quote:global',1,1);
+             UPDATE metadata SET value='1' WHERE key='quote_committed_minute';
+             INSERT OR IGNORE INTO metadata VALUES('quote_committed_minute','1');",
+        ).unwrap();
+        store.store_quote(&candidate, 300).unwrap();
+        assert_eq!(committed_quote_rate(&store), (Some("5".into()), 5, 1, 0));
+        assert_eq!(store.quote(&candidate.payload.id).unwrap().payload, candidate.payload);
+        assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
+            encode(&opened.account).unwrap());
+    }
+}

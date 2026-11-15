@@ -1058,7 +1058,7 @@ async fn challenge_slots_are_separate_from_proposals_and_cleanup_preserves_accep
             payload.expires_at = issued_at + 300;
             protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap()
         };
-        let proposals: Vec<_> = (1..=8).map(|sequence| proposal(sequence, now)).collect();
+        let proposals: Vec<_> = (1..=13).map(|sequence| proposal(sequence, now)).collect();
         let challenges: Vec<_> = (1..=8).map(|sequence| fixture.pending_challenge(
             &quote.payload.consumer_wallet, sequence, now + if sequence == 1 { 119 } else { 120 })).collect();
         for challenge_phase in [challenges_first, !challenges_first] {
@@ -1068,10 +1068,7 @@ async fn challenge_slots_are_separate_from_proposals_and_cleanup_preserves_accep
                 for proposed in &proposals { ledger.store_quote(proposed, now).unwrap(); }
             }
         }
-        // Acknowledgement freed its proposal slot; eight standalone proposals fill the allowance.
-        let rejected_quote = proposal(9, now);
-        assert!(ledger.store_quote(&rejected_quote, now).unwrap_err().starts_with("rate_limit:"));
-        assert!(ledger.quote(&rejected_quote.payload.id).is_err());
+        // Crossing both former wallet quote ceilings does not consume challenge slots.
         let replacement = fixture.pending_challenge(&quote.payload.consumer_wallet, 9, now + 120);
         let before = fixture.challenge_records();
         let rates = rate_records(&fixture.provider.ledger_path);
@@ -1102,7 +1099,7 @@ async fn challenge_slots_are_separate_from_proposals_and_cleanup_preserves_accep
         assert_eq!(serde_json::to_value(ledger.funding_intent(&quote.payload, &raw).unwrap().unwrap()).unwrap(),
             serde_json::to_value(&ack).unwrap());
         fixture.unopened(&quote);
-        let fresh_quote = proposal(9, cleanup_at);
+        let fresh_quote = proposal(14, cleanup_at);
         ledger.store_quote(&fresh_quote, cleanup_at).unwrap();
         assert_eq!(ledger.quote(&fresh_quote.payload.id).unwrap().payload, fresh_quote.payload);
         assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), account_before);
@@ -2400,7 +2397,7 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
     assert_eq!(expected_account["available_wei"], "100");
 
     // One actual pending quote plus complete signed restored records isolate global storage,
-    // without claiming 10,000 historical public issuances or filling either legacy wallet gate.
+    // without claiming 10,000 historical public issuances or exhausting committed issuance.
     let pending = fixture.quote("100").await;
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
     restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
@@ -2444,7 +2441,7 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
     full_quotes();
     let rates = rate_records(&fixture.provider.ledger_path);
     assert!(rates.iter().filter(|(bucket, _, _)| bucket.starts_with("quote:"))
-        .all(|(bucket, _, count)| *count < if bucket == "quote:global" { 600 } else { 12 }));
+        .all(|(bucket, _, count)| bucket == "quote:global" && *count < 600));
     let (status, refused) = fixture.post("/v1/contracts/propose", json!({
         "offer_id":fixture.provider.offer_id,
         "consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),"funding_wei":"100"
@@ -2918,7 +2915,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
     full_quotes();
     let rates = rate_records(&fixture.provider.ledger_path);
     assert!(rates.iter().filter(|(bucket, _, _)| bucket.starts_with("quote:"))
-        .all(|(bucket, _, count)| *count < if bucket == "quote:global" { 600 } else { 12 }));
+        .all(|(bucket, _, count)| bucket == "quote:global" && *count < 600));
     let (status, refused) = fixture.post("/v1/contracts/propose", json!({
         "offer_id":fixture.provider.offer_id,"consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),
         "funding_wei":"100"
@@ -3260,7 +3257,7 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
     full_quotes();
     assert!(rate_records(&fixture.provider.ledger_path).iter()
         .filter(|(bucket, _, _)| bucket.starts_with("quote:"))
-        .all(|(bucket, _, count)| *count < if bucket == "quote:global" { 600 } else { 12 }));
+        .all(|(bucket, _, count)| bucket == "quote:global" && *count < 600));
     let (status, refused) = fixture.post("/v1/contracts/propose", json!({
         "offer_id":fixture.provider.offer_id,
         "consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),"funding_wei":"100"

@@ -1,10 +1,10 @@
 ## Authority and scope
 
-The author answer and the book's **Approved non-reserving quotes** supersede named-wallet quote quotas. The worker did not edit the book. This is a replacement-contract slice, not evidence that production has cut over. Historical eight-slot and twelve-per-minute acceptance observations remain valid descriptions of the old behavior, not mitigation evidence.
+The author answer and the book's **Approved non-reserving quotes** supersede named-wallet quote quotas. The worker did not edit the book. Native committed admission now removes both wallet gates together; the separate pre-signing-work cutover and remaining opening/recovery acceptance are still incomplete. Historical eight-slot and twelve-per-minute observations describe the superseded behavior, not current policy.
 
 ## Observed implementation
 
-`BillingStore::store_quote` currently charges `quote:global` at 600/minute and `quote:<named wallet>` at 12/minute, then enforces 10,000 total pending quotes and eight for the named wallet. The native public handler signs before calling that transaction. Thus removing only the pending-wallet query leaves the rate attack, and a committed-insertion counter alone does not bound signatures for rejected insertions.
+`BillingStore::store_quote` now enforces only provider-wide 10,000 retained quotes and 600 committed insertions per effective minute. Its immediate transaction adopts retained global evidence, advances a durable non-regressing minute, retires obsolete wallet rows, cleans pending state and inserts exact signed terms atomically. Other maintenance preserves quote-rate evidence. The native public handler still signs before calling that transaction: the committed counter does not bound signatures for rejected insertions. Task 3.2 must add its independent work permit on the real route.
 
 The control handler already takes one of 64 process-wide non-queuing permits before buffering at most 96 KiB with a five-second body deadline. These bounds are useful but do not limit repeated signing attempts over time.
 
@@ -52,4 +52,4 @@ Required consumer-visible evidence includes public issuance beyond both old wall
 
 Signing-work tests must prove no signer invocation after budget/concurrency refusal, finite attempts despite insertion failures, durable exhaustion and conservative initialization, independent committed-counter rollback, and non-regressing clocks. Reuse body-boundary evidence only where it exercises this public route. Free opening must cover authentication, final-capacity competition, no fake payment, failure rollback and idempotent existing-account recovery.
 
-Current native ownership prevents independently committing those source changes. Keep implementation tasks open; do not add unused helpers, weaken the contract, commit expected-failing regressions alone or absorb the surrounding owner migration. Passing the current suite describes the old implementation. No isolated acceptance test is live-chain, public-load, GPU or installer qualification.
+The author authorized incorporating necessary pre-existing source; the migration is now committed, so native ownership no longer blocks this work. The committed-admission slice migrates the old wallet cases to public acceptance and provider-global conservation/rollback boundaries. Keep the remaining pre-signing, paid/free admission and recovery tasks open; no unused helper or expected-failing test-only mitigation is acceptable. No isolated acceptance test is live-chain, public-load, GPU or installer qualification.

@@ -99,13 +99,17 @@ impl Fixture {
         let response = self.post(PROPOSE, &self.request(funding)).await;
         assert_eq!(response.status(), StatusCode::OK);
         let signed: Signed<Quote> = response.json().await.unwrap();
-        protocol::verify(QUOTE_DOMAIN, &signed, &self.state.wallet).unwrap();
+        self.verify_quote(&signed, PAYER, funding);
+        signed
+    }
+    fn verify_quote(&self, signed: &Signed<Quote>, payer: &str, funding: &str) {
+        protocol::verify(QUOTE_DOMAIN, signed, &self.state.wallet).unwrap();
         let q = &signed.payload;
         let o = &self.offer.payload;
         assert_eq!(q.network, o.network);
         assert_eq!(q.offer_id, self.offer_id);
         assert_eq!(q.provider_wallet, o.provider_wallet);
-        assert_eq!(q.consumer_wallet, PAYER);
+        assert_eq!(q.consumer_wallet, payer);
         assert_eq!(q.model, o.model);
         assert_eq!(q.price, o.price);
         assert_eq!(q.funding_wei, funding);
@@ -118,7 +122,21 @@ impl Fixture {
             assert_eq!(hex.len(), 64);
             assert!(hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
         }
-        signed
+    }
+    // Deterministic ledger-admission prerequisite, not a public HTTP issuance claim.
+    // A later sampled minute pins the committed clock while the real route samples wall time.
+    fn commit_prerequisite(&self, payer: &str, funding: &str, now: u64) -> Signed<Quote> {
+        let offer = &self.offer.payload;
+        let quote = protocol::sign(QUOTE_DOMAIN, Quote {
+            id: protocol::random_id(), network: offer.network.clone(),
+            offer_id: self.offer_id.clone(), provider_wallet: offer.provider_wallet.clone(),
+            consumer_wallet: payer.into(), model: offer.model.clone(), price: offer.price.clone(),
+            funding_wei: funding.into(), platform_wallet: offer.platform_wallet.clone(),
+            fee_bps: offer.fee_bps, max_concurrency: offer.max_concurrency,
+            nonce: protocol::random_id(), issued_at: now, expires_at: now + 300,
+        }, &self.state.private_key).unwrap();
+        self.state.ledger.store_quote(&quote, now).unwrap();
+        quote
     }
     async fn stop(mut self) {
         self.shutdown.take().unwrap().send(()).unwrap();
@@ -300,38 +318,166 @@ async fn proposal_body_limit_accepts_exactly_96_kib_and_rejects_one_more_byte() 
 }
 
 #[tokio::test]
-async fn public_pending_quota_follows_the_canonical_named_payer_not_caller_authority() {
+async fn public_and_native_quotes_exceed_both_former_wallet_limits_without_reserving_capacity() {
     let directory = tempfile::tempdir().unwrap();
-    let fixture = Fixture::new(directory.path(), 30, "1", "2").await;
-    let payer = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let mut fixture = Fixture::new(directory.path(), 30, "1", "2").await;
+    let config = ConsumerConfig {
+        network: fixture.state.config.network.clone(),
+        data_dir: directory.path().join("consumer"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, &format!("{:064x}", 50_030)).unwrap();
+    consumer.wallet_import_file(&import).unwrap();
+    let payer = consumer.address().unwrap();
     let alias = format!("0x{}", payer[2..].to_ascii_uppercase());
-    let mut request = fixture.request("100");
-    let mut accepted = Vec::new();
-    // No owner proof or bearer: both spellings name the same payer and share its eight slots.
-    for index in 0..8 {
-        request["consumer_wallet"] = json!(if index % 2 == 0 { payer } else { &alias });
-        let response = fixture.post(PROPOSE, &request).await;
-        assert_eq!(response.status(), StatusCode::OK);
+    assert_ne!(payer, alias);
+    let minute_sample = protocol::now().unwrap() + 600;
+    let prerequisite = fixture.commit_prerequisite(PAYER, "100", minute_sample);
+    let mut accepted = vec![prerequisite];
+
+    // Each request uses a separate anonymous client/connection, not owner proof or
+    // a forwarded source header. Sixteen actual HTTP admissions name the same owner.
+    for index in 0..16 {
+        let caller = reqwest::Client::builder().no_proxy()
+            .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10))
+            .build().unwrap();
+        let response = caller.post(format!("{}{PROPOSE}", fixture.base)).json(&json!({
+            "offer_id": fixture.offer_id,
+            "consumer_wallet": if index % 2 == 0 { &payer } else { &alias },
+            "funding_wei": "100"
+        })).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "public admission {}", index + 1);
         let signed: Signed<Quote> = response.json().await.unwrap();
-        protocol::verify(QUOTE_DOMAIN, &signed, &fixture.state.wallet).unwrap();
-        assert_eq!(signed.payload.consumer_wallet, payer);
+        fixture.verify_quote(&signed, &payer, "100");
         accepted.push(signed);
     }
-    for spelling in [payer, alias.as_str()] {
-        request["consumer_wallet"] = json!(spelling);
-        reject(fixture.post(PROPOSE, &request).await,
-            StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+
+    // Every variant is requested after BOTH former wallet ceilings have been passed.
+    // Signed development offers are prerequisites, not engine qualification evidence.
+    for (model, input, output, funding) in [
+        ("test/proposal", "0", "0", "0"),
+        ("test/proposal", "1", "0", "101"),
+        ("test/another-proposal", "0", "0", "0"),
+        ("test/another-proposal", "0", "2", "102"),
+    ] {
+        let mut offer = fixture.offer.payload.clone();
+        offer.model.id = model.into();
+        offer.price.input_wei_per_1k = input.into();
+        offer.price.output_wei_per_1k = output.into();
+        offer.revision += 1;
+        fixture.offer = protocol::sign(OFFER_DOMAIN, offer, &fixture.state.private_key).unwrap();
+        fixture.offer_id = fixture.state.offers.insert(fixture.offer.clone()).unwrap();
+        let caller = reqwest::Client::builder().no_proxy()
+            .redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10))
+            .build().unwrap();
+        let response = caller.post(format!("{}{PROPOSE}", fixture.base)).json(&json!({
+            "offer_id": fixture.offer_id, "consumer_wallet": alias, "funding_wei": funding
+        })).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let public: Signed<Quote> = response.json().await.unwrap();
+        fixture.verify_quote(&public, &payer, funding);
+        accepted.push(public);
+        let native = consumer.quote(&fixture.offer, funding).await.unwrap();
+        fixture.verify_quote(&native, &payer, funding);
+        accepted.push(native);
     }
-    // The public caller can name another payer, but cannot thereby open or fund an account.
-    accepted.push(fixture.propose("100").await);
+
     let independent = BillingStore::open(&fixture.ledger_path,
         &fixture.state.config.network.identity).unwrap();
-    for signed in accepted {
+    for signed in &accepted {
         let saved = independent.quote(&signed.payload.id).unwrap();
         assert_eq!(saved.payload, signed.payload);
         assert_eq!(saved.signature, signed.signature);
         assert!(independent.account(&signed.payload.id).is_err());
+        // Naming the payer, including through the native quote workflow, grants no
+        // opening authority to a caller that lacks the owner's exact request proof.
+        reject(fixture.post("/v1/contracts/open", &json!({
+            "quote_id": signed.payload.id, "raw_transaction": null
+        })).await, StatusCode::UNAUTHORIZED, "invalid_api_key").await;
     }
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    let count: usize = db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get(0)).unwrap();
+    assert_eq!(count, accepted.len());
+    let buckets: Vec<(String, u64, usize)> = db.prepare(
+        "SELECT bucket,window,count FROM rate_limits WHERE bucket LIKE 'quote:%' ORDER BY bucket"
+    ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(buckets, vec![("quote:global".into(), minute_sample / 60, accepted.len())]);
+    for table in ["funding_intents", "accounts", "credentials", "funding", "requests", "challenges"] {
+        let count: u64 = db.query_row(&format!("SELECT COUNT(*) FROM {table}"),
+            [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0, "quoting must not reserve or authorize {table}");
+    }
+    assert!(!fixture.submitted.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn public_global_committed_rate_refusal_preserves_quotes_and_an_opened_agreement() {
+    let directory = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(directory.path(), 31, "0", "0").await;
+    let config = ConsumerConfig {
+        network: fixture.state.config.network.clone(),
+        data_dir: directory.path().join("consumer"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, &format!("{:064x}", 50_031)).unwrap();
+    consumer.wallet_import_file(&import).unwrap();
+    let original = consumer.quote(&fixture.offer, "0").await.unwrap();
+    let opened = consumer.fund(&fixture.offer, &original).await.unwrap();
+    let account = serde_json::to_value(&opened).unwrap();
+    let credential = consumer.credential_export(&original.payload.id, None).unwrap();
+
+    // These 599 complete signed quotes are real public-time ledger admissions,
+    // NOT 599 live HTTP issuances. The later sample keeps route assertions away
+    // from minute-boundary races and exercises the non-regressing committed clock.
+    let minute_sample = protocol::now().unwrap() + 600;
+    for index in 0..599 {
+        fixture.commit_prerequisite(&format!("0x{:040x}", 100_000 + index), "0", minute_sample);
+    }
+    let last = fixture.propose("0").await; // Actual HTTP admission spends global unit 600.
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    let retained = || {
+        db.prepare("SELECT record FROM quotes ORDER BY id").unwrap()
+            .query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap()
+    };
+    let before = retained();
+    assert_eq!(before.len(), 600);
+    for payer in [PAYER.to_string(), consumer.address().unwrap()] {
+        let mut request = fixture.request("0");
+        request["consumer_wallet"] = json!(payer);
+        reject(fixture.post(PROPOSE, &request).await,
+            StatusCode::TOO_MANY_REQUESTS, "rate_limit").await;
+        assert!(retained() == before, "global refusal altered retained signed quotes");
+    }
+    let counter: (u64, u64) = db.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket='quote:global'", [],
+        |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    assert_eq!(counter, (minute_sample / 60, 600));
+    let watermark: String = db.query_row(
+        "SELECT value FROM metadata WHERE key='quote_committed_minute'", [],
+        |row| row.get(0)).unwrap();
+    assert_eq!(watermark, (minute_sample / 60).to_string());
+    for signed in [&original, &last] {
+        let saved = fixture.state.ledger.quote(&signed.payload.id).unwrap();
+        assert_eq!(saved.payload, signed.payload);
+        assert_eq!(saved.signature, signed.signature);
+    }
+    let account_count: u64 = db.query_row("SELECT COUNT(*) FROM accounts", [],
+        |row| row.get(0)).unwrap();
+    assert_eq!(account_count, 1);
+    let intents: u64 = db.query_row("SELECT COUNT(*) FROM funding_intents", [],
+        |row| row.get(0)).unwrap();
+    assert_eq!(intents, 0);
+    assert!(fixture.state.ledger.account(&last.payload.id).is_err());
+    let resumed = consumer.fund(&fixture.offer, &original).await.unwrap();
+    assert_eq!(serde_json::to_value(resumed).unwrap(), account);
+    assert!(consumer.credential_export(&original.payload.id, None).unwrap() == credential);
+    assert!(fixture.state.ledger.funding_history(&original.payload.id).unwrap().is_empty());
     assert!(!fixture.submitted.load(Ordering::Acquire));
 }
 
