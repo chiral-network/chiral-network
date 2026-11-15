@@ -2,7 +2,7 @@
 
 The wire foundation is archived and its main spec is available. The README-designated whitepaper remains `docs/chiral-book.md`, SHA-256 `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`, read-only. This change specifies the next dependency layer: complete commercial declarations and how a consumer accepts a quote. Its **Approved non-reserving quotes** author decision supersedes conflicting wallet quote quotas. During pending cutover, `specify-non-reserving-quotes` owns replacement quote retention, signing work and authenticated admission; the aligned `specify-proposal-rate-budgets` owns committed issuance. These pending contracts are authoritative over historical quota wording, not evidence of native compliance or archived canonical integration.
 
-No current failing committed-code check takes priority: the preceding all-targets Rust run and available frontend/Python/build commands passed. Most runtime sources are nevertheless pre-existing modified/untracked work. Read them for evidence but do not commit or overwrite that work.
+At the initial specification review, available checks passed but most native sources were pre-existing modified/untracked work. That ownership constraint is historical: the author subsequently authorized the necessary native migration, and the origin-correction turn entered a clean checkout at `bb976635`. It does not block the remaining native tasks; unrelated future edits still must not be absorbed.
 
 ## Goals / Non-Goals
 
@@ -28,7 +28,7 @@ Non-goals:
 7. **Bound provider resources, never the unauthenticated named wallet.** Retain at most 10,000 standalone quotes per ledger, independently of at most 10,000 active original paid-intent leases. Keep 64 non-queuing control readers, 96 KiB bodies and five-second read deadlines. Claim a durable provider-ledger 600/minute work permit after validation and before signing; it remains spent after signing/insertion/delivery failure. Separately charge 600/minute committed insertions atomically with quote storage; failed insertion rolls back this charge, and successful issuance is not refunded by response loss, expiry, acknowledgement or opening. Each budget has its own durable non-regressing effective-minute clock; work initializes its first minute exhausted, while committed issuance preserves retained global evidence under the aligned rate contract. Neither clock changes signed timestamps. Remove both old named-wallet gates together; optional source controls use transport/trusted-proxy identity, not the named wallet or untrusted forwarding headers. Challenge and per-inference rules remain unchanged.
 8. **Preserve accepted originals through capacity pressure and ambiguity.** Full paid admission refuses without acknowledgement, accepted intent, account, credit or submission; an honest provider must not broadcast the refused original. A client persists a valid acknowledgement before submitting the exact prepared bytes. Signed bytes still permit dishonest provider broadcast; lost replies are ambiguous and require recovery of the same intent/acknowledgement/transaction, not automatic replacement. Once acknowledged, expiry, restart or later capacity pressure cannot revoke terms or sender/nonce ownership. Healthy safe-frontier evidence remains necessary for credit. Cached accepted-original, existing-account, top-up and settlement recovery acquire no fresh quote/work/rate/opening-capacity gate. Existing authenticated free-opening account bounds remain separate.
 
-## Inspected source and coverage
+## Source and coverage at initial review
 
 | Boundary | Source inspected | Evidence / remaining work |
 |---|---|---|
@@ -74,7 +74,15 @@ Task 2.5 reuses the existing renewal regressions. No additional commercial accep
 
 The ledger tests use isolated fixtures and explicit ledger times, not real chain acceptance or measured GPUs; the visibility test pre-admits synthetic metadata and is not a live readiness probe. Evidence-parser tests exercise report/workload/runtime binding, not hardware truth. The implementation path above and the preserved historical-recovery correspondence delimit completion of this commercial task: full runtime measurement, lifecycle/failure qualification, performance accounting specifications and public-release gates remain separate work. The reviewed native sources/tests remain owner-uncommitted work and are not absorbed into this change's commit.
 
-## Implementation gap and ownership constraint
+## Advertised-origin implementation
+
+Task 2.1.4 corrects static acceptance of `localhost.` and names below `*.localhost.` in the shared `offer_registry::validate_endpoint` boundary. Only reserved-name classification strips terminal DNS root dots, after URL parsing/normalization. The development exception still uses literal loopback or exact `localhost`; absolute aliases cannot obtain that exception. Returned URLs and signed endpoint strings are not rewritten.
+
+The origin regression covers plain, case-folded, percent-encoded and IDNA dot spellings, nested localhost subdomains and repeated terminal dots, with HTTPS/443 and development-style HTTP(S) ports in both modes. Each case first establishes that URL parsing accepts the spelling. Positive controls retain public absolute DNS names, including `localhost.example.org.`, and existing exact-localhost/literal-loopback behavior. These are deterministic static admission checks, not DNS, reachability or transport-bypass evidence.
+
+The shared validator remains the gate for offer-registry insertion, provider public-endpoint configuration and safe outbound client construction. DNS address validation/pinning, disabled redirects/proxies and private-engine configuration are unchanged. Embedding price/template enforcement and the other incomplete commercial tasks remain open; this correction does not complete the change or authorize archival.
+
+## Historical implementation gaps and ownership constraints
 
 Native embedding output-price enforcement is an observed source-level gap: provider configuration parses any canonical output rate, the managed runtime inventory path has no rate check, and only the reference provisioner enforces zero. The next implementation slice must demonstrate rejection/acceptance at the real native configuration boundary and close it there; no live provider or payment is necessary.
 
@@ -93,7 +101,7 @@ The native quote cutover is also open owner-source work: remove both public wall
 
 ## Migration Plan
 
-This turn changes specifications only. Subsequent tasks add missing contract tests and the native embedding-price correction without migrating money or changing accepted agreement bytes. Archive normally only after implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
+This change began as specifications and now includes isolated acceptance tests and the native origin correction above. Remaining tasks include the embedding-price/template corrections, without migrating money or changing accepted agreement bytes. Archive normally only after all implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
 
 ## Open Questions
 

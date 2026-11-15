@@ -13,6 +13,14 @@ fn public_https_origins_accept_default_port_and_standard_url_normalization() {
             "HTTPS://Inference.Example.Org:443/",
             "https://inference.example.org/",
         ),
+        (
+            "https://Inference.Example.Org.:443",
+            "https://inference.example.org./",
+        ),
+        (
+            "https://localhost.example.org.",
+            "https://localhost.example.org./",
+        ),
         ("https://1.1.1.1:443", "https://1.1.1.1/"),
         (
             "https://[2606:4700:4700::1111]:443/",
@@ -129,6 +137,34 @@ fn development_never_extends_to_private_lan_or_localhost_subdomains() {
                 validate_endpoint(input, development).is_err(),
                 "non-loopback development exception: {input}, development={development}"
             );
+        }
+    }
+}
+
+#[test]
+fn absolute_localhost_aliases_are_rejected_after_url_normalization() {
+    for (host, normalized) in [
+        ("localhost.", "localhost."),
+        ("LOCALHOST.", "localhost."),
+        ("provider.localhost.", "provider.localhost."),
+        ("a.provider.localhost.", "a.provider.localhost."),
+        ("%6cocalhost%2e", "localhost."),
+        ("provider%2elocalhost%2e", "provider.localhost."),
+        ("localhost\u{3002}", "localhost."),
+        ("provider\u{ff0e}localhost\u{ff61}", "provider.localhost."),
+        ("localhost..", "localhost.."),
+        ("provider.localhost..", "provider.localhost.."),
+    ] {
+        for (scheme, port) in [("https", 443), ("http", 8080), ("https", 8443)] {
+            let input = format!("{scheme}://{host}:{port}");
+            // These are accepted by the URL parser, not malformed-URL refusals.
+            assert_eq!(url::Url::parse(&input).unwrap().host_str(), Some(normalized));
+            for development in [false, true] {
+                assert!(
+                    validate_endpoint(&input, development).is_err(),
+                    "localhost alias accepted: {input}, development={development}"
+                );
+            }
         }
     }
 }

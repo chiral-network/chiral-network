@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Absolute localhost aliases passed advertised-origin validation
+
+- **Native-CFX defect:** HTTPS/443 origins such as `localhost.` and `provider.localhost.` passed static admission because localhost classification omitted terminal DNS root dots. This was a metadata-validation gap, not demonstrated DNS/transport access to a forbidden address.
+- **Correction:** the shared origin validator classifies the reserved namespace after URL normalization, stripping terminal dots only for that check. Literal-loopback/exact-localhost development support remains narrow; valid public absolute DNS names and returned URL spellings are preserved. DNS pinning, address filtering and redirect/proxy refusal remain unchanged.
+- **Verification:** ten parser-accepted host spellings across three scheme/port combinations and both modes are refused; public absolute names and existing development controls remain accepted. All 483 available tests, available builds/checks and strict commercial-change validation pass. The new regression is isolated syntax/admission evidence, not a DNS, reachability or public-deployment qualification.
+
 ### Funding messages accepted positional JSON arrays
 
 - **Native-CFX defect:** derived struct decoding accepted a positional funding request and positional acknowledgement envelope, payload or network. Those response projections retained the original valid signature, so signature verification alone did not enforce the required object schemas.

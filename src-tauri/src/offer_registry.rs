@@ -163,11 +163,15 @@ pub fn validate_endpoint(endpoint: &str, development: bool) -> Result<url::Url, 
     let local =
         literal.is_some_and(|ip| ip.is_loopback()) || host.eq_ignore_ascii_case("localhost");
     if !(development && local) {
+        // A DNS root dot does not leave the reserved localhost namespace.
+        // Do not use this spelling to broaden the exact development exception.
+        let dns_name = host.trim_end_matches('.');
         if url.scheme() != "https"
             || url.port_or_known_default() != Some(443)
             || literal.is_some_and(|ip| !public_ip(ip))
             || local
-            || host.ends_with(".localhost")
+            || dns_name.eq_ignore_ascii_case("localhost")
+            || dns_name.ends_with(".localhost")
             || (literal.is_none() && !host.contains('.'))
         {
             return Err("endpoint must be public HTTPS on port 443; development only permits loopback exceptions".into());

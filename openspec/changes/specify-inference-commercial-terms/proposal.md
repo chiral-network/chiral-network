@@ -25,5 +25,5 @@ None. `inference-wire-foundation` remains the dependency for network identity, c
 
 - Read-only authority: `docs/chiral-book.md`, especially the signed schemas, hardware participation, immutable terms, authorization matrix, configuration, funding order, and API/model qualification sections.
 - Corresponding code: `protocol.rs`, `offer_registry.rs`, `performance.rs`, `provider_config.rs`, `contracts.rs`, `consumer.rs`, `billing_store.rs`, `engine_runtime.rs`, and `scripts/provision-provider.py`.
-- This turn changes specifications and APAS notes only. Follow-on work must preserve the extensive pre-existing dirty implementation and must not include others' changes in a commit.
+- Implementation now includes the shared advertised-origin correction for absolute localhost aliases, alongside the existing acceptance tests. The original source-ownership blocker was resolved by the author-approved native migration; preserve any unrelated future edits and commit only this change's files.
 - No deployment, account/server operation, database conversion, dependency installation or public-release approval. Discovery reconciliation, safe-chain settlement, request accounting and qualification measurement remain separate capabilities to specify.
