@@ -13,7 +13,7 @@ This step supplies that missing specification before implementation. It does not
 5. **Recovery is not fresh funding admission.** Closed serving/new-funding readiness, withdrawn offers and full quote/opening resources do not erase the accepted agreement or prevent otherwise-valid top-up settlement. They also do not excuse a frozen account or unavailable safe evidence. A repeated accepted top-up still traverses verification; unlike existing-account opening replay, it is not an offline ledger-only fast path. Unavailable evidence is not a reorg.
 6. **Retain useful existing acceptance.** Extend the shared production-router fixture and direct object visitor rather than adding another server, payment simulator or decoder convention. Account/credential/fee snapshots distinguish forbidden mutations from legitimately consumed challenges and bounded verification-attempt records. Synthetic chain and restored account/storage prerequisites must remain explicitly disclosed.
 
-## Source and acceptance correspondence
+## Source and acceptance correspondence at initial review
 
 | Boundary | Actual source | Existing evidence / remaining work |
 |---|---|---|
@@ -43,3 +43,19 @@ Reuse existing synthetic safe-credit/native original/lost-response coverage; ext
 Strict change validation and all 499 available tests pass: 438 Rust tests (two pre-existing ignored), 15 frontend tests and 46 provisioning tests. Headless/frontend builds, Svelte checking with zero errors/warnings, CI Python compilation and the unchanged whitepaper checksum also pass. Existing compiler warnings and stale Browserslist data remain; native desktop/release checks still require unavailable WebKit and the actual policy authority.
 
 Only specification artifacts and worker progress are committed in this step. The decoder probe is deleted, runtime/permanent tests are unchanged, and tasks 2.1–2.4 and final integration remain open. Passing the current suite does not enforce the new object-only requirement or establish its missing production-router acceptance.
+
+## Object-only implementation and authority acceptance — 2026-11-15
+
+`TopupRequest` now uses the existing direct object visitor and a local strict field decoder. The required `String` is moved into the unchanged public field; serialization and native callers are unchanged. No intermediate `Value`, nullable-payment alias, compatibility shim or storage conversion is added. The route still validates the identifier, authenticates/consumes the exact owner proof and resolves account ownership before decoding the top-up body.
+
+`topup_request_schema_refuses_invalid_shapes_after_consuming_owner_authority` covers sixteen malformed/root/member cases for both free and existing paid accounts, including the previously observed complete positional projection. Each request carries genuine authority bound to its exact bytes. Full fourteen-table snapshots must differ only by removal of that request's nonce; an unrelated pending read proof remains usable. Consumed-proof replay fails, existing credentials remain valid, and the observed RPC/engine endpoint receives no request.
+
+The real `TopupRequest` serializer supplies each object control. Free accounts reach their eligibility refusal without RPC. Matching signed paid top-ups reach an intentionally unavailable loopback RPC and retain only the original unavailable funding attempt, without credit, fee or credential mutation. This proves decoding and verification entry, not safe credit; paid opening credit remains a disclosed post-verification fixture prerequisite. Existing safe-credit and native top-up regressions remain separate controls.
+
+`topup_authority_precedes_schema_and_binds_exact_body_and_target` covers missing/bearer authority on malformed bodies, wrong-owner and absent-account precedence, and invalid route syntax before proof consumption. Both directions of compact/whitespace-equivalent JSON substitution, another same-owner account's path and an added query must fail binding with the complete ledger/proof and RPC count unchanged. The exact original compact or spaced object remains usable, reaches the proper eligibility/verification boundary, then cannot reuse its consumed proof. No new authentication or financial policy is introduced; remaining eligibility/resource correspondence stays in tasks 2.3–2.4.
+
+### Verification for tasks 2.1–2.2
+
+All **501 available tests passed**: 440 locked headless Rust all-target tests (including both new production-router regressions; two existing tests ignored), 15 frontend tests and 46 provisioning tests. Locked headless binary build, frontend build, Svelte checking (zero errors/warnings), CI Python compilation, strict non-interactive change validation and the protected-book checksum passed. Existing compiler/Browserslist warnings remain. Native desktop dependencies, actual release-policy authority and external platform/hardware/deployment qualification remain separate known blockers; no unavailable gate was rerun, installed around or claimed complete.
+
+Tasks 2.1–2.2 are complete. Tasks 2.3–2.4 and final whole-change integration remain open, so the change is not archived. The initial source comparison and specification-step evidence above are historical; the direct object decoder and permanent HTTP acceptance now replace the previously observed positional-request behavior without changing accounting or authorization policy.

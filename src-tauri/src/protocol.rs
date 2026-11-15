@@ -644,10 +644,23 @@ impl<'de> Deserialize<'de> for OpenRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TopupRequest {
     pub raw_transaction: String,
+}
+
+impl<'de> Deserialize<'de> for TopupRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            raw_transaction: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            raw_transaction: fields.raw_transaction,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

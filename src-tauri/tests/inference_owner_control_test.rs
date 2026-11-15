@@ -1487,6 +1487,199 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
 }
 
 #[tokio::test]
+async fn topup_request_schema_refuses_invalid_shapes_after_consuming_owner_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_bodies: &[(&str, fn(&str) -> Vec<u8>)] = &[
+        ("complete positional", |raw| serde_json::to_vec(&json!([raw])).unwrap()),
+        ("empty positional", |_| b"[]".to_vec()),
+        ("invalid JSON", |_| b"{".to_vec()),
+        ("null root", |_| b"null".to_vec()),
+        ("boolean root", |_| b"true".to_vec()),
+        ("numeric root", |_| b"1".to_vec()),
+        ("string root", |raw| serde_json::to_vec(raw).unwrap()),
+        ("missing payment", |_| b"{}".to_vec()),
+        ("null payment", |_| br#"{"raw_transaction":null}"#.to_vec()),
+        ("boolean payment", |_| br#"{"raw_transaction":true}"#.to_vec()),
+        ("integer payment", |_| br#"{"raw_transaction":1}"#.to_vec()),
+        ("fractional payment", |_| br#"{"raw_transaction":1.5}"#.to_vec()),
+        ("array payment", |raw| serde_json::to_vec(&json!({"raw_transaction":[raw]})).unwrap()),
+        ("object payment", |raw| serde_json::to_vec(&json!({"raw_transaction":{"hex":raw}})).unwrap()),
+        ("unknown member", |raw| serde_json::to_vec(&json!({"raw_transaction":raw,"amount_wei":"1000"})).unwrap()),
+        ("duplicate payment", |raw| {
+            let raw = serde_json::to_string(raw).unwrap();
+            format!(r#"{{"raw_transaction":{raw},"raw_transaction":{raw}}}"#).into_bytes()
+        }),
+    ];
+    for (state, paid) in [false, true].into_iter().enumerate() {
+        for (index, (name, invalid_body)) in invalid_bodies.iter().enumerate() {
+            // Separate fixtures keep proof/rate ceilings from masking decoding.
+            let mut fixture = Fixture::new(directory.path(), 69_000 + (state * invalid_bodies.len() + index) as u64);
+            let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+            let observed = rpc_calls.clone();
+            let rpc_app = Router::new().fallback(move |request: Request| {
+                let observed = observed.clone();
+                async move {
+                    observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            });
+            fixture._listeners[0].set_nonblocking(true).unwrap();
+            let listener = tokio::net::TcpListener::from_std(fixture._listeners[0].try_clone().unwrap()).unwrap();
+            let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+            let unrelated = fixture.open_free().await;
+            // Accepted paid credit is a post-verification prerequisite, not chain evidence.
+            let opened = if paid { fixture.paid_account().await.0 } else { fixture.open_free().await };
+            let id = &opened.account.contract_id;
+            let path = format!("/v1/contracts/{id}/topup");
+            let read_path = format!("/v1/contracts/{}", unrelated.account.contract_id);
+            let retained = fixture.proof(OWNER_KEY, "GET", &read_path, &[]).await;
+            let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+            let body = invalid_body(&raw);
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let mut expected = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", &path, &proof.headers, body.clone()).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{name}, paid={paid}: {document}");
+            assert_eq!(document["error"]["code"], "invalid_request", "{name}, paid={paid}");
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            assert_eq!(ledger_snapshot(&db), expected, "{name}: only this proof may be consumed");
+            denied(fixture.send("POST", &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(ledger_snapshot(&db), expected);
+            assert!(rpc_calls.lock().unwrap().is_empty());
+
+            // The real writer's object still reaches eligibility/verification.
+            let valid = protocol::TopupRequest { raw_transaction: raw };
+            let body = serde_json::to_vec(&valid).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+            let mut expected = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", &path, &proof.headers, body).await;
+            assert_eq!(status, if paid { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::CONFLICT }, "{document}");
+            assert_eq!(document["error"]["code"], if paid { "settlement_unavailable" } else { "account_frozen" });
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            let after = ledger_snapshot(&db);
+            for table in 0..expected.len() {
+                if paid && table == 5 { continue; } // The genuine verification refusal records its original.
+                assert_eq!(after[table], expected[table], "{name}: object control changed table {table}");
+            }
+            if paid {
+                assert!(!rpc_calls.lock().unwrap().is_empty(), "valid paid evidence must reach verification");
+                let attempt: (String, String, String, String) = db.query_row(
+                    "SELECT tx_hash,contract,raw_transaction,json_extract(record,'$.status') FROM funding_attempts",
+                    [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
+                assert_eq!(attempt, (envelope.tx_hash, id.clone(), valid.raw_transaction, "unavailable".into()));
+            } else {
+                assert!(rpc_calls.lock().unwrap().is_empty());
+            }
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), unrelated.credential.as_ref().unwrap()]);
+            let (status, account) = fixture.send("GET", &read_path, &retained.headers, Vec::new()).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(account, serde_json::to_value(&unrelated.account).unwrap());
+            fixture.consumed(&retained);
+            rpc_server.abort();
+            assert!(rpc_server.await.unwrap_err().is_cancelled());
+        }
+    }
+}
+
+#[tokio::test]
+async fn topup_authority_precedes_schema_and_binds_exact_body_and_target() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 70_000 + index as u64);
+        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let observed = rpc_calls.clone();
+        let rpc_app = Router::new().fallback(move |request: Request| {
+            let observed = observed.clone();
+            async move {
+                observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        fixture._listeners[0].set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(fixture._listeners[0].try_clone().unwrap()).unwrap();
+        let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+        let unrelated = fixture.open_free().await;
+        let opened = if paid { fixture.paid_account().await.0 } else { fixture.open_free().await };
+        let id = &opened.account.contract_id;
+        let read = fixture.scoped_credential(id, "read");
+        let path = format!("/v1/contracts/{id}/topup");
+        let other_path = format!("/v1/contracts/{}/topup", unrelated.account.contract_id);
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let malformed = b"{}".to_vec();
+        for headers in [HeaderMap::new(), bearer(opened.credential.as_ref().unwrap()), bearer(&read)] {
+            let before = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", &path, &headers, malformed.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+            assert_eq!(document["error"]["code"], "invalid_api_key");
+            assert_eq!(ledger_snapshot(&db), before);
+        }
+        let absent_id = format!("0x{:064x}", 1);
+        assert!(fixture.provider.state.ledger.account(&absent_id).is_err());
+        let absent_path = format!("/v1/contracts/{absent_id}/topup");
+        for (key, target, status, code) in [
+            (OTHER_KEY, path.as_str(), StatusCode::FORBIDDEN, "forbidden"),
+            (OWNER_KEY, absent_path.as_str(), StatusCode::NOT_FOUND, "not_found"),
+        ] {
+            let proof = fixture.proof(key, "POST", target, &malformed).await;
+            let mut expected = ledger_snapshot(&db);
+            let (actual, document) = fixture.send("POST", target, &proof.headers, malformed.clone()).await;
+            assert_eq!(actual, status);
+            assert_eq!(document["error"]["code"], code);
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            assert_eq!(ledger_snapshot(&db), expected);
+        }
+        let invalid_path = "/v1/contracts/0x00/topup";
+        let proof = fixture.proof(OWNER_KEY, "POST", invalid_path, &malformed).await;
+        let before = ledger_snapshot(&db);
+        let (status, document) = fixture.send("POST", invalid_path, &proof.headers, malformed).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(document["error"]["code"], "invalid_contract_id");
+        assert_eq!(ledger_snapshot(&db), before, "route validation precedes proof consumption");
+        assert!(rpc_calls.lock().unwrap().is_empty());
+
+        let (raw, _) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+        let compact = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: raw }).unwrap();
+        let spaced = format!(" {}\n", std::str::from_utf8(&compact).unwrap()).into_bytes();
+        let query_path = format!("{path}?cursor=1");
+        for reverse in [false, true] {
+            let (original, substituted) = if reverse { (&spaced, &compact) } else { (&compact, &spaced) };
+            let proof = fixture.proof(OWNER_KEY, "POST", &path, original).await;
+            let mut expected = ledger_snapshot(&db);
+            let rpc_start = rpc_calls.lock().unwrap().len();
+            for (target, body) in [(&path, substituted), (&other_path, original), (&query_path, original)] {
+                let (status, document) = fixture.send("POST", target, &proof.headers, body.clone()).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED);
+                assert_eq!(document["error"]["code"], "invalid_api_key");
+                assert_eq!(ledger_snapshot(&db), expected, "binding refusal must retain the exact original authority");
+                assert_eq!(rpc_calls.lock().unwrap().len(), rpc_start);
+            }
+            let (status, document) = fixture.send("POST", &path, &proof.headers, original.clone()).await;
+            assert_eq!(status, if paid { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::CONFLICT }, "{document}");
+            assert_eq!(document["error"]["code"], if paid { "settlement_unavailable" } else { "account_frozen" });
+            fixture.consumed(&proof);
+            expected[11].retain(|row| row[0].as_str() != Some(proof.nonce.as_str()));
+            let after = ledger_snapshot(&db);
+            for table in 0..expected.len() {
+                if paid && table == 5 { continue; }
+                assert_eq!(after[table], expected[table]);
+            }
+            let rpc_count = rpc_calls.lock().unwrap().len();
+            if paid { assert!(rpc_count > rpc_start); }
+            else { assert_eq!(rpc_count, rpc_start); }
+            denied(fixture.send("POST", &path, &proof.headers, original.clone()).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(rpc_calls.lock().unwrap().len(), rpc_count);
+            assert_eq!(ledger_snapshot(&db), after);
+        }
+        fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &read, unrelated.credential.as_ref().unwrap()]);
+        rpc_server.abort();
+        assert!(rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn topups_require_account_owner_and_business_refusals_consume_only_authority() {
     let directory = tempfile::tempdir().unwrap();
     for (index, paid) in [false, true].into_iter().enumerate() {
