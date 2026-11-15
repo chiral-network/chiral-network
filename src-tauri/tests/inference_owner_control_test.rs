@@ -107,6 +107,31 @@ fn bearer(credential: &Credential) -> HeaderMap {
     headers
 }
 
+fn ledger_snapshot(db: &Connection) -> [Vec<Value>; 14] {
+    // Complete rows, including indexed identity/authority columns and retained
+    // agreements. JSON records are compared structurally, not by field order.
+    [
+        "SELECT json_array(id,owner,json(quote),json(account),sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id",
+        "SELECT json_array(id,contract,request_key,credential,status,created,json(record)) FROM requests ORDER BY id",
+        "SELECT json_array(id,owner,expires,json(record)) FROM quotes ORDER BY id",
+        "SELECT json_array(tx_hash,contract,json(record),json(evidence),status,checked) FROM funding ORDER BY tx_hash",
+        "SELECT json_array(tx_hash,contract,json(record),raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash",
+        "SELECT json_array(contract,tx_hash,raw_transaction,json(ack),json(quote),sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
+        "SELECT json_array(id,status,json(record)) FROM fee_batches ORDER BY id",
+        "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket",
+        "SELECT json_array(key,value) FROM metadata ORDER BY key",
+        "SELECT json_array(nonce,wallet,expires,json(record)) FROM challenges ORDER BY nonce",
+        "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence",
+        "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence",
+    ].map(|query| {
+        db.prepare(query).unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .map(|row| serde_json::from_str::<Value>(&row.unwrap()).unwrap())
+            .collect::<Vec<_>>()
+    })
+}
+
 fn denied(response: (StatusCode, Value), status: StatusCode) {
     assert_eq!(response.0, status, "{}", response.1);
     assert!(response.1.get("error").is_some(), "{}", response.1);
@@ -3382,28 +3407,7 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
             ("96", "3", "1"));
         let pending = fixture.quote("100").await;
         let db = Connection::open(&fixture.provider.ledger_path).unwrap();
-        // Complete rows, including indexed identity/authority columns and retained
-        // agreements. JSON records are compared structurally, not by field order.
-        let snapshot = || [
-            "SELECT json_array(id,owner,json(quote),json(account),sequence,created) FROM accounts ORDER BY id",
-            "SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id",
-            "SELECT json_array(id,contract,request_key,credential,status,created,json(record)) FROM requests ORDER BY id",
-            "SELECT json_array(id,owner,expires,json(record)) FROM quotes ORDER BY id",
-            "SELECT json_array(tx_hash,contract,json(record),json(evidence),status,checked) FROM funding ORDER BY tx_hash",
-            "SELECT json_array(tx_hash,contract,json(record),raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash",
-            "SELECT json_array(contract,tx_hash,raw_transaction,json(ack),json(quote),sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
-            "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
-            "SELECT json_array(id,status,json(record)) FROM fee_batches ORDER BY id",
-            "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket",
-            "SELECT json_array(key,value) FROM metadata ORDER BY key",
-            "SELECT json_array(nonce,wallet,expires,json(record)) FROM challenges ORDER BY nonce",
-            "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence",
-            "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence",
-        ].map(|query| {
-            db.prepare(query).unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
-                .map(|row| serde_json::from_str::<Value>(&row.unwrap()).unwrap())
-                .collect::<Vec<_>>()
-        });
+        let snapshot = || ledger_snapshot(&db);
         let before = snapshot();
         assert_eq!((before[0].len(), before[1].len(), before[2].len()), (2, 3, 3));
         assert_eq!(before[3][0][0], pending.payload.id);
@@ -3476,6 +3480,154 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
                 .unwrap_err().starts_with("duplicate_request:"));
             fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
             assert_eq!(snapshot(), expected, "{point}: duplicate must not add another hold");
+        }
+    }
+}
+
+#[tokio::test]
+async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
+    const KEY: &str = "terminal-write-fault";
+    let directory = tempfile::tempdir().unwrap();
+    for (mode_index, (mode, supplied_usage, status, terminal_status)) in [
+        ("known", TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
+            "completed", "completed"),
+        ("unknown", TokenUsage::default(), "backend_unknown_usage", "backend_unknown_usage"),
+        ("invalid", TokenUsage { prompt_tokens: 1, completion_tokens: 513 },
+            "completed", "invalid_usage_unknown_usage"),
+    ].into_iter().enumerate() {
+        for (point_index, (point, event)) in [
+            ("account-release", "AFTER UPDATE ON accounts"),
+            ("credential-release", "AFTER UPDATE ON credentials"),
+            ("request-terminal", "AFTER UPDATE ON requests"),
+        ].into_iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(),
+                61_000 + (mode_index * 3 + point_index) as u64);
+            let other = fixture.open_free().await;
+            // Post-verification opening credit and supplied usage are prerequisites,
+            // not observed chain execution, cancellation or private-engine evidence.
+            let (opened, _) = fixture.paid_account().await;
+            let id = &opened.account.contract_id;
+            let now = protocol::now().unwrap();
+            let app = fixture.provider.state.ledger.issue_credential(id, &CredentialIssueRequest {
+                expires_at: now + 3600, spend_cap_wei: Some("2".into()),
+                max_concurrency: 1, scopes: vec!["infer".into()],
+            }, now).unwrap();
+            let ledger = &fixture.provider.state.ledger;
+            let prior_usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+                KEY, 1, 512, now, &other.account.model).unwrap();
+            ledger.settle(&unrelated.id, &prior_usage, "completed", now).unwrap();
+            let prior = ledger.reserve(id, &opened.credential.id, "prior-terminal",
+                1, 512, now, &opened.account.model).unwrap();
+            assert_eq!(ledger.settle(&prior.id, &prior_usage, "completed", now).unwrap().cost_wei, "1");
+            let held = ledger.reserve(id, &opened.credential.id, "prior-reservation",
+                1000, 512, now, &opened.account.model).unwrap();
+            assert_eq!(held.max_cost_wei, "3");
+            let target = ledger.reserve(id, &app.id, KEY,
+                1, 512, now, &opened.account.model).unwrap();
+            assert_eq!(target.max_cost_wei, "2");
+            let account = ledger.account(id).unwrap();
+            assert_eq!((&account.available_wei[..], &account.reserved_wei[..], &account.spent_wei[..]),
+                ("94", "5", "1"));
+            let pending = fixture.quote("100").await;
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let before = ledger_snapshot(&db);
+            assert_eq!((before[0].len(), before[1].len(), before[2].len()), (2, 3, 4));
+            assert_eq!(before[3][0][0], pending.payload.id);
+            let target_id = match point {
+                "account-release" => id,
+                "credential-release" => &app.id,
+                "request-terminal" => &target.id,
+                _ => unreachable!(),
+            };
+            // FAIL retains the statement's writes inside the transaction. A
+            // persistence error must roll back, unlike committed invalid usage.
+            db.execute_batch(&format!(
+                "CREATE TRIGGER fail_terminal_write {event} WHEN NEW.id='{target_id}'
+                 BEGIN SELECT RAISE(FAIL,'injected terminal {point}'); END;"
+            )).unwrap();
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path,
+                        &state.config.network.identity).unwrap());
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
+                let error = fixture.provider.state.ledger.settle(&target.id, &supplied_usage,
+                    status, now + 1).unwrap_err();
+                assert!(error.contains(&format!("injected terminal {point}")),
+                    "{mode}/{point}, reopened={reopened}: {error}");
+                assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
+                assert_eq!(fixture.provider.state.ledger.request_view(id, KEY).unwrap().status, "reserved");
+                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}: retained holds and authority");
+            }
+
+            // Removing the fixture fault authorizes no automatic inference replay.
+            // Reconcile the original reservation and keep its unrelated root hold.
+            db.execute_batch("DROP TRIGGER fail_terminal_write").unwrap();
+            let known = mode == "known";
+            let request = json!({
+                "id":target.id, "request_id":KEY, "contract_id":id, "credential_id":app.id,
+                "status":terminal_status,
+                "usage":{"prompt_tokens":if known { 1 } else { 0 },
+                    "completion_tokens":if known { 1 } else { 0 }},
+                "cost_wei":if known { "1" } else { "0" }, "max_cost_wei":"2",
+                "provider_loss_wei":if known { "0" } else { "2" },
+                "prompt_tokens_reserved":1, "max_output_tokens":512, "created_at":now,
+                "settled_at":now + 1, "performance":null, "waived_wei":"0"
+            });
+            let mut expected = before.clone();
+            let account = expected[0].iter_mut().find(|row| row[0] == *id).unwrap();
+            account[3]["available_wei"] = json!(if known { "95" } else { "96" });
+            account[3]["reserved_wei"] = json!("3");
+            account[3]["spent_wei"] = json!(if known { "2" } else { "1" });
+            account[3]["usage"] = json!({"prompt_tokens":if known { 2 } else { 1 },
+                "completion_tokens":if known { 2 } else { 1 }});
+            let credential = expected[1].iter_mut().find(|row| row[0] == app.id).unwrap();
+            credential[3]["reserved_wei"] = json!("0");
+            credential[3]["spent_wei"] = json!(if known { "1" } else { "0" });
+            let record = expected[2].iter_mut().find(|row| row[0] == target.id).unwrap();
+            record[4] = json!(terminal_status);
+            record[6] = request.clone();
+            let result = fixture.provider.state.ledger.settle(&target.id, &supplied_usage,
+                status, now + 1);
+            if mode == "invalid" {
+                assert!(result.unwrap_err().starts_with("usage_over_reservation:"));
+            } else {
+                assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), request);
+            }
+            assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: first committed outcome");
+
+            for reopened in [false, true] {
+                if reopened {
+                    fixture.app = Router::new();
+                    let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                    state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path,
+                        &state.config.network.identity).unwrap());
+                    fixture.app = contracts::router(fixture.provider.state.clone());
+                }
+                assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}, terminal, reopened={reopened}");
+                let ledger = &fixture.provider.state.ledger;
+                for lookup in [KEY, target.id.as_str()] {
+                    assert_eq!(serde_json::to_value(ledger.request_view(id, lookup).unwrap()).unwrap(), request);
+                }
+                for (usage, later_status, offset) in [
+                    (TokenUsage { prompt_tokens: 1, completion_tokens: 512 }, "cancelled", 2),
+                    (TokenUsage::default(), "restart_unknown_usage", 3),
+                    (TokenUsage { prompt_tokens: 1, completion_tokens: 513 }, "completed", 4),
+                ] {
+                    let replay = ledger.settle(&target.id, &usage, later_status, now + offset).unwrap();
+                    assert_eq!(serde_json::to_value(replay).unwrap(), request);
+                    assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: first result must win");
+                }
+                assert!(ledger.reserve(id, &app.id, KEY, 1, 512, now + 5, &opened.account.model)
+                    .unwrap_err().starts_with("duplicate_request:"));
+                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: no new charge or release");
+            }
         }
     }
 }
