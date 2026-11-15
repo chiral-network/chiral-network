@@ -1,13 +1,16 @@
 <script lang="ts">
   import { versionStatus, type VersionStatus } from '$lib/stores/versionStore';
   import { ExternalLink, AlertTriangle, X } from 'lucide-svelte';
+  import { onDestroy } from 'svelte';
+  import { toasts } from '$lib/toastStore';
 
   let status = $state<VersionStatus | null>(null);
   let dismissedRecommended = $state(false);
 
-  versionStatus.subscribe((v) => {
+  const unsubscribe = versionStatus.subscribe((v) => {
     status = v;
   });
+  onDestroy(unsubscribe);
 
   // Restore "dismissed for this session" so the banner doesn't keep
   // re-appearing after every re-poll inside the same app run.
@@ -24,12 +27,13 @@
 
   async function openDownload() {
     if (!status) return;
-    const url = status.policy.downloadUrl;
     try {
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(url);
+      const url = new URL(status.policy.downloadUrl);
+      if (url.protocol !== 'https:' || url.username || url.password) throw new Error('invalid URL');
+      await navigator.clipboard.writeText(url.href);
+      toasts.show('Download URL copied. Open it in your browser to update.', 'info');
     } catch {
-      window.open(url, '_blank');
+      toasts.show('Copy the displayed HTTPS download URL into your browser.', 'warning');
     }
   }
 </script>
@@ -58,7 +62,7 @@
         <p class="text-sm text-gray-700 dark:text-gray-300 mb-3">
           This client (<code class="font-mono">v{status.currentVersion}</code>) is below the
           network's required minimum version
-          (<code class="font-mono">v{status.policy.minRequired}</code>). The DHT, downloads, and
+          (<code class="font-mono">v{status.policy.minRequired}</code>). Discovery and
           paid network operations are disabled until you update.
         </p>
         {#if status.policy.message}
@@ -72,7 +76,7 @@
           class="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg flex items-center justify-center gap-2 font-medium transition"
         >
           <ExternalLink class="w-4 h-4" />
-          Open download page
+          Copy download URL
         </button>
         <p class="text-xs text-gray-400 dark:text-gray-500 mt-3 text-center break-all">
           {status.policy.downloadUrl}

@@ -1,328 +1,106 @@
 # Chiral Network Development Guide
 
-## Project Direction & Status (READ FIRST)
+## Direction and release status
 
-Chiral Network is **pivoting from a decentralized file-sharing app into a general decentralized resource exchange** — a "cloud on a blockchain" where providers sell **S3-compatible storage**, **container compute**, and **LLM inference**; consumers discover providers via signed DHT offers and pay by funding a **prepaid, non-refundable balance** the provider meters and draws down; a **payment-gated** reputation system disciplines dishonest providers.
+Chiral Network is an **LLM-inference exchange**, not a file-sharing application or a general storage/container marketplace. Windows/macOS/Linux providers advertise signed model offers; consumers use provider-specific, prepaid, **non-refundable** balances through an OpenAI-compatible API. Public providers require HTTPS and public reachability regardless of OS.
 
-- **Target design is authoritative:** `docs/chiral-book.md` (Part I white paper + Part II design & implementation). Align new work with it.
-- **The current code is still the legacy file-sharing system** — it has NOT been migrated yet. The sections below describe the current as-built implementation and operations. Infrastructure (wallet, RPC, DHT, Geth/mining, relay, version enforcement, owner-proof auth) largely carries forward; the file-sharing feature specifics (Drive, downloads, CDN, folders, chunked transfer, drive shares) are the legacy layer being migrated.
-- **Key v1 decisions** (see the book): discovery = signed DHT resource offers (chain = settlement only); charging = prepaid direct-to-provider, **non-refundable**; reputation = payment-gated user feedback over the existing Elo engine; storage = S3 over HTTP (BitTorrent / chunked-p2p transports retired); providers must be **publicly reachable** (no NAT traversal in v1).
+- `docs/chiral-book.md` defines the current operational contract.
+- `docs/llm-serving-migration-plan.md` retains the implementation sequence, evidence, and full **public-testnet** release gates. A private smoke run is not release completion.
+- The code has cut over to inference with **native Conflux eSpace CFX**, testnet chain **71**, genesis **`0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804`**. Chiral-coin is deferred; no mainnet launch is authorized.
+- Current scope is **private validation**, with public rollout deferred. The user approved **8 GB capacity and dedicating zoo-6 to private LLM testing**. CFX/CPU/GPU/SDK/native Linux/failure evidence is in the plan; small smoke runs are not speed certification or public-release approval. Retain public deployment, security, failure/load and installer gates.
+- The user selected **llama.cpp only**, replacing vLLM. Use a pinned private server subprocess managed by Rust, not embedded FFI or a second engine adapter. Native CUDA/Metal/Vulkan profiles require separate hardware/OS qualification; CPU development is not a paid speed class. Do not claim measured superiority without comparable results.
+- Whole models run within one provider's trusted network. No WAN tensor parallelism, home-provider NAT traversal, S3, container submission, CDN, Drive, ChiralDrop, or app-managed mining is part of this release.
 
-## Overview
+## Architecture and source map
 
-Chiral Network is a Tauri 2 desktop app with a Svelte 5 frontend and Rust backend.
+The desktop is Tauri 2 with Svelte 5 and Rust. Headless binaries share the Rust core without requiring desktop libraries.
 
-**Target domains** (resource exchange — see `docs/chiral-book.md`):
+| Area | Source |
+|---|---|
+| Desktop shell and pages | `src/App.svelte`, `src/pages/` |
+| Native frontend boundary | `src/lib/native.ts` |
+| Native command dispatch / streaming | `src-tauri/src/desktop.rs` |
+| Consumer workflows and protected local state | `src-tauri/src/consumer.rs` |
+| Signed wire types and canonical encoding | `src-tauri/src/protocol.rs` |
+| Explicit network identity/configuration | `src-tauri/src/network.rs` |
+| Wallet keys, signing, exact unit conversion | `src-tauri/src/wallet.rs` |
+| Chain evidence and durable transaction journal | `src-tauri/src/chain_client.rs`, `rpc_client.rs` |
+| Quotes, funding, credentials, reconciliation | `src-tauri/src/contracts.rs`, `billing_store.rs` |
+| Public inference / private llama.cpp adapter | `src-tauri/src/inference_gateway.rs`, `inference_backend.rs` |
+| Managed native process, inventories and device observation | `src-tauri/src/engine_runtime.rs` |
+| Qualified profiles, token timing and inference waivers | `src-tauri/src/performance.rs` |
+| Provider lifecycle and configuration | `src-tauri/src/app.rs`, `provider_config.rs` |
+| Signed offer discovery | `src-tauri/src/dht.rs`, `offer_registry.rs` |
+| Payment-gated reputation | `src-tauri/src/rating_api.rs`, `rating_storage.rs`, `reputation.rs` |
+| Version authority and durable rollback protection | `src-tauri/src/version.rs` |
+| Narrow chain RPC exposure | `src-tauri/src/chain_rpc_api.rs` |
 
-- Signed resource-offer discovery (storage / container / inference)
-- The three provider interfaces: S3-compatible storage, container submission, OpenAI-compatible inference
-- Prepaid-balance settlement (provider-metered drawdown) + platform fee
-- Payment-gated reputation (Elo)
-- Wallet management and CPU/GPU mining
-- Headless provider daemon + CLI operations
+Binaries: `chiral-desktop`, `chiral`, `chiral_daemon`, `relay_server`, `chiral_rpc_gateway`, and `chiral-policy-sign`. Registration of desktop commands is in `desktop.rs`; `lib.rs` exports the shared inference core, not legacy command wrappers.
 
-**Current (legacy) domains still in the code:**
+Pages: marketplace, playground, provider administration, usage/API credentials, wallet, account/reputation, network, settings, and diagnostics. Browser previews must explicitly report that native operations are unavailable; never add simulated wallets, offers, balances, or inference output.
 
-- DHT peer networking and file transfer
-- Drive file management + seeding
-- Download orchestration and payments
-- Hosting marketplace and relay publication
-- CPU/GPU mining controls
-- Wallet management and reputation (Elo)
-- Headless daemon + CLI operations
+## Financial and recovery invariants
 
-## Current Page Surface
+- Network identity is the complete **chain ID + genesis hash + deployment ID** tuple. Never infer it from a URL or silently fall back to legacy Geth.
+- Monetary wire values are canonical decimal wei strings. Use checked integer arithmetic, not floating point. Charge each request with one ceil-rounded token-cost calculation.
+- The platform fee is 50 basis points of funding, provider-remitted. Remittance gas is the provider's cost. Track obligations and actual remittances; collection is not trustless.
+- Prepare one exact signed opening transaction, obtain a durably signed provider funding-intent acknowledgement, then broadcast those same bytes. A provider receives the signed transaction and can technically broadcast it; disclose this trust boundary.
+- Acknowledged terms and transaction evidence survive quote/admission-lease expiry. Admission capacity expiry must never erase the agreement or permit conflicting sender/nonce commitments.
+- No mempool credit. Verify signed raw transaction identity, sender, recipient, value, calldata, successful canonical execution, and the healthy eSpace **`safe` frontier**, rechecked before credit. First execution, safe acceptance and PoS `finalized` are distinct; missing receipt alone is unavailable evidence, not a reorg.
+- Preserve original-operation sender/nonce ownership across restart and chain regression. Explicit cancellation is a fixed same-nonce self-transfer, costs gas, can lose to the original payment, and is **not a refund**. No automatic fee bump or replacement.
+- Re-inclusion of the same transaction refreshes its evidence without duplicate credit. Orphaned funding remains recoverable; restoration must compensate reversals exactly. RPC unavailability is not evidence of an orphan.
+- Reserve worst-case cost atomically before dispatch. Settle only validated authoritative usage. Unknown usage releases the consumer hold at provider expense; never invent a token count. Request status/receipts must support ambiguous-outcome recovery instead of automatic paid retries.
+- Resuming an already-open account must not rotate an exported API credential. Explicit revocation/issuance/rotation and historical funding recovery must remain reachable without abandoning accepted balances.
+- Qualified performance misses waive only inference cost, preserving known authoritative usage. Funding/platform fees and chain gas are not refunded. A capacity tier or CPU smoke does not establish a 20/50/100-token/sec class.
+- Approved evidence-only renewal admits strictly newer qualification for otherwise identical serving terms. Preserve original agreements/prices/fees; bind the actual admitted report durably before dispatch and retain it through settlement/restart. Changed hardware, artifacts, engine, admission or speed terms require their own agreement. Old withdrawal latches remain durable.
 
-_Legacy pages (file-sharing). Target surface per the book: `/marketplace` (browse offers by class), `/provider` (provider dashboard), plus wallet / account / mining / network / settings / diagnostics._
+## Storage and secrets
 
-- `/wallet` — wallet creation, import, backup
-- `/network` — P2P connection, peer list, Geth status
-- `/download` — file search, download with CHI payments
-- `/drive` — local file management, seeding, sharing
-- `/chiraldrop` — direct peer-to-peer file transfers
-- `/hosts` — hosting marketplace: My Sites, CDN Servers, Peer Hosts, Agreements
-- `/mining` — CPU/GPU mining controls
-- `/account` — wallet info, reputation panel
-- `/settings` — appearance, notifications, download directory
-- `/diagnostics` — event log, system info
+- Consumer, provider, reputation, and wallet-journal state is network-scoped. Provider ledgers, locks, and offer revisions are additionally scoped by signing wallet and persistent DHT peer identity.
+- Processes using the **same signing wallet must share the same base `data_dir`/nonce journal**, even across provider deployments. Independent hosts without shared journal storage need distinct signing wallets; separate local journals are not a nonce coordinator.
+- Wallet/private engine/operator secrets use protected files, not command-line arguments, frontend stores, images, logs, or repository fixtures. Keep explicit backup/export paths owner-private and refuse unsafe overwrites/symlinks.
+- Private wallet keys never enter Svelte. Use native commands for signing and privileged operations. Model output is untrusted data, never HTML or executable tool instructions.
+- Inputs reach the chosen provider in plaintext at its HTTPS endpoint. Signed model metadata is not model-execution attestation or confidential inference.
+- Preserve legacy wallet, chain, download, Drive, and hosting data in place. Do not automatically import old balances, convert CHI/CHR to CFX, migrate old keys, delete directories, or auto-start legacy services. Schema-3 provider ledgers refuse older schemas without converting money state.
 
-## Core Source Layout
+## Provider, relay, and model boundaries
 
-- Frontend app shell: `src/App.svelte`
-- Frontend stores/services: `src/lib/`
-- Toast notifications: `src/lib/toastStore.ts`
-- Backend command layer: `src-tauri/src/lib.rs` (thin wrappers)
-- Wallet module: `src-tauri/src/wallet.rs` (balance, transactions, history, signing)
-- Shared RPC client: `src-tauri/src/rpc_client.rs` (connection-pooled, batch requests)
-- DHT/libp2p: `src-tauri/src/dht.rs`
-- Drive persistence/API: `src-tauri/src/drive_storage.rs`, `src-tauri/src/drive_api.rs`
-- Hosting server: `src-tauri/src/hosting_server.rs`
-- Hosting types: `src-tauri/src/hosting.rs`
-- Geth/mining integration: `src-tauri/src/geth.rs`
-- Geth bootstrap health: `src-tauri/src/geth_bootstrap.rs`
-- Speed/cost tiers: `src-tauri/src/speed_tiers.rs`
-- Reputation (Elo): `src-tauri/src/rating_api.rs`, `src-tauri/src/rating_storage.rs`
-- Wallet backup email: `src-tauri/src/wallet_backup_api.rs`
-- Relay share proxy: `src-tauri/src/relay_share_proxy.rs`
-- Encryption: `src-tauri/src/encryption.rs`
-- File transfer: `src-tauri/src/file_transfer.rs`
-- Chain RPC proxy: `src-tauri/src/chain_rpc_api.rs`
-- Event sink: `src-tauri/src/event_sink.rs`
-- Headless binaries: `src-tauri/src/bin/chiral.rs`, `src-tauri/src/bin/chiral_daemon.rs`
-- Relay server: `src-tauri/src/bin/relay_server.rs`
+- `chiral_daemon --config <provider.json>` has distinct public and loopback-only operator listeners. Operator routes require their protected bearer and reject browser `Origin` requests. No signing-key, engine-management, or tokenization route belongs on the public listener.
+- Public inference authenticates before body buffering, bounds simultaneous body readers and bytes, and separates body-read deadlines from generation/SSE deadlines. Preserve non-queuing admission and reservation limits.
+- llama.cpp runs privately, with a protected API-key file and no wallet key. Do not expose tokenization, template, metrics, slots, model management or arbitrary engine endpoints through the public gateway. Native runtime and GGUF inventories must be verified before launch; inherited environment must not override signed execution settings.
+- Qualify each advertised capability with exact tokenizer/template identity and real inference/usage probes. Only pinned immutable model/tokenizer revisions are acceptable. Do not assume OpenAI-compatible engines have interchangeable tokenization or cancellation behavior.
+- Provision pinned native runtime packages and GGUF artifacts with `scripts/provision-runtime.py` and `scripts/provision-model.py`; `scripts/provision-provider.py` and `scripts/provider-preflight.py` configure/check deployment. Generation and embeddings have separate task/capability/limit contracts. Embedded GGUF tokenizer/template metadata replaces the separate Python tokenizer path. Dedicated VRAM and unified system memory are distinct; reserve at least 4 GiB on unified-memory providers.
+- Public providers require HTTPS and public reachability. Literal-loopback development exceptions are not public deployment qualification. Resolve and pin untrusted offer endpoints; reject private/metadata addresses, redirects, and proxy bypasses.
+- DHT discovery is bounded and signed, with network-scoped namespaces, stable peer identities, monotonic revisions, expiry, and connection admission limits. Relay catalogs are caches, not exhaustive or authoritative provider directories.
+- `relay_server` serves discovery, reputation, policy, and bounded chain RPC access—not prompts or inference. Feedback requires authentic canonical funding evidence; revisions replace one agreement's vote instead of multiplying its weight.
+- Version-policy acceptance is signed, network/authority-scoped, durable, and monotonic across processes. Expiry does not erase an authenticated rollback watermark. Corrupt/insecure policy persistence fails closed. Release builds require a non-placeholder policy authority; signing keys stay with the operator/offline signer.
+- CLI stdout is machine-readable JSON or explicit streaming events. Diagnostics belong on stderr.
 
-## Architecture
-
-```
-rpc_client.rs  (shared HTTP client, batch JSON-RPC, response cache)
-     ^               ^
-     |               |
- wallet.rs       geth.rs  (process lifecycle, mining, RPC)
-     ^               ^
-     |               |
-     +--- lib.rs ----+   (thin Tauri command wrappers, AppState)
-              ^
-              |
-          dht.rs  (calls wallet::send_payment for file downloads)
-```
-
-No circular dependencies. `wallet.rs` imports from `rpc_client` and `geth` (for endpoint routing). `lib.rs` delegates to both.
-
-## Command Surface (Tauri)
-
-Command registration is in `tauri::generate_handler![...]` in `src-tauri/src/lib.rs`.
-
-Main categories:
-
-- DHT/network commands
-- File transfer/download commands
-- Wallet/transaction commands (delegated to `wallet.rs`)
-- Geth/mining (CPU and GPU) commands
-- Drive CRUD/seeding/share commands
-- Hosting/marketplace commands
-- Encryption commands
-- Diagnostics and lifecycle commands
-
-## Development Commands
+## Development and verification
 
 ```bash
-# frontend deps
 npm install
-
-# desktop dev
-npm run tauri:dev
-
-# frontend build
+npm run check
 npm run build
-
-# frontend tests
 npm test
 
-# rust tests
-cargo test --manifest-path src-tauri/Cargo.toml
+# Headless core/binaries: no GTK/WebKit requirement.
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets
+cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --bins
 
-# rust compile check
-cargo check --manifest-path src-tauri/Cargo.toml
+# Native desktop, with platform dependencies installed.
+npm run tauri:dev
+cargo build --manifest-path src-tauri/Cargo.toml --bin chiral-desktop --features tauri/custom-protocol
 ```
 
-## Headless Mode
+Use explicit consumer/provider/relay/network profiles; see `README.md` for current commands and operator setup. Do not reintroduce old embedded RPC/genesis/platform-wallet defaults. Shared tests must remain deterministic and isolated; actual chain/engine/SDK/native smoke evidence is separately required. `tests/scaled/paid-inference.py` can kill its explicitly authorized isolated Compose provider; never point it at a shared/live deployment.
 
-```bash
-# Direct daemon start
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral_daemon -- --port 9419 --auto-start-dht
+Toast conventions: use `toasts.show`/`detail` for immediate user-action feedback and `notify`/`notifyDetail` for event-driven notifications respecting settings.
 
-# Via CLI
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start --port 9419
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status --port 9419
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon stop --port 9419
-```
+## Existing infrastructure is not the new release
 
-Headless daemon API endpoints (port 9419 by default):
+Historical deployments at `130.245.173.73` included `relay-server.service` and `cdn-freshnet.service` (the latter also managed legacy Geth). Their existence is not evidence that new inference or native CFX artifacts are deployed. Retiring/replacing live services requires an explicit cutover, backups, and an operational rollback plan; do not apply old file-sharing restart instructions to the new network blindly.
 
-- **Health**: GET `/api/health`, GET `/api/ready`
-- **Wallet**: POST `wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/receipt`, `wallet/history`, `wallet/faucet`; GET `wallet`, `wallet/chain-id`
-- **DHT**: POST `dht/start`, `dht/stop`, `dht/put`, `dht/get`, `dht/ping`, `dht/echo`; GET `dht/health`, `dht/peers`, `dht/peer-id`, `dht/listening-addresses`
-- **Files**: POST `dht/register-shared-file`, `dht/unregister-shared-file`, `dht/request-file`, `dht/send-file`, `file/search`, `folder/search`
-- **ChiralDrop**: GET `drop/inbox`, `drop/outgoing`; POST `drop/accept`, `drop/decline`
-- **Geth**: POST `geth/install`, `geth/start`, `geth/stop`; GET `geth/status`, `geth/logs`
-- **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
-- **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
-- **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`; PUT `cdn/files/:hash` (update price)
-- **Drive**: Full CRUD via `/api/drive/*` routes (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_sig>` headers — see Owner-proof auth below)
-- **Diagnostics**: GET `bootstrap-health`
+The separate `chiral-coin` working tree may contain active unpublished work. Do not modify, publish, reset, or attribute that work to a public commit without verified provenance and authorization. Chiral-coin publication is not a launch prerequisite after the approved CFX selection; native network/deployment identity and lifecycle qualification remain required.
 
-All headless paths are prefixed with `/api/headless/` except health, ready, and drive routes.
-
-## Docker Testing
-
-```bash
-# 30 production-connected nodes (host networking)
-docker compose -f docker-compose.production-net.yml up -d
-
-# Run stress test against 30 nodes
-bash scripts/stress-test-30-nodes.sh
-
-# Local isolated testing with relay
-docker compose -f docker-compose.local-test.yml up -d --scale node=10
-```
-
-## Geth / Blockchain
-
-- Chain ID: `98765` (Chiral Network)
-- Consensus: Ethash (PoW)
-- Block reward: 5 CHI
-- Sync mode: `full` (default, configurable via `CHIRAL_GETH_SYNCMODE`)
-- GC mode: `archive` (keeps all state, prevents block regression on restart)
-- Genesis difficulty: `0x400000`
-- Bootstrap enode: `130.245.173.73:30303`
-- RPC: local at `127.0.0.1:8545` when running, remote fallback `130.245.173.73:8545`
-
-## Reputation System
-
-_Pivot note: the book generalizes this to **payment-gated subjective feedback** (only a wallet with an on-chain-verified payment to a provider may rate it; same amount + recency weighting), adding a `POST /api/ratings/feedback` route. The Elo engine below is reused as-is — the change is admitting a user score in the event. Current code is still outcome-only._
-
-Elo scores are computed from transfer outcomes only (no user ratings). The formula uses:
-- Transfer outcome: completed (1.0) or failed (0.0)
-- Time weighting: recent events (within 180-day lookback) weighted more heavily
-- Amount weighting: logarithmic scaling based on CHI transferred
-- Bounded Elo updates clamped to 0-100
-
-REST endpoints on the relay server (`http://130.245.173.73:8080`):
-- `POST /api/ratings/transfer` — record transfer outcome
-- `GET /api/ratings/:wallet` — get Elo + event history
-- `POST /api/ratings/batch` — batch Elo lookup
-
-## Toast Notifications
-
-The toast store (`src/lib/toastStore.ts`) provides:
-- `toasts.show(message, type, duration?)` — always show
-- `toasts.detail(message, description, type, duration?)` — always show with title + description
-- `toasts.notify(key, message, type, duration?)` — respects notification settings
-- `toasts.notifyDetail(key, message, description, type, duration?)` — respects notification settings
-
-Use `notify`/`notifyDetail` for event-driven notifications (downloads, network, mining, payments) so users can toggle them in Settings. Use `show`/`detail` for user-initiated action feedback.
-
-## Relay Server
-
-The canonical box `130.245.173.73` runs **two** systemd services. Both must be updated together when shipping FM-Agent / trust-contract changes — clients reject unsigned records published by either side, so a stale binary on one of them silently breaks the network.
-
-| Service | Binary | Listens on | Role |
-|---|---|---|---|
-| `relay-server.service` | `/usr/local/bin/relay_server` | tcp/4001 (libp2p), tcp/8080 (HTTP gateway) | libp2p circuit relay v2 + same-origin HTTP API: reputation, drive proxy, wallet backup, site hosting, `/api/chain/rpc` proxy. |
-| `cdn-freshnet.service` | `/opt/chiral/chiral_daemon` | tcp/9420 (HTTP), tcp/4002 (libp2p), spawns geth on 8545/30303 | The always-on CDN node. Same `chiral_daemon` binary as desktop, just headless and pre-configured with `--auto-start-dht --auto-start-geth --auto-mine`. |
-
-Both services should be restarted together after any update to the trust contract:
-```bash
-ssh root@130.245.173.73 'systemctl restart relay-server.service cdn-freshnet.service'
-```
-
-Other notes:
-- The relay filters private IPs from the Kademlia routing table (only stores public + relay-circuit addresses). Max 256 circuit reservations, 16 per peer.
-- Geth is spawned by `chiral_daemon` (the `cdn-freshnet` unit). Its `--http.api` deliberately omits `admin` since the namespace is reachable over the public HTTP RPC and `admin_stopRPC` was used in the wild to take the RPC offline; admin remains available over the IPC socket (`<datadir>/geth/geth.ipc`).
-- The CDN systemd unit on the canonical relay runs with `--mining-threads 4` (not the daemon's default of 1). Solo Ethash mining at a single thread on freshnet caused 10-minute+ block stretches that timed out user payment-verification waits during/after daemon restarts. The 8-core box can spare 4 mining threads without starving the rest of the daemon. Desktop deployments stay on the default of 1 — desktop users running mining at home shouldn't peg every core.
-- The CDN's `chiral_daemon` is started with `CHIRAL_WALLET_KEY_FILE=/etc/chiral-cdn-wallet.key` (mode 0600 hex private key). Without it, the daemon can populate the CDN's `wallet_address` from `--miner-address` but has no signing key, so every CDN-served file ends up with empty `chiral_seeder_*` / `chiral_file_*` signatures — clients reject those records and the upload is unreachable. Generate a key with `chiral wallet create` (or any 32-byte hex), drop it at the path, set perms 0600.
-
-SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (required); `CHIRAL_WALLET_EMAIL_SMTP_USERNAME`, `CHIRAL_WALLET_EMAIL_SMTP_PASSWORD` (optional for local postfix).
-
-## k3s Test Cluster
-
-Cluster lives at `130.245.173.231` (login `debian`, sudo allowed). 30 chiral test daemons in namespace `chiral-test` as bare `Pod` objects (no Deployment / StatefulSet wrapping them). Image `docker.io/library/chiral-network-node:latest`, `imagePullPolicy: Never` — pulls aren't possible, so the image must be loaded into containerd manually:
-
-```bash
-# On the dev box, after `cargo build --release` is current:
-docker build -f Dockerfile.local -t chiral-network-node:latest .
-docker save chiral-network-node:latest -o /tmp/cnn.tar
-scp /tmp/cnn.tar debian@130.245.173.231:/tmp/
-ssh debian@130.245.173.231 'sudo k3s ctr images import /tmp/cnn.tar'
-ssh debian@130.245.173.231 'kubectl delete pods --all -n chiral-test'
-# Re-apply the manifest (it's not auto-recreated since pods are bare):
-ssh debian@130.245.173.231 'kubectl apply -f /tmp/chiral-nodes.yaml'
-```
-
-The manifest at `/tmp/chiral-nodes.yaml` on `.231` covers the 30 pods (each with default container networking, an `emptyDir` `/data` volume, livenessProbe on `/api/health`, args `--port 9419 --auto-start-dht`). Pods reach the canonical `.73` relay through libp2p circuit relay since they use container networking, not host networking.
-
-## Implementation Notes
-
-_Most notes below document the current **legacy file-sharing** implementation (downloads, Drive, CDN, folders, chunked transfer, drive shares) — accurate for the code as it stands and the migration reference; the target model is in `docs/chiral-book.md`. Reusable infrastructure (wallet, RPC, DHT, mining, version enforcement, owner-proof auth) carries into the resource exchange largely unchanged._
-
-- Prefer Tauri `invoke()` paths for app runtime behavior.
-- All wallet logic lives in `wallet.rs` — `lib.rs` contains thin wrappers only.
-- All RPC calls use the shared `rpc_client.rs` (connection-pooled, 5s timeout).
-- Balance queries use a 5-second `RpcCache` to avoid duplicate RPC calls.
-- Transaction sending batches nonce + balance + gasPrice in a single HTTP request.
-- Transaction metadata persisted to `~/.local/share/chiral-network/tx_metadata.json`.
-- Drive seeding state is restored from backend at DHT startup.
-- DHT auto-restarts on login (tied to `isAuthenticated` store).
-- Kademlia re-bootstraps every 30 seconds to discover new peers.
-- Event listeners registered before DHT start to avoid missed events.
-- Stale peers removed after 5 minutes without Kademlia/connection activity.
-- Hosting: accepted agreements auto-seed files via `seed_hosted_file` command.
-- Hosting: cancellation removes seeder from DHT and cleans up Drive.
-- App shows a close confirmation dialog before quitting (wired in `src/App.svelte`).
-- Wallet backup email step is optional (skip button) during wallet creation.
-- Logout has 5s timeout on DHT stop + loading state to prevent hanging.
-- Download cost: 0.01 CHI per MB. Platform fee: default 0.5% on all transactions, adjustable down to a 0.1% floor.
-- Platform fee split: seller/burn gets the remainder, platform wallet gets the fee; `split_payment` is the single source of truth (`seller + fee == total`, exact integer math).
-- File metadata, seeder entries, folder manifests, site-directory entries, and the chunked-transfer FileInfo envelope are all ECDSA-signed by the publisher / seeder wallet. Readers verify before consuming and drop unsigned/invalid records — every Tauri publisher refuses to write a record unless `private_key` is provided.
-- Payment verification: on-chain tx receipt checked before serving file chunks.
-- CDN server at `130.245.173.73:9420` — always-on file hosting with market-based pricing.
-- CDN pricing: `max(floor, median_peer_price × 1.2)` — adapts to marketplace.
-- CDN upload requires on-chain payment verification (5% tolerance for rounding).
-- CDN files re-seed to DHT on startup (15s delay after bootstrap).
-- CDN expiration cleanup runs every 60s — removes expired files from disk + DHT.
-- Download page queries CDN servers as fallback when DHT search times out.
-- Stop seeding removes peer from DHT seeder list (not just local shared files).
-- Wallet RPC reads (`get_wallet_balance`, `verify_tx_details`) walk an ordered fallback list via `rpc_client::call_with_fallbacks`: direct canonical Geth (port 8545) first, then the relay's `/api/chain/rpc` same-origin proxy on 8080. Either path can be down (firewall, crash, etc.) without taking the wallet offline. Write paths still pin to a single endpoint to avoid double-broadcast.
-- Wallet UI surfaces RPC failures explicitly: `walletService.getBalance` populates a `walletBalanceError` Svelte store on failure (cleared on success), and the Account page renders a yellow "Balance may be stale — canonical RPC unreachable" banner with the underlying reason instead of silently rendering `0.00`. Mining page does the same with `get_mining_balance_diagnostic` — compares local-Geth balance against canonical-RPC balance for the miner address and renders an inline warning when the canonical RPC errors or the two diverge by more than ~0.001 CHI (private-fork diagnostic).
-- Folder bundles: a folder is published under one content-addressed hash (SHA-256 of owner_wallet + sorted (rel_path, file_hash) list). DHT key `chiral_folder_<hash>`; seller also registers as Kademlia provider for the folder hash. Buyers' `search_folder` returns common-seeders intersection across the bundle.
-- Folder pricing: the `FolderManifest` carries signed `priceWei` + `walletAddress` fields — folders sell as a single bundle at a folder-level price, not as the sum of per-file prices. `publish_drive_folder` takes a folder-level `price_chi`, sets it on the signed manifest, and publishes every child file at price=0. The Download page's "Buy Folder for X CHI" button sends one tx to the manifest's `walletAddress` and then dispatches per-file downloads at price=0 (no per-file payment loop). Pre-pricing manifests with empty `priceWei` are treated as free folders. Known V1 gap: child files remain individually downloadable at price=0 with the bare file hash — closing that requires extending the chunked-transfer PaymentProof with folder context.
-- DHT first-hit semantics (`dht.rs::handle_kad_event`): both `GetRecord` and `GetProviders` queries fire the caller's response on the FIRST replica that arrives instead of waiting for `FinishedWithNoAdditionalRecord` (Kademlia's quorum-convergence event, which routinely takes 15-25s even when a record is already in the local store). Background convergence still runs to warm the local cache. Trust contract is unchanged because every record read this way (`chiral_file_*`, `chiral_seeder_*`, `chiral_folder_*`, `chiral_drive_share_*`) is ECDSA-signed and verified at the caller. The auto-host-registry path keeps the union-on-finish semantic since it wants every advertised host. Result: search-by-hash latency dropped from 15-25s to ~50ms.
-- Headless `dht/register-shared-file` publishes signed DHT records: the daemon's `POST /api/headless/dht/register-shared-file` now writes `chiral_file_<hash>` (signed metadata blob) + `chiral_seeder_<hash>_<peerId>` (signed seeder entry) + Kademlia provider record after updating the local shared_files map. Without this step a headless seeder's files were locally seeded but invisible to every remote search. Returns `{dhtPublished: false, warning: ...}` when the wallet/private key is missing instead of silently no-oping.
-- Tauri `search_file` surfaces signed seeders even when the legacy blob has a bad signature: a `chiral_file_<hash>` blob with an unsigned/invalid publisher signature drops only the blob's untrusted fields (`name`, `wallet_address`) and falls back to the provider-sourced seeder list, so a single forged or stale blob doesn't hide every honest seeder for that hash.
-- CDN HTTP-fallback search reads `data.seeders` (top-level), not `data.metadata.seeders`: the daemon's `/api/headless/file/search` populates the seeder list at the response root; the metadata blob's `seeders` field is an empty stub. Reading the wrong field used to silently drop every CDN fallback seeder.
-- CDN site upload uses a 180s per-request timeout: `publish_site_to_cdn` overrides the shared-client default (5s, tuned for JSON-RPC) on the multipart `/api/cdn/sites/upload` POST so a multi-MB upload + on-chain payment verify (often 30-60s on freshnet) can complete instead of failing with `error sending request: operation timed out`.
-- libp2p outgoing-connection-error log spam suppressed: `dht.rs` and `relay_server.rs` no longer print routine `OutgoingConnectionError` events. Routine P2P churn (ResourceLimitExceeded on relay reservations, ConnectionRefused behind firewalls, IPv6 link-local + RFC1918 unreachable addrs) is expected and Kademlia handles routing-table eviction internally.
-- Version enforcement (`src-tauri/src/version.rs`): bundled `VersionPolicy` embedded at compile time; effective policy held in a global `OnceCell<RwLock<VersionPolicy>>` so libp2p Identify, HTTP middleware, and Tauri commands all read the same value. `/api/version-policy` is mounted by the gateway router (relay, daemon, desktop hosting). On startup the desktop fetches the relay's policy and promotes it via `update_effective_policy` if `is_acceptable_remote_policy` accepts (rollback by `issuedAt`, signed accept against `POLICY_PUBLIC_KEY`, or unsigned-not-tightening if no signed policy is in effect).
-- Version enforcement layers: `UpdateGate.svelte` UI (soft banner / hard modal), `ensure_version_supported` Tauri gate, `X-Chiral-Client-Version` HTTP middleware (426 Upgrade Required below `minRequired`), libp2p Identify `agent_version="chiral/<v>"` with peer disconnect on mismatch.
-- `chiral-policy-sign` operator binary: keygen / sign / verify policies with the project's offline Ed25519 key. The compile-time `POLICY_PUBLIC_KEY` is 32 zero bytes (placeholder); operators activate signed policies at deploy time by setting the `CHIRAL_POLICY_PUBLIC_KEY` env var (32-byte hex, with or without `0x` prefix). All three binaries (desktop, daemon, relay) print a one-shot `[VERSION]` line at startup confirming whether signed policies are enabled or warning that the placeholder is still in use.
-
-## Owner-proof HTTP auth
-
-Every authenticated HTTP route uses a stateless signed-challenge scheme (replaces the previously-trusted bare `X-Owner` header):
-
-- Headers: `X-Owner: 0x<40 hex>` + `X-Owner-Sig: <unix_ts>:<hex_signature>`.
-- Signed bytes: `auth::owner_proof_payload(wallet_lowercased, ts, method, path_and_query)` — length-prefixed canonical, tagged `chiral-owner-proof-v1`. Binds wallet ↔ exact request, so a captured proof can't be replayed against a different endpoint within its ±5-minute validity window.
-- Server: `auth::owner_proof_middleware` recovers the secp256k1 signer and rejects with 401 on mismatch / expired / missing.
-- Applied to: `/api/drive/*` (every route), `POST /api/ratings/transfer`, and the unregister DELETEs on relay register routes. Public visitor routes (`/drive/:token`, `/sites/:site_id`) stay unauthenticated.
-- Tauri command: `compute_owner_proof(method, path, walletAddress, privateKey)` — frontend calls it before each authenticated fetch; private keys never leave the process.
-
-## Trust boundary specifics
-
-- **Folder bundles**: `FolderManifest` is signed by `owner_wallet` over canonical bytes covering `hash`, `name`, `owner_wallet`, `created_at`, `priceWei`, `walletAddress`, and the file list. `publish_drive_folder` skips the publish if the wallet is locked. `search_folder` drops unsigned/invalid manifests. Including `priceWei` + `walletAddress` in the signed payload prevents a hostile peer from re-publishing the same `chiral_folder_<H>` key with a substituted price/recipient.
-- **Folder manifest backward-compat (v1 → v2)**: `FolderManifest::verify` first tries the v2 payload (with `priceWei` + `walletAddress`). If that fails AND both pricing fields are empty in the candidate, falls back to a v1 payload (without those fields) so manifests signed before folder-level pricing existed still verify. The empty-fields gate is what makes the fallback safe — a manifest claiming a non-zero price but only verifying under v1 is rejected, so an attacker can't tack pricing onto a legacy-signed bundle and divert payment.
-- **Headless folder search verifies signatures**: `POST /api/headless/folder/search` now mirrors the Tauri `search_folder` trust contract — drops unsigned / signature-invalid manifests with a clear `{found: false, error: ...}` response instead of returning the raw blob. Without this a malicious peer could publish `chiral_folder_<H>` with a forged `priceWei` / `walletAddress` and divert payment for any headless buyer.
-- **Headless unregister cleans up the DHT**: `POST /api/headless/dht/unregister-shared-file` calls `remove_seeder_entry` after dropping the local shared-files entry, mirroring `register-shared-file`'s symmetric publish path. Otherwise a peer who unregisters headlessly stays in everyone else's seeder lists until natural TTL eviction (~3-min republish) and provider lookups keep returning a peer that no longer serves.
-- **Chunked transfer**: `ChunkResponse::FileInfo` is signed by the seeder's wallet over `dht::file_info_sign_payload`. The downloader verifies before consuming `wallet_address` / `price_wei` and fails over to other seeders on signature failure. `SharedFileInfo` carries the seeder's `private_key`; if absent the seeder responder refuses to serve.
-- **Drive shares**: `verify_share_access` binds each `tx_hash` to the first share token it unlocks via a persisted ledger at `<data_dir>/drive_share_spent_tx.json`. One tx ↔ one share forever; the buyer can reload their page, but the URL doesn't unlock unrelated shares.
-- **Seeder spent-tx**: `claim_spent_tx(tx_hash, file_hash)` keys on the *(tx, file)* pair, so one payment to a wallet that seeds many priced files redeems exactly one delivery.
-- **CDN payment math**: exact `u128` ceil-rounded `required_upload_wei`. No `f64`, no 5% tolerance — `min_accepted_wei == required_wei`.
-
-## Relay register signing
-
-Relay `register_share` / `register_site` POSTs require an ECDSA `signature` field over `relay_share_proxy::register_payload(operation, id, owner_wallet, origin_url)` (length-prefixed, tagged `chiral-relay-register-v1`). First-claim-wins is enforced cryptographically: an existing record can only be overwritten by the wallet that originally signed it. The relay also runs `is_safe_origin_url` to reject:
-
-- non-http(s) schemes
-- RFC1918 (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10)
-- link-local (169.254/16, fe80::/10) — blocks AWS / GCP cloud metadata IPs
-- unique-local IPv6 (fc00::/7), multicast, broadcast, unspecified
-- IPv4-mapped IPv6 variants of any of the above
-
-Loopback (127.0.0.0/8, ::1) stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time. The Tauri commands `publish_drive_share` / `publish_site_to_relay` (and unpublish counterparts) take `private_key`, sign locally, and refuse if the wallet is locked. New `compute_relay_register_signature` Tauri command for external callers.
-
-## Other defense-in-depth
-
-- `dht_put` headless route refuses keys in reserved namespaces (`chiral_file_*`, `chiral_seeder_*`, `chiral_folder_*`, `chiral_drive_share_*`, `chiral_host_ad_*`) with 403 — those records are written through their dedicated signed-publication commands.
-- Local-daemon CORS allowlists Tauri webview origins only (relay-mode keeps `Any`); blocks CSRF from any visited webpage. `/api/drive/*` has `DefaultBodyLimit::max(500 MiB)`. `is_item_under_shared_root` tracks visited IDs to short-circuit parent cycles.
-- `wallet::verify_tx_details` checks `tx.chainId == geth::chain_id()` so cross-chain replays of signed txs are rejected. `wallet::recover_signer` enforces low-`s` (EIP-2) so no caller using sig hex as a dedup key gets fooled by malleable variants.
-- Chunked downloader rejects out-of-sequence chunks (`chunk_index != current_chunk_index`) before bandwidth waste; the full-file hash still backstops integrity.
-- Seeder `PaymentProof` handler distinguishes "tx not yet mined" (retryable, the buyer is told to retry in 30s) from "wrong amount/recipient" (permanent). The spent-tx ledger only records on success, so the same `tx_hash` can be presented again safely.
+The user explicitly authorized **dedicating zoo-6's RTX 4060 to private inference**: its pilot miner is stopped, and `chiral-llm-8gb.service` remains on the existing qualification VM, loopback-only. Do not restart that miner automatically. Preserve unrelated chain services, keys, data and resource monitoring. Other mining interruptions, GPU rental and public deployment still require authorization. Capacity tiers include `8gb` (at least 7,500 MiB per device); a small-model GPU smoke is not a qualified speed class.

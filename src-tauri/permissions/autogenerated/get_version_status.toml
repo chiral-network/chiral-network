@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-version-status"
+description = "Enables the get_version_status command without any pre-configured scope."
+commands.allow = ["get_version_status"]
+
+[[permission]]
+identifier = "deny-get-version-status"
+description = "Denies the get_version_status command without any pre-configured scope."
+commands.deny = ["get_version_status"]

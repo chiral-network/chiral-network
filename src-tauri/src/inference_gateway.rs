@@ -1,0 +1,1517 @@
+//! OpenAI-compatible, contract-scoped inference. The durable ledger owns every
+//! debit; an HTTP retry never starts an already-reserved request a second time.
+use crate::app::ProviderState;
+use crate::billing_store::{CredentialContext, RequestView};
+use crate::error::ApiError;
+use crate::inference_backend::{
+    self as backend, Backend, Endpoint, SseDecoder, StreamNormalization, StreamSpec, StreamValidation,
+    MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
+};
+use crate::protocol::{self, TokenUsage};
+use axum::{
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, FromRequest, Path, Request, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use futures_util::{Stream, StreamExt};
+use serde_json::{json, Value};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    pin::Pin,
+    sync::{atomic::Ordering, Arc, Mutex},
+    time::Duration,
+};
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
+
+const MAX_BODY_READERS: usize = 64;
+const BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct ModelRuntime {
+    backend: Result<Backend, ()>,
+    slots: Arc<Semaphore>,
+    arrival: Mutex<(Instant, u128)>,
+    profile: Option<Arc<protocol::ServingProfile>>,
+}
+struct Gateway {
+    provider: Arc<ProviderState>,
+    models: HashMap<String, ModelRuntime>,
+    active: Mutex<HashMap<String, watch::Sender<bool>>>,
+    rates: Mutex<HashMap<String, (u64, u32)>>,
+    body_slots: Semaphore,
+}
+
+pub fn router(state: Arc<ProviderState>) -> Router {
+    let runtime_models = state
+        .config
+        .models
+        .iter()
+        .map(|config| {
+            (
+                config.model.id.clone(),
+                ModelRuntime {
+                    backend: Backend::new(config).map_err(|_| ()),
+                    slots: state.model_slots[&config.model.id].clone(),
+                    arrival: Mutex::new((Instant::now(), u128::from(config.max_concurrency) * 1_000_000_000)),
+                    profile: config.model.serving.clone().map(Arc::new),
+                },
+            )
+        })
+        .collect();
+    let gateway = Arc::new(Gateway {
+        provider: state,
+        models: runtime_models,
+        active: Mutex::new(HashMap::new()),
+        rates: Mutex::new(HashMap::new()),
+        body_slots: Semaphore::new(MAX_BODY_READERS),
+    });
+    Router::new()
+        .route("/v1/models", get(models))
+        .route("/v1/chat/completions", post(chat))
+        .route("/v1/completions", post(completions))
+        .route("/v1/embeddings", post(embeddings))
+        .route("/v1/requests/:id", get(request_status))
+        .route("/v1/requests/:id/cancel", post(cancel_request))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .with_state(gateway)
+}
+
+fn ledger_error(error: String) -> ApiError {
+    let (status, code, message) = if error.starts_with("insufficient_funds") {
+        (
+            StatusCode::PAYMENT_REQUIRED,
+            "insufficient_balance",
+            "Prepaid balance cannot cover this request's maximum authorized usage",
+        )
+    } else if error.starts_with("spend_cap") {
+        (
+            StatusCode::PAYMENT_REQUIRED,
+            "credential_spend_cap",
+            "Credential spending cap cannot cover this request's maximum authorized usage",
+        )
+    } else if error.starts_with("duplicate_request") {
+        (
+            StatusCode::CONFLICT,
+            "duplicate_request",
+            "Request was already admitted; inspect its durable status rather than replaying it",
+        )
+    } else if error.starts_with("saturation") || error.starts_with("rate_limit") {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_exceeded",
+            "Account concurrency or request rate limit exceeded",
+        )
+    } else if error.starts_with("unauthorized") {
+        (
+            StatusCode::UNAUTHORIZED,
+            "invalid_api_key",
+            "Bearer credential is invalid, expired or revoked",
+        )
+    } else if error.starts_with("forbidden")
+        || error.starts_with("paused")
+        || error.starts_with("account_frozen")
+    {
+        (
+            StatusCode::FORBIDDEN,
+            "account_forbidden",
+            "Account is paused or credential does not authorize this operation",
+        )
+    } else if error.starts_with("model_unqualified") || error.starts_with("model_revision_unavailable") {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_unqualified",
+            "Contracted serving terms or current qualification are unavailable; no paid dispatch",
+        )
+    } else if error.starts_with("not_found") {
+        (
+            StatusCode::NOT_FOUND,
+            "request_not_found",
+            "Request was not found in this account",
+        )
+    } else {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ledger_unavailable",
+            "Durable accounting is unavailable; inspect request status before retrying",
+        )
+    };
+    ApiError::new(status, code, message)
+}
+fn authenticate(
+    gateway: &Gateway,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<CredentialContext, ApiError> {
+    if headers.get_all(header::AUTHORIZATION).iter().count() != 1 {
+        return Err(ApiError::unauthorized(
+            "Supply exactly one bearer credential",
+        ));
+    }
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|v| !v.is_empty() && v.len() <= 256)
+        .ok_or_else(|| ApiError::unauthorized("A valid bearer credential is required"))?;
+    let context = gateway
+        .provider
+        .ledger
+        .authenticate(bearer, protocol::now().map_err(ApiError::from)?)
+        .map_err(ledger_error)?;
+    if !context.scopes.iter().any(|s| s == scope) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "credential_scope",
+            "Credential does not authorize this operation",
+        ));
+    }
+    Ok(context)
+}
+fn request_key(headers: &HeaderMap) -> Result<String, ApiError> {
+    if headers.get_all("idempotency-key").iter().count() > 1 {
+        return Err(ApiError::bad_request(
+            "invalid_idempotency_key",
+            "Supply at most one Idempotency-Key",
+        ));
+    }
+    match headers.get("idempotency-key") {
+        Some(value) => {
+            let key = value.to_str().map_err(|_| {
+                ApiError::bad_request("invalid_idempotency_key", "Idempotency-Key must be ASCII")
+            })?;
+            validate_id(key)?;
+            Ok(key.to_owned())
+        }
+        None => Ok(uuid::Uuid::new_v4().to_string()),
+    }
+}
+fn validate_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(ApiError::bad_request("invalid_request_id", "Request identifiers allow 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens"));
+    }
+    Ok(())
+}
+fn with_id(mut response: Response, id: &str) -> Response {
+    if let Ok(header) = HeaderValue::from_str(id) {
+        response.headers_mut().insert("x-request-id", header);
+    }
+    response
+}
+fn duplicate(view: RequestView) -> Response {
+    with_id((StatusCode::CONFLICT, Json(json!({"error":{"message":"Request already exists and will not be replayed. Retrieve its status; response content is not retained.","type":"invalid_request_error","param":null,"code":"duplicate_request","request_id":view.id,"request_status":view.status}}))).into_response(), &view.id)
+}
+impl Gateway {
+    /// Runs before tokenization, including free/failed admission attempts. Durable
+    /// reserve also applies its own credential limits; rotating keys cannot reset
+    /// this account-level window. Memory is bounded and expired entries are purged.
+    fn rate_limit(&self, account: &str, now: u64) -> Result<(), ApiError> {
+        let mut rates = self
+            .rates
+            .lock()
+            .map_err(|_| ApiError::internal("Admission lock unavailable"))?;
+        let window = now / 60;
+        rates.retain(|_, (old, _)| *old == window);
+        if !rates.contains_key(account) && rates.len() >= 8192 {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "provider_saturated",
+                "Provider admission capacity reached",
+            ));
+        }
+        let (_, count) = rates.entry(account.into()).or_insert((window, 0));
+        if *count >= 120 {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limit_exceeded",
+                "Account is limited to 120 inference attempts per minute",
+            ));
+        }
+        *count += 1;
+        Ok(())
+    }
+}
+async fn models(
+    State(gateway): State<Arc<Gateway>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let context = authenticate(&gateway, &headers, "infer")?;
+    let current = gateway.provider.qualified_model(&context.account.model).filter(|_| {
+        gateway.provider.accepting.load(Ordering::Acquire)
+            && matches!(context.account.status.as_str(), "active" | "free")
+    });
+    let data = if let Some(model) = current {
+        vec![
+            json!({"id":model.id,"object":"model","created":0,"owned_by":gateway.provider.wallet,"chiral":{"model":model,"max_embedding_batch":backend::MAX_EMBEDDING_BATCH,"max_request_bytes":MAX_REQUEST_BYTES,"requests_per_account_minute":120,"tool_choice":"auto_only_when_qualified","cancellation_billing":"known_final_usage_only_otherwise_provider_loss"}}),
+        ]
+    } else {
+        vec![]
+    };
+    Ok(Json(json!({"object":"list","data":data})))
+}
+async fn request_status(
+    State(gateway): State<Arc<Gateway>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<RequestView>, ApiError> {
+    validate_id(&id)?;
+    let context = authenticate(&gateway, &headers, "read")?;
+    Ok(Json(
+        gateway
+            .provider
+            .ledger
+            .request_view(&context.account.contract_id, &id)
+            .map_err(ledger_error)?,
+    ))
+}
+async fn cancel_request(
+    State(gateway): State<Arc<Gateway>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    validate_id(&id)?;
+    let context = authenticate(&gateway, &headers, "infer")?;
+    let view = gateway
+        .provider
+        .ledger
+        .request_view(&context.account.contract_id, &id)
+        .map_err(ledger_error)?;
+    let active = gateway
+        .active
+        .lock()
+        .map_err(|_| ApiError::internal("Cancellation lock unavailable"))?;
+    if let Some(cancel) = active.get(&view.id) {
+        let _ = cancel.send(true);
+        Ok(with_id(
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({"id":view.id,"status":"cancelling"})),
+            )
+                .into_response(),
+            &view.id,
+        ))
+    } else {
+        Ok(with_id(Json(view.clone()).into_response(), &view.id))
+    }
+}
+async fn chat(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
+    infer(gateway, request, Endpoint::Chat)
+        .await
+        .unwrap_or_else(IntoResponse::into_response)
+}
+async fn completions(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
+    infer(gateway, request, Endpoint::Completions)
+        .await
+        .unwrap_or_else(IntoResponse::into_response)
+}
+async fn embeddings(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
+    infer(gateway, request, Endpoint::Embeddings)
+        .await
+        .unwrap_or_else(IntoResponse::into_response)
+}
+
+/// A single owner moves from handler to stream worker. Drop also covers task
+/// cancellation/panic, socket teardown and pre-stream errors. Process death is
+/// handled by BillingStore::recover_requests before admission on next startup.
+struct Settlement {
+    gateway: Arc<Gateway>,
+    id: String,
+    known_usage: Option<TokenUsage>,
+    settled: bool,
+    profile: Option<Arc<protocol::ServingProfile>>,
+    normalization: StreamNormalization,
+    accepted: Instant,
+    first_output: Option<Instant>,
+    last_output: Option<Instant>,
+    in_envelope: bool,
+    client_stalled: bool,
+    blocked: Duration,
+    observed_tokens: u64,
+    token_clock_valid: bool,
+    _permit: OwnedSemaphorePermit,
+}
+impl Settlement {
+    fn finish(&mut self, status: &str) -> Result<(), ApiError> {
+        if self.settled {
+            return Ok(());
+        }
+        let usage = self.known_usage.clone().unwrap_or_default();
+        let final_status = if self.known_usage.is_some() {
+            status.to_owned()
+        } else {
+            format!("{status}_unknown_usage")
+        };
+        let now = match protocol::now() {
+            Ok(now) => now,
+            Err(_) => {
+                self.gateway
+                    .provider
+                    .accepting
+                    .store(false, Ordering::Release);
+                return Err(ApiError::internal("Accounting clock unavailable"));
+            }
+        };
+        let micros = |duration: Duration| u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+        let ttft_us = self.first_output.map(|first| micros(first.duration_since(self.accepted)));
+        let decode_us = self.first_output.zip(self.last_output)
+            .filter(|_| self.token_clock_valid)
+            .map(|(first, last)| micros(last.duration_since(first)));
+        let elapsed_us = Some(micros(self.accepted.elapsed().saturating_sub(self.blocked)));
+        let performance = Some(match self.profile.as_ref() {
+            Some(profile) => crate::performance::outcome(profile, self.in_envelope, ttft_us, decode_us, self.known_usage.as_ref(), status, self.client_stalled, elapsed_us, &(profile).qualification.evidence_sha256),
+            None => protocol::PerformanceOutcome {
+                evidence_sha256: String::new(), policy: "unqualified".into(),
+                eligibility: "unqualified".into(), ttft_us, decode_us, elapsed_us,
+                output_tokens: self.known_usage.as_ref().map(|u| u.completion_tokens),
+                attained: None, remedy: "none".into(),
+            },
+        });
+        match self
+            .gateway
+            .provider
+            .ledger
+            .settle_measured(&self.id, &usage, &final_status, performance.as_ref(), now)
+        {
+            Ok(_) => {
+                self.settled = true;
+                Ok(())
+            }
+            Err(_) => {
+                // Never acknowledge a successful completion with an unpersisted debit.
+                // A repeated settle is idempotent; restart recovery remains authoritative.
+                self.gateway
+                    .provider
+                    .accepting
+                    .store(false, Ordering::Release);
+                Err(ApiError::internal(
+                    "Durable settlement failed; provider admission has been stopped",
+                ))
+            }
+        }
+    }
+}
+impl Drop for Settlement {
+    fn drop(&mut self) {
+        if !self.settled {
+            let _ = self.finish("interrupted");
+        }
+        if let Ok(mut active) = self.gateway.active.lock() {
+            active.remove(&self.id);
+        }
+    }
+}
+
+async fn infer(
+    gateway: Arc<Gateway>,
+    request: Request,
+    endpoint: Endpoint,
+) -> Result<Response, ApiError> {
+    let headers = request.headers();
+    let context = authenticate(&gateway, headers, "infer")?;
+    let key = request_key(headers)?;
+    if let Ok(view) = gateway
+        .provider
+        .ledger
+        .request_view(&context.account.contract_id, &key)
+    {
+        return Ok(duplicate(view));
+    }
+    if !gateway.provider.accepting.load(Ordering::Acquire) {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_paused",
+            "Provider is not accepting new inference",
+        ));
+    }
+    if !matches!(context.account.status.as_str(), "active" | "free") {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "account_paused",
+            "Account is not active",
+        ));
+    }
+    gateway.rate_limit(
+        &context.account.contract_id,
+        protocol::now().map_err(ApiError::from)?,
+    )?;
+    if !headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(';').next() == Some("application/json"))
+    {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "invalid_content_type",
+            "Content-Type must be application/json",
+        ));
+    }
+    // Unlike a handler Bytes extractor, collection here cannot precede bearer
+    // authentication. Readers never queue, and their deadline is independent of
+    // model tokenization/generation/SSE. Drop releases the slot on every exit,
+    // including a body error or cancellation of the HTTP handler.
+    let bytes = {
+        let _slot = gateway.body_slots.try_acquire().map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "provider_saturated",
+                "Inference body reader capacity reached",
+            )
+        })?;
+        tokio::time::timeout(BODY_READ_TIMEOUT, Bytes::from_request(request, &()))
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "request_timeout",
+                    "Inference request body deadline exceeded",
+                )
+            })?
+            .map_err(|rejection| {
+                ApiError::new(
+                    rejection.status(),
+                    "invalid_request_body",
+                    "Request body is unreadable or exceeds 256 KiB",
+                )
+            })?
+    };
+    // Acceptance excludes slow request uploads, but includes parsing, admission and tokenization.
+    let accepted = Instant::now();
+    let body: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        ApiError::bad_request("invalid_json", "Request must be a bounded JSON object")
+    })?;
+    let mut request = backend::prepare(body, endpoint, &context.account.model)?;
+    let client_stream = request.stream;
+    // Both public generation modes use the same private stream and output clock.
+    if endpoint != Endpoint::Embeddings {
+        request.stream = true;
+        request.body["stream"] = json!(true);
+        request.body["stream_options"] = json!({"include_usage":true});
+    }
+    let runtime = gateway
+        .models
+        .get(&context.account.model.id)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "model_unavailable",
+                "Contracted model is not deployed",
+            )
+        })?;
+    let engine = runtime
+        .backend
+        .as_ref()
+        .map_err(|_| backend::upstream_error())?;
+    if !context.account.model.accepts_execution(&engine.config.model) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "model_revision_unavailable",
+            "The exact contracted model revision is no longer deployed",
+        ));
+    }
+    if gateway.provider.qualified_model(&context.account.model).is_none() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_unqualified",
+            "Contracted model has not passed current readiness and inference qualification",
+        ));
+    }
+    // Queue length is deliberately zero: every operation, including private
+    // tokenization, must acquire a model slot or fail before making a reservation.
+    let permit = runtime.slots.clone().try_acquire_owned().map_err(|_| {
+        ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "model_saturated",
+            "Model concurrency limit reached; no request was dispatched",
+        )
+    })?;
+    if let Some(profile) = &context.account.model.serving {
+        let mut bucket = runtime.arrival.lock().map_err(|_| ApiError::internal("Admission clock unavailable"))?;
+        let now = Instant::now();
+        bucket.1 = (bucket.1 + now.duration_since(bucket.0).as_nanos()
+            .saturating_mul(u128::from(profile.arrival_milli_rps)) / 1000)
+            .min(u128::from(profile.max_concurrency) * 1_000_000_000);
+        bucket.0 = now;
+        if bucket.1 < 1_000_000_000 {
+            return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limit",
+                "Qualified global arrival envelope exceeded; no paid dispatch"));
+        }
+        bucket.1 -= 1_000_000_000;
+    }
+    let deadline = Instant::now() + Duration::from_secs(engine.config.request_timeout_secs);
+    tokio::time::timeout_at(deadline, async {
+        engine.ready().await?;
+        engine.tokenize(&mut request).await
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "tokenization_timeout",
+            "Tokenization timed out; no inference was dispatched",
+        )
+    })??;
+    if !gateway.provider.accepting.load(Ordering::Acquire) {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_paused",
+            "Provider stopped accepting inference before reservation",
+        ));
+    }
+    if gateway.provider.qualified_model(&context.account.model).is_none() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_unqualified",
+            "Model qualification was withdrawn before reservation",
+        ));
+    }
+    let reservation = match gateway.provider.ledger.reserve(
+        &context.account.contract_id,
+        &context.credential_id,
+        &key,
+        request.prompt_tokens,
+        request.max_output_tokens,
+        protocol::now().map_err(ApiError::from)?,
+        &engine.config.model,
+    ) {
+        Ok(reservation) => reservation,
+        Err(error) if error.starts_with("duplicate_request") => {
+            return Ok(duplicate(
+                gateway
+                    .provider
+                    .ledger
+                    .request_view(&context.account.contract_id, &key)
+                    .map_err(ledger_error)?,
+            ))
+        }
+        Err(error) => return Err(ledger_error(error)),
+    };
+    let id = reservation.id;
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let mut settlement = Settlement {
+        gateway: gateway.clone(),
+        id: id.clone(),
+        known_usage: None,
+        settled: false,
+        profile: runtime.profile.clone(),
+        normalization: StreamNormalization::new(request.logprobs, request.echo_prompt.take(), context.account.model.context_length),
+        accepted, first_output: None, last_output: None,
+        in_envelope: endpoint != Endpoint::Embeddings && request.prompt_tokens <= 2048
+            && request.max_output_tokens <= 256
+            && request.prompt_tokens.saturating_add(request.max_output_tokens) <= 4096,
+        client_stalled: false,
+        blocked: Duration::ZERO,
+        observed_tokens: 0, token_clock_valid: true,
+        _permit: permit,
+    };
+    gateway
+        .active
+        .lock()
+        .map_err(|_| ApiError::internal("Cancellation lock unavailable"))?
+        .insert(id.clone(), cancel_tx);
+    let response = tokio::select! {
+        biased;
+        _ = cancelled(&mut cancel_rx) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+        _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference timed out; it will not be replayed")),
+        response = engine.dispatch(&request, &id) => response,
+    };
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            let error = match settlement.finish(terminal_status(Some(&error))) {
+                Ok(()) => error,
+                Err(settlement_error) => settlement_error,
+            };
+            return Ok(with_id(error.into_response(), &id));
+        }
+    };
+    if client_stream {
+        let (sender, receiver) = mpsc::channel::<Bytes>(4);
+        let spec = StreamSpec {
+            endpoint,
+            model: context.account.model.id,
+            prompt: request.prompt_tokens,
+            output: request.max_output_tokens,
+            include_usage: request.include_usage,
+        };
+        // Only bounded chunks and, for echo, the bounded prompt cross the task boundary.
+        tokio::spawn(stream_worker(
+            response, spec, settlement, cancel_rx, sender, deadline,
+        ));
+        let body = futures_util::stream::unfold(receiver, |mut receiver| async {
+            receiver
+                .recv()
+                .await
+                .map(|bytes| (Ok::<Bytes, Infallible>(bytes), receiver))
+        });
+        let mut response = Body::from_stream(body).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, no-transform"),
+        );
+        response
+            .headers_mut()
+            .insert("x-accel-buffering", HeaderValue::from_static("no"));
+        Ok(with_id(response, &id))
+    } else if endpoint != Endpoint::Embeddings {
+        let spec = StreamSpec {
+            endpoint, model: context.account.model.id, prompt: request.prompt_tokens,
+            output: request.max_output_tokens, include_usage: true,
+        };
+        let result = stream_inner(response, &spec, &mut settlement, &mut cancel_rx, None, deadline).await;
+        let status = terminal_status(result.as_ref().err());
+        if let Err(error) = settlement.finish(status) {
+            return Ok(with_id(error.into_response(), &id));
+        }
+        Ok(with_id(match result {
+            Ok(value) => Json(value).into_response(),
+            Err(error) => error.into_response(),
+        }, &id))
+    } else {
+        let result = tokio::select! {
+            biased;
+            _ = cancelled(&mut cancel_rx) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+            _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference timed out; it will not be replayed")),
+            result = backend::read_json(response, MAX_RESPONSE_BYTES) => result,
+        };
+        let result = result.and_then(|mut value| {
+            backend::normalize_embedding_usage(&mut value, endpoint)?;
+            let usage = backend::validate_response(&value, &request)?;
+            backend::validate_authorized_usage(
+                &usage,
+                request.prompt_tokens,
+                request.max_output_tokens,
+            )?;
+            settlement.known_usage = Some(usage);
+            Ok(value)
+        });
+        let status = terminal_status(result.as_ref().err());
+        if let Err(error) = settlement.finish(status) {
+            return Ok(with_id(error.into_response(), &id));
+        }
+        Ok(with_id(
+            match result {
+                Ok(value) => Json(value).into_response(),
+                Err(error) => error.into_response(),
+            },
+            &id,
+        ))
+    }
+}
+async fn cancelled(receiver: &mut watch::Receiver<bool>) {
+    loop {
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+fn terminal_status(error: Option<&ApiError>) -> &'static str {
+    match error.map(|error| error.code.as_str()) {
+        None => "completed",
+        Some("request_cancelled") => "cancelled",
+        Some("client_disconnected") => "disconnected",
+        Some("engine_timeout") => "timed_out",
+        _ => "failed",
+    }
+}
+
+async fn send_chunk(
+    sender: &mpsc::Sender<Bytes>,
+    cancel: &mut watch::Receiver<bool>,
+    deadline: Instant,
+    bytes: Bytes,
+) -> Result<(), ApiError> {
+    tokio::select! {
+        biased;
+        _ = cancelled(cancel) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+        _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference stream timed out")),
+        result = sender.send(bytes) => result.map_err(|_| ApiError::new(StatusCode::CONFLICT, "client_disconnected", "Client disconnected")),
+    }
+}
+async fn stream_worker(
+    response: reqwest::Response,
+    spec: StreamSpec,
+    mut settlement: Settlement,
+    mut cancel: watch::Receiver<bool>,
+    sender: mpsc::Sender<Bytes>,
+    deadline: Instant,
+) {
+    let result = stream_inner(
+        response,
+        &spec,
+        &mut settlement,
+        &mut cancel,
+        Some(&sender),
+        deadline,
+    )
+    .await;
+    let status = terminal_status(result.as_ref().err());
+    let settled = settlement.finish(status);
+    if let Err(error) = result.and(settled) {
+        let bytes = Bytes::from(format!(
+            "data: {}\n\ndata: [DONE]\n\n",
+            json!({"error":{"message":error.message,"type":"server_error","param":null,"code":error.code}})
+        ));
+        // Never retain engine resources waiting for a slow/disconnected caller.
+        let _ = sender.try_send(bytes);
+    }
+}
+fn output_event(value: &Value) -> bool {
+    let choice = &value["choices"][0];
+    choice["text"].as_str().is_some_and(|s| !s.is_empty())
+        || choice["delta"]["content"].as_str().is_some_and(|s| !s.is_empty())
+        || choice["delta"]["refusal"].as_str().is_some_and(|s| !s.is_empty())
+        || choice["delta"]["tool_calls"].as_array().is_some_and(|a| !a.is_empty())
+}
+
+fn append_text(target: &mut Value, fragment: &mut Value) -> Result<(), ApiError> {
+    if fragment.is_null() { return Ok(()); }
+    if !fragment.is_string() { return Err(backend::upstream_error()); }
+    if target.is_null() || target.as_str() == Some("") {
+        *target = fragment.take();
+    } else if let Value::String(buffer) = target {
+        buffer.push_str(fragment.as_str().ok_or_else(backend::upstream_error)?);
+    } else { return Err(backend::upstream_error()); }
+    Ok(())
+}
+
+fn append_logprobs(target: &mut Value, fragment: &mut Value) -> Result<(), ApiError> {
+    if fragment.is_null() { return Ok(()); }
+    let fields = fragment.as_object_mut().ok_or_else(backend::upstream_error)?;
+    if target.is_null() { *target = json!({}); }
+    let output = target.as_object_mut().ok_or_else(backend::upstream_error)?;
+    for (key, value) in std::mem::take(fields) {
+        if value.is_null() { output.entry(key).or_insert(Value::Null); continue; }
+        let Value::Array(mut values) = value else { return Err(backend::upstream_error()); };
+        let destination = output.entry(key).or_insert(Value::Null);
+        if destination.is_null() { *destination = Value::Array(values); }
+        else { destination.as_array_mut().ok_or_else(backend::upstream_error)?.append(&mut values); }
+    }
+    Ok(())
+}
+
+/// Bounded by the same total upstream byte limit as streaming; never retokenizes output.
+fn collect_event(output: &mut Value, event: &mut Value, endpoint: Endpoint) -> Result<(), ApiError> {
+    if output.get("id").is_none() {
+        for field in ["id", "model", "created", "system_fingerprint", "service_tier"] {
+            if let Some(value) = event.get_mut(field) { output[field] = value.take(); }
+        }
+        output["object"] = json!(if endpoint == Endpoint::Chat { "chat.completion" } else { "text_completion" });
+        if endpoint == Endpoint::Chat {
+            output["choices"][0]["message"] = json!({"role":"assistant","content":""});
+        } else {
+            output["choices"][0]["text"] = json!("");
+        }
+    }
+    if event["choices"].as_array().is_some_and(|choices| choices.is_empty()) {
+        output["usage"] = event["usage"].take();
+        return Ok(());
+    }
+    let choice = &mut event["choices"][0];
+    for field in ["finish_reason", "stop_reason"] {
+        if !choice[field].is_null() { output["choices"][0][field] = choice[field].take(); }
+    }
+    append_logprobs(&mut output["choices"][0]["logprobs"], &mut choice["logprobs"])?;
+    if endpoint != Endpoint::Chat {
+        return append_text(&mut output["choices"][0]["text"], &mut choice["text"]);
+    }
+    let message = &mut output["choices"][0]["message"];
+    for field in ["content", "refusal", "reasoning_content"] {
+        if !choice["delta"][field].is_null() {
+            append_text(&mut message[field], &mut choice["delta"][field])?;
+        }
+    }
+    if let Some(calls) = choice["delta"]["tool_calls"].as_array_mut() {
+        if message.get("tool_calls").is_none() { message["tool_calls"] = json!([]); }
+        let target = message["tool_calls"].as_array_mut().ok_or_else(backend::upstream_error)?;
+        for call in calls {
+            let index = call["index"].as_u64().filter(|i| *i < 128).ok_or_else(backend::upstream_error)? as usize;
+            if index > target.len() { return Err(backend::upstream_error()); }
+            if index == target.len() {
+                target.push(json!({"id":"","type":"function","function":{"name":"","arguments":""}}));
+            }
+            let entry = &mut target[index];
+            append_text(&mut entry["id"], &mut call["id"])?;
+            append_text(&mut entry["function"]["name"], &mut call["function"]["name"])?;
+            append_text(&mut entry["function"]["arguments"], &mut call["function"]["arguments"])?;
+        }
+    }
+    Ok(())
+}
+
+async fn stream_inner(
+    response: reqwest::Response,
+    spec: &StreamSpec,
+    settlement: &mut Settlement,
+    cancel: &mut watch::Receiver<bool>,
+    sender: Option<&mpsc::Sender<Bytes>>,
+    deadline: Instant,
+) -> Result<Value, ApiError> {
+    let mut upstream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>> =
+        Box::pin(response.bytes_stream());
+    let mut decoder = SseDecoder::default();
+    let mut validation = StreamValidation::default();
+    let mut total_bytes = 0usize;
+    let mut collected = json!({"choices":[{"index":0,"finish_reason":null}]});
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = cancelled(cancel) => return Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+            _ = async { match sender { Some(sender) => sender.closed().await, None => std::future::pending::<()>().await } } => return Err(ApiError::new(StatusCode::CONFLICT, "client_disconnected", "Client disconnected")),
+            _ = tokio::time::sleep_until(deadline) => return Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference stream timed out")),
+            chunk = upstream.next() => chunk.ok_or_else(backend::upstream_error)?.map_err(|_| backend::upstream_error())?,
+        };
+        total_bytes = total_bytes
+            .checked_add(chunk.len())
+            .ok_or_else(backend::upstream_error)?;
+        if total_bytes > MAX_RESPONSE_BYTES {
+            return Err(backend::upstream_error());
+        }
+        for byte in chunk {
+            if let Some(data) = decoder.byte(byte)? {
+                if data == b"[DONE]" {
+                    if !validation.finished || !validation.final_usage {
+                        return Err(backend::upstream_error());
+                    }
+                    settlement.finish("completed")?;
+                    if let Some(sender) = sender {
+                        send_chunk(sender, cancel, deadline, Bytes::from_static(b"data: [DONE]\n\n")).await?;
+                    }
+                    return Ok(collected);
+                }
+                let value: Value = serde_json::from_slice(&data).map_err(|_| backend::upstream_error())?;
+                for mut value in settlement.normalization.events(value, spec.endpoint)?.into_iter().flatten() {
+                let (forward, usage) = validation.event(&mut value, spec)?;
+                let now = Instant::now() - settlement.blocked;
+                let visible_output = output_event(&value) && value["chiral_echo"].as_bool() != Some(true);
+                let token_ids = value["choices"][0]["token_ids"].as_array();
+                let observed_output = if let Some(ids) = token_ids {
+                    settlement.observed_tokens = settlement.observed_tokens.saturating_add(ids.len() as u64);
+                    if ids.len() > 1 || ids.iter().any(|id| id.as_u64().is_none()) || (ids.is_empty() && visible_output) {
+                        settlement.token_clock_valid = false;
+                    }
+                    !ids.is_empty()
+                } else {
+                    if visible_output { settlement.token_clock_valid = false; }
+                    false
+                };
+                if observed_output {
+                    settlement.first_output.get_or_insert(now);
+                    settlement.last_output = Some(now);
+                }
+                // Token IDs are private instrumentation, never an OpenAI response extension.
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("chiral_echo");
+                }
+                if let Some(choices) = value["choices"].as_array_mut() {
+                    for choice in choices {
+                        if let Some(object) = choice.as_object_mut() {
+                            object.remove("token_ids");
+                        }
+                    }
+                }
+                if sender.is_none() {
+                    collect_event(&mut collected, &mut value, spec.endpoint)?;
+                }
+                if let Some(usage) = usage {
+                    if settlement.observed_tokens != usage.completion_tokens {
+                        settlement.token_clock_valid = false;
+                    }
+                    settlement.known_usage = Some(usage);
+                }
+                if forward && sender.is_some() {
+                    let encoded =
+                        serde_json::to_vec(&value).map_err(|_| backend::upstream_error())?;
+                    let mut event = Vec::with_capacity(encoded.len() + 8);
+                    event.extend_from_slice(b"data: ");
+                    event.extend_from_slice(&encoded);
+                    event.extend_from_slice(b"\n\n");
+                    let sender = sender.expect("checked sender");
+                    // A full bounded downstream queue identifies a consumer stall. Never
+                    // attribute time spent awaiting its capacity to provider decoding.
+                    let before_send = if sender.capacity() == 0 {
+                        settlement.client_stalled = true;
+                        Some(Instant::now())
+                    } else { None };
+                    let sent = send_chunk(sender, cancel, deadline, Bytes::from(event)).await;
+                    if let Some(before_send) = before_send {
+                        settlement.blocked += before_send.elapsed();
+                    }
+                    sent?;
+                }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::Service;
+
+    #[test]
+    fn internal_stream_preserves_nonstream_text_and_authoritative_logprobs() {
+        let mut output = json!({"choices":[{"index":0,"finish_reason":null}]});
+        for (text, offset, finish) in [("Hello", 0, Value::Null), (" world", 5, json!("length"))] {
+            let mut event = json!({"id":"response","model":"model","created":123,
+                "choices":[{"index":0,"text":text,"finish_reason":finish,
+                    "logprobs":{"tokens":[text],"token_logprobs":[-0.5],"top_logprobs":[{text:-0.5}],
+                        "text_offset":[offset]}}]});
+            collect_event(&mut output, &mut event, Endpoint::Completions).unwrap();
+        }
+        let mut final_event = json!({"id":"response","model":"model","choices":[],
+            "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}});
+        collect_event(&mut output, &mut final_event, Endpoint::Completions).unwrap();
+        assert_eq!(output["choices"][0]["text"], "Hello world");
+        assert_eq!(output["choices"][0]["finish_reason"], "length");
+        assert_eq!(output["choices"][0]["logprobs"]["tokens"], json!(["Hello"," world"]));
+        assert_eq!(output["choices"][0]["logprobs"]["text_offset"], json!([0,5]));
+        assert_eq!(output["usage"]["completion_tokens"], 2);
+        assert_eq!(output["object"], "text_completion");
+    }
+
+    fn ingress_fixture() -> (tempfile::TempDir, Arc<ProviderState>, String) {
+        use crate::{
+            billing_store::BillingStore,
+            chain_client::ChainClient,
+            network::NetworkConfig,
+            offer_registry::OfferRegistry,
+            provider_config::{DhtConfig, ModelConfig, ProviderConfig},
+        };
+        use std::sync::atomic::AtomicBool;
+        let directory = tempfile::tempdir().unwrap();
+        let offer = crate::offer_registry::tests::offer().payload;
+        let key = "11".repeat(32);
+        let now = protocol::now().unwrap();
+        let price = protocol::PriceSchedule {
+            input_wei_per_1k: "0".into(),
+            output_wei_per_1k: "0".into(),
+        };
+        let quote = protocol::sign(
+            protocol::QUOTE_DOMAIN,
+            protocol::Quote {
+                id: protocol::random_id(),
+                network: offer.network.clone(),
+                offer_id: protocol::random_id(),
+                provider_wallet: offer.provider_wallet.clone(),
+                consumer_wallet: crate::wallet::address_from_private_key(&"22".repeat(32)).unwrap(),
+                model: offer.model.clone(),
+                price: price.clone(),
+                funding_wei: "0".into(),
+                platform_wallet: offer.platform_wallet.clone(),
+                fee_bps: 50,
+                max_concurrency: 1,
+                nonce: protocol::random_id(),
+                issued_at: now,
+                expires_at: now + 300,
+            },
+            &key,
+        )
+        .unwrap();
+        let ledger = Arc::new(
+            BillingStore::open(&directory.path().join("ledger.sqlite"), &offer.network).unwrap(),
+        );
+        ledger.store_quote(&quote, now).unwrap();
+        let bearer = ledger
+            .open_account(&quote, None, now)
+            .unwrap()
+            .credential
+            .bearer;
+        let network = NetworkConfig {
+            identity: offer.network.clone(),
+            rpc_url: "http://127.0.0.1:1".into(),
+            rpc_bearer_file: None,
+            faucet_url: None,
+            explorer_url: None,
+            policy_url: None,
+        };
+        let chain = Arc::new(ChainClient::new(network.clone(), directory.path().into()).unwrap());
+        let config = ProviderConfig {
+            network,
+            data_dir: directory.path().into(),
+            signing_key_file: directory.path().join("key"),
+            admin_token_file: directory.path().join("admin"),
+            public_endpoint: "http://127.0.0.1:9419".into(),
+            public_bind: "127.0.0.1:9419".parse().unwrap(),
+            admin_bind: "127.0.0.1:9421".parse().unwrap(),
+            platform_wallet: offer.platform_wallet,
+            fee_bps: 50,
+            min_funding_wei: "0".into(),
+            models: vec![ModelConfig {
+                model: offer.model,
+                price,
+                engine_url: "http://127.0.0.1:1".into(),
+                engine_api_key_file: None,
+                max_concurrency: 1,
+                request_timeout_secs: 60,
+                qualification_evidence_file: None,
+                runtime: None,
+            }],
+            dht: DhtConfig {
+                listen: "/ip4/127.0.0.1/tcp/0".into(),
+                bootstrap: vec![],
+                identity_file: directory.path().join("peer"),
+            },
+            development: true,
+        };
+        let state = Arc::new(ProviderState {
+            model_slots: ProviderState::slots(&config),
+            managed_engines: Default::default(),
+            config: Arc::new(config),
+            chain,
+            ledger,
+            private_key: Arc::new(key),
+            wallet: offer.provider_wallet,
+            offers: Arc::new(OfferRegistry::new(offer.network, true)),
+            accepting: AtomicBool::new(true),
+            funding_ready: AtomicBool::new(true),
+            qualified_models: std::sync::RwLock::new(Default::default()),
+        });
+        (directory, state, bearer)
+    }
+
+    #[tokio::test]
+    async fn renewed_qualification_keeps_existing_model_visible_without_rewriting_agreement() {
+        let (_directory, mut state, _) = ingress_fixture();
+        let inner = Arc::get_mut(&mut state).unwrap();
+        let config = Arc::get_mut(&mut inner.config).unwrap();
+        let deployed = &mut config.models[0].model;
+        deployed.serving = Some(crate::performance::test_profile());
+        let agreement = deployed.clone();
+        deployed.serving.as_mut().unwrap().qualification.evidence_sha256 = "d".repeat(64);
+        deployed.serving.as_mut().unwrap().qualification.measured_at += 1;
+        inner.qualified_models.write().unwrap().insert(deployed.id.clone());
+        let current = deployed.clone();
+        let now = protocol::now().unwrap();
+        let quote = protocol::sign(protocol::QUOTE_DOMAIN, protocol::Quote {
+            id: protocol::random_id(), network: inner.config.network.identity.clone(),
+            offer_id: protocol::random_id(), provider_wallet: inner.wallet.clone(),
+            consumer_wallet: crate::wallet::address_from_private_key(&"22".repeat(32)).unwrap(),
+            model: agreement.clone(), price: inner.config.models[0].price.clone(),
+            funding_wei: "0".into(), platform_wallet: inner.config.platform_wallet.clone(),
+            fee_bps: 50, max_concurrency: 1, nonce: protocol::random_id(),
+            issued_at: now, expires_at: now + 300,
+        }, &inner.private_key).unwrap();
+        inner.ledger.store_quote(&quote, now).unwrap();
+        let opened = inner.ledger.open_account(&quote, None, now).unwrap();
+        let mut app = router(state.clone());
+        let response = app.call(Request::builder().uri("/v1/models")
+            .header(header::AUTHORIZATION, format!("Bearer {}", opened.credential.bearer))
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let data: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 64 * 1024).await.unwrap()
+        ).unwrap();
+        assert_eq!(data["data"][0]["chiral"]["model"], serde_json::to_value(&current).unwrap());
+        assert_eq!(state.ledger.account(&quote.payload.id).unwrap().model, agreement);
+        state.qualified_models.write().unwrap().clear();
+        assert!(state.qualified_model(&agreement).is_none());
+    }
+
+    fn inference_request(path: &str, bearer: Option<&str>, body: Body) -> Request {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        request.body(body).unwrap()
+    }
+
+    fn incomplete_body(started: Option<mpsc::UnboundedSender<()>>) -> Body {
+        Body::from_stream(
+            futures_util::stream::once(async move {
+                if let Some(started) = started {
+                    started.send(()).unwrap();
+                }
+                Ok::<_, std::io::Error>(Bytes::from_static(b"{"))
+            })
+            .chain(futures_util::stream::pending()),
+        )
+    }
+
+    async fn assert_api_error(response: Response, status: StatusCode, code: &str, bearer: &str) {
+        assert_eq!(response.status(), status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let error: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["error"]["code"], code);
+        assert!(error["error"]["message"].is_string());
+        assert!(error["error"]["type"].is_string());
+        assert!(!std::str::from_utf8(&bytes).unwrap().contains(bearer));
+    }
+
+    #[tokio::test]
+    async fn unauthenticated_incomplete_inference_bodies_are_not_polled() {
+        let (_directory, state, bearer) = ingress_fixture();
+        let mut app = router(state);
+        for path in ["/v1/chat/completions", "/v1/completions", "/v1/embeddings"] {
+            for credential in [None, Some("invalid-secret-credential")] {
+                let (started, mut observed) = mpsc::unbounded_channel();
+                let mut request =
+                    inference_request(path, credential, incomplete_body(Some(started)));
+                // Same incomplete framing as the live embeddings reproduction.
+                request
+                    .headers_mut()
+                    .insert(header::CONTENT_LENGTH, HeaderValue::from_static("100000"));
+                let response = tokio::time::timeout(Duration::from_millis(100), app.call(request))
+                    .await
+                    .expect("authentication must not wait for body completion")
+                    .unwrap();
+                assert_api_error(
+                    response,
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_api_key",
+                    &bearer,
+                )
+                .await;
+                assert!(
+                    observed.try_recv().is_err(),
+                    "authentication polled the body"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn authorized_body_deadline_is_independent_of_generation_timeout() {
+        let (_directory, state, bearer) = ingress_fixture();
+        let mut app = router(state);
+        let started = Instant::now();
+        let request = inference_request("/v1/embeddings", Some(&bearer), incomplete_body(None));
+        let response = tokio::time::timeout(
+            BODY_READ_TIMEOUT + Duration::from_secs(1),
+            app.call(request),
+        )
+        .await
+        .expect("an authorized incomplete body must have its own deadline")
+        .unwrap();
+        assert_eq!(Instant::now() - started, BODY_READ_TIMEOUT);
+        assert_api_error(
+            response,
+            StatusCode::REQUEST_TIMEOUT,
+            "request_timeout",
+            &bearer,
+        )
+        .await;
+        let response = app
+            .call(inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                Body::from("{"),
+            ))
+            .await
+            .unwrap();
+        assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_json", &bearer).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn body_reader_saturation_never_queues_and_reclaims_slots_on_all_errors() {
+        let (_directory, state, bearer) = ingress_fixture();
+        let mut app = router(state);
+        let (started, mut observed) = mpsc::unbounded_channel();
+        let mut readers = Vec::new();
+        for _ in 0..MAX_BODY_READERS {
+            let mut app = app.clone();
+            let request = inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                incomplete_body(Some(started.clone())),
+            );
+            readers.push(tokio::spawn(
+                async move { app.call(request).await.unwrap() },
+            ));
+            observed.recv().await.unwrap();
+        }
+        let request = inference_request("/v1/embeddings", Some(&bearer), incomplete_body(None));
+        let response = tokio::time::timeout(Duration::from_millis(100), app.call(request))
+            .await
+            .expect("saturated body readers must reject rather than queue")
+            .unwrap();
+        assert_api_error(
+            response,
+            StatusCode::TOO_MANY_REQUESTS,
+            "provider_saturated",
+            &bearer,
+        )
+        .await;
+
+        // A disconnected handler frees its permit immediately, without waiting
+        // for the body deadline. Keep every other slot occupied throughout.
+        let reader = readers.pop().unwrap();
+        reader.abort();
+        assert!(reader.await.unwrap_err().is_cancelled());
+        let broken = Body::from_stream(futures_util::stream::once(async {
+            Err::<Bytes, _>(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "private-body-detail",
+            ))
+        }));
+        let response = app
+            .call(inference_request("/v1/embeddings", Some(&bearer), broken))
+            .await
+            .unwrap();
+        assert_api_error(
+            response,
+            StatusCode::BAD_REQUEST,
+            "invalid_request_body",
+            "private-body-detail",
+        )
+        .await;
+
+        // No Content-Length: the actual streamed bytes must still be bounded.
+        let oversized = Body::from_stream(futures_util::stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from(vec![b' '; MAX_REQUEST_BYTES])),
+            Ok(Bytes::from_static(b"x")),
+        ]));
+        let response = app
+            .call(inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                oversized,
+            ))
+            .await
+            .unwrap();
+        assert_api_error(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "invalid_request_body",
+            &bearer,
+        )
+        .await;
+        let response = app
+            .call(inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                Body::from(vec![b' '; MAX_REQUEST_BYTES]),
+            ))
+            .await
+            .unwrap();
+        assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_json", &bearer).await;
+
+        // Refill the released slot, proving neither transport/size/JSON errors
+        // nor handler cancellation leaked it.
+        let mut replacement_app = app.clone();
+        let request = inference_request(
+            "/v1/embeddings",
+            Some(&bearer),
+            incomplete_body(Some(started)),
+        );
+        readers.push(tokio::spawn(async move {
+            replacement_app.call(request).await.unwrap()
+        }));
+        observed.recv().await.unwrap();
+        let response = app
+            .call(inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                Body::from("{"),
+            ))
+            .await
+            .unwrap();
+        assert_api_error(
+            response,
+            StatusCode::TOO_MANY_REQUESTS,
+            "provider_saturated",
+            &bearer,
+        )
+        .await;
+        tokio::time::advance(BODY_READ_TIMEOUT).await;
+        for reader in readers {
+            assert_api_error(
+                reader.await.unwrap(),
+                StatusCode::REQUEST_TIMEOUT,
+                "request_timeout",
+                &bearer,
+            )
+            .await;
+        }
+        let response = app
+            .call(inference_request(
+                "/v1/embeddings",
+                Some(&bearer),
+                Body::from("{"),
+            ))
+            .await
+            .unwrap();
+        assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_json", &bearer).await;
+    }
+
+    #[test]
+    fn credential_cap_is_payment_error_not_ledger_failure() {
+        let error = ledger_error("spend_cap: credential budget exhausted".into());
+        assert_eq!(error.status, StatusCode::PAYMENT_REQUIRED);
+        assert_eq!(error.code, "credential_spend_cap");
+        assert!(!error.message.contains("budget exhausted"));
+    }
+    #[test]
+    fn sse_framing_handles_network_splits_and_crlf() {
+        let mut decoder = SseDecoder::default();
+        let mut events = vec![];
+        for byte in b":heartbeat\r\n\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\ndata: [DONE]\n\n" {
+            if let Some(event) = decoder.byte(*byte).unwrap() {
+                events.push(event);
+            }
+        }
+        assert_eq!(events, vec![b"{\"a\":\n1}".to_vec(), b"[DONE]".to_vec()]);
+    }
+    #[test]
+    fn sse_rejects_oversized_and_non_sse_events() {
+        let mut decoder = SseDecoder::default();
+        for _ in 0..backend::MAX_SSE_EVENT_BYTES {
+            assert!(decoder.byte(b'a').is_ok());
+        }
+        assert!(decoder.byte(b'a').is_err());
+        let mut decoder = SseDecoder::default();
+        for byte in b"not-an-event" {
+            decoder.byte(*byte).unwrap();
+        }
+        assert!(decoder.byte(b'\n').is_err());
+    }
+    #[test]
+    fn idempotency_keys_are_bounded_and_path_safe() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "idempotency-key",
+            HeaderValue::from_static("retry:account-1_2.3"),
+        );
+        assert_eq!(request_key(&headers).unwrap(), "retry:account-1_2.3");
+        assert!(validate_id("../another/path").is_err());
+        assert!(validate_id(&"a".repeat(129)).is_err());
+        assert!(validate_id("").is_err());
+    }
+    #[tokio::test]
+    async fn bounded_backpressure_remains_cancellable() {
+        let (sender, _receiver) = mpsc::channel(1);
+        sender.send(Bytes::from_static(b"first")).await.unwrap();
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        cancel_tx.send(true).unwrap();
+        assert!(send_chunk(
+            &sender,
+            &mut cancel_rx,
+            Instant::now() + Duration::from_secs(60),
+            Bytes::from_static(b"second")
+        )
+        .await
+        .is_err());
+    }
+    #[tokio::test]
+    async fn llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage() {
+        use axum::routing::post;
+        let (_directory, mut state, bearer) = ingress_fixture();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let engine = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/apply-template", post(|| async { Json(json!({"prompt":"rendered"})) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens":[10,11]})) }))
+            .route("/v1/chat/completions", post(|Json(body): Json<Value>| async move {
+                let output = match body["messages"][0]["content"].as_str() {
+                    Some("overshoot") => 5,
+                    Some("hidden-token") => 2,
+                    _ => 1,
+                };
+                let events = [
+                    json!({"id":"engine-response","object":"chat.completion.chunk","model":"model","created":1,
+                        "choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null,
+                            "logprobs":{"content":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5,
+                                "top_logprobs":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5}]}]}}],
+                        "timings":{"predicted_n":1}}),
+                    json!({"id":"engine-response","object":"chat.completion.chunk","model":"model","created":1,
+                        "choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),
+                    json!({"id":"engine-response","object":"chat.completion.chunk","model":"model","created":1,
+                        "choices":[],"usage":{"prompt_tokens":2,"completion_tokens":output,"total_tokens":2+output}}),
+                ];
+                let mut body = String::new();
+                for event in events { body.push_str(&format!("data: {event}\n\n")); }
+                body.push_str("data: [DONE]\n\n");
+                ([(header::CONTENT_TYPE, "text/event-stream")], body)
+            }));
+        let engine_task = tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() });
+        let inner = Arc::get_mut(&mut state).unwrap();
+        Arc::get_mut(&mut inner.config).unwrap().models[0].engine_url = base;
+        inner.qualified_models.write().unwrap().insert("model".into());
+        let mut app = router(state);
+        for (stream, prompt) in [(false, "normal"), (true, "normal"), (false, "hidden-token"), (false, "overshoot")] {
+            let expected_tokens = if prompt == "hidden-token" { 2 } else { 1 };
+            let response = app.call(inference_request("/v1/chat/completions", Some(&bearer), Body::from(
+                json!({"model":"model","messages":[{"role":"user","content":prompt}],
+                    "stream":stream,"max_tokens":4}).to_string()
+            ))).await.unwrap();
+            let expected = if prompt == "overshoot" { StatusCode::BAD_GATEWAY } else { StatusCode::OK };
+            assert_eq!(response.status(), expected);
+            let id = response.headers()["x-request-id"].to_str().unwrap().to_owned();
+            let bytes = axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await.unwrap();
+            let public = std::str::from_utf8(&bytes).unwrap();
+            let events: Vec<Value> = if stream {
+                public.lines().filter_map(|line| line.strip_prefix("data: "))
+                    .filter(|data| *data != "[DONE]")
+                    .map(|data| serde_json::from_str(data).unwrap()).collect()
+            } else { vec![serde_json::from_slice(&bytes).unwrap()] };
+            for event in &events {
+                for private in ["token_ids", "timings", "__verbose"] {
+                    assert!(event.get(private).is_none(), "private metadata: {private}");
+                }
+                if let Some(choices) = event["choices"].as_array() {
+                    for choice in choices {
+                        assert!(choice["logprobs"].is_null(), "unrequested sampled probabilities leaked");
+                        assert!(choice.get("token_ids").is_none());
+                    }
+                }
+            }
+            if prompt != "overshoot" {
+                if stream {
+                    assert!(public.contains("[DONE]"));
+                    assert!(!public.contains("\"usage\""));
+                } else {
+                    let value: Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(value["choices"][0]["message"]["content"], "OK");
+                    assert_eq!(value["usage"]["completion_tokens"], expected_tokens);
+                }
+            }
+            let status = app.call(Request::builder().uri(format!("/v1/requests/{id}"))
+                .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                .body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(status.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(status.into_body(), 16_384).await.unwrap();
+            let settled: Value = serde_json::from_slice(&bytes).unwrap();
+            if prompt == "overshoot" {
+                assert_eq!(settled["status"], "failed_unknown_usage");
+                assert_eq!(settled["usage"]["completion_tokens"], 0);
+                assert_eq!(settled["cost_wei"], "0");
+            } else {
+                assert_eq!(settled["status"], "completed");
+                assert_eq!(settled["usage"]["prompt_tokens"], 2);
+                assert_eq!(settled["usage"]["completion_tokens"], expected_tokens);
+                if prompt == "hidden-token" {
+                    assert!(settled["performance"]["decode_us"].is_null());
+                } else {
+                    assert!(settled["performance"]["decode_us"].as_u64().is_some());
+                }
+            }
+        }
+        for path in ["/props", "/tokenize", "/apply-template", "/completion", "/slots"] {
+            let response = app.call(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        engine_task.abort();
+    }
+}

@@ -1,144 +1,94 @@
-# =============================================================================
-# Chiral Network — Docker Compose for scaled testing
-#
-# Usage:
-#   docker compose up -d                    # Start relay + 3 test nodes
-#   docker compose up -d --scale node=10    # Start relay + 10 test nodes
-#   docker compose logs -f node             # Watch node logs
-#   docker compose exec chiral-seeder chiral wallet create  # Create wallet
-#   docker compose down -v                  # Tear down everything
-# =============================================================================
-
+name: chiral-inference
+# Native Linux only. HTTP engines/operator listeners remain loopback; only Caddy
+# and explicitly configured libp2p listeners accept public traffic.
+x-rust: &rust
+  user: "10001:10001"
+  network_mode: host
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+  init: true
+  pids_limit: 256
+  tmpfs: [/tmp:size=64m,mode=1777]
+  stop_grace_period: 90s
 services:
-  # ---------------------------------------------------------------------------
-  # Bootstrap relay server — all nodes connect to this
-  # ---------------------------------------------------------------------------
+  provider:
+    <<: *rust
+    image: chiral-provider:${RELEASE_ID:?Run scripts/provision-provider.py}
+    build:
+      context: .
+      target: provider
+      args: &build_args
+        RUST_IMAGE: ${RUST_IMAGE:?Immutable Rust image required}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:?Immutable Debian image required}
+        CHIRAL_POLICY_PUBLIC_KEY: ${CHIRAL_POLICY_PUBLIC_KEY:?Release policy key required}
+    volumes:
+      - ${DEPLOY_DIR:?}/provider.json:/etc/chiral/provider.json:ro
+      - ${DEPLOY_DIR}/version-policy.json:/etc/chiral/version-policy.json:ro
+      - ${DEPLOY_DIR}/qualification:/etc/chiral/qualification:ro
+      - ${DEPLOY_DIR}/secrets/provider.key:/run/secrets/provider.key:ro
+      - ${DEPLOY_DIR}/secrets/admin.token:/run/secrets/admin.token:ro
+      - ${DEPLOY_DIR}/secrets/engine.token:/run/secrets/engine.token:ro
+      - ${DEPLOY_DIR}/secrets/rpc.token:/run/secrets/rpc.token:ro
+      - ${DEPLOY_DIR}/data/provider:/var/lib/chiral
+      - ${MODEL_DIR:?Immutable GGUF artifact required}:/model:ro
+      - ${LLAMA_RUNTIME_DIR:?Pinned llama.cpp runtime required}:/runtime:ro
+    extends:
+      file: ${DEPLOY_DIR}/provider-devices.json
+      service: provider
+    pids_limit: 1024
+    shm_size: 2gb
+    tmpfs: [/tmp:size=2g,mode=1777]
+    depends_on:
+      chain-rpc: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:9419/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 3
   relay:
-    build:
-      context: .
-      target: relay
-    container_name: chiral-relay
-    ports:
-      - "4001:4001"
-      - "8080:8080"
+    <<: *rust
+    image: chiral-relay:${RELEASE_ID}
+    build: {context: ., target: relay, args: *build_args}
     volumes:
-      - relay-data:/data
-    environment:
-      - CHIRAL_WALLET_EMAIL_SMTP_HOST=127.0.0.1
-      - CHIRAL_WALLET_EMAIL_SMTP_PORT=25
-      - CHIRAL_WALLET_EMAIL_FROM=noreply@chiral-test.local
-      - CHIRAL_WALLET_EMAIL_SMTP_STARTTLS=false
-    networks:
-      chiral-net:
-        aliases:
-          - relay.chiral.local
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # Test nodes — scalable P2P participants with auto-start
-  # ---------------------------------------------------------------------------
-  node:
-    build:
-      context: .
-      target: test-node
-    deploy:
-      replicas: 3
-    environment:
-      - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
-      - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
-      - CHIRAL_AUTO_START_DHT=true
-      - CHIRAL_AUTO_START_GETH=true
-    expose:
-      - "9419"
-      - "30303"
-    networks:
-      - chiral-net
-    depends_on:
-      relay:
-        condition: service_started
-    restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # Dedicated seeder node — publishes and seeds files, auto-mines
-  # ---------------------------------------------------------------------------
-  seeder:
-    build:
-      context: .
-      target: test-node
-    container_name: chiral-seeder
-    environment:
-      - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
-      - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
-      - CHIRAL_AUTO_MINE=true
-      - CHIRAL_MINER_ADDRESS=0x0000000000000000000000000000000000001337
-      - CHIRAL_MINING_THREADS=2
+      - ${DEPLOY_DIR}/relay.json:/etc/chiral/relay.json:ro
+      - ${DEPLOY_DIR}/version-policy.json:/etc/chiral/version-policy.json:ro
+      - ${DEPLOY_DIR}/secrets/rpc.token:/run/secrets/rpc.token:ro
+      - ${DEPLOY_DIR}/data/relay:/var/lib/chiral
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8081/api/health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  chain-rpc:
+    <<: *rust
+    image: chiral-rpc:${RELEASE_ID}
+    build: {context: ., target: chain-rpc, args: *build_args}
+    command: [--config, /etc/chiral/rpc-gateway.json, --bind, "127.0.0.1:8547", --journal-dir, /var/lib/chiral, --bearer-file, /run/secrets/rpc.token]
     volumes:
-      - seeder-data:/data
-      - ./tests/fixtures:/fixtures:ro
-    expose:
-      - "9419"
-      - "30303"
-    networks:
-      - chiral-net
-    depends_on:
-      relay:
-        condition: service_started
+      - ${DEPLOY_DIR}/rpc-gateway.json:/etc/chiral/rpc-gateway.json:ro
+      - ${DEPLOY_DIR}/secrets/rpc.token:/run/secrets/rpc.token:ro
+      - ${DEPLOY_DIR}/secrets/upstream-rpc.token:/run/secrets/upstream-rpc.token:ro
+      - ${DEPLOY_DIR}/data/rpc:/var/lib/chiral
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8547/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  ingress:
+    profiles: [public]
+    image: ${CADDY_IMAGE:?Pinned Caddy digest required}
+    user: "10001:10001"
+    network_mode: host
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
     restart: unless-stopped
-
-  # ---------------------------------------------------------------------------
-  # Mining node — dedicated miner with auto-start
-  # ---------------------------------------------------------------------------
-  miner:
-    build:
-      context: .
-      target: test-node
-    container_name: chiral-miner
-    environment:
-      - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
-      - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
-      - CHIRAL_AUTO_MINE=true
-      - CHIRAL_MINER_ADDRESS=0x0000000000000000000000000000000000000001
-      - CHIRAL_MINING_THREADS=4
-    expose:
-      - "9419"
-      - "30303"
-    networks:
-      - chiral-net
-    depends_on:
-      relay:
-        condition: service_started
-    restart: unless-stopped
-    profiles:
-      - mining
-
-  # ---------------------------------------------------------------------------
-  # Test runner — executes load/stress tests against the network
-  # ---------------------------------------------------------------------------
-  test-runner:
-    build:
-      context: .
-      dockerfile: Dockerfile.test-runner
-    container_name: chiral-test-runner
-    environment:
-      - RELAY_URL=http://relay.chiral.local:8080
-      - SEEDER_URL=http://chiral-seeder:9419
+    pids_limit: 128
     volumes:
-      - ./tests:/app/tests:ro
-      - ./src:/app/src:ro
-      - test-results:/app/results
-    networks:
-      - chiral-net
-    depends_on:
-      - relay
-      - seeder
-    profiles:
-      - test
-
-networks:
-  chiral-net:
-    driver: bridge
-
-volumes:
-  relay-data:
-  seeder-data:
-  test-results:
+      - ${DEPLOY_DIR}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DEPLOY_DIR}/data/tls:/data
+      - ${DEPLOY_DIR}/data/caddy:/config
+    depends_on: [provider, relay, chain-rpc]

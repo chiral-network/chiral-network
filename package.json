@@ -8,22 +8,15 @@
     "tauri:dev": "node scripts/tauri-runner.mjs dev",
     "tauri:build": "node scripts/tauri-runner.mjs build",
     "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@mateothegreat/svelte5-router": "^2.16.19",
-    "@noble/hashes": "^2.0.1",
     "@tauri-apps/api": "^2.9.0",
-    "@tauri-apps/plugin-shell": "^2.3.1",
-    "@types/qrcode": "^1.5.6",
-    "clsx": "^2.1.1",
-    "ethers": "^6.16.0",
-    "lucide-svelte": "^0.563.0",
-    "qrcode": "^1.5.4",
-    "tailwind-merge": "^3.4.0"
+    "lucide-svelte": "^0.563.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.0",

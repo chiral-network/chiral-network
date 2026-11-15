@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 
-const [, , command] = process.argv;
+const [, , command, ...args] = process.argv;
 
 if (!command || (command !== "dev" && command !== "build")) {
-  console.error("Usage: node scripts/tauri-runner.mjs <dev|build>");
+  console.error("Usage: node scripts/tauri-runner.mjs <dev|build> [options]");
   process.exit(1);
 }
 
@@ -16,11 +16,11 @@ if (process.platform === "win32" && !env.CARGO_TARGET_DIR && env.LOCALAPPDATA) {
 
 const child =
   process.platform === "win32"
-    ? spawn("cmd.exe", ["/d", "/s", "/c", "tauri", command], {
+    ? spawn("cmd.exe", ["/d", "/s", "/c", "tauri", command, ...args], {
         stdio: "inherit",
         env,
       })
-    : spawn("tauri", [command], {
+    : spawn("tauri", [command, ...args], {
         stdio: "inherit",
         env,
       });

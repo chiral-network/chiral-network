@@ -1,261 +1,171 @@
-//! Owner-proof authentication for HTTP routes that previously trusted
-//! the bare `X-Owner` header.
-//!
-//! Before FM-A03, any HTTP caller could put any wallet address in the
-//! `X-Owner` header and the server would treat them as that wallet.
-//! This module replaces that with a signed-challenge scheme.
-//!
-//! Wire format:
-//!   X-Owner:     0x<40 lowercase hex>          (the claimed wallet)
-//!   X-Owner-Sig: <unix_ts>:<hex_signature>     (timestamp + ECDSA sig)
-//!
-//! The signed bytes bind the caller's wallet, an issue timestamp, the
-//! HTTP method, and the path-with-query — so a captured proof can only
-//! be replayed against the same endpoint within a ±5-minute window.
-//! The encoding is length-prefixed (same family as
-//! `version::canonical_signing_payload`) so an attacker can't shift
-//! bytes across field boundaries.
-//!
-//! Verification is stateless: the server consults only `now` and the
-//! claimed wallet's recoverable signer. No nonce store, no session.
+//! One-use, body-bound wallet authentication for inference control operations.
+use crate::{
+    billing_store::BillingStore,
+    protocol::{self, NetworkIdentity},
+};
+use axum::http::HeaderMap;
+use serde::{Deserialize, Serialize};
 
-use axum::http::{HeaderMap, Method};
+pub const CHALLENGE_TTL_SECS: u64 = 120;
 
-pub const PROOF_VALIDITY_SECS: i64 = 300;
-const TAG: &[u8] = b"chiral-owner-proof-v1";
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthPayload {
+    pub network: NetworkIdentity,
+    pub provider_wallet: String,
+    pub wallet: String,
+    pub method: String,
+    pub path: String,
+    pub body_hash: String,
+    pub nonce: String,
+    pub expires_at: u64,
+}
 
-/// Canonical signing bytes for the owner-proof header.
-pub fn owner_proof_payload(
-    wallet_lowercased: &str,
-    ts_unix: i64,
-    method: &str,
-    path_and_query: &str,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(64 + path_and_query.len());
-    out.extend_from_slice(TAG);
-    for part in [
-        wallet_lowercased.as_bytes(),
-        method.as_bytes(),
-        path_and_query.as_bytes(),
-    ] {
-        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
-        out.extend_from_slice(part);
+pub fn challenge_payload(payload: &AuthPayload) -> Result<Vec<u8>, String> {
+    protocol::signing_payload(protocol::AUTH_DOMAIN, payload)
+}
+
+pub fn canonical_wallet(wallet: &str) -> Result<String, String> {
+    if wallet.len() != 42
+        || !wallet.starts_with("0x")
+        || !wallet[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("invalid_wallet: expected a 20-byte hex wallet address".into());
     }
-    out.extend_from_slice(&ts_unix.to_le_bytes());
-    out
+    Ok(wallet.to_ascii_lowercase())
 }
 
-fn is_valid_wallet(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn unix_timestamp_secs_at(now: std::time::SystemTime) -> Result<i64, String> {
-    let secs = now
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| {
-            "Server clock is before UNIX_EPOCH; refusing owner-proof freshness check".to_string()
-        })?
-        .as_secs();
-    i64::try_from(secs).map_err(|_| "Server clock timestamp exceeds i64 range".to_string())
-}
-
-fn unix_timestamp_secs() -> Result<i64, String> {
-    unix_timestamp_secs_at(std::time::SystemTime::now())
-}
-
-fn verify_owner_proof_freshness(now: i64, ts: i64) -> Result<(), String> {
-    if now.abs_diff(ts) > PROOF_VALIDITY_SECS as u64 {
-        return Err(format!(
-            "X-Owner-Sig timestamp outside ±{}s validity window (server={}, sig={})",
-            PROOF_VALIDITY_SECS, now, ts
-        ));
+pub fn validate_challenge_request(request: &protocol::ChallengeRequest) -> Result<(), String> {
+    canonical_wallet(&request.wallet)?;
+    if !matches!(request.method.as_str(), "GET" | "POST" | "DELETE")
+        || !request.path.starts_with("/v1/contracts/")
+        || request.path.len() > 512
+        || request
+            .path
+            .bytes()
+            .any(|b| b.is_ascii_control() || b == b'#')
+        || request.body_hash.len() != 66
+        || !request.body_hash.starts_with("0x")
+        || !request.body_hash[2..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("invalid_challenge: invalid method, path, or body hash".into());
     }
     Ok(())
 }
 
-/// Verify the `X-Owner` + `X-Owner-Sig` headers against the given
-/// method and `path_and_query`. On success returns the verified
-/// lowercase wallet address; on failure returns a human-readable
-/// reason (which middleware will return as the 401 body).
-pub fn verify_owner_proof(
+/// A verified signature never leaves a reusable nonce behind. Consumption and
+/// challenge matching happen under the ledger's BEGIN IMMEDIATE transaction.
+pub fn authenticate_owner(
+    ledger: &BillingStore,
     headers: &HeaderMap,
-    method: &Method,
-    path_and_query: &str,
+    network: &NetworkIdentity,
+    provider: &str,
+    method: &str,
+    path: &str,
+    raw_body: &[u8],
+    now: u64,
 ) -> Result<String, String> {
-    let owner_raw = headers
-        .get("x-owner")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    if owner_raw.is_empty() {
-        return Err("X-Owner header required".to_string());
+    fn header<'a>(headers: &'a HeaderMap, name: &str, limit: usize) -> Result<&'a str, String> {
+        let value = headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .ok_or("unauthorized: owner proof required")?;
+        if value.len() > limit {
+            return Err("unauthorized: invalid owner proof".into());
+        }
+        Ok(value)
     }
-    let owner = owner_raw.to_lowercase();
-    if !is_valid_wallet(&owner) {
-        return Err("X-Owner is not a valid 0x-hex wallet address".to_string());
+    let owner = canonical_wallet(header(headers, "x-chiral-owner", 42)?)?;
+    let nonce = header(headers, "x-chiral-nonce", 66)?;
+    let signature = header(headers, "x-chiral-signature", 132)?;
+    let payload = ledger.challenge(nonce)?;
+    if payload.network != *network
+        || payload.provider_wallet != provider
+        || payload.wallet != owner
+        || payload.method != method
+        || payload.path != path
+        || payload.body_hash != protocol::hash_hex(raw_body)
+        || payload.expires_at <= now
+    {
+        return Err("unauthorized: owner proof does not bind this request".into());
     }
-    let sig_header = headers
-        .get("x-owner-sig")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if sig_header.is_empty() {
-        return Err("X-Owner-Sig header required".to_string());
+    if crate::wallet::recover_signer(&challenge_payload(&payload)?, signature)? != owner {
+        return Err("unauthorized: invalid owner signature".into());
     }
-    let (ts_str, sig) = sig_header
-        .split_once(':')
-        .ok_or_else(|| "X-Owner-Sig must be \"<ts>:<hex>\"".to_string())?;
-    let ts: i64 = ts_str
-        .parse()
-        .map_err(|_| "X-Owner-Sig timestamp is not an integer".to_string())?;
-    verify_owner_proof_freshness(unix_timestamp_secs()?, ts)?;
-    let payload = owner_proof_payload(&owner, ts, method.as_str(), path_and_query);
-    if !crate::wallet::verify_signature(&payload, sig, &owner) {
-        return Err("X-Owner-Sig did not verify against X-Owner wallet".to_string());
-    }
+    ledger.consume_challenge(nonce, &payload, now)?;
     Ok(owner)
 }
 
-/// Axum middleware: require a valid owner-proof on every request that
-/// passes through this layer. OPTIONS preflight is allowed through so
-/// CORS still works. Failed proofs return `401 Unauthorized` with the
-/// failure reason as the body.
-pub async fn owner_proof_middleware(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    use axum::http::StatusCode;
-    use axum::response::IntoResponse;
-
-    if req.method() == Method::OPTIONS {
-        return next.run(req).await;
+pub fn bearer(headers: &HeaderMap) -> Result<&str, String> {
+    let value = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or("unauthorized: bearer credential required")?;
+    if value.len() != 71 || !value.starts_with("chiral_") {
+        return Err("unauthorized: invalid bearer credential".into());
     }
-    let path_and_query = req
-        .uri()
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or("");
-    let method = req.method().clone();
-    match verify_owner_proof(req.headers(), &method, path_and_query) {
-        Ok(_) => next.run(req).await,
-        Err(reason) => (StatusCode::UNAUTHORIZED, reason).into_response(),
-    }
+    Ok(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn payload_is_injective_under_field_shift() {
-        // Length-prefix protects the parse: shifting bytes between
-        // wallet/method/path can't produce a colliding payload.
-        let a = owner_proof_payload("0xabc:def", 1700000000, "GET", "/api/drive/items");
-        let b = owner_proof_payload("0xabc", 1700000000, "GET:def", "/api/drive/items");
-        assert_ne!(a, b);
+    fn payload() -> AuthPayload {
+        AuthPayload {
+            network: NetworkIdentity {
+                chain_id: 1,
+                genesis_hash: "g".into(),
+                deployment_id: "d".into(),
+            },
+            provider_wallet: "p".into(),
+            wallet: "w".into(),
+            method: "POST".into(),
+            path: "/v1/contracts/open".into(),
+            body_hash: protocol::hash_hex(b"{}"),
+            nonce: "n".into(),
+            expires_at: 120,
+        }
     }
-
     #[test]
-    fn payload_is_deterministic() {
-        let p1 = owner_proof_payload("0x1234", 1700000000, "POST", "/api/x");
-        let p2 = owner_proof_payload("0x1234", 1700000000, "POST", "/api/x");
-        assert_eq!(p1, p2);
-    }
-
-    /// Tag prefix is the only thing that domain-separates this proof
-    /// from any other length-prefixed signing payload in the project
-    /// (file metadata, folder manifest, site directory, etc.). If the
-    /// tag goes missing, a signature attesting to one purpose could be
-    /// replayed against another. Lock the literal tag down.
-    #[test]
-    fn payload_starts_with_domain_tag() {
-        let p = owner_proof_payload("0x1234", 1, "GET", "/api");
-        assert!(
-            p.starts_with(b"chiral-owner-proof-v1"),
-            "payload must begin with the v1 domain tag"
-        );
-    }
-
-    /// Each input field must change the payload independently. Without
-    /// this, an attacker could capture a (wallet, ts, GET, /api/foo)
-    /// proof and replay it as (wallet, ts, GET, /api/bar) — defeating
-    /// the path binding.
-    #[test]
-    fn payload_distinct_per_field() {
-        let base = owner_proof_payload("0xa", 100, "GET", "/api/x");
-        // Wallet differs.
-        assert_ne!(base, owner_proof_payload("0xb", 100, "GET", "/api/x"));
-        // Timestamp differs.
-        assert_ne!(base, owner_proof_payload("0xa", 101, "GET", "/api/x"));
-        // Method differs.
-        assert_ne!(base, owner_proof_payload("0xa", 100, "POST", "/api/x"));
-        // Path differs.
-        assert_ne!(base, owner_proof_payload("0xa", 100, "GET", "/api/y"));
-    }
-
-    /// Method and path are separately length-prefixed, so a path that
-    /// "absorbs" a method suffix (e.g. method="GET" path="/api" vs.
-    /// method="" path="GET/api") must not collide.
-    #[test]
-    fn payload_method_path_cannot_be_merged() {
-        let a = owner_proof_payload("0x1234", 1700000000, "GET", "/api");
-        let b = owner_proof_payload("0x1234", 1700000000, "", "GET/api");
-        assert_ne!(a, b);
-    }
-
-    /// Empty fields are still length-prefixed (with a zero u32). An
-    /// attacker who omits the wallet shouldn't get a payload that
-    /// collides with a different non-empty wallet.
-    #[test]
-    fn payload_empty_fields_remain_distinct() {
-        let a = owner_proof_payload("", 1, "GET", "/x");
-        let b = owner_proof_payload("a", 1, "GET", "/x");
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn invalid_wallet_format_rejected() {
-        assert!(!is_valid_wallet(""));
-        assert!(!is_valid_wallet("0x"));
-        assert!(!is_valid_wallet("0x123")); // too short
-        assert!(!is_valid_wallet(&format!("0x{}", "z".repeat(40)))); // non-hex
-        assert!(!is_valid_wallet(&format!("0x{}1", "0".repeat(40)))); // too long
-        assert!(!is_valid_wallet(&"a".repeat(42))); // missing 0x prefix
-        // Real-shape wallet accepted regardless of case.
-        assert!(is_valid_wallet(&format!("0x{}", "abcdef0123".repeat(4))));
-        assert!(is_valid_wallet(&format!("0x{}", "ABCDEF0123".repeat(4))));
-    }
-
-    #[test]
-    fn owner_proof_clock_accepts_post_epoch_time() {
-        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(42);
-
-        assert_eq!(unix_timestamp_secs_at(now).unwrap(), 42);
-    }
-
-    #[test]
-    fn owner_proof_clock_rejects_pre_epoch_time() {
-        let now = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
-        let err =
-            unix_timestamp_secs_at(now).expect_err("pre-epoch server clock should be rejected");
-
-        assert!(err.contains("Server clock is before UNIX_EPOCH"));
-        assert!(err.contains("owner-proof freshness"));
-    }
-
-    #[test]
-    fn owner_proof_freshness_accepts_valid_window() {
-        assert!(verify_owner_proof_freshness(1_000, 1_000).is_ok());
-        assert!(verify_owner_proof_freshness(1_000, 700).is_ok());
-        assert!(verify_owner_proof_freshness(1_000, 1_300).is_ok());
-    }
-
-    #[test]
-    fn owner_proof_freshness_rejects_expired_timestamp() {
-        let err = verify_owner_proof_freshness(1_000, 699)
-            .expect_err("timestamp older than validity window should fail");
-
-        assert!(err.contains("outside ±300s validity window"));
-        assert!(err.contains("server=1000"));
-        assert!(err.contains("sig=699"));
+    fn signature_binds_every_control_field_and_raw_body() {
+        let p = payload();
+        let original = challenge_payload(&p).unwrap();
+        let mut variants = Vec::new();
+        let mut v = p.clone();
+        v.network.chain_id += 1;
+        variants.push(v);
+        let mut v = p.clone();
+        v.network.genesis_hash.push('x');
+        variants.push(v);
+        let mut v = p.clone();
+        v.network.deployment_id.push('x');
+        variants.push(v);
+        let mut v = p.clone();
+        v.provider_wallet.push('x');
+        variants.push(v);
+        let mut v = p.clone();
+        v.wallet.push('x');
+        variants.push(v);
+        let mut v = p.clone();
+        v.method = "GET".into();
+        variants.push(v);
+        let mut v = p.clone();
+        v.path.push('x');
+        variants.push(v);
+        let mut v = p.clone();
+        v.body_hash = protocol::hash_hex(b"{ }");
+        variants.push(v);
+        let mut v = p.clone();
+        v.nonce.push('x');
+        variants.push(v);
+        let mut v = p;
+        v.expires_at += 1;
+        variants.push(v);
+        for variant in variants {
+            assert_ne!(original, challenge_payload(&variant).unwrap());
+        }
     }
 }

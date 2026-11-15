@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inference-stream"
+description = "Enables the inference_stream command without any pre-configured scope."
+commands.allow = ["inference_stream"]
+
+[[permission]]
+identifier = "deny-inference-stream"
+description = "Denies the inference_stream command without any pre-configured scope."
+commands.deny = ["inference_stream"]

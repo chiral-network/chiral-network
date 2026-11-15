@@ -7,7 +7,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CHIRAL_POLICY_PUBLIC_KEY");
     let policy_key = resolve_build_policy_key();
     write_policy_key(policy_key);
-    tauri_build::build()
+    #[cfg(feature = "desktop")]
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "consumer_command",
+            "inference_stream",
+            "inference_cancel",
+            "get_version_status",
+        ]),
+    ))
+    .expect("build restricted desktop command capabilities");
 }
 
 fn resolve_build_policy_key() -> [u8; 32] {

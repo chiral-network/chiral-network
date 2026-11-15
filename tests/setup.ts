@@ -1,36 +1,12 @@
-/**
- * Test Setup - Mocks for Tauri and browser environment
- */
-import { vi } from 'vitest';
+import { beforeEach } from 'vitest';
 
-// Mock @tauri-apps/api/core
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
-}));
-
-// Mock @tauri-apps/plugin-shell
-vi.mock('@tauri-apps/plugin-shell', () => ({
-  Command: {
-    sidecar: vi.fn(),
-  },
-}));
-
-// Mock window.matchMedia (not available in jsdom)
+// jsdom supplies storage but not media-query observation. No native runtime or
+// provider response is fabricated: browser-unavailable behavior is exercised.
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: (query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: () => {},
-    removeListener: () => {},
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    dispatchEvent: () => false,
+    matches: false, media: query, onchange: null,
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; },
   }),
 });
-
-// Ensure localStorage is available (jsdom provides it, but reset between tests)
-beforeEach(() => {
-  localStorage.clear();
-});
+beforeEach(() => { localStorage.clear(); });

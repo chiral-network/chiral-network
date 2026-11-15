@@ -1,16 +1,8 @@
-node_modules
-dist
-# Exclude target except release binaries (needed by Dockerfile.local)
-src-tauri/target/debug
-src-tauri/target/.rustc_info.json
-src-tauri/target/release/build
-src-tauri/target/release/deps
-src-tauri/target/release/.fingerprint
-src-tauri/target/release/incremental
-src-tauri/target/release/examples
-.git
-.claude
-.apas
-*.md
-*.log
-dev/
+**
+!src-tauri/
+!src-tauri/**
+src-tauri/target/
+src-tauri/**/*.key
+src-tauri/**/*.pem
+src-tauri/**/secrets/
+src-tauri/**/.env

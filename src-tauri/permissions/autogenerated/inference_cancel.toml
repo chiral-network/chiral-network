@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inference-cancel"
+description = "Enables the inference_cancel command without any pre-configured scope."
+commands.allow = ["inference_cancel"]
+
+[[permission]]
+identifier = "deny-inference-cancel"
+description = "Denies the inference_cancel command without any pre-configured scope."
+commands.deny = ["inference_cancel"]

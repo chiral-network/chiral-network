@@ -44,9 +44,9 @@ const internal = writable<VersionStatus>(DEFAULT_STATUS);
 /// here; nothing else writes to the store.
 export const versionStatus: Readable<VersionStatus> = { subscribe: internal.subscribe };
 
-let pollHandle: ReturnType<typeof setInterval> | null = null;
+let pollHandle: number | undefined;
 
-async function fetchOnce(): Promise<void> {
+export async function refreshVersionStatus(): Promise<void> {
   if (typeof window === 'undefined') return;
   const inTauri = '__TAURI__' in window || '__TAURI_INTERNALS__' in window;
   if (!inTauri) return; // browser dev — leave defaults
@@ -61,9 +61,14 @@ async function fetchOnce(): Promise<void> {
 
 /// Idempotent — call once at app startup. Subsequent calls are no-ops.
 export function initVersionStore(): void {
-  if (pollHandle !== null) return;
-  void fetchOnce();
-  pollHandle = setInterval(() => {
-    void fetchOnce();
+  if (pollHandle !== undefined) return;
+  void refreshVersionStatus();
+  pollHandle = window.setInterval(() => {
+    void refreshVersionStatus();
   }, POLL_INTERVAL_MS);
+}
+
+export function stopVersionStore(): void {
+  clearInterval(pollHandle);
+  pollHandle = undefined;
 }

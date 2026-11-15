@@ -1,246 +1,44 @@
 import { writable } from 'svelte/store';
-import type { HostingConfig } from '$lib/types/hosting';
-import { LAUNCH_DOWNLOAD_COST_PER_MB_WEI } from '$lib/launchFeePolicy';
-
-// Check if we're in a browser environment
-const browser = typeof window !== 'undefined';
-
-export interface WalletAccount {
-  address: string;
-  privateKey: string;
-}
-
-export const walletAccount = writable<WalletAccount | null>(null);
-export const isAuthenticated = writable<boolean>(false);
-export const networkConnected = writable<boolean>(false);
-
-export interface PeerInfo {
-  id: string;
-  address: string;
-  multiaddrs?: string[];
-  lastSeen: Date | number;
-}
-
-export const peers = writable<PeerInfo[]>([]);
-export const networkStats = writable({
-  connectedPeers: 0,
-  totalPeers: 0
-});
-
-// ============================================================================
-// Settings Store
-// ============================================================================
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ColorTheme = 'blue' | 'purple' | 'green' | 'red' | 'orange';
-export type NavStyle = 'navbar' | 'sidebar';
-
-export interface NotificationSettings {
-  downloadComplete: boolean;
-  downloadFailed: boolean;
-  peerConnected: boolean;
-  peerDisconnected: boolean;
-  miningBlock: boolean;
-  paymentReceived: boolean;
-  networkStatus: boolean;
-  fileShared: boolean;
-}
-
+export interface NotificationSettings { inference: boolean; funding: boolean; networkStatus: boolean }
 export interface AppSettings {
   theme: ThemeMode;
   colorTheme: ColorTheme;
-  navStyle: NavStyle;
   reducedMotion: boolean;
-  autoStartMining: boolean;
-  downloadDirectory: string; // empty string = system default Downloads folder
   notifications: NotificationSettings;
-  hostingConfig: HostingConfig;
 }
-
-const defaultNotifications: NotificationSettings = {
-  downloadComplete: true,
-  downloadFailed: true,
-  peerConnected: false,
-  peerDisconnected: false,
-  miningBlock: true,
-  paymentReceived: true,
-  networkStatus: true,
-  fileShared: true
+const defaults: AppSettings = {
+  theme: 'system', colorTheme: 'blue', reducedMotion: false,
+  notifications: { inference: true, funding: true, networkStatus: true },
 };
-
-const defaultSettings: AppSettings = {
-  theme: 'system',
-  colorTheme: 'blue',
-  navStyle: 'navbar',
-  reducedMotion: false,
-  autoStartMining: false,
-  downloadDirectory: '',
-  notifications: { ...defaultNotifications },
-  hostingConfig: {
-    enabled: false,
-    maxStorageBytes: 10 * 1024 * 1024 * 1024, // 10 GB
-    pricePerMbPerDayWei: LAUNCH_DOWNLOAD_COST_PER_MB_WEI,
-    minDepositWei: '500000000000000000',        // 0.5 CHI
-    autoAcceptByElo: false,
-    minAutoAcceptElo: 60,
-  }
-};
-
-function normalizeHostingConfig(raw: unknown): HostingConfig {
-  const cfg = (raw || {}) as Partial<HostingConfig>;
+export function normalizeSettings(value: unknown): AppSettings {
+  const raw = (value && typeof value === 'object' ? value : {}) as Partial<AppSettings>;
   return {
-    enabled: !!cfg.enabled,
-    maxStorageBytes: Number.isFinite(cfg.maxStorageBytes as number)
-      ? Math.max(1, Number(cfg.maxStorageBytes))
-      : defaultSettings.hostingConfig.maxStorageBytes,
-    pricePerMbPerDayWei: typeof cfg.pricePerMbPerDayWei === 'string' && cfg.pricePerMbPerDayWei
-      ? cfg.pricePerMbPerDayWei
-      : defaultSettings.hostingConfig.pricePerMbPerDayWei,
-    minDepositWei: typeof cfg.minDepositWei === 'string' && cfg.minDepositWei
-      ? cfg.minDepositWei
-      : defaultSettings.hostingConfig.minDepositWei,
-    autoAcceptByElo: !!cfg.autoAcceptByElo,
-    minAutoAcceptElo: Number.isFinite(cfg.minAutoAcceptElo as number)
-      ? Math.min(100, Math.max(0, Number(cfg.minAutoAcceptElo)))
-      : defaultSettings.hostingConfig.minAutoAcceptElo,
-  };
-}
-
-function normalizeSettings(raw: unknown): AppSettings {
-  const parsed = (raw || {}) as Partial<AppSettings>;
-  return {
-    ...defaultSettings,
-    ...parsed,
+    theme: ['light', 'dark', 'system'].includes(raw.theme ?? '') ? raw.theme! : defaults.theme,
+    colorTheme: ['blue', 'purple', 'green', 'red', 'orange'].includes(raw.colorTheme ?? '') ? raw.colorTheme! : defaults.colorTheme,
+    reducedMotion: raw.reducedMotion === true,
     notifications: {
-      ...defaultNotifications,
-      ...(parsed.notifications || {}),
+      inference: raw.notifications?.inference !== false,
+      funding: raw.notifications?.funding !== false,
+      networkStatus: raw.notifications?.networkStatus !== false,
     },
-    hostingConfig: normalizeHostingConfig(parsed.hostingConfig),
   };
 }
-
-function createSettingsStore() {
-  // Load settings from localStorage
-  const stored = browser ? localStorage.getItem('chiral-settings') : null;
-  const initial: AppSettings = stored
-    ? normalizeSettings(JSON.parse(stored))
-    : defaultSettings;
-
-  const { subscribe, set, update } = writable<AppSettings>(initial);
-
-  return {
-    subscribe,
-    set: (value: AppSettings) => {
-      if (browser) {
-        localStorage.setItem('chiral-settings', JSON.stringify(value));
-      }
-      set(value);
-    },
-    update: (fn: (settings: AppSettings) => AppSettings) => {
-      update((current) => {
-        const updated = fn(current);
-        if (browser) {
-          localStorage.setItem('chiral-settings', JSON.stringify(updated));
-        }
-        return updated;
-      });
-    },
-    reset: () => {
-      if (browser) {
-        localStorage.removeItem('chiral-settings');
-      }
-      set(defaultSettings);
-    }
-  };
+function load(): AppSettings {
+  try { return normalizeSettings(JSON.parse(localStorage.getItem('chiral-inference-settings') ?? '{}')); }
+  catch { return normalizeSettings({}); }
 }
+export const settings = writable<AppSettings>(load());
+settings.subscribe(value => {
+  try { localStorage.setItem('chiral-inference-settings', JSON.stringify(value)); } catch { /* Preferences remain session-local when storage is unavailable. */ }
+});
 
-export const settings = createSettingsStore();
-
-// Derived dark mode state (resolves 'system' to actual preference)
-function createDarkModeStore() {
-  const { subscribe, set } = writable<boolean>(false);
-
-  if (browser) {
-    // Initialize based on current settings and system preference
-    const updateDarkMode = (theme: ThemeMode) => {
-      if (theme === 'system') {
-        set(window.matchMedia('(prefers-color-scheme: dark)').matches);
-      } else {
-        set(theme === 'dark');
-      }
-    };
-
-    // Subscribe to settings changes
-    settings.subscribe((s) => updateDarkMode(s.theme));
-
-    // Listen for system theme changes
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-      settings.subscribe((s) => {
-        if (s.theme === 'system') {
-          set(e.matches);
-        }
-      })();
-    });
-  }
-
-  return { subscribe };
+// Only public identities and account metadata belong in the webview.
+export const session = writable<{ address: string | null; configured: boolean }>({ address: null, configured: false });
+export const sessionEpoch = writable(0);
+export function clearSession() {
+  session.set({ address: null, configured: false });
+  sessionEpoch.update(value => value + 1);
 }
-
-export const isDarkMode = createDarkModeStore();
-
-// ============================================================================
-// Blacklist Store
-// ============================================================================
-
-export interface BlacklistEntry {
-  address: string;
-  reason: string;
-  addedAt: number;
-}
-
-function createBlacklistStore() {
-  const stored = browser ? localStorage.getItem('chiral-blacklist') : null;
-  const initial: BlacklistEntry[] = stored ? JSON.parse(stored) : [];
-
-  const { subscribe, set, update } = writable<BlacklistEntry[]>(initial);
-
-  const save = (entries: BlacklistEntry[]) => {
-    if (browser) {
-      localStorage.setItem('chiral-blacklist', JSON.stringify(entries));
-    }
-  };
-
-  return {
-    subscribe,
-    set: (value: BlacklistEntry[]) => {
-      save(value);
-      set(value);
-    },
-    update: (fn: (entries: BlacklistEntry[]) => BlacklistEntry[]) => {
-      update((current) => {
-        const updated = fn(current);
-        save(updated);
-        return updated;
-      });
-    },
-    add: (address: string, reason: string) => {
-      update((current) => {
-        if (current.some(e => e.address.toLowerCase() === address.toLowerCase())) {
-          return current;
-        }
-        const updated = [...current, { address, reason, addedAt: Date.now() }];
-        save(updated);
-        return updated;
-      });
-    },
-    remove: (address: string) => {
-      update((current) => {
-        const updated = current.filter(e => e.address.toLowerCase() !== address.toLowerCase());
-        save(updated);
-        return updated;
-      });
-    }
-  };
-}
-
-export const blacklist = createBlacklistStore();

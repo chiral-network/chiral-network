@@ -1,408 +1,164 @@
-//! Shared JSON-RPC client for Geth communication.
-//!
-//! Provides a connection-pooled reqwest client, batch request support,
-//! and a response cache with TTL to reduce redundant RPC calls.
-
+//! Pooled, bounded JSON-RPC transport. No node lifecycle or implicit endpoints.
+use futures_util::StreamExt;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
-
-// ============================================================================
-// Shared HTTP client (connection-pooled, reused across all RPC calls)
-// ============================================================================
-
-static SHARED_CLIENT: Lazy<Result<reqwest::Client, String>> = Lazy::new(build_shared_client);
-
-fn shared_client_default_headers() -> reqwest::header::HeaderMap {
-    // Default headers — every outgoing HTTP call from Rust carries the
-    // client's compile-time version. Phase 3 of version enforcement: the
-    // server gateway middleware compares this against its bundled
-    // `min_required` and 426s out-of-date clients.
-    let mut headers = reqwest::header::HeaderMap::new();
-    if let Ok(v) = reqwest::header::HeaderValue::from_str(crate::version::CURRENT_VERSION) {
-        headers.insert("X-Chiral-Client-Version", v);
-    }
-    headers
-}
-
-fn shared_client_startup_error(error: impl std::fmt::Display) -> String {
-    format!(
-        "Failed to create shared HTTP client with Chiral default headers: {}",
-        error
-    )
-}
-
-fn build_shared_client() -> Result<reqwest::Client, String> {
+use serde_json::{json, Value};
+use std::{
+    io::Read,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+use zeroize::Zeroizing;
+static CLIENT: Lazy<Result<reqwest::Client, String>> = Lazy::new(|| {
     reqwest::Client::builder()
-        .default_headers(shared_client_default_headers())
+        .redirect(reqwest::redirect::Policy::none())
         .pool_max_idle_per_host(4)
-        .pool_idle_timeout(Duration::from_secs(30))
-        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
         .build()
-        .map_err(shared_client_startup_error)
+        .map_err(|_| "cannot initialize HTTP transport".into())
+});
+static ID: AtomicU64 = AtomicU64::new(1);
+pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+// Hash-only eSpace blocks can aggregate many thousands of transactions.
+// Keep ordinary methods/errors small; only this bounded block shape gets more room.
+pub const MAX_BLOCK_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+pub fn response_limit(method: &str, params: &Value) -> usize {
+    if method == "eth_getBlockByNumber"
+        && params.as_array().is_some_and(|p| p.len() == 2 && p[1] == false)
+    {
+        MAX_BLOCK_RESPONSE_BYTES
+    } else {
+        MAX_RESPONSE_BYTES
+    }
 }
-
-/// Auto-incrementing request ID for JSON-RPC calls.
-static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-fn next_id() -> u64 {
-    REQUEST_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Returns a reference to the shared connection-pooled reqwest client.
 pub fn client() -> Result<&'static reqwest::Client, String> {
-    SHARED_CLIENT.as_ref().map_err(|err| err.clone())
+    CLIENT.as_ref().map_err(Clone::clone)
 }
-
-// ============================================================================
-// JSON-RPC types
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-struct RpcRequest {
-    jsonrpc: &'static str,
-    method: String,
-    params: serde_json::Value,
-    id: u64,
+#[derive(Debug)]
+pub enum RpcError {
+    Transport,
+    Protocol,
+    Remote(i64),
 }
-
-#[derive(Debug, Deserialize)]
-struct RpcResponse {
-    id: u64,
-    result: Option<serde_json::Value>,
-    error: Option<serde_json::Value>,
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport => f.write_str("chain RPC transport unavailable"),
+            Self::Protocol => f.write_str("invalid or oversized chain RPC response"),
+            Self::Remote(code) => write!(f, "chain RPC rejected request (code {code})"),
+        }
+    }
 }
-
-// ============================================================================
-// Single RPC call
-// ============================================================================
-
-/// Make a single JSON-RPC call to the given endpoint.
+impl std::error::Error for RpcError {}
 pub async fn call(
-    endpoint: &str,
+    config: &crate::network::NetworkConfig,
     method: &str,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let id = next_id();
-    let payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": id
-    });
-
-    let response = client()?
-        .post(endpoint)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("RPC request to {} failed: {}", endpoint, e))?;
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
-
-    if let Some(error) = json.get("error") {
-        return Err(format!("RPC error: {}", error));
+    params: Value,
+) -> Result<Value, RpcError> {
+    let id = ID.fetch_add(1, Ordering::Relaxed);
+    let limit = response_limit(method, &params);
+    let body = serde_json::to_vec(
+        &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+    ).map_err(|_| RpcError::Protocol)?;
+    if body.len() > MAX_REQUEST_BYTES {
+        return Err(RpcError::Protocol);
     }
-
-    Ok(json.get("result").cloned().unwrap_or(serde_json::Value::Null))
-}
-
-/// Read-only RPC call with an ordered fallback list. Tries each
-/// endpoint in turn and returns the first success; aggregates errors
-/// for the failure case. Use this for `eth_getBalance`,
-/// `eth_getTransactionByHash`, etc. when the primary RPC may be
-/// firewall-blocked or temporarily unreachable but a same-origin
-/// proxy on a different port is also an option.
-///
-/// Do NOT use this for write paths (`eth_sendRawTransaction`) — those
-/// should hit a single endpoint to avoid double-broadcast races.
-pub async fn call_with_fallbacks(
-    endpoints: &[String],
-    method: &str,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    if endpoints.is_empty() {
-        return Err("call_with_fallbacks: no endpoints".to_string());
-    }
-    let mut errors: Vec<String> = Vec::with_capacity(endpoints.len());
-    for ep in endpoints {
-        match call(ep, method, params.clone()).await {
-            Ok(v) => return Ok(v),
-            Err(e) => errors.push(format!("{}: {}", ep, e)),
+    let mut request = client()
+        .map_err(|_| RpcError::Transport)?
+        .post(&config.rpc_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body);
+    if let Some(path) = &config.rpc_bearer_file {
+        let mut bearer = Zeroizing::new(String::new());
+        crate::wallet::protected_file(path)
+            .map_err(|_| RpcError::Transport)?
+            .take(4097)
+            .read_to_string(&mut bearer)
+            .map_err(|_| RpcError::Transport)?;
+        let bearer = bearer.trim();
+        if bearer.is_empty() || bearer.len() > 4096 || bearer.bytes().any(|b| b.is_ascii_control())
+        {
+            return Err(RpcError::Transport);
         }
+        let mut header = reqwest::header::HeaderValue::from_str(&format!("Bearer {bearer}"))
+            .map_err(|_| RpcError::Transport)?;
+        header.set_sensitive(true);
+        request = request.header(reqwest::header::AUTHORIZATION, header);
     }
-    Err(format!(
-        "all RPC endpoints failed:\n  {}",
-        errors.join("\n  ")
-    ))
-}
-
-// ============================================================================
-// Batch RPC call
-// ============================================================================
-
-/// A single request within a batch.
-pub struct BatchEntry {
-    pub method: String,
-    pub params: serde_json::Value,
-    id: u64,
-}
-
-/// Build a batch of RPC requests.
-pub fn batch() -> BatchBuilder {
-    BatchBuilder { entries: Vec::new() }
-}
-
-pub struct BatchBuilder {
-    entries: Vec<BatchEntry>,
-}
-
-impl BatchBuilder {
-    /// Add a method call to the batch.  Returns the index (0-based) for
-    /// retrieving the result after execution.
-    pub fn add(&mut self, method: &str, params: serde_json::Value) -> usize {
-        let idx = self.entries.len();
-        self.entries.push(BatchEntry {
-            method: method.to_string(),
-            params,
-            id: next_id(),
-        });
-        idx
+    let response = request.send().await.map_err(|_| RpcError::Transport)?;
+    if !response.status().is_success() {
+        return Err(RpcError::Transport);
     }
-
-    /// Execute all queued calls as a single HTTP request.
-    /// Returns results indexed by the order they were added.
-    pub async fn execute(self, endpoint: &str) -> Result<Vec<Result<serde_json::Value, String>>, String> {
-        if self.entries.is_empty() {
-            return Ok(Vec::new());
+    if response
+        .content_length()
+        .is_some_and(|n| n > limit as u64)
+    {
+        return Err(RpcError::Protocol);
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| RpcError::Transport)?;
+        if chunk.len() > limit - bytes.len() {
+            return Err(RpcError::Protocol);
         }
-
-        // Single call optimisation — avoid batch array overhead.
-        if self.entries.len() == 1 {
-            let e = &self.entries[0];
-            let result = call(endpoint, &e.method, e.params.clone()).await;
-            return Ok(vec![result]);
+        bytes.extend_from_slice(&chunk);
+    }
+    let mut value: Value = serde_json::from_slice(&bytes).map_err(|_| RpcError::Protocol)?;
+    if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || value.get("id").and_then(Value::as_u64) != Some(id)
+    {
+        return Err(RpcError::Protocol);
+    }
+    if let Some(error) = value.get("error") {
+        if value.get("result").is_some() || bytes.len() > MAX_RESPONSE_BYTES {
+            return Err(RpcError::Protocol);
         }
-
-        let payloads: Vec<serde_json::Value> = self
-            .entries
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": e.method,
-                    "params": e.params,
-                    "id": e.id
-                })
-            })
-            .collect();
-
-        let response = client()?
-            .post(endpoint)
-            .json(&payloads)
-            .send()
-            .await
-            .map_err(|e| format!("Batch RPC request failed: {}", e))?;
-
-        let responses: Vec<RpcResponse> = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse batch RPC response: {}", e))?;
-
-        // Map responses back by ID.
-        let mut by_id: HashMap<u64, RpcResponse> = HashMap::new();
-        for r in responses {
-            by_id.insert(r.id, r);
-        }
-
-        let results: Vec<Result<serde_json::Value, String>> = self
-            .entries
-            .iter()
-            .map(|e| {
-                match by_id.remove(&e.id) {
-                    Some(r) => {
-                        if let Some(err) = r.error {
-                            Err(format!("RPC error ({}): {}", e.method, err))
-                        } else {
-                            Ok(r.result.unwrap_or(serde_json::Value::Null))
-                        }
-                    }
-                    None => Err(format!("No response for {} (id={})", e.method, e.id)),
-                }
-            })
-            .collect();
-
-        Ok(results)
+        return Err(RpcError::Remote(
+            error
+                .get("code")
+                .and_then(Value::as_i64)
+                .ok_or(RpcError::Protocol)?,
+        ));
     }
+    value.as_object_mut().and_then(|object| object.remove("result")).ok_or(RpcError::Protocol)
 }
-
-// ============================================================================
-// Response cache with TTL
-// ============================================================================
-
-struct CacheEntry {
-    value: serde_json::Value,
-    expires: Instant,
-}
-
-/// A simple TTL cache for RPC responses.
-pub struct RpcCache {
-    entries: RwLock<HashMap<String, CacheEntry>>,
-    ttl: Duration,
-}
-
-impl RpcCache {
-    pub fn new(ttl: Duration) -> Self {
-        Self {
-            entries: RwLock::new(HashMap::new()),
-            ttl,
-        }
-    }
-
-    /// Get a cached value if it exists and hasn't expired.
-    pub async fn get(&self, key: &str) -> Option<serde_json::Value> {
-        let entries = self.entries.read().await;
-        if let Some(entry) = entries.get(key) {
-            if Instant::now() < entry.expires {
-                return Some(entry.value.clone());
-            }
-        }
-        None
-    }
-
-    /// Store a value in the cache.
-    pub async fn set(&self, key: String, value: serde_json::Value) {
-        let mut entries = self.entries.write().await;
-        entries.insert(
-            key,
-            CacheEntry {
-                value,
-                expires: Instant::now() + self.ttl,
-            },
-        );
-    }
-
-    /// Invalidate a specific key.
-    pub async fn invalidate(&self, key: &str) {
-        let mut entries = self.entries.write().await;
-        entries.remove(key);
-    }
-
-    /// Invalidate all entries.
-    pub async fn clear(&self) {
-        let mut entries = self.entries.write().await;
-        entries.clear();
-    }
-}
-
-// ============================================================================
-// Hex parsing helpers
-// ============================================================================
-
-fn rpc_hex_digits<'a>(hex: &'a str, type_name: &str) -> Result<&'a str, String> {
-    let digits = hex
+pub fn hex_to_u128(value: &str) -> Result<u128, String> {
+    let hex = value
         .strip_prefix("0x")
-        .or_else(|| hex.strip_prefix("0X"))
-        .unwrap_or(hex);
-    if digits.is_empty() {
-        return Err(format!("Invalid RPC hex {type_name} value: missing digits"));
+        .ok_or("quantity must be 0x-prefixed")?;
+    if hex.is_empty()
+        || hex.len() > 32
+        || (hex.len() > 1 && hex.starts_with('0'))
+        || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("invalid canonical hexadecimal quantity".into());
     }
-    Ok(digits)
+    u128::from_str_radix(hex, 16).map_err(|_| "quantity exceeds u128".into())
 }
-
-/// Parse a hex string (with or without 0x prefix) to u64.
-pub fn hex_to_u64(hex: &str) -> Result<u64, String> {
-    let digits = rpc_hex_digits(hex, "u64")?;
-    u64::from_str_radix(digits, 16)
-        .map_err(|e| format!("Invalid RPC hex u64 value `{hex}`: {e}"))
+pub fn hex_to_u64(value: &str) -> Result<u64, String> {
+    u64::try_from(hex_to_u128(value)?).map_err(|_| "quantity exceeds u64".into())
 }
-
-/// Parse a hex string (with or without 0x prefix) to u128.
-pub fn hex_to_u128(hex: &str) -> Result<u128, String> {
-    let digits = rpc_hex_digits(hex, "u128")?;
-    u128::from_str_radix(digits, 16)
-        .map_err(|e| format!("Invalid RPC hex u128 value `{hex}`: {e}"))
-}
-
-/// Convert wei (u128) to CHI (f64) string with 6 decimal places.
-pub fn wei_to_chi_string(wei: u128) -> String {
-    let chi = wei as f64 / 1e18;
-    format!("{:.6}", chi)
-}
-
-/// Convert wei (u128) to CHI (f64).
-pub fn wei_to_chi(wei: u128) -> f64 {
-    wei as f64 / 1e18
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn shared_client_default_headers_include_client_version() {
-        let headers = shared_client_default_headers();
-        let version = headers
-            .get("X-Chiral-Client-Version")
-            .expect("client version header should be present");
-
-        assert_eq!(
-            version.to_str().expect("version header should be UTF-8"),
-            crate::version::CURRENT_VERSION
-        );
-    }
-
-    #[test]
-    fn shared_client_startup_error_is_actionable() {
-        let error = shared_client_startup_error("builder rejected configuration");
-
-        assert!(error.contains("shared HTTP client"));
-        assert!(error.contains("Chiral default headers"));
-        assert!(error.contains("builder rejected configuration"));
-    }
-
-    #[test]
-    fn hex_to_u64_preserves_valid_zero() {
-        assert_eq!(hex_to_u64("0x0").unwrap(), 0);
-        assert_eq!(hex_to_u64("0").unwrap(), 0);
-    }
-
-    #[test]
-    fn hex_to_u128_preserves_valid_zero() {
+    fn quantities_are_strict() {
         assert_eq!(hex_to_u128("0x0").unwrap(), 0);
-        assert_eq!(hex_to_u128("0").unwrap(), 0);
-    }
-
-    #[test]
-    fn hex_to_u64_parses_valid_prefixed_hex() {
-        assert_eq!(hex_to_u64("0x2a").unwrap(), 42);
-    }
-
-    #[test]
-    fn hex_to_u128_parses_valid_uppercase_hex() {
-        assert_eq!(hex_to_u128("0XFF").unwrap(), 255);
-    }
-
-    #[test]
-    fn hex_to_u64_rejects_malformed_hex() {
-        assert!(hex_to_u64("0xnot-hex").is_err());
-    }
-
-    #[test]
-    fn hex_to_u128_rejects_empty_hex() {
-        assert!(hex_to_u128("").is_err());
-        assert!(hex_to_u128("0x").is_err());
-    }
-
-    #[test]
-    fn hex_to_u64_rejects_overflow() {
-        assert!(hex_to_u64("0x10000000000000000").is_err());
+        assert_eq!(
+            hex_to_u128("0xffffffffffffffffffffffffffffffff").unwrap(),
+            u128::MAX
+        );
+        for bad in [
+            "0x",
+            "1",
+            "0x00",
+            "0x01",
+            "0x-1",
+            "0x100000000000000000000000000000000",
+        ] {
+            assert!(hex_to_u128(bad).is_err());
+        }
     }
 }

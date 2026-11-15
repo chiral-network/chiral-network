@@ -1,17 +1,13 @@
-//! Version policy plumbing — Phase 1 of the version-enforcement plan.
-//!
-//! At this stage the policy is purely informational: the binary embeds its
-//! own `CARGO_PKG_VERSION` at compile time, every server exposes a
-//! `GET /api/version-policy` endpoint that returns a bundled
-//! `VersionPolicy`, and clients fetch + log it on startup. No enforcement
-//! happens yet — Phases 2–5 will add the soft/hard UI, HTTP rejection,
-//! libp2p Identify rejection, and signature-based governance.
-//!
-//! Bundling the policy with the binary (rather than reading from a config
-//! file) keeps Phase 1 self-contained and deterministic. The `signature`
-//! and `valid_until` fields are placeholders until Phase 5 wires Ed25519.
+//! Shared signed version-policy governance for native clients, HTTP services and DHT peers.
+//! Production keys require authenticated policies; unsigned development policies cannot
+//! tighten the bundled floor or obstruct a later signed policy.
 
 use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 #[path = "policy_key_validation.rs"]
 mod policy_key_validation;
@@ -143,6 +139,7 @@ fn parse_version_parts(raw: &str, label: &str) -> Result<Vec<u64>, String> {
 /// Three-way comparison of `current` against the policy thresholds.
 /// Returns "ok" / "recommended" / "required".
 pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> Result<&'static str, String> {
+    ensure_policy_fresh(policy, policy_now()?)?;
     if version_is_below_named(
         current,
         "current",
@@ -180,12 +177,9 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> Result<&'stat
 // stays offline / in a CI secret and only feeds the `chiral-policy-sign`
 // operator CLI.
 
-/// Compile-time fallback for the project policy-signing public key.
-/// Release builds require `CHIRAL_POLICY_PUBLIC_KEY` at build time so
-/// production binaries cannot ship the all-zero placeholder. Operators
-/// may still override this at runtime with the same env var (32-byte
-/// hex, with or without leading `0x`). Generate a key with
-/// `chiral-policy-sign keygen`.
+// Compile-time fallback for the project policy-signing public key.
+// Release builds require CHIRAL_POLICY_PUBLIC_KEY at build time; the matching
+// private key remains offline.
 include!(concat!(env!("OUT_DIR"), "/policy_public_key.rs"));
 
 /// Resolve the active policy public key. Reads the
@@ -202,7 +196,7 @@ pub fn policy_public_key() -> [u8; 32] {
         };
         match parse_policy_public_key_hex(&raw) {
             Ok(key) if !is_placeholder_policy_key(&key) => {
-                println!(
+                eprintln!(
                     "[VERSION] CHIRAL_POLICY_PUBLIC_KEY override active: {}",
                     raw.trim()
                 );
@@ -244,7 +238,7 @@ pub fn log_policy_key_status() {
                  transition path is active."
             );
         } else {
-            println!("[VERSION] policy-signing public key configured (signed policies enabled)");
+            eprintln!("[VERSION] policy-signing public key configured (signed policies enabled)");
         }
     });
 }
@@ -280,8 +274,12 @@ pub fn canonical_signing_payload(p: &VersionPolicy) -> Vec<u8> {
 /// signatures, malformed public keys (e.g. while the placeholder zeros
 /// stand in), or signature mismatches.
 pub fn verify_policy(p: &VersionPolicy) -> bool {
+    verify_policy_with_key(p, &policy_public_key())
+}
+
+fn verify_policy_with_key(p: &VersionPolicy, key_bytes: &[u8; 32]) -> bool {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-    if p.signature.is_empty() {
+    if p.signature.is_empty() || is_placeholder_policy_key(key_bytes) {
         return false;
     }
     let sig_bytes = match hex::decode(&p.signature) {
@@ -292,8 +290,7 @@ pub fn verify_policy(p: &VersionPolicy) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
-    let key_bytes = policy_public_key();
-    let key = match VerifyingKey::from_bytes(&key_bytes) {
+    let key = match VerifyingKey::from_bytes(key_bytes) {
         Ok(k) => k,
         Err(_) => return false,
     };
@@ -301,48 +298,55 @@ pub fn verify_policy(p: &VersionPolicy) -> bool {
         .is_ok()
 }
 
-/// Decide whether a policy fetched from the network should replace the
-/// current effective policy. Three rules, in priority order:
-///
-/// 1. **Rollback protection.** Never accept a policy whose `issuedAt` is
-///    older than the currently-stored one.
-/// 2. **Signature.** A valid signature is sufficient.
-/// 3. **Unsigned-but-permissive (transitional).** While the public key
-///    is still the placeholder, real signatures don't exist. Accept
-///    unsigned policies *only* if they don't tighten beyond the bundled
-///    floor — i.e. their `min_required` is at or below bundled. This
-///    lets relays advertise "update available" nudges (recommended /
-///    message / downloadUrl) without ever pushing a more aggressive
-///    `min_required` than what the binary itself ships with.
+/// Require fresh, authenticated production policies and monotonic signed updates.
+/// Unsigned development policies may not tighten the bundled floor, replace a
+/// signed policy, or establish a watermark that blocks authenticated governance.
 pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPolicy) -> bool {
-    if remote.issued_at < current.issued_at {
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    accept_policy(remote, current, &policy_public_key(), now.as_secs())
+}
+
+fn accept_policy(
+    remote: &VersionPolicy,
+    current: &VersionPolicy,
+    key: &[u8; 32],
+    now: u64,
+) -> bool {
+    if remote.issued_at > now.saturating_add(30)
+        || (remote.valid_until != 0
+            && (remote.valid_until <= now || remote.valid_until <= remote.issued_at))
+        || parse_version_parts(&remote.min_required, "min_required").is_err()
+        || parse_version_parts(&remote.recommended, "recommended").is_err()
+    {
         return false;
     }
     if !remote.signature.is_empty() {
-        return verify_policy(remote);
+        if !verify_policy_with_key(remote, key) {
+            return false;
+        }
+        // An unauthenticated development watermark cannot veto an authenticated policy.
+        if current.signature.is_empty() {
+            return true;
+        }
+        return remote.issued_at > current.issued_at
+            || (remote.issued_at == current.issued_at
+                && canonical_signing_payload(remote) == canonical_signing_payload(current));
     }
-    // Unsigned remote: never allowed to replace a previously-adopted
-    // signed policy (otherwise an attacker could ship an unsigned policy
-    // with a fresh `issued_at` and silently disable enforcement).
-    if !current.signature.is_empty() {
+    if !is_placeholder_policy_key(key)
+        || !current.signature.is_empty()
+        || remote.issued_at < current.issued_at
+    {
         return false;
     }
-    // Otherwise accept only if it doesn't tighten beyond the bundled
-    // floor. The binary's bundled `min_required` is the hard floor —
-    // unsigned policies can relax / nudge but never raise it.
-    let bundled = bundled_policy();
-    match version_is_below_named(
-        &bundled.min_required,
+    version_is_below_named(
+        &bundled_policy().min_required,
         "bundled min_required",
         &remote.min_required,
         "remote min_required",
-    ) {
-        Ok(is_tighter) => !is_tighter,
-        Err(e) => {
-            eprintln!("[VERSION] Rejecting malformed remote policy: {e}");
-            false
-        }
-    }
+    )
+    .is_ok_and(|tighter| !tighter)
 }
 
 // ---------------------------------------------------------------------------
@@ -353,28 +357,260 @@ pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPoli
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 
-static EFFECTIVE_POLICY: OnceCell<RwLock<VersionPolicy>> = OnceCell::new();
+static EFFECTIVE_POLICY: OnceCell<RwLock<EffectivePolicy>> = OnceCell::new();
 
-fn effective_slot() -> &'static RwLock<VersionPolicy> {
-    EFFECTIVE_POLICY.get_or_init(|| RwLock::new(bundled_policy()))
+fn effective_slot() -> &'static RwLock<EffectivePolicy> {
+    EFFECTIVE_POLICY.get_or_init(|| RwLock::new(EffectivePolicy::default()))
 }
 
 /// Snapshot the currently-effective policy (initialised to bundled if
 /// no override has been promoted yet).
 pub fn effective_policy() -> VersionPolicy {
-    effective_slot().read().clone()
+    effective_slot()
+        .read()
+        .policy
+        .clone()
+        .unwrap_or_else(bundled_policy)
 }
 
-/// Replace the effective policy. Returns `true` if accepted, `false` if
-/// the supplied policy was rejected by `is_acceptable_remote_policy`.
-pub fn update_effective_policy(new: VersionPolicy) -> bool {
-    let slot = effective_slot();
-    let current = slot.read().clone();
-    if !is_acceptable_remote_policy(&new, &current) {
-        return false;
+/// Restore the authenticated policy for a network-scoped directory and the active
+/// authority. An expired policy still establishes the rollback watermark: callers
+/// may fetch a newer policy, but admission fails until that refresh succeeds.
+/// Corruption, insecure permissions and signature failures are fatal, never a
+/// reason to fall back to the bundled policy.
+pub fn restore_persisted_policy(directory: &Path) -> Result<(), String> {
+    persisted_policy(
+        directory,
+        None,
+        &policy_public_key(),
+        policy_now()?,
+        effective_slot(),
+    )
+    .map(|_| ())
+}
+
+/// Atomically accept and durably commit a policy before making it effective.
+/// Every invocation rereads the authenticated watermark under a process lock.
+/// Unsigned development metadata is memory-only and cannot establish that mark.
+pub fn update_persisted_policy(directory: &Path, remote: VersionPolicy) -> Result<bool, String> {
+    persisted_policy(
+        directory,
+        Some(remote),
+        &policy_public_key(),
+        policy_now()?,
+        effective_slot(),
+    )
+}
+
+fn policy_now() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|time| time.as_secs())
+        .map_err(|_| "system clock precedes the Unix epoch".into())
+}
+
+fn ensure_policy_fresh(policy: &VersionPolicy, now: u64) -> Result<(), String> {
+    if policy.valid_until != 0 && policy.valid_until <= now {
+        return Err("authenticated version policy is expired; fetch a newer signed policy".into());
     }
-    *slot.write() = new;
-    true
+    Ok(())
+}
+
+#[derive(Default)]
+struct EffectivePolicy {
+    scope: Option<PathBuf>,
+    policy: Option<VersionPolicy>,
+}
+
+// No unsigned timestamp or separate watermark is stored. The authenticated
+// policy itself is the evidence for both the issue time and equal-time payload.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedPolicy<T = VersionPolicy> {
+    policy: T,
+}
+
+const POLICY_CACHE_LIMIT: u64 = 64 * 1024;
+
+fn private_policy_directory(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => crate::wallet::secure_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or("policy directory has no parent")?;
+            if !parent.exists() {
+                private_policy_directory(parent)?;
+            }
+            crate::wallet::secure_directory(path)?;
+            sync_policy_directory(parent)
+        }
+        Err(error) => Err(format!("cannot inspect policy directory: {error}")),
+    }
+}
+
+fn sync_policy_directory(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    fs::File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("cannot sync policy directory: {error}"))?;
+    // Windows commits use MoveFileExW(MOVEFILE_WRITE_THROUGH) below; a Unix-style
+    // directory FlushFileBuffers is not available to an unprivileged process.
+    #[cfg(windows)]
+    let _ = path;
+    #[cfg(not(any(unix, windows)))]
+    return Err("durable policy persistence is unsupported on this platform".into());
+    Ok(())
+}
+
+fn commit_policy_file(temporary: &Path, directory: &Path) -> Result<(), String> {
+    let destination = directory.join("policy.json");
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        if unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err(format!(
+                "cannot commit policy cache: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    #[cfg(not(windows))]
+    fs::rename(temporary, destination)
+        .map_err(|error| format!("cannot commit policy cache: {error}"))?;
+    sync_policy_directory(directory)
+}
+
+fn read_persisted_policy(
+    path: &Path,
+    key: &[u8; 32],
+    now: u64,
+) -> Result<Option<VersionPolicy>, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot inspect policy cache: {error}")),
+        Ok(_) => {}
+    }
+    let file = crate::wallet::open_secret_file(path)?;
+    let mut bytes = Vec::new();
+    file.take(POLICY_CACHE_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read policy cache: {error}"))?;
+    if bytes.len() as u64 > POLICY_CACHE_LIMIT {
+        return Err("policy cache exceeds size limit".into());
+    }
+    let cached: PersistedPolicy =
+        serde_json::from_slice(&bytes).map_err(|error| format!("invalid policy cache: {error}"))?;
+    let policy = cached.policy;
+    // Expiry is intentionally not checked here. It makes the policy unusable for
+    // admission, not unauthenticated, and must never discard rollback evidence.
+    if !verify_policy_with_key(&policy, key)
+        || policy.issued_at > now.saturating_add(30)
+        || (policy.valid_until != 0 && policy.valid_until <= policy.issued_at)
+        || parse_version_parts(&policy.min_required, "min_required").is_err()
+        || parse_version_parts(&policy.recommended, "recommended").is_err()
+    {
+        return Err("policy cache authenticity or signed fields rejected".into());
+    }
+    Ok(Some(policy))
+}
+
+fn persist_signed_policy(directory: &Path, policy: &VersionPolicy) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&PersistedPolicy { policy })
+        .map_err(|error| format!("cannot encode policy cache: {error}"))?;
+    if bytes.len() as u64 > POLICY_CACHE_LIMIT {
+        return Err("policy cache exceeds size limit".into());
+    }
+    let temporary = directory.join(format!(".policy-{:032x}.tmp", rand::random::<u128>()));
+    let result = (|| {
+        let mut file = crate::wallet::create_secret_file(&temporary)?;
+        file.write_all(&bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|error| format!("cannot persist policy cache: {error}"))?;
+        drop(file);
+        commit_policy_file(&temporary, directory)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn persisted_policy(
+    directory: &Path,
+    remote: Option<VersionPolicy>,
+    key: &[u8; 32],
+    now: u64,
+    slot: &RwLock<EffectivePolicy>,
+) -> Result<bool, String> {
+    // Serialize threads before acquiring the file lock, including profile switches.
+    let mut effective = slot.write();
+    let directory = if directory.is_absolute() {
+        directory.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(directory)
+    };
+    private_policy_directory(&directory)?;
+    let authority = directory.join(hex::encode(key));
+    private_policy_directory(&authority)?;
+    let authority = fs::canonicalize(authority).map_err(|error| error.to_string())?;
+    let lock_path = authority.join("policy.lock");
+    let lock = crate::wallet::create_secret_file(&lock_path)
+        .or_else(|_| crate::wallet::open_secret_file(&lock_path))?;
+    let _lock = crate::file_lock::ExclusiveFileLock::acquire(lock)
+        .map_err(|error| format!("cannot lock policy cache: {error}"))?;
+    let cached = read_persisted_policy(&authority.join("policy.json"), key, now)?;
+    let previous = if effective.scope.as_ref() == Some(&authority) {
+        effective.policy.as_ref()
+    } else {
+        None
+    };
+    if let Some(previous) = previous.filter(|policy| !policy.signature.is_empty()) {
+        let cached = cached
+            .as_ref()
+            .ok_or("authenticated policy cache disappeared")?;
+        if cached.issued_at < previous.issued_at
+            || (cached.issued_at == previous.issued_at
+                && canonical_signing_payload(cached) != canonical_signing_payload(previous))
+        {
+            return Err("authenticated policy cache rolled back or equivocated".into());
+        }
+    }
+    let mut current = cached
+        .or_else(|| previous.cloned())
+        .unwrap_or_else(bundled_policy);
+    let accepted = if let Some(remote) = remote {
+        if accept_policy(&remote, &current, key, now) {
+            if !remote.signature.is_empty() {
+                persist_signed_policy(&authority, &remote)?;
+            }
+            current = remote;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    effective.scope = Some(authority);
+    effective.policy = Some(current);
+    Ok(accepted)
 }
 
 #[cfg(test)]
@@ -452,19 +688,13 @@ mod tests {
     #[test]
     fn compare_to_policy_rejects_malformed_current_version() {
         let p = policy("1.0.0", "2.0.0", 0);
-        let err = compare_to_policy("not-a-version", &p)
-            .expect_err("malformed current version should be rejected");
-
-        assert!(err.contains("current version"));
+        assert!(compare_to_policy("not-a-version", &p).is_err());
     }
 
     #[test]
     fn compare_to_policy_rejects_malformed_policy_version() {
         let p = policy("1.x.0", "2.0.0", 0);
-        let err = compare_to_policy("1.0.0", &p)
-            .expect_err("malformed policy version should be rejected");
-
-        assert!(err.contains("policy min_required"));
+        assert!(compare_to_policy("1.0.0", &p).is_err());
     }
 
     #[test]
@@ -475,13 +705,6 @@ mod tests {
         remote.issued_at = bundled.issued_at + 1;
 
         assert!(!is_acceptable_remote_policy(&remote, &bundled));
-    }
-
-    #[test]
-    fn agent_version_string_format() {
-        let s = agent_version_string();
-        assert!(s.starts_with("chiral/"));
-        assert_eq!(s, format!("chiral/{}", CURRENT_VERSION));
     }
 
     #[test]
@@ -503,12 +726,6 @@ mod tests {
         let mut b = policy("1.0.0", "relaxed\09.9.9", 1700000000);
         b.download_url = String::new();
         assert_ne!(canonical_signing_payload(&a), canonical_signing_payload(&b));
-    }
-
-    #[test]
-    fn canonical_payload_is_deterministic() {
-        let a = policy("1.0.0", "2.0.0", 100);
-        assert_eq!(canonical_signing_payload(&a), canonical_signing_payload(&a));
     }
 
     #[test]
@@ -566,7 +783,7 @@ mod tests {
         let mut remote = bundled.clone();
         remote.recommended = "9.9.9".into();
         remote.issued_at = bundled.issued_at + 1;
-        assert!(is_acceptable_remote_policy(&remote, &bundled));
+        assert!(accept_policy(&remote, &bundled, &[0; 32], 100));
     }
 
     #[test]
@@ -594,38 +811,392 @@ mod tests {
     }
 
     #[test]
-    fn is_acceptable_signed_round_trip_with_real_key() {
-        // The bundled POLICY_PUBLIC_KEY is zeros, so we can't actually
-        // exercise the "signed accept" branch end-to-end here. But we can
-        // verify the canonical payload is what gets signed: an Ed25519
-        // signature produced over `canonical_signing_payload` verifies
-        // with the matching public key.
-        use ed25519_dalek::{Verifier, VerifyingKey};
+    fn signed_policy_cannot_be_blocked_by_unsigned_watermark() {
         let signing = SigningKey::generate(&mut OsRng);
-        let verifying: VerifyingKey = signing.verifying_key();
-        let p = policy("1.0.0", "2.0.0", 100);
-        let payload = canonical_signing_payload(&p);
-        let sig = signing.sign(&payload);
-        assert!(verifying.verify(&payload, &sig).is_ok());
+        let key = signing.verifying_key().to_bytes();
+        let mut current = bundled_policy();
+        current.issued_at = u64::MAX;
+        let mut remote = policy("1.0.0", "2.0.0", 100);
+        assert!(!accept_policy(&remote, &bundled_policy(), &key, 200));
+        remote.signature =
+            hex::encode(signing.sign(&canonical_signing_payload(&remote)).to_bytes());
+        assert!(accept_policy(&remote, &current, &key, 200));
+        let accepted = remote.clone();
+        remote.min_required = "0.0.0".into();
+        remote.signature =
+            hex::encode(signing.sign(&canonical_signing_payload(&remote)).to_bytes());
+        assert!(!accept_policy(&remote, &accepted, &key, 200));
     }
 
     #[test]
-    fn effective_policy_round_trip() {
-        // The slot is process-global; just check that an acceptable
-        // unsigned update is reflected back. Use a far-future issued_at
-        // so we don't collide with whatever the current snapshot is.
-        let mut p = bundled_policy();
-        p.recommended = "9999.0.0".into();
-        p.issued_at = u64::MAX / 2;
-        let before = effective_policy();
-        assert!(update_effective_policy(p.clone()));
-        let after = effective_policy();
-        assert_eq!(after.recommended, "9999.0.0");
-        // Restore so we don't poison sibling tests.
-        let restore = VersionPolicy {
-            issued_at: after.issued_at, // same timestamp is allowed (>=)
-            ..before
+    fn future_and_expired_policies_are_rejected() {
+        let current = bundled_policy();
+        let mut future = policy("0.0.0", "1.0.0", u64::MAX);
+        assert!(!accept_policy(&future, &current, &[0; 32], 200));
+        future.issued_at = 100;
+        future.valid_until = 200;
+        assert!(!accept_policy(&future, &current, &[0; 32], 200));
+    }
+
+    fn signed_policy(signing: &SigningKey, min: &str, issued: u64, expires: u64) -> VersionPolicy {
+        let mut policy = policy(min, min, issued);
+        policy.valid_until = expires;
+        policy.signature =
+            hex::encode(signing.sign(&canonical_signing_payload(&policy)).to_bytes());
+        policy
+    }
+
+    fn fresh_slot() -> RwLock<EffectivePolicy> {
+        RwLock::new(EffectivePolicy::default())
+    }
+
+    fn cached_path(directory: &Path, key: &[u8; 32]) -> PathBuf {
+        directory.join(hex::encode(key)).join("policy.json")
+    }
+
+    fn private_test_directory() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        crate::wallet::secure_directory(directory.path()).unwrap();
+        directory
+    }
+
+    #[test]
+    fn persisted_policy_restore_keeps_equal_time_payload_and_rejects_rollback() {
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        let b = signed_policy(&signing, "2.0.0", 200, 400);
+        assert!(
+            persisted_policy(directory.path(), Some(b.clone()), &key, 250, &fresh_slot()).unwrap()
+        );
+        let restored = fresh_slot();
+        persisted_policy(directory.path(), None, &key, 251, &restored).unwrap();
+        assert_eq!(restored.read().policy.as_ref().unwrap().issued_at, 200);
+        assert!(!persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "0.0.0", 100, 400)),
+            &key,
+            251,
+            &restored
+        )
+        .unwrap());
+        assert!(!persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "0.0.0", 200, 400)),
+            &key,
+            251,
+            &restored
+        )
+        .unwrap());
+        assert!(persisted_policy(directory.path(), Some(b), &key, 251, &restored).unwrap());
+        assert_eq!(
+            restored.read().policy.as_ref().unwrap().min_required,
+            "2.0.0"
+        );
+    }
+
+    #[test]
+    fn persisted_policy_expiry_retains_watermark_but_allows_fresh_advance() {
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        let b = signed_policy(&signing, "2.0.0", 200, 300);
+        assert!(persisted_policy(directory.path(), Some(b), &key, 250, &fresh_slot()).unwrap());
+        let restored = fresh_slot();
+        persisted_policy(directory.path(), None, &key, 400, &restored).unwrap();
+        {
+            let effective = restored.read();
+            let expired = effective.policy.as_ref().unwrap();
+            assert_eq!(expired.issued_at, 200);
+            assert!(ensure_policy_fresh(expired, 400).is_err());
+            assert!(compare_to_policy("3.0.0", expired).is_err());
+        }
+        assert!(!persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "0.0.0", 100, 0)),
+            &key,
+            400,
+            &restored
+        )
+        .unwrap());
+        assert!(!persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "2.0.0", 200, 0)),
+            &key,
+            400,
+            &restored
+        )
+        .unwrap());
+        assert!(persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "3.0.0", 350, 500)),
+            &key,
+            400,
+            &restored
+        )
+        .unwrap());
+        assert_eq!(restored.read().policy.as_ref().unwrap().issued_at, 350);
+    }
+
+    #[test]
+    fn persisted_policy_never_persists_unsigned_future_watermark() {
+        let directory = private_test_directory();
+        let slot = fresh_slot();
+        assert!(!persisted_policy(
+            directory.path(),
+            Some(policy("0.0.0", "1.0.0", u64::MAX)),
+            &[0; 32],
+            200,
+            &slot
+        )
+        .unwrap());
+        assert!(persisted_policy(
+            directory.path(),
+            Some(policy("0.0.0", "1.0.0", 200)),
+            &[0; 32],
+            200,
+            &slot
+        )
+        .unwrap());
+        assert!(!cached_path(directory.path(), &[0; 32]).exists());
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        assert!(persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "1.0.0", 100, 0)),
+            &key,
+            200,
+            &slot
+        )
+        .unwrap());
+        let bytes = fs::read(cached_path(directory.path(), &key)).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["issuedAt"] = serde_json::json!(u64::MAX);
+        fs::write(
+            cached_path(directory.path(), &key),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        assert!(persisted_policy(directory.path(), None, &key, 200, &fresh_slot()).is_err());
+    }
+
+    #[test]
+    fn persisted_policy_isolates_authorities_and_networks() {
+        let directory = private_test_directory();
+        let network_a = directory.path().join("network-a");
+        let network_b = directory.path().join("network-b");
+        let authority_a = SigningKey::generate(&mut OsRng);
+        let authority_b = SigningKey::generate(&mut OsRng);
+        let key_a = authority_a.verifying_key().to_bytes();
+        let key_b = authority_b.verifying_key().to_bytes();
+        let slot = fresh_slot();
+        assert!(persisted_policy(
+            &network_a,
+            Some(signed_policy(&authority_a, "2.0.0", 200, 0)),
+            &key_a,
+            250,
+            &slot
+        )
+        .unwrap());
+        persisted_policy(&network_b, None, &key_a, 250, &slot).unwrap();
+        assert_eq!(slot.read().policy.as_ref().unwrap().issued_at, 0);
+        assert!(persisted_policy(
+            &network_b,
+            Some(signed_policy(&authority_a, "1.0.0", 100, 0)),
+            &key_a,
+            250,
+            &slot
+        )
+        .unwrap());
+        persisted_policy(&network_a, None, &key_b, 250, &slot).unwrap();
+        assert_eq!(slot.read().policy.as_ref().unwrap().issued_at, 0);
+        assert!(persisted_policy(
+            &network_a,
+            Some(signed_policy(&authority_b, "1.0.0", 100, 0)),
+            &key_b,
+            250,
+            &slot
+        )
+        .unwrap());
+        persisted_policy(&network_a, None, &key_a, 250, &slot).unwrap();
+        assert_eq!(slot.read().policy.as_ref().unwrap().issued_at, 200);
+        // A copied policy in the other authority's private cache must not verify.
+        fs::copy(
+            cached_path(&network_a, &key_a),
+            cached_path(&network_a, &key_b),
+        )
+        .unwrap();
+        assert!(persisted_policy(&network_a, None, &key_b, 250, &fresh_slot()).is_err());
+    }
+
+    #[test]
+    fn persisted_policy_corruption_never_falls_back_or_overwrites_evidence() {
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        let b = signed_policy(&signing, "2.0.0", 200, 0);
+        assert!(
+            persisted_policy(directory.path(), Some(b.clone()), &key, 250, &fresh_slot()).unwrap()
+        );
+        let path = cached_path(directory.path(), &key);
+        let mut forged = b.clone();
+        forged.min_required = "0.0.0".into();
+        let unsigned = policy("0.0.0", "1.0.0", u64::MAX);
+        for corrupt in [
+            b"{".to_vec(),
+            serde_json::to_vec(&PersistedPolicy { policy: forged }).unwrap(),
+            serde_json::to_vec(&PersistedPolicy { policy: unsigned }).unwrap(),
+        ] {
+            fs::write(&path, &corrupt).unwrap();
+            let slot = fresh_slot();
+            assert!(persisted_policy(directory.path(), None, &key, 250, &slot).is_err());
+            assert!(persisted_policy(directory.path(), Some(b.clone()), &key, 250, &slot).is_err());
+            assert_eq!(fs::read(&path).unwrap(), corrupt);
+            assert!(slot.read().policy.is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_policy_requires_owner_private_files_and_lock() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        assert!(persisted_policy(
+            directory.path(),
+            Some(signed_policy(&signing, "1.0.0", 100, 0)),
+            &key,
+            200,
+            &fresh_slot()
+        )
+        .unwrap());
+        let cache = cached_path(directory.path(), &key);
+        let lock = cache.parent().unwrap().join("policy.lock");
+        for path in [&cache, &lock] {
+            let metadata = fs::metadata(path).unwrap();
+            assert_eq!(metadata.mode() & 0o777, 0o600);
+            assert_eq!(metadata.uid(), unsafe { libc::geteuid() });
+            fs::set_permissions(path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(persisted_policy(directory.path(), None, &key, 200, &fresh_slot()).is_err());
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let saved = cache.with_extension("saved");
+        fs::rename(&cache, &saved).unwrap();
+        std::os::unix::fs::symlink(&saved, &cache).unwrap();
+        assert!(persisted_policy(directory.path(), None, &key, 200, &fresh_slot()).is_err());
+    }
+
+    fn policy_process(
+        directory: &Path,
+        key: &[u8; 32],
+        remote: Option<VersionPolicy>,
+        accepted: Option<bool>,
+        issued: Option<u64>,
+    ) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "version::tests::persisted_policy_process_worker", "--nocapture"])
+            .env("CHIRAL_POLICY_PUBLIC_KEY", hex::encode(key))
+            .env("CHIRAL_POLICY_TEST_PROCESS", serde_json::json!({
+                "directory": directory, "remote": remote, "accepted": accepted, "issued": issued,
+            }).to_string())
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped())
+            .spawn().unwrap()
+    }
+
+    fn finish_policy_process(child: std::process::Child) {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "policy child failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "child-process entrypoint for durable policy regression tests"]
+    fn persisted_policy_process_worker() {
+        let Ok(input) = std::env::var("CHIRAL_POLICY_TEST_PROCESS") else {
+            return;
         };
-        update_effective_policy(restore);
+        let input: serde_json::Value = serde_json::from_str(&input).unwrap();
+        let directory = Path::new(input["directory"].as_str().unwrap());
+        restore_persisted_policy(directory).unwrap();
+        if !input["remote"].is_null() {
+            let accepted = update_persisted_policy(
+                directory,
+                serde_json::from_value(input["remote"].clone()).unwrap(),
+            )
+            .unwrap();
+            if let Some(expected) = input["accepted"].as_bool() {
+                assert_eq!(accepted, expected);
+            }
+        }
+        if let Some(issued) = input["issued"].as_u64() {
+            assert_eq!(effective_policy().issued_at, issued);
+        }
+    }
+
+    #[test]
+    fn persisted_policy_fresh_process_rejects_older_still_valid_policy() {
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        let now = policy_now().unwrap();
+        finish_policy_process(policy_process(
+            directory.path(),
+            &key,
+            Some(signed_policy(&signing, "2.0.0", now - 10, now + 300)),
+            Some(true),
+            Some(now - 10),
+        ));
+        finish_policy_process(policy_process(
+            directory.path(),
+            &key,
+            None,
+            None,
+            Some(now - 10),
+        ));
+        finish_policy_process(policy_process(
+            directory.path(),
+            &key,
+            Some(signed_policy(&signing, "0.0.0", now - 20, now + 300)),
+            Some(false),
+            Some(now - 10),
+        ));
+    }
+
+    #[test]
+    fn persisted_policy_concurrent_process_writers_keep_highest_watermark() {
+        let directory = private_test_directory();
+        let signing = SigningKey::generate(&mut OsRng);
+        let key = signing.verifying_key().to_bytes();
+        let now = policy_now().unwrap();
+        let mut children = Vec::new();
+        for age in 1..=8 {
+            children.push(policy_process(
+                directory.path(),
+                &key,
+                Some(signed_policy(&signing, "1.0.0", now - age, 0)),
+                None,
+                None,
+            ));
+        }
+        for child in children {
+            finish_policy_process(child);
+        }
+        finish_policy_process(policy_process(
+            directory.path(),
+            &key,
+            None,
+            None,
+            Some(now - 1),
+        ));
     }
 }

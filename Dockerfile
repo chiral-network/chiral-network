@@ -1,116 +1,37 @@
-# =============================================================================
-# Chiral Network — Multi-stage Docker build
-#
-# Targets:
-#   daemon       — headless P2P node with DHT, file transfer, Drive API
-#   relay        — bootstrap relay server (P2P + HTTP gateway)
-#   cli          — CLI tool for interacting with a running daemon
-#   test-node    — daemon pre-configured for automated testing
-# =============================================================================
-
-# ---------------------------------------------------------------------------
-# Stage 1: Build all Rust binaries
-# ---------------------------------------------------------------------------
-FROM rust:latest AS builder
-
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    clang \
-    cmake \
-    protobuf-compiler \
-    libgtk-3-dev \
-    libwebkit2gtk-4.1-dev \
-    libayatana-appindicator3-dev \
-    librsvg2-dev \
-    libsoup-3.0-dev \
-    libjavascriptcoregtk-4.1-dev \
-    && rm -rf /var/lib/apt/lists/*
-
+# syntax=docker/dockerfile:1.7
+# Supply immutable registry digests selected by the release operator.
+ARG RUST_IMAGE
+ARG RUNTIME_IMAGE
+FROM ${RUST_IMAGE} AS builder
+ARG CHIRAL_POLICY_PUBLIC_KEY
+ENV CHIRAL_POLICY_PUBLIC_KEY=${CHIRAL_POLICY_PUBLIC_KEY}
+RUN test ${#CHIRAL_POLICY_PUBLIC_KEY} -eq 64 && test "$CHIRAL_POLICY_PUBLIC_KEY" != "0000000000000000000000000000000000000000000000000000000000000000"
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev clang cmake protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
+COPY src-tauri/ src-tauri/
+RUN cargo build --locked --release --no-default-features --manifest-path src-tauri/Cargo.toml --bins
 
-# Copy source
-COPY src-tauri/ ./src-tauri/
+FROM ${RUNTIME_IMAGE} AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libgomp1 curl && rm -rf /var/lib/apt/lists/* && groupadd --gid 10001 chiral && useradd --uid 10001 --gid 10001 --no-create-home chiral && mkdir -p /var/lib/chiral && chown 10001:10001 /var/lib/chiral
+COPY --from=builder /build/src-tauri/target/release/chiral /usr/local/bin/chiral
+USER 10001:10001
+ENV XDG_DATA_HOME=/var/lib/chiral
+WORKDIR /var/lib/chiral
 
-# Build all binaries in release mode
-RUN cd src-tauri && \
-    cargo build --release --bin chiral_daemon --bin chiral --bin relay_server && \
-    strip target/release/chiral_daemon target/release/chiral target/release/relay_server
-
-# ---------------------------------------------------------------------------
-# Stage 2: Minimal runtime base
-# ---------------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime-base
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN mkdir -p /data/chiral-network
-
-ENV XDG_DATA_HOME=/data
-
-# ---------------------------------------------------------------------------
-# Target: daemon — headless P2P node
-# ---------------------------------------------------------------------------
-FROM runtime-base AS daemon
-
+FROM runtime AS provider
 COPY --from=builder /build/src-tauri/target/release/chiral_daemon /usr/local/bin/chiral_daemon
-
-EXPOSE 9419/tcp
-EXPOSE 30303/tcp
-EXPOSE 30303/udp
-
-VOLUME ["/data"]
-
 ENTRYPOINT ["chiral_daemon"]
-CMD ["--port", "9419"]
+CMD ["--config", "/etc/chiral/provider.json", "--version-policy", "/etc/chiral/version-policy.json"]
 
-# ---------------------------------------------------------------------------
-# Target: relay — bootstrap relay server
-# ---------------------------------------------------------------------------
-FROM runtime-base AS relay
-
+FROM runtime AS relay
 COPY --from=builder /build/src-tauri/target/release/relay_server /usr/local/bin/relay_server
-
-EXPOSE 4001/tcp
-EXPOSE 8080/tcp
-
-VOLUME ["/data"]
-
 ENTRYPOINT ["relay_server"]
-CMD ["--port", "4001", "--http-port", "8080"]
+CMD ["--config", "/etc/chiral/relay.json"]
 
-# ---------------------------------------------------------------------------
-# Target: cli — command-line client
-# ---------------------------------------------------------------------------
-FROM runtime-base AS cli
+FROM runtime AS chain-rpc
+COPY --from=builder /build/src-tauri/target/release/chiral_rpc_gateway /usr/local/bin/chiral_rpc_gateway
+ENTRYPOINT ["chiral_rpc_gateway"]
+CMD ["--config", "/etc/chiral/rpc-gateway.json", "--journal-dir", "/var/lib/chiral", "--bearer-file", "/run/secrets/rpc.token"]
 
-COPY --from=builder /build/src-tauri/target/release/chiral /usr/local/bin/chiral
-
-VOLUME ["/data"]
-
+FROM runtime AS cli
 ENTRYPOINT ["chiral"]
-
-# ---------------------------------------------------------------------------
-# Target: test-node — daemon configured for automated testing
-# ---------------------------------------------------------------------------
-FROM runtime-base AS test-node
-
-COPY --from=builder /build/src-tauri/target/release/chiral_daemon /usr/local/bin/chiral_daemon
-COPY --from=builder /build/src-tauri/target/release/chiral /usr/local/bin/chiral
-
-EXPOSE 9419/tcp
-EXPOSE 30303/tcp
-EXPOSE 30303/udp
-
-VOLUME ["/data"]
-
-# Healthcheck: verify the HTTP gateway is responsive
-HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
-    CMD curl -sf http://localhost:9419/api/health || exit 1
-
-ENTRYPOINT ["chiral_daemon"]
-CMD ["--port", "9419", "--auto-start-dht"]

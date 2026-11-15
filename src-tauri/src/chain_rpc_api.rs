@@ -1,295 +1,425 @@
+//! Narrow Conflux eSpace RPC gateway. Operator/mining methods are never forwarded.
+use crate::{
+    chain_client::{ChainClient, ChainError, MAX_ESTIMATE_GAS, MAX_PAYMENT_DATA, MAX_RAW_BYTES},
+    network::{normalize_address, validate_hash},
+    rpc_client::{MAX_BLOCK_RESPONSE_BYTES, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES},
+};
 use axum::{
     body::Bytes,
-    http::{header::CONTENT_TYPE, HeaderValue, StatusCode},
+    extract::{DefaultBodyLimit, State},
+    http::{header::CONTENT_TYPE, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
-    Router,
+    Json, Router,
 };
-
-/// Read-only method namespaces that the canonical chain proxy will
-/// forward. Anything outside this list is rejected with 403 — most
-/// importantly that means `miner_*` (e.g. `miner_setEtherbase`,
-/// `miner_start`), `personal_*` (keystore management), `debug_*` and
-/// `admin_*` cannot be invoked through the proxy.
-///
-/// Why this matters: the canonical relay binds geth's HTTP RPC to
-/// localhost only, so the proxy is the *only* externally reachable
-/// path to the chain. Without a method allowlist here, anyone on the
-/// internet could call `miner_setEtherbase("0x<attacker>")` and
-/// redirect mining rewards. That happened (2026-05 incident — ~7 168
-/// CHI of freshnet block rewards diverted before this filter
-/// existed).
-///
-/// A namespace prefix (e.g. `eth_`) is allowlisted as a whole because
-/// the eth/net/web3/txpool surface is large but uniformly read-only
-/// (or write-only-to-the-chain-via-signed-tx, which is fine — the
-/// relay can't forge signatures). Per-method enumeration would be
-/// more conservative but harder to keep in sync with new geth
-/// releases.
-const ALLOWED_METHOD_PREFIXES: &[&str] = &["eth_", "net_", "web3_", "txpool_"];
-
-/// A method passes the allowlist iff it starts with one of the four
-/// read-only namespace prefixes.
-///
-/// The example-based tests in this file enumerate known dangerous and
-/// known safe method names; the proof at
-/// `verified/method_allowlist.rs` (checked by Verus, not cargo)
-/// upgrades them to the universal statement that EVERY string
-/// starting with `miner_`, `personal_`, `debug_`, or `admin_` is
-/// rejected — including method names geth hasn't shipped yet.
-fn is_allowed_method(method: &str) -> bool {
-    ALLOWED_METHOD_PREFIXES
-        .iter()
-        .any(|p| method.starts_with(p))
+use serde_json::{json, Value};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+use tokio::sync::Semaphore;
+const MAX_BATCH: usize = 8;
+pub fn allowed_method(method: &str) -> bool {
+    matches!(
+        method,
+        "eth_chainId"
+            | "net_version"
+            | "eth_blockNumber"
+            | "eth_gasPrice"
+            | "eth_getBalance"
+            | "eth_getTransactionCount"
+            | "eth_getTransactionReceipt"
+            | "eth_sendRawTransaction"
+            | "eth_syncing"
+            | "eth_getBlockByNumber"
+            | "eth_estimateGas"
+    )
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MethodCheckError {
-    MalformedMethod,
-    Disallowed(String),
+struct Bucket {
+    tokens: u32,
+    last: Instant,
+    rate: u32,
+    capacity: u32,
 }
-
-impl MethodCheckError {
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::MalformedMethod => StatusCode::BAD_REQUEST,
-            Self::Disallowed(_) => StatusCode::FORBIDDEN,
+impl Bucket {
+    fn new(rate: u32, capacity: u32) -> Self {
+        Self {
+            tokens: capacity,
+            last: Instant::now(),
+            rate,
+            capacity,
         }
     }
-
-    fn message(&self) -> String {
-        match self {
-            Self::MalformedMethod => {
-                "JSON-RPC request method must be a non-empty string".to_string()
-            }
-            Self::Disallowed(method) => format!(
-                "JSON-RPC method `{}` not exposed via this proxy. Allowed namespaces: {}",
-                method,
-                ALLOWED_METHOD_PREFIXES.join(", ")
-            ),
+    fn take(&mut self, count: u32) -> bool {
+        let ticks = self
+            .last
+            .elapsed()
+            .as_millis()
+            .saturating_mul(u128::from(self.rate))
+            / 1000;
+        if ticks > 0 {
+            self.tokens = self
+                .tokens
+                .saturating_add(ticks.min(u128::from(u32::MAX)) as u32)
+                .min(self.capacity);
+            self.last = Instant::now();
         }
-    }
-
-    fn into_response(self) -> Response {
-        (self.status(), self.message()).into_response()
-    }
-}
-
-/// Inspect the JSON-RPC request body and return Err with the offending
-/// malformed method envelope or method outside the allowlist. Handles
-/// both single requests and batch arrays. Unparseable bodies are
-/// permitted to fall through (geth itself will return a parse error).
-fn check_methods(body: &[u8]) -> Result<(), MethodCheckError> {
-    let value: serde_json::Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(_) => return Ok(()), // let geth surface the parse error to the client
-    };
-    let check_one = |req: &serde_json::Value| -> Result<(), MethodCheckError> {
-        let m = req
-            .get("method")
-            .and_then(|v| v.as_str())
-            .ok_or(MethodCheckError::MalformedMethod)?;
-        if m.is_empty() {
-            Err(MethodCheckError::MalformedMethod)
-        } else if is_allowed_method(m) {
-            Ok(())
+        if self.tokens < count {
+            false
         } else {
-            Err(MethodCheckError::Disallowed(m.to_string()))
+            self.tokens -= count;
+            true
         }
-    };
-    if let Some(arr) = value.as_array() {
-        for req in arr {
-            check_one(req)?;
-        }
-        Ok(())
-    } else {
-        check_one(&value)
     }
 }
-
-/// Same-origin JSON-RPC proxy with a read-only method allowlist.
-/// Browser share pages, the desktop wallet's RPC fallback, and any
-/// other external client all hit this. Geth itself is bound to
-/// 127.0.0.1 on the canonical relay, so this is the only externally
-/// reachable path to the chain — the allowlist is the only thing
-/// keeping `miner_setEtherbase` from being a public RPC.
-async fn proxy_chain_rpc(body: Bytes) -> Response {
-    if let Err(error) = check_methods(&body) {
-        return error.into_response();
-    }
-
-    let rpc = crate::geth::rpc_endpoint();
-    let client = reqwest::Client::new();
-
-    let upstream = match client
-        .post(&rpc)
-        .header("content-type", "application/json")
-        .body(body)
-        .timeout(std::time::Duration::from_secs(20))
-        .send()
-        .await
+struct Proxy {
+    chain: Arc<ChainClient>,
+    reads: Semaphore,
+    writes: Semaphore,
+    read_rate: Mutex<Bucket>,
+    write_rate: Mutex<Bucket>,
+}
+fn validate(request: &Value) -> Result<bool, &'static str> {
+    let object = request
+        .as_object()
+        .ok_or("JSON-RPC envelope must be an object")?;
+    if object
+        .keys()
+        .any(|k| !matches!(k.as_str(), "jsonrpc" | "id" | "method" | "params"))
+        || request["jsonrpc"] != "2.0"
     {
-        Ok(resp) => resp,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("Chain RPC unavailable: {}", e),
-            )
-                .into_response();
+        return Err("invalid JSON-RPC envelope");
+    }
+    let id = request.get("id").ok_or("notifications are not supported")?;
+    if !(id.is_i64() || id.is_u64() || id.as_str().is_some_and(|s| s.len() <= 128)) {
+        return Err("invalid JSON-RPC id");
+    }
+    let method = request["method"].as_str().ok_or("missing method")?;
+    if !allowed_method(method) {
+        return Err("RPC method is not exposed");
+    }
+    let params = request["params"]
+        .as_array()
+        .ok_or("params must be an array")?;
+    match method {
+        "eth_getBalance" | "eth_getTransactionCount" => {
+            if params.len() != 2
+                || !(params[1] == "latest"
+                    || (method == "eth_getTransactionCount" && params[1] == "pending"))
+                || params[0]
+                    .as_str()
+                    .and_then(|a| normalize_address(a).ok())
+                    .is_none()
+            {
+                return Err("requires address and a supported account block tag");
+            }
         }
-    };
-
-    let status =
-        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let bytes = match upstream.bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read RPC response: {}", e),
-            )
-                .into_response();
+        "eth_getBlockByNumber" => {
+            if params.len() != 2 || params[1] != false
+                || !params[0].as_str().is_some_and(|tag|
+                    matches!(tag, "latest" | "safe" | "finalized")
+                        || crate::rpc_client::hex_to_u64(tag).is_ok())
+            {
+                return Err("requires a canonical block height or latest/safe/finalized tag, and false");
+            }
         }
+        "eth_estimateGas" => {
+            let transaction = params.first().and_then(Value::as_object)
+                .ok_or("requires a bounded native payment estimate")?;
+            if params.len() != 1 || transaction.len() != 6
+                || transaction.keys().any(|key| !matches!(key.as_str(),
+                    "from" | "to" | "value" | "data" | "gasPrice" | "gas"))
+            {
+                return Err("estimate requires from, to, value, data, gasPrice and bounded gas only");
+            }
+            for field in ["from", "to"] {
+                if !transaction[field].as_str().is_some_and(|value| normalize_address(value).is_ok()) {
+                    return Err("invalid estimate address");
+                }
+            }
+            for field in ["value", "gasPrice", "gas"] {
+                if !transaction[field].as_str().is_some_and(|value| crate::rpc_client::hex_to_u128(value).is_ok()) {
+                    return Err("invalid estimate quantity");
+                }
+            }
+            let gas = crate::rpc_client::hex_to_u128(transaction["gas"].as_str().unwrap()).unwrap();
+            if gas < 21000 || gas > u128::from(MAX_ESTIMATE_GAS) {
+                return Err("estimate gas exceeds native payment bounds");
+            }
+            if !transaction["data"].as_str().is_some_and(|data|
+                data.starts_with("0x") && data.len() % 2 == 0
+                    && data.len() <= MAX_PAYMENT_DATA * 2 + 2
+                    && data[2..].bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err("invalid or oversized estimate data");
+            }
+        }
+        "eth_getTransactionReceipt" => {
+            if params.len() != 1
+                || params[0]
+                    .as_str()
+                    .and_then(|h| validate_hash(h).ok())
+                    .is_none()
+            {
+                return Err("requires one 32-byte transaction hash");
+            }
+        }
+        "eth_sendRawTransaction" => {
+            let raw = params
+                .first()
+                .and_then(Value::as_str)
+                .ok_or("requires a signed transaction")?;
+            if params.len() != 1
+                || raw.len() < 4
+                || raw.len() > MAX_RAW_BYTES * 2 + 2
+                || !raw.starts_with("0x")
+                || raw.len() % 2 != 0
+                || !raw[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("invalid or oversized signed transaction");
+            }
+        }
+        _ => {
+            if !params.is_empty() {
+                return Err("method requires empty params");
+            }
+        }
+    }
+    Ok(method == "eth_sendRawTransaction")
+}
+fn error(status: StatusCode, code: i64, message: &str) -> Response {
+    (
+        status,
+        Json(json!({"jsonrpc":"2.0","id":null,"error":{"code":code,"message":message}})),
+    )
+        .into_response()
+}
+// Serialize each reply directly into one capped body instead of retaining up to
+// eight parsed block results and then allocating a second aggregate JSON copy.
+struct ResponseBody {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+impl Write for ResponseBody {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit - self.bytes.len() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "RPC response limit"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+async fn proxy(State(state): State<Arc<Proxy>>, body: Bytes) -> Response {
+    if body.len() > MAX_REQUEST_BYTES {
+        return error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            -32600,
+            "RPC request exceeds size limit",
+        );
+    }
+    let value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return error(StatusCode::BAD_REQUEST, -32700, "invalid JSON"),
     };
-
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    (status, headers, bytes).into_response()
+    let batch = value.is_array();
+    let requests = if let Some(array) = value.as_array() {
+        array.as_slice()
+    } else {
+        std::slice::from_ref(&value)
+    };
+    if requests.is_empty() || requests.len() > MAX_BATCH {
+        return error(
+            StatusCode::BAD_REQUEST,
+            -32600,
+            "batch must contain 1..8 requests",
+        );
+    }
+    let mut reads = 0;
+    let mut writes = 0;
+    for request in requests {
+        match validate(request) {
+            Ok(true) => writes += 1,
+            Ok(false) => reads += 1,
+            Err(message) => return error(StatusCode::BAD_REQUEST, -32600, message),
+        }
+    }
+    // Reject the whole batch before any write when either class is saturated.
+    if !state.read_rate.lock().is_ok_and(|mut b| b.take(reads))
+        || !state.write_rate.lock().is_ok_and(|mut b| b.take(writes))
+    {
+        return error(StatusCode::TOO_MANY_REQUESTS, -32005, "RPC rate limit");
+    }
+    let _read = if reads > 0 {
+        match state.reads.try_acquire_many(reads) {
+            Ok(p) => Some(p),
+            Err(_) => {
+                return error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    -32005,
+                    "read capacity exhausted",
+                )
+            }
+        }
+    } else {
+        None
+    };
+    let _write = if writes > 0 {
+        match state.writes.try_acquire_many(writes) {
+            Ok(p) => Some(p),
+            Err(_) => {
+                return error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    -32005,
+                    "submission capacity exhausted",
+                )
+            }
+        }
+    } else {
+        None
+    };
+    // The aggregate cap is independent of batch length. Ordinary-only batches
+    // retain the small bound; even eight large block reads share one block cap.
+    let limit = if requests.iter().any(|r| r["method"] == "eth_getBlockByNumber") {
+        MAX_BLOCK_RESPONSE_BYTES
+    } else {
+        MAX_RESPONSE_BYTES
+    };
+    let mut body = ResponseBody { bytes: Vec::new(), limit };
+    if batch {
+        body.bytes.push(b'[');
+    }
+    for request in requests {
+        let result = state
+            .chain
+            .proxy_call(
+                request["method"].as_str().expect("validated method"),
+                request["params"].clone(),
+            )
+            .await;
+        let mut response = json!({"jsonrpc":"2.0","id":request["id"]});
+        match result {
+            Ok(result) => response["result"] = result,
+            Err(reason) => {
+                let (code, message) = match reason {
+                    ChainError::Rejected(_) => (-32602, "chain request rejected"),
+                    ChainError::Pending(_) => (-32001, "chain request pending"),
+                    ChainError::Unavailable(_) => (-32002, "eSpace chain RPC unavailable"),
+                };
+                response["error"] = json!({"code":code,"message":message});
+            }
+        };
+        if batch && body.bytes.len() > 1 && body.write_all(b",").is_err() {
+            return error(StatusCode::BAD_GATEWAY, -32005, "RPC batch response exceeds size limit");
+        }
+        if serde_json::to_writer(&mut body, &response).is_err() {
+            return error(StatusCode::BAD_GATEWAY,-32005,"RPC response exceeds size limit; query individually (a submitted transaction may already be admitted)");
+        }
+    }
+    if batch && body.write_all(b"]").is_err() {
+        return error(StatusCode::BAD_GATEWAY, -32005, "RPC batch response exceeds size limit");
+    }
+    ([(CONTENT_TYPE, "application/json")], body.bytes).into_response()
 }
-
-/// Routes for chain JSON-RPC proxying.
-pub fn chain_rpc_routes() -> Router {
-    Router::new().route("/api/chain/rpc", post(proxy_chain_rpc))
+pub fn router(chain: Arc<ChainClient>) -> Router {
+    let state = Arc::new(Proxy {
+        chain,
+        reads: Semaphore::new(32),
+        writes: Semaphore::new(4),
+        read_rate: Mutex::new(Bucket::new(64, 128)),
+        write_rate: Mutex::new(Bucket::new(2, 4)),
+    });
+    Router::new()
+        .route("/api/chain/rpc", post(proxy))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
+        .with_state(state)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn allows_read_only_namespaces() {
-        for m in [
-            "eth_blockNumber",
-            "eth_getBalance",
-            "eth_sendRawTransaction",
-            "net_version",
-            "web3_clientVersion",
-            "txpool_status",
-        ] {
-            assert!(is_allowed_method(m), "expected {m} allowed");
-        }
-    }
-
-    #[test]
-    fn blocks_dangerous_namespaces() {
-        for m in [
-            "miner_setEtherbase",
-            "miner_start",
-            "miner_stop",
-            "personal_unlockAccount",
-            "personal_sendTransaction",
-            "debug_traceTransaction",
-            "admin_addPeer",
+    fn no_namespace_bypass() {
+        for method in [
+            "eth_sendTransaction",
+            "eth_call",
+            "eth_getTransactionByHash",
             "admin_stopRPC",
+            "personal_sign",
+            "miner_start",
+            "eth_submitWork",
+            "eth_submitHashrate",
+            "debug_traceTransaction",
+            "eth_futureOperatorMethod",
         ] {
-            assert!(!is_allowed_method(m), "expected {m} blocked");
+            assert!(!allowed_method(method), "{method}");
+        }
+        for method in [
+            "eth_syncing",
+            "eth_getBlockByNumber",
+            "eth_estimateGas",
+            "eth_sendRawTransaction",
+            "eth_getTransactionReceipt",
+        ] {
+            assert!(allowed_method(method));
         }
     }
-
     #[test]
-    fn check_methods_rejects_dangerous_single() {
-        let body = br#"{"jsonrpc":"2.0","method":"miner_setEtherbase","params":["0x00"],"id":1}"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::Disallowed("miner_setEtherbase".to_string())
-        );
+    fn validates_supported_shapes_only() {
+        let address = format!("0x{}", "11".repeat(20));
+        assert!(validate(
+            &json!({"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":[address,"latest"]})
+        )
+        .is_ok());
+        for params in [
+            json!([address, "pending"]),
+            json!(["0x01", "latest"]),
+            json!([address, "latest", true]),
+        ] {
+            assert!(validate(
+                &json!({"jsonrpc":"2.0","id":1,"method":"eth_getBalance","params":params})
+            )
+            .is_err());
+        }
+        assert!(validate(
+            &json!({"jsonrpc":"2.0","id":1,"method":"eth_getTransactionCount","params":[address,"pending"]})
+        ).is_ok());
+        for tag in ["0x0", "0xa", "latest", "safe", "finalized"] {
+            assert!(validate(&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":[tag,false]})).is_ok());
+        }
+        for params in [json!(["latest",true]), json!(["pending",false]), json!(["0x00",false]), json!(["0x10000000000000000",false])] {
+            assert!(validate(&json!({"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":params})).is_err());
+        }
+        assert!(validate(&json!({"jsonrpc":"2.0","method":"eth_chainId","params":[]})).is_err());
+        assert!(validate(
+            &json!({"jsonrpc":"2.0","id":1,"method":"eth_submitWork","params":[]})
+        )
+        .is_err());
     }
-
     #[test]
-    fn check_methods_accepts_safe_single() {
-        let body = br#"{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}"#;
-        assert!(check_methods(body).is_ok());
+    fn native_estimation_is_independently_bounded() {
+        let mut tx = json!({"from":format!("0x{}", "11".repeat(20)), "to":format!("0x{}", "22".repeat(20)),
+            "value":"0x1", "data":"0x00", "gasPrice":"0x1", "gas":"0xf4240"});
+        let valid = |tx: &Value| validate(&json!({"jsonrpc":"2.0","id":1,"method":"eth_estimateGas","params":[tx]})).is_ok();
+        assert!(valid(&tx));
+        tx["gas"] = json!("0xf4241");
+        assert!(!valid(&tx));
+        tx["gas"] = json!("0xf4240");
+        tx["data"] = json!(format!("0x{}", "00".repeat(MAX_PAYMENT_DATA + 1)));
+        assert!(!valid(&tx));
+        tx["data"] = json!("0x");
+        tx["stateOverrides"] = json!({});
+        assert!(!valid(&tx));
     }
-
     #[test]
-    fn check_methods_rejects_missing_single_method() {
-        let body = br#"{"jsonrpc":"2.0","params":[],"id":1}"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::MalformedMethod
-        );
-    }
-
-    #[test]
-    fn check_methods_rejects_non_string_single_method() {
-        let body = br#"{"jsonrpc":"2.0","method":123,"params":[],"id":1}"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::MalformedMethod
-        );
-    }
-
-    #[test]
-    fn check_methods_rejects_empty_single_method() {
-        let body = br#"{"jsonrpc":"2.0","method":"","params":[],"id":1}"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::MalformedMethod
-        );
-    }
-
-    #[test]
-    fn check_methods_rejects_dangerous_in_batch() {
-        // A batch with one dangerous method must be rejected as a whole.
-        // Otherwise an attacker hides miner_setEtherbase in a batch with
-        // benign reads to slip past per-request inspection.
-        let body = br#"[
-            {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
-            {"jsonrpc":"2.0","method":"miner_setEtherbase","params":["0x00"],"id":2}
-        ]"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::Disallowed("miner_setEtherbase".to_string())
-        );
-    }
-
-    #[test]
-    fn check_methods_accepts_safe_batch() {
-        let body = br#"[
-            {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
-            {"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":2}
-        ]"#;
-        assert!(check_methods(body).is_ok());
-    }
-
-    #[test]
-    fn check_methods_rejects_malformed_method_in_batch() {
-        let body = br#"[
-            {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
-            {"jsonrpc":"2.0","params":[],"id":2}
-        ]"#;
-        assert_eq!(
-            check_methods(body).unwrap_err(),
-            MethodCheckError::MalformedMethod
-        );
-    }
-
-    #[test]
-    fn method_check_errors_map_to_controlled_status_codes() {
-        assert_eq!(
-            MethodCheckError::MalformedMethod.status(),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            MethodCheckError::Disallowed("miner_start".to_string()).status(),
-            StatusCode::FORBIDDEN
-        );
-    }
-
-    #[test]
-    fn check_methods_passes_unparseable_body_through() {
-        // geth itself returns a clearer parse-error than we could; don't
-        // pre-empt it with our own 403.
-        assert!(check_methods(b"{not json").is_ok());
+    fn submission_budget_is_independent() {
+        let mut reads = Bucket::new(64, 128);
+        let mut writes = Bucket::new(2, 4);
+        assert!(reads.take(128));
+        assert!(!reads.take(1));
+        assert!(writes.take(4));
+        assert!(!writes.take(1));
     }
 }

@@ -1,89 +1,107 @@
 # Chiral Network
 
-Chiral Network is a decentralized file-sharing desktop app. You can share files directly with other users, pay (or get paid) for downloads using the built-in CHI cryptocurrency, host files on the always-on CDN, and even mine CHI on your computer — all from a single app.
+Chiral Network is an **LLM-serving marketplace**: discover signed model offers, fund a small provider-specific prepaid balance with **native CFX on Conflux eSpace testnet**, and use a capability-qualified OpenAI-compatible API. The implementation includes a Rust provider gateway/CLI, libp2p discovery and reputation relay, and a Tauri 2 / Svelte 5 consumer app. Whole models run behind each provider's private engine; inference goes directly to that provider, not through the DHT.
 
-There's no central server deciding what can be shared or who can participate. Your files stay on your computer (or on the CDN if you choose), and transfers happen peer-to-peer.
+**Status: llama.cpp-only cutover implemented and privately exercised on Linux CPU/CUDA; not a public-testnet release.** Real paid chat, completions, embeddings, stock Python/Node SDKs, exact context limits, cancellation, engine failure and restart accounting were verified. Zoo-6's dedicated 8 GB RTX 4060 now runs a managed native llama.cpp provider. Windows/macOS provider paths are implemented but not hardware-qualified; the shared-memory UI was checked with an explicitly synthetic layout fixture. No smoke run certifies a speed class. Public HTTPS, supported-platform installers and the full security/failure/load matrix remain release gates. See the [execution evidence and open gates](docs/llm-serving-migration-plan.md#14-execution-evidence-and-open-release-checklist).
 
-## What You Can Do
+**Selected launch:** Conflux eSpace testnet, chain **71**, genesis **`0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804`**; chiral-coin is deferred. Funding requires successful canonical execution at the healthy **`safe` frontier**, rechecked before credit; first execution and PoS `finalized` are distinct. No mainnet launch or new mining pool is authorized. **llama.cpp is the only selected engine**, with native Windows/macOS/Linux provider support and a private managed subprocess. Prior vLLM measurements are historical, not qualification of the new runtime.
 
-- **Share files with anyone** — publish a file to the network and other users can find and download it.
-- **Download files** — search by file hash and download from peers who are sharing it, paying a small CHI fee per megabyte.
-- **Manage a personal Drive** — organize your local files and choose which ones to seed to the network.
-- **Send files directly (ChiralDrop)** — one-to-one transfers with an optional price.
-- **Host files on the CDN** — upload to an always-on server so your files remain available even when your computer is offline. You set the download price; others pay you.
-- **Run a hosting marketplace** — browse peer hosts and CDN servers, sign hosting agreements, and earn CHI by hosting other users' files.
-- **Publish a static site** — host an HTML/JS/CSS site through a relay or the CDN, claim a memorable name in the network's site directory, and let other peers find it by that name.
-- **Sell folders, not just files** — share a whole folder under a single hash; buyers see the file list and total cost, pay once, and download the bundle.
-- **Mine CHI** — use your CPU (or GPU on Linux/Windows) to mine blocks and earn 5 CHI per block.
-- **Manage your wallet** — create a new wallet or import an existing one, back it up by email, view your balance and transaction history, and send CHI to other addresses.
-- **Check your reputation** — every completed or failed transfer feeds into an Elo-style reputation score (0–100) that other users can see.
+**Capacity tiers:** `8gb`, `16gb`, `32gb`, and `higher`. The 8 GB tier requires at least 7,500 MiB per selected device. Dedicated VRAM and Apple unified memory are labeled separately; a 16 GB Mac retains at least 4 GiB headroom and is not equivalent to a 16 GB dedicated GPU. Model fit, context, concurrency and speed require independent measurements.
 
-## Getting Started
+The previous file/Drive/CDN/site-hosting/mining product and proposed storage/container marketplace are not runtime features. Legacy user data is preserved, **not automatically imported**. Neither old CHI nor historical CHR balances convert into CFX credit. Schema-3 provider ledgers refuse older schemas without conversion; preserve old ledgers and agreements.
 
-### 1. Install
+## Read before funding
 
-Download the installer for your platform from the releases page and install it like any normal desktop app. Chiral Network runs on **Windows**, **macOS**, and **Linux**.
+- Prepayments are **non-refundable**, provider-specific, and at risk if the provider disappears or meters dishonestly. Start small. Switching providers does not transfer credit.
+- The provider sees your prompts and outputs. HTTPS protects transport; signed offers/receipts prove attribution, **not execution of the claimed model**, fair metering, or confidential inference.
+- Funding incurs chain gas; 0.5% of accepted funding is charged as a provider-remitted platform fee. Remittance is journaled, not trustless.
+- Never retry an ambiguous paid generation automatically. The examples disable SDK retries and use a request key for status lookup. Funding recovery is different: resume the original durable intent, do not create another payment.
+- Qualified performance misses waive only the affected inference charge, retaining actual known token usage; funding, platform fees and chain gas are not refunded. Evidence-only renewal may keep existing balances usable on an otherwise identical qualified deployment; original agreements remain unchanged and each request binds its actual report. Neither the CPU run nor zoo-6's private GPU smoke certifies a speed class.
 
-### 2. First launch
+The [design reference and white paper](docs/chiral-book.md) defines the inference-only product, architecture, signed discovery and wire identities, payment-gated reputation, funding/accounting, exact performance guarantees, API limits and lifecycle/security boundaries. The [provider qualification guide](docs/provider-qualification.md) supplies complete provisioning inputs and measured-profile construction; the [migration plan](docs/llm-serving-migration-plan.md) retains dated evidence and public-release gates. [Known limitations](docs/bugs.md) separates defects from unexercised qualification.
 
-When you open the app for the first time:
+## Build and develop
 
-1. **Create a wallet.** You'll be given a recovery phrase — write it down and keep it somewhere safe. This is the only way to recover your wallet if you lose access. You can optionally receive an encrypted backup by email.
-2. **Connect to the network.** The app automatically connects to the Chiral peer-to-peer network. You should see peers appear on the Network page within a few seconds.
-3. **Get some CHI.** You'll need a small amount of CHI to download files (0.01 CHI per MB). You can either:
-   - Mine some yourself on the Mining page, or
-   - Receive CHI from another user who sends it to your wallet address.
+Prerequisites: Rust/Cargo, Node.js/npm, and—for native desktop builds—the [Tauri 2 platform prerequisites](https://v2.tauri.app/start/prerequisites/). Providers need an explicit compatible chain/RPC, a pinned native llama.cpp runtime and a verified GGUF artifact. Native execution does not require Python, Docker or WSL; hardware drivers and platform packaging still require qualification. No chain, faucet, or provider URL is silently selected.
 
-### 3. Share or download a file
+```bash
+npm ci
+# Native desktop; load an explicit consumer JSON profile in Settings.
+npm run tauri:dev
 
-- **To share**, go to the **Drive** page, add a file, and toggle seeding on. The file's hash is what others need to download it.
-- **To download**, go to the **Download** page, paste the file hash, and confirm the payment. The app handles the rest.
+# Headless CLI/provider/relay/RPC gateway, without GTK/WebKit dependencies:
+cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --bins
+```
 
-## A Tour of the App
+Headless debug binaries are under `src-tauri/target/debug/`. Put that directory on `PATH` for the commands below. `npm run dev` is a browser-only UI preview: it does **not** emulate wallets, payments, credentials, or inference.
 
-| Page | What it does |
-|------|---------------|
-| **Wallet** | Create or import a wallet, view your recovery phrase, set up email backup. |
-| **Network** | See connected peers, network status, and blockchain sync status. |
-| **Download** | Search for files by hash and download them, paying in CHI. |
-| **Drive** | Organize your local files and choose which ones to share on the network. |
-| **ChiralDrop** | Send a file directly to a specific peer, with an optional price. |
-| **Hosts** | Hosting marketplace: publish your site, browse CDN servers and peer hosts, manage agreements. |
-| **Mining** | Start and stop CPU or GPU mining; track the blocks you've mined. |
-| **Account** | Your wallet balance, full transaction history, and reputation panel. |
-| **Settings** | Switch between light/dark themes, toggle notifications, set your download folder. |
-| **Diagnostics** | Event log and system info — handy if something isn't working. |
+**Testing on a Mac?** Follow the [Apple Silicon compile/run guide](docs/macos-testing.md): native prerequisites, desktop build, pinned Metal runtime, protected local profiles, and a free end-to-end CLI/SDK/desktop smoke test without transferring testnet funds.
 
-## How Payments Work
+Developer checks (commands, not a claim that this documentation edit ran them):
 
-Chiral Network has its own cryptocurrency called **CHI**. It's used to pay for downloads and hosting, and it's earned by mining or by sharing popular files.
+```bash
+npm run check
+npm test
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets
+```
 
-- **Download fee**: 0.01 CHI per megabyte, paid to the file's seeder.
-- **Platform fee**: 0.5% of every transaction goes to network upkeep; the rest goes to the seller.
-- **Mining reward**: 5 CHI per block mined.
-- **Gas fees**: Zero — transactions are free apart from the 0.5% platform fee.
+Release builds require `CHIRAL_POLICY_PUBLIC_KEY` to be the operator's nonzero 32-byte hex Ed25519 **public** policy key at compile time. Keep its private half offline; do not replace it with an arbitrary throwaway key to bypass release policy checks. `npm run tauri:build` builds native packaging; packaging and cross-platform qualification remain separate release work.
 
-Payments are verified on-chain before any file data is served, so you can't be charged without actually receiving your file, and sellers can't be stiffed after serving.
+## Developer API quick start
 
-## Security
+Obtain a deliberate `consumer.json` profile for eSpace testnet chain 71 and the pinned genesis above, plus legitimate test funding; see [configuration](docs/chiral-book.md#configuration-and-state). Public chain availability does not imply a released Chiral provider/catalog. For isolated development only, use `development: true` and explicit loopback provider endpoints. The CLI accepts `--config PATH` or `CHIRAL_CONSUMER_CONFIG`.
 
-Chiral Network is **not an anonymity tool** — your wallet address, IP, and which files you publish or download are visible on the network. What the security model does cover:
+```bash
+chiral --config consumer.json wallet create
+chiral --config consumer.json network status
+chiral --config consumer.json wallet address
+chiral --config consumer.json wallet balance
+chiral --config consumer.json discover --model Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf
+```
 
-- **Your wallet lives on your device.** Nobody else has your recovery phrase. If you lose it, your CHI is gone.
-- **File listings are signed.** Every file's metadata and seeder entry is cryptographically signed, so nobody can spoof your files or substitute their own wallet to redirect your payment.
-- **Payments are verified.** Seeders check the blockchain for your payment before sending chunks.
-- **Update enforcement.** The app checks the network's published version policy on startup and walks you to the download page if your build is below the minimum required version. Vulnerable clients can't quietly stay on the network.
+Fund the displayed wallet using the configured network's funding procedure, allowing for gas. Save **one verified signed offer object**, not the entire discovery result, to `offer.json`. Obtain and inspect its signed quote; save the quote object to `quote.json`:
 
-## Running Without a Window (Headless Mode)
+```bash
+# 0.01 CFX at 10^18 wei/CFX; ensure this meets the selected offer's minimum.
+chiral --config consumer.json quote --offer offer.json --amount-wei 10000000000000000
+chiral --config consumer.json fund --offer offer.json --quote quote.json
+chiral --config consumer.json pending
+```
 
-If you want to run Chiral Network on a server, a Raspberry Pi, or inside Docker — without a graphical interface — there's a `chiral_daemon` binary that exposes the same features over a local HTTP API. This is mainly useful for always-on seeders, mining rigs, and automated setups. See `CLAUDE.md` for the full API reference.
+Use the quote ID as `CONTRACT_ID`. Pending settlement is not spendable credit: run `chiral --config consumer.json resume CONTRACT_ID` until the original payment is resolved, then inspect `account CONTRACT_ID`. Do not create a fresh quote merely because the first request timed out. A signed transaction disclosed during registration could be broadcast by the provider even if its acknowledgement never reaches you.
 
-## Troubleshooting
+Create a separate application credential; its returned metadata supplies `CREDENTIAL_ID`:
 
-- **No peers showing up?** Make sure your firewall isn't blocking outbound UDP/TCP traffic. The app connects through a relay server if your network is restrictive.
-- **Download stuck?** Check the Diagnostics page for errors. The file may not currently have any seeders online — try the CDN as a fallback.
-- **Balance not updating?** Balance is refreshed every few seconds; if it's been longer than a minute, restart the app or check your Geth sync status on the Network page.
-- **Lost your wallet?** You can import it again on the Wallet page using your recovery phrase or the email backup.
+```bash
+chiral --config consumer.json credentials CONTRACT_ID issue
+python -m pip install openai==3.41.0
+python examples/openai_client.py --config consumer.json --contract CONTRACT_ID --credential CREDENTIAL_ID
+chiral --config consumer.json usage CONTRACT_ID
+chiral --config consumer.json receipt CONTRACT_ID
+```
+
+The example invokes explicit CLI credential export into its own process; it does not print the API key. Keep exports, wallet backups, journals, and bearer files private. A [JavaScript example](examples/openai-client.mjs) is also provided. Stock Python 3.41.0 and Node 7.45.1 OpenAI SDKs exercised the native-CFX-funded llama.cpp backend; this does not qualify all models or GPU performance. Supported endpoints are `/v1/models`, `/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings` **only for a separately configured and qualified embedding model**. GGUF generation artifacts derive chat/completion capabilities from their task/template; tools and structured output need separate qualification. Completion echo preserves prompt text, but prompt-token probabilities remain unknown; see the [API limitations](docs/chiral-book.md#api-compatibility-and-model-qualification). This is not compatibility with every architecture, OpenAI API or parameter.
+
+## Windows, macOS and Linux provider operations
+
+Use the [complete provider qualification guide](docs/provider-qualification.md) and the book's [runtime/lifecycle contract](docs/chiral-book.md#native-provider-provisioning-and-operations). The guide covers `scripts/provision-model.py`, `scripts/provision-runtime.py`, `scripts/provision-provider.py` and `scripts/qualify-provider.py`, including the strict input schema and construction of a candidate from actual observations. Rust owns the private llama.cpp child; no Python inference environment or Docker is required. Linux Compose remains optional and has no separate engine service. The [private zoo-6 runbook](docs/zoo6-private-pilot.md) is deployment-specific, not a public provider default.
+
+Production generation additionally requires observed qualification evidence. `--calibration` creates an unpublished loopback-only configuration, not a speed-certified public provider, and starts no services. For native host-path configuration:
+
+```bash
+chiral_daemon --config provider.json --version-policy version-policy.json --check
+chiral_daemon --config provider.json --version-policy version-policy.json
+relay_server --config relay.json
+```
+
+Run separate services/processes for provider and relay. The daemon's `--check` validates configuration, protected credentials and managed artifact/runtime inventories, **not** live inference or release readiness. Do not pass container-path configuration to a host binary. Public ingress must route only public gateway endpoints; engine/tokenizer/metrics ports and bearer-authenticated loopback administration must never be exposed. Local operator status:
+
+```bash
+python scripts/provider-admin.py --token-file /srv/chiral/deployment/secrets/admin.token status
+```
+
+The gateway does not install/start a chain node or miner. Use separately operated native eSpace RPC; mining payouts normally arrive in Core space and need an explicit Core-to-eSpace transfer before payment. Back up ledger and shared signing-wallet journal consistently before upgrades; never roll a stale database back over live accepted payments or delete old state to bypass schema refusal.
 
 ## License
 

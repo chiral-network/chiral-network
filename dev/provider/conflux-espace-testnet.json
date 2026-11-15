@@ -1,0 +1,12 @@
+{
+  "identity": {
+    "chain_id": 71,
+    "genesis_hash": "0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804",
+    "deployment_id": "chiral-espace-testnet-beta"
+  },
+  "rpc_url": "https://evmtestnet.confluxrpc.com",
+  "rpc_bearer_file": null,
+  "faucet_url": "https://efaucet.confluxnetwork.org",
+  "explorer_url": "https://evmtestnet.confluxscan.org",
+  "policy_url": null
+}

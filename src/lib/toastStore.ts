@@ -73,7 +73,3 @@ function createToastStore() {
 
 export const toasts = createToastStore();
 
-/** @deprecated Use toasts.show() directly */
-export function showToast(message: string, type: ToastType = 'info', duration?: number) {
-  toasts.show(message, type, duration);
-}

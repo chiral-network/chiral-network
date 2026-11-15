@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-consumer-command"
+description = "Enables the consumer_command command without any pre-configured scope."
+commands.allow = ["consumer_command"]
+
+[[permission]]
+identifier = "deny-consumer-command"
+description = "Denies the consumer_command command without any pre-configured scope."
+commands.deny = ["consumer_command"]

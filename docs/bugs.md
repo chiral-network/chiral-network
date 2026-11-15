@@ -1,84 +1,117 @@
-# Known Bugs and Limitations
+# Known bugs, limitations, and qualification gaps
 
-A running list of bugs and rough edges that have been found but not yet fixed.
-Anything here is fair game to pick up. Closed items live in `git log` — keep
-this file lean by removing entries when their fix lands on `main`.
+This register applies to the **LLM-only runtime**, not the retired file-sharing application. See the [current book](chiral-book.md) for operating contracts and the [migration plan's evidence/open checklist](llm-serving-migration-plan.md#14-execution-evidence-and-open-release-checklist) for the complete first-public-release gates. A missing qualification is not proof of a defect; a passing unit test is not proof of public readiness.
 
-Format per entry:
+## Release blockers / unexercised qualification
 
-- **Short title** — one-line summary
-  - **Where:** file:line or component
-  - **Symptom:** what the user / operator sees
-  - **Why it's still here:** the constraint or trade-off blocking the fix
-  - **Workaround:** if any
+### Native CFX/performance implementation is not public-release qualification
 
----
+- **Where:** native wallet/settlement, signed model/offer/quote/receipt contracts, provider provisioning and public deployment.
+- **Implemented:** native Conflux eSpace testnet chain **71**, genesis `0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804`; safe-receipt settlement, dynamic pinned HF artifacts, GPU-bound performance evidence, admission limits, inference waivers and durable withdrawal. Chiral-coin is deferred; no mainnet or new pool is authorized.
+- **Current llama.cpp evidence:** native Linux CPU/CUDA execution with pinned v0.9.0 / b12110, Qwen Q4_K_M generation and separate Nomic Q8_0 embeddings. Stock Python 3.41.0 / Node 7.45.1 SDKs, generated-token logprobs, echo, both response modes, exact usage, cancellation, disconnect, child failure, replay rejection and same-ledger restart were exercised. Both CPU and zoo-6 passed the 4,096-token context boundary and uncharged overflow rejection. Final new-agreement reservations were zero.
+- **Historical evidence:** prior native-CFX vLLM CPU/GPU runs, native Linux desktop generation, top-up recovery and platform-fee arrival remain recorded in the plan. They are not requalification of llama.cpp or permission to convert old agreements.
+- **Qualification gap:** zoo-6's 8 GB RTX 4060 remains dedicated to private inference with its miner stopped. Its persistent service now runs managed llama.cpp, but every smoke profile remains `serving:null`. Runtime-bound sustained-arrival qualification, Windows/macOS hardware and installers, larger capacity profiles, Vulkan memory observation and public TLS deployment remain open.
+- **Safe operation:** calibration stays loopback-only and unpublished. Do not accept public clients or advertise speed guarantees from synthetic/unit evidence. Preserve historical ledgers and obligations; schema 3 refuses old ledgers without converting credit.
 
-## High priority
+### Full model, SDK, multi-provider, and failure matrix remains open
 
-### Folder bundles — child files downloadable for free with bare hash
+- **Where:** provider gateway/engine, consumers, settlement, discovery and deployment qualification.
+- **Historical slice only:** isolated chiral-coin Qwen chat/completions/SSE and BGE embeddings through stock Python/Node SDKs and native Linux; opening, fee remittance, top-up cancellation/offline recovery; paid concurrency/credential cases; free provider; crash recovery; embedded native and non-root release-container startup. These observations remain valid for that stack, not automatically the new CFX/performance protocol.
+- **Remaining constraint:** representative launch models, complete free/paid feedback, multi-provider/adversarial/reorg/fee/failure matrix, GPU containers/public HTTPS, supported-platform installers and security/distributed/load/soak tests. llama.cpp is the only supported adapter; alternate-engine comparisons are optional research, not a retained serving path.
+- **Safe operation:** advertise only capabilities actually qualified for the pinned model/engine/tokenizer profile. Dynamic HF download does not support arbitrary remote-code/tokenizer architectures. Retain all gates in the plan; provisioning or defining a CI job closes none.
 
-- **Where:** `src-tauri/src/lib.rs::publish_drive_folder`, chunked-transfer protocol in `dht.rs`
-- **Symptom:** When a seller publishes a folder bundle for X CHI, the seller's child files are individually published at `price_wei = 0`. A buyer who knows a child file's hash (separate from the folder hash) can download that single file directly without paying the folder owner.
-- **Why it's still here:** Closing the gap requires extending `ChunkRequest::PaymentProof` and `ChunkResponse::FileInfo` with folder context (`folder_hash`, folder-level `priceWei`/`walletAddress`), plus a per-folder spent-tx ledger so one folder payment unlocks every file in the manifest. Sketched in an earlier prototype but reverted to ship the V1 UX flow first.
-- **Workaround:** Don't put files in folders that you'd object to being downloaded for free outside the folder context.
+### Same signing wallet requires shared nonce journal
 
-### Policy public key is the 32-byte placeholder
+- **Where:** `src-tauri/src/chain_client.rs`, provider and consumer `data_dir` configuration.
+- **Symptom:** independent copies of a signing-wallet journal cannot coordinate nonce selection, funding, cancellation, and fee remittance for the same wallet.
+- **Constraint:** locking coordinates a single shared journal, not separate host-local databases. Provider ledger/lock isolation must not be confused with wallet-nonce isolation.
+- **Safe operation:** all spenders of the same wallet/network must share the configured journal base or use distinct signing wallets. Do not put the same private key in unrelated datadirs and assume provider deployment separation makes it safe. Back up and restore journals consistently with accepted funding/fee state.
 
-- **Where:** `src-tauri/src/version.rs::POLICY_PUBLIC_KEY`
-- **Symptom:** Every binary prints `[VERSION] WARNING: policy-signing public key is the placeholder zeros` at startup. Signed `VersionPolicy` updates can't verify, so only the unsigned-but-permissive transition path is active — a remote policy can relax constraints (set `recommended` higher, add a download URL) but can never raise `min_required` past the bundled floor.
-- **Why it's still here:** Generating the keypair, persisting the private half securely (CI secret / offline laptop), and rolling the public half into all three binaries (desktop, daemon, relay) is an operational task, not a code fix.
-- **Workaround:** Operators can override the public key via the `CHIRAL_POLICY_PUBLIC_KEY` env var without recompiling, once a real keypair is generated with `chiral-policy-sign keygen`.
+## Deliberate limitations, not silent fallbacks
 
----
+- **Non-refundable provider credit:** no escrow, withdrawal, automatic balance transfer, or recourse protocol. A dishonest/offline provider can strand funds. Keep deposits small; providers receive signed funding bytes and could broadcast them before an acknowledgement reaches the consumer.
+- **Unknown usage:** missing/invalid/lost authoritative usage releases the unsettled reservation at provider expense with an explicit unknown-usage status. Zero charge is not proof that no tokens were generated. Reservation-sized provider loss exposure is not a measured GPU-work bill.
+- **Performance remedy:** a qualified miss waives only inference cost, preserving known authoritative usage and idempotent settlement. Funding/platform fees and gas are not refunded. Per-token engine IDs establish the clock; SSE event counts and synthetic tests do not qualify a speed class.
+- **Recovery/cancellation:** chain broadcast ambiguity is not failure. Resume the original intent; explicit same-nonce cancellation spends gas and may lose the race. There is no automatic fee bump or transparent paid-generation retry.
+- **Model/metadata trust:** signatures attribute offers/receipts but do not attest the claimed model ran or that metering was honest. The provider sees prompts. Testnet feedback is experimental and not strong economic Sybil resistance.
+- **Wallet history and migration:** history comes from durable local submissions/receipts, not a complete chain indexer. Legacy files/chain data/history remain on disk but are not automatically imported; no CHI/CHR-to-CFX conversion or reputation carryover exists. Schema-3 refusal must not be bypassed by deleting old state.
+- **Browser preview:** Vite preview has no native wallet/payment/inference simulation. Native flows require Tauri or the CLI/SDK.
+- **Completion echo/logprobs:** the prompt is preserved exactly, but llama.cpp does not supply input-token probabilities. Prompt-only streamed chunks use `logprobs:null`; non-streaming probability arrays cover generated tokens only. No invented prompt probabilities or silent removal of echo.
+- **Token timing:** authoritative final usage can include hidden end-of-generation tokens absent from per-token instrumentation. Billing remains exact, but an incomplete token clock cannot certify decode speed.
+- **Embedding dimensions:** native 768-dimensional Nomic output was exercised; arbitrary requested reduction is not silently emulated. Wrong response dimensions fail validation.
+- **Native packaging/lifecycle:** the Linux CUDA server archive requires separate compatible CUDA runtime/cuBLAS libraries. The private package binds their verified bytes and licenses. Windows uses kill-on-close jobs; Linux uses parent-death/process-group termination. Abrupt macOS parent `SIGKILL` may orphan the engine; normal shutdown stops it and occupied ports prevent accidental reuse.
 
-## Medium priority
+## Fixed regressions and hardening with follow-up evidence
 
-### Drive share relay proxy needs sharer reachable on port 9419
+The evidence below is from the **historical isolated chiral-coin prototype** unless explicitly labeled otherwise. It records real fixes/results, not requalification of the native CFX/performance cutover.
 
-- **Where:** `src-tauri/src/relay_share_proxy.rs`
-- **Symptom:** A user behind NAT can publish a drive share (the relay accepts the registration), but the relay's reverse-proxy fetch to the sharer's local server at `<sharer_ip>:9419` fails — visitors hitting `https://relay/drive/:token/...` get a 502 or timeout.
-- **Why it's still here:** Real fix needs hole-punching or a libp2p stream relay for the HTTP traffic. Architecturally bigger than a quick patch.
-- **Workaround:** Sharers either expose port 9419 (UPnP / port forwarding) or upload to the always-on CDN instead.
+### Evidence-only qualification renewal preserves existing prepaid accounts
 
-### Reputation verdict signature can't be verified from `issuer_id` alone
+- **Current native-CFX design/fix:** user approved strictly newer evidence for an otherwise identical serving deployment. Original agreements, prices, fees and balances remain unchanged.
+- **Reproduced failure:** the regression rejected renewed execution with `performance outcome differs from immutable agreement`.
+- **Change:** qualification gates select compatible current evidence; new reservations bind that evidence durably and check its withdrawal latch transactionally. Settlement rejects a substituted report, and crash recovery retains the admitted identity. Existing accepted funding remains recoverable; new admission checks the current report. No ledger reset or credit transfer is involved.
+- **Verification:** the full native-CFX headless run passed 186 tests with 1 ignored. Regression coverage includes current-report admission, immutable original terms, substituted-report rejection, durable withdrawal and crash recovery. Hardware qualification and public deployment remain open; synthetic accounting fixtures are not performance certificates.
 
-- **Where:** `src-tauri/src/reputation.rs`, `DhtService.ed25519_secret_key`
-- **Symptom:** Reputation verdicts are Ed25519-signed by the issuer (`DhtService.ed25519_secret_key` — separate from the libp2p identity key), and the verdict carries `issuer_id` (a libp2p PeerId string). Verifiers don't have a way to map `issuer_id` → public key, so signature verification is effectively skipped on retrieval.
-- **Why it's still here:** Needs an exchange step where each peer publishes its Ed25519 verifying key under a well-known DHT key, signed by something the verifier already trusts (the libp2p identity key, or the wallet's secp256k1 key). Non-trivial.
-- **Workaround:** Reputation panel currently displays raw verdicts without signature verification; consumers should treat scores as advisory.
+### Pending top-up displayed the opening transaction hash
 
-### CDN file metadata blob lookup is timing-sensitive across daemon restarts
+- **Where:** `src-tauri/src/consumer.rs::pending_accounts`.
+- **Observed current native-CFX failure:** an actual pending 0.01 CFX top-up displayed the account's original opening hash, misleading wallet recovery/status tracking.
+- **Change:** derive the displayed top-up hash from its durably saved signed bytes; return no transaction hash before those bytes exist. Opening intents retain their own hash. No journal migration or replacement payment is introduced.
+- **Verification:** the extended dropped-broadcast recovery regression failed before the fix; all 25 consumer tests passed afterward. Rebuilt CLI displayed the real top-up hash, resumed the original payment once, preserved the application credential and left no pending operation after repeated resume. Evidence: `topup-pending-corrected.json` and `topup-recovery-evidence.json` in the current native-CFX qualification directory.
 
-- **Where:** `src-tauri/src/cdn_server.rs::register_in_dht` and the matching paths in `lib.rs` / `chiral_daemon.rs`
-- **Symptom:** The recent always-republish fix (`168f7539`) closed the obvious case (`blob_present` short-circuit + first-hit Kademlia made the publisher skip its own put), but there's still a window during DHT bootstrap where a put can fail silently if the swarm hasn't connected to the bootstrap peer yet. The CDN's startup re-seed runs on a 15s timer, which usually beats this, but on cold starts with very slow DNS / TCP handshake the put can fire before any remote peer is in the routing table.
-- **Why it's still here:** Bigger fix is to gate the re-seed on a confirmed Kademlia bootstrap event rather than a fixed delay.
-- **Workaround:** A second restart almost always succeeds. The auto-reseed background task (every 30s after startup) catches it on the next tick.
 
----
+### Repeated funding recovery invalidated an exported API credential
 
-## Low priority / cosmetic
+- **Where:** `src-tauri/src/consumer.rs`, saved-account `fund`/`resume` behavior.
+- **Observed failure:** replayed opening did not duplicate funding, but an unnecessary open rotated the account credential and the previously exported key received HTTP 401.
+- **Change:** refresh the already saved open account without issuing another open. Credential rotation remains an explicit user action.
+- **Evidence:** 20 targeted consumer tests passed after the fix. Rebuilt CLI actual `resume` and repeated `fund` returned active, funded total stayed `10000000000000000` wei, the exported credential was unchanged and accepted (HTTP 200). Local report: `/var/tmp/chiral-inference-qualification-20261028/credential-recovery-report.json`. This is a resolved regression, not a claim that every credential/funding scenario passed.
 
-### Diagnostics page event log limited to 500 entries
+### Settled top-up recovery incorrectly required a ready engine
 
-- **Where:** `src/pages/Diagnostics.svelte::maxLogEntries`
-- **Symptom:** During heavy network activity (lots of peer-discovered events), older entries scroll off and can't be recovered without re-triggering the activity. Export captures the current 500 max.
-- **Why it's still here:** Bounded to keep the Svelte reactive update cost low; an unbounded buffer would chew GC.
-- **Workaround:** Operators investigating a long-running issue should `Export` periodically or use the `Copy snapshot` button which captures recent state at a point in time.
+- **Where:** `src-tauri/src/contracts.rs`, existing-agreement top-up settlement.
+- **Observed failure:** a previously sent top-up returned 503 after its model was withdrawn, although its immutable account and payment remained valid.
+- **Change:** keep readiness gating for new admission, but reconcile an existing agreement's original top-up independently of model readiness.
+- **Evidence:** signed-transaction router regression covers pending/accepted/replay and continued rejection of new admission. The rebuilt daemon, still reporting readiness 503, credited the actual original payment once; repeated resume retained funded `20000000000000000` wei, zero reservation, no pending operation and the rotated default credential. Report: `offline-topup-recovery-report.json` in the local qualification directory.
 
----
+### Policy rollback protection was lost between processes
 
-## Test gaps (not bugs in product code, but flagged so contributors know)
+- **Where:** `src-tauri/src/version.rs`, authenticated policy cache.
+- **Observed failure:** one process accepted newer restrictive policy B, while a fresh process could accept older policy A.
+- **Change:** persist the authenticated authority/network-scoped rollback watermark in protected storage; reject rollback, corruption and insecure permissions.
+- **Evidence:** two rebuilt CLI processes accepted B then rejected A, retaining B on disk. Production permission checks remain enabled; test directories were corrected to satisfy them.
 
----
+### Scoped file locks could outlive their owning guard
 
-## How to add a new entry
+- **Where:** `src-tauri/src/file_lock.rs` and provider, consumer, wallet-journal and policy-cache guards.
+- **Observed behavior:** closing the owning descriptor does not release an OS lock while a duplicated or inherited descriptor remains open.
+- **Change/evidence:** explicitly unlock on guard drop. A real OS regression retains a duplicate, verifies exclusivity, then verifies a new owner can acquire after the original guard drops; closing the old duplicate does not release the new owner's lock. The full Rust run passed.
 
-1. Reproduce the bug; confirm it's not already fixed on `main`.
-2. Find the file:line where the buggy code lives.
-3. Add an entry under the right priority band:
-   - **High** = silent data loss, payment redirection, security gap, breaks core flows.
-   - **Medium** = noticeable UX problem, edge case that affects real users.
-   - **Low** = cosmetic, perf-with-workaround, or docs / tooling rough edges.
-4. Use the same `Where / Symptom / Why it's still here / Workaround` template so triage is uniform.
-5. When the fix lands, **delete the entry in the same PR** so this file doesn't drift.
+### Credential recovery and inference admission boundaries
+
+- **Where:** consumer default-credential selection and `inference_gateway.rs`.
+- **Change:** explicit issue can repair a missing usable default without rotating a valid one. Authenticate and acquire bounded body admission before buffering; enforce a five-second read deadline.
+- **Evidence:** real explicit recovery, cap concurrency, revoke, expiry and rotation passed. An unauthorized incomplete body received 401 in about 2 ms; an authorized incomplete body with a live engine received 408 after about 5 seconds. Reports: `credential-boundary-report.json` and `security-recovery-report.json`. These checks do not establish public DoS resistance.
+
+### Malformed embedding payloads needed semantic validation
+
+- **Where:** `src-tauri/src/inference_backend.rs`.
+- **Change/evidence:** decode and validate base64 f32 vectors, finite components, dimensions, encoding and batch consistency before accepting usage/results. A malformed-response regression failed before the fix and passed afterward. Actual BGE float/base64 batches passed with both stock SDKs; invalid inputs and duplicate request keys did not produce extra charges.
+
+### Provisioning accepted noncanonical network identities
+
+- **Where:** `scripts/provision-provider.py`.
+- **Observed failure:** dotted deployment IDs and uppercase genesis hashes passed provisioning validation although the runtime rejects them.
+- **Change/evidence:** align with `NetworkConfig`'s lowercase hash and ASCII letter/digit/hyphen/underscore deployment contract. Actual negative fixture processes now reject at identity validation before reading private-key files. This is not proof of a complete public provisioning run.
+
+### Standalone RPC image omitted its required journal argument
+
+- **Where:** `Dockerfile`, `chain-rpc` stage default command; Compose already supplied the argument.
+- **Observed failure:** the built image's default startup exited with Clap's missing `--journal-dir` error before loading configuration.
+- **Change/evidence:** include the private journal and inbound bearer file in the image default. Rebuilt runtime requires its protected token; with valid mounted configuration/token/state and an intentionally unavailable chain, it reaches chain validation and fails closed. Relay, RPC and CLI image help commands also executed. This does not qualify public RPC ingress.
+
+## Retired historical entries
+
+Folder-child free downloads, Drive-share reachability, CDN reseed timing, legacy issuer-key verdict verification, and the old Diagnostics log cap referred to removed runtime components. They are not current product workarounds or reasons to restore those features. Release builds require a nonzero compile-time public policy key and signed policies for non-development providers/relays. The current runtime separately permits a valid nonzero `CHIRAL_POLICY_PUBLIC_KEY` environment override, cached on first use; it changes the effective authority/cache scope, not the build-time requirement. Protect the service environment and follow the book's [version-policy contract](chiral-book.md#version-policy-and-upgrades). Debug development configuration or an arbitrary replacement authority is not release qualification.
+
+When adding an issue, record the affected current component, observed symptom, evidence, constraint and safe workaround. Separate a reproducible defect from an unexercised gate. Remove or explicitly resolve fixed items rather than leaving stale operator instructions.

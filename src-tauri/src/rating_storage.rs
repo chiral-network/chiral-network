@@ -1,850 +1,288 @@
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+//! Durable one-vote-per-agreement storage, scoped to the complete network identity.
+use crate::{
+    protocol::NetworkIdentity,
+    reputation::{FeedbackSubmission, ReputationEvent},
+};
+use parking_lot::Mutex;
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use std::path::Path;
 
-use crate::dht::DhtService;
-use crate::reputation::{self, ReputationIssuerKeyRecord};
-
-pub const BASE_ELO: f64 = 50.0;
-pub const MIN_ELO: f64 = 0.0;
-pub const MAX_ELO: f64 = 100.0;
-pub const LOOKBACK_DAYS: u64 = 180;
-pub const LOOKBACK_SECS: u64 = LOOKBACK_DAYS * 24 * 60 * 60;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum TransferOutcome {
-    Completed,
-    Failed,
+pub struct RatingStore {
+    db: Mutex<Connection>,
+    network: NetworkIdentity,
 }
-
-/// Single transfer-backed reputation event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReputationEvent {
-    pub id: String,
-    pub transfer_id: String,
-    pub seeder_wallet: String,
-    pub downloader_wallet: String,
-    pub file_hash: String,
-    /// Amount paid to seeder in wei.
-    pub amount_wei: String,
-    pub outcome: TransferOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tx_hash: Option<String>,
-    /// Deprecated: rating fields are no longer used in Elo calculation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rating_score: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rating_comment: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer_wallet: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verdict_signature: Option<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RatingManifest {
-    pub events: Vec<ReputationEvent>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReputationSnapshot {
-    pub elo: f64,
-    pub base_elo: f64,
-    pub completed_count: usize,
-    pub failed_count: usize,
-    pub transaction_count: usize,
-    pub total_earned_wei: String,
-}
-
-#[derive(Clone)]
-pub struct RatingState {
-    pub manifest: Arc<RwLock<RatingManifest>>,
-    data_dir: PathBuf,
-    issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
-}
-
-impl RatingState {
-    pub fn new(data_dir: PathBuf) -> Self {
-        Self::new_with_issuer_dht(data_dir, None)
-    }
-
-    pub fn new_with_issuer_dht(
-        data_dir: PathBuf,
-        issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
-    ) -> Self {
-        let manifest = load_manifest(&data_dir);
-        Self {
-            manifest: Arc::new(RwLock::new(manifest)),
-            data_dir,
-            issuer_dht,
+impl RatingStore {
+    pub fn open(path: &Path, network: &NetworkIdentity) -> Result<Self, String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        let mut db = Connection::open(path).map_err(|e| e.to_string())?;
+        db.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| e.to_string())?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS rating_network (id INTEGER PRIMARY KEY CHECK(id=1),identity TEXT NOT NULL); CREATE TABLE IF NOT EXISTS feedback (quote_id TEXT PRIMARY KEY, tx_hash TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, payer TEXT NOT NULL, revision TEXT NOT NULL, issued_at INTEGER NOT NULL, created_at INTEGER NOT NULL, amount TEXT NOT NULL, eligible INTEGER NOT NULL, evidence TEXT NOT NULL); CREATE INDEX IF NOT EXISTS feedback_provider ON feedback(provider);").map_err(|e| e.to_string())?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let identity = serde_json::to_string(network).map_err(|e| e.to_string())?;
+        let existing: Option<String> = tx
+            .query_row("SELECT identity FROM rating_network WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match existing {
+            Some(existing) if existing != identity => {
+                return Err("feedback database belongs to a different network".into())
+            }
+            None => {
+                tx.execute("INSERT INTO rating_network VALUES(1,?1)", [identity])
+                    .map_err(|e| e.to_string())?;
+            }
+            _ => {}
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Self {
+            db: Mutex::new(db),
+            network: network.clone(),
+        })
     }
-
-    pub async fn persist(&self) {
-        let m = self.manifest.read().await;
-        save_manifest(&self.data_dir, &m);
-    }
-
-    pub fn issuer_key_store_configured(&self) -> bool {
-        self.issuer_dht.is_some()
-    }
-
-    async fn issuer_dht_service(&self) -> Result<Arc<DhtService>, String> {
-        let Some(dht_ref) = &self.issuer_dht else {
-            return Err("DHT issuer key store is not configured".to_string());
-        };
-        dht_ref
-            .lock()
-            .await
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| "DHT is not running".to_string())
-    }
-
-    pub async fn publish_issuer_key(
+    /// Caller passes only the amount derived from canonical chain evidence.
+    pub fn upsert(
         &self,
-        record: ReputationIssuerKeyRecord,
+        submission: &FeedbackSubmission,
+        amount: &str,
+        now: u64,
     ) -> Result<(), String> {
-        let dht = self.issuer_dht_service().await?;
-        reputation::publish_issuer_key(&dht, record).await
-    }
-
-    pub async fn fetch_issuer_key(
-        &self,
-        issuer_wallet: &str,
-    ) -> Result<Option<ReputationIssuerKeyRecord>, String> {
-        let dht = self.issuer_dht_service().await?;
-        reputation::fetch_issuer_key(&dht, issuer_wallet).await
-    }
-}
-
-fn ratings_dir(data_dir: &PathBuf) -> PathBuf {
-    // v2 path intentionally ignores legacy star-rating history.
-    data_dir.join("chiral-reputation-v2")
-}
-
-fn manifest_path(data_dir: &PathBuf) -> PathBuf {
-    ratings_dir(data_dir).join("reputation.json")
-}
-
-fn load_manifest(data_dir: &PathBuf) -> RatingManifest {
-    let path = manifest_path(data_dir);
-    load_manifest_from_path(&path)
-}
-
-fn load_manifest_from_path(path: &Path) -> RatingManifest {
-    let data = match std::fs::read(path) {
-        Ok(data) => data,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RatingManifest::default(),
-        Err(e) => {
-            eprintln!(
-                "[Reputation] Failed to read reputation manifest {}: {}; starting with an empty manifest",
-                path.display(),
-                e
-            );
-            return RatingManifest::default();
+        crate::reputation::validate_submission(submission, &self.network, now)?;
+        if crate::offer_registry::validate_money(amount)? == 0 {
+            return Err("zero payment cannot vote".into());
         }
-    };
-
-    match serde_json::from_slice(&data) {
-        Ok(manifest) => manifest,
-        Err(e) => {
-            match quarantine_malformed_manifest(path) {
-                Ok(quarantine) => eprintln!(
-                    "[Reputation] Malformed reputation manifest {} quarantined at {}: {}",
-                    path.display(),
-                    quarantine.display(),
-                    e
-                ),
-                Err(quarantine_err) => eprintln!(
-                    "[Reputation] Malformed reputation manifest {} could not be quarantined: {}; starting with an empty manifest",
-                    path.display(),
-                    quarantine_err
-                ),
-            }
-            RatingManifest::default()
-        }
-    }
-}
-
-fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
-    let quarantine = malformed_manifest_quarantine_path(path);
-    std::fs::rename(path, &quarantine).map_err(|e| {
-        format!(
-            "rename {} to {}: {}",
-            path.display(),
-            quarantine.display(),
-            e
-        )
-    })?;
-    Ok(quarantine)
-}
-
-fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("reputation.json");
-    for attempt in 0..1000 {
-        let suffix = if attempt == 0 {
-            format!("malformed-{timestamp}")
-        } else {
-            format!("malformed-{timestamp}-{attempt}")
-        };
-        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
-}
-
-fn save_manifest(data_dir: &PathBuf, manifest: &RatingManifest) {
-    let path = manifest_path(data_dir);
-    if let Err(e) = save_manifest_to_path(manifest, &path) {
-        eprintln!(
-            "[Reputation] Failed to save reputation manifest {}: {}",
-            path.display(),
-            e
-        );
-    }
-}
-
-fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) -> Result<(), String> {
-    match std::fs::read(path) {
-        Ok(data) => {
-            if serde_json::from_slice::<RatingManifest>(&data).is_err() {
-                return Err(format!(
-                    "refusing to overwrite malformed reputation manifest at {}; fix or remove it manually",
-                    path.display()
-                ));
-            }
-        }
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) => {}
-        Err(_) if path.is_dir() => {}
-        Err(e) => {
-            return Err(format!(
-                "refusing to overwrite unreadable reputation manifest at {}: {}; fix or remove it manually",
-                path.display(),
-                e
-            ));
-        }
-    }
-    let json = serde_json::to_string_pretty(manifest)
-        .map_err(|e| format!("serialize reputation manifest: {}", e))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "create reputation manifest directory {}: {}",
-                parent.display(),
-                e
+        let f = &submission.feedback.payload;
+        let mut db = self.db.lock();
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let previous: Option<(String, String, u64, String, String)> = tx
+            .query_row(
+                "SELECT tx_hash,revision,issued_at,evidence,amount FROM feedback WHERE quote_id=?1",
+                [&f.quote_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
-        })?;
-    }
-    std::fs::write(path, json)
-        .map_err(|e| format!("write reputation manifest {}: {}", path.display(), e))
-}
-
-pub fn now_secs() -> Result<u64, String> {
-    now_secs_at(std::time::SystemTime::now())
-}
-
-pub fn now_secs_at(time: std::time::SystemTime) -> Result<u64, String> {
-    time.duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .map_err(|e| format!("system clock is before UNIX_EPOCH: {}", e))
-}
-
-pub fn generate_event_id(
-    transfer_id: &str,
-    seeder_wallet: &str,
-    downloader_wallet: &str,
-    file_hash: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(transfer_id.as_bytes());
-    hasher.update(b"|");
-    hasher.update(seeder_wallet.to_lowercase().as_bytes());
-    hasher.update(b"|");
-    hasher.update(downloader_wallet.to_lowercase().as_bytes());
-    hasher.update(b"|");
-    hasher.update(file_hash.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-fn wei_to_chi_f64(wei: &str) -> f64 {
-    match wei.parse::<u128>() {
-        Ok(v) => v as f64 / 1e18,
-        Err(_) => 0.0,
-    }
-}
-
-fn clamp_elo(v: f64) -> f64 {
-    v.max(MIN_ELO).min(MAX_ELO)
-}
-
-/// Compute wallet Elo from transfer outcomes in the last 180 days.
-/// Uses simple bounded Elo updates with time and amount weighting plus rating signal.
-pub fn compute_reputation_for_wallet(
-    events: &[ReputationEvent],
-    seeder_wallet: &str,
-    now: u64,
-) -> ReputationSnapshot {
-    let mut scoped: Vec<&ReputationEvent> = events
-        .iter()
-        .filter(|e| e.seeder_wallet.eq_ignore_ascii_case(seeder_wallet))
-        .filter(|e| now.saturating_sub(e.created_at) <= LOOKBACK_SECS)
-        .collect();
-    scoped.sort_by_key(|e| e.created_at);
-
-    let mut elo = BASE_ELO;
-    let mut completed = 0usize;
-    let mut failed = 0usize;
-    let mut total_earned_wei: u128 = 0;
-
-    for event in &scoped {
-        let age_days = now.saturating_sub(event.created_at) as f64 / 86_400.0;
-        let w_time = (1.0 - age_days / LOOKBACK_DAYS as f64).max(0.0);
-
-        let amount_chi = wei_to_chi_f64(&event.amount_wei);
-        let w_amount = 1.0 + (amount_chi.ln_1p() / 51f64.ln()).clamp(0.0, 1.0);
-
-        let outcome = match event.outcome {
-            TransferOutcome::Completed => {
-                completed += 1;
-                if let Ok(v) = event.amount_wei.parse::<u128>() {
-                    total_earned_wei = total_earned_wei.saturating_add(v);
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let evidence = serde_json::to_string(submission).map_err(|e| e.to_string())?;
+        if let Some((hash, revision, issued_at, old_evidence, old_amount)) = previous {
+            if hash != f.tx_hash || old_amount != amount {
+                return Err("agreement cannot change its funding evidence".into());
+            }
+            let revision = revision
+                .parse::<u64>()
+                .map_err(|_| "corrupt feedback revision")?;
+            if revision == f.revision && old_evidence == evidence {
+                tx.execute(
+                    "UPDATE feedback SET eligible=1 WHERE quote_id=?1",
+                    [&f.quote_id],
+                )
+                .map_err(|e| e.to_string())?;
+            } else {
+                if f.revision <= revision || f.issued_at <= issued_at {
+                    return Err("feedback update is stale or equivocal".into());
                 }
-                1.0
+                tx.execute("UPDATE feedback SET revision=?1,issued_at=?2,evidence=?3,eligible=1 WHERE quote_id=?4",params![f.revision.to_string(),f.issued_at,evidence,f.quote_id]).map_err(|e|e.to_string())?;
             }
-            TransferOutcome::Failed => {
-                failed += 1;
-                0.0
+        } else {
+            let count: u64 = tx
+                .query_row("SELECT COUNT(*) FROM feedback", [], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            let provider_count: u64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM feedback WHERE provider=?1",
+                    [&f.provider_wallet],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if count >= 100_000 || provider_count >= 1000 {
+                return Err("feedback registry capacity reached".into());
             }
-        };
-
-        let actual = outcome;
-        let expected = 1.0 / (1.0 + 10f64.powf((BASE_ELO - elo) / 12.0));
-        let k = 4.0 * w_time * w_amount;
-        elo = clamp_elo(elo + k * (actual - expected));
+            tx.execute("INSERT INTO feedback(quote_id,tx_hash,provider,payer,revision,issued_at,created_at,amount,eligible,evidence) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9)",params![f.quote_id,f.tx_hash,f.provider_wallet,f.consumer_wallet,f.revision.to_string(),f.issued_at,now,amount,evidence]).map_err(|e|format!("payment already voted or storage failure: {e}"))?;
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
-
-    ReputationSnapshot {
-        elo: (elo * 10.0).round() / 10.0,
-        base_elo: BASE_ELO,
-        completed_count: completed,
-        failed_count: failed,
-        transaction_count: scoped.len(),
-        total_earned_wei: total_earned_wei.to_string(),
+    pub fn events(&self, wallet: &str) -> Result<Vec<ReputationEvent>, String> {
+        let db = self.db.lock();
+        let mut statement=db.prepare("SELECT evidence,amount,created_at,eligible FROM feedback WHERE provider=?1 ORDER BY created_at,quote_id LIMIT 1000").map_err(|e|e.to_string())?;
+        let rows = statement
+            .query_map([wallet], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, u64>(2)?,
+                    r.get::<_, bool>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|row| {
+            let (evidence, amount_wei, created_at, eligible) = row.map_err(|e| e.to_string())?;
+            Ok(ReputationEvent {
+                submission: serde_json::from_str(&evidence).map_err(|e| e.to_string())?,
+                amount_wei,
+                created_at,
+                eligible,
+            })
+        })
+        .collect()
+    }
+    pub fn set_eligible(&self, quote_id: &str, eligible: bool) -> Result<(), String> {
+        self.db
+            .lock()
+            .execute(
+                "UPDATE feedback SET eligible=?1 WHERE quote_id=?2",
+                params![eligible, quote_id],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    pub fn providers(&self, after: &str) -> Result<Vec<String>, String> {
+        let db = self.db.lock();
+        let mut s=db.prepare("SELECT DISTINCT provider FROM feedback WHERE provider>?1 ORDER BY provider LIMIT 32").map_err(|e|e.to_string())?;
+        let rows = s
+            .query_map([after], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| r.map_err(|e| e.to_string())).collect()
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-
-    fn mk_event(
-        transfer_id: &str,
-        seeder_wallet: &str,
-        downloader_wallet: &str,
-        outcome: TransferOutcome,
-        amount_wei: &str,
-        rating_score: Option<u8>,
-        created_at: u64,
-    ) -> ReputationEvent {
-        ReputationEvent {
-            id: generate_event_id(transfer_id, seeder_wallet, downloader_wallet, "hash"),
-            transfer_id: transfer_id.to_string(),
-            seeder_wallet: seeder_wallet.to_string(),
-            downloader_wallet: downloader_wallet.to_string(),
-            file_hash: "hash".to_string(),
-            amount_wei: amount_wei.to_string(),
-            outcome,
-            tx_hash: None,
-            rating_score,
-            rating_comment: None,
-            issuer_wallet: None,
-            verdict_signature: None,
-            created_at,
-            updated_at: created_at,
-        }
-    }
-
-    fn test_manifest_path(root: &std::path::Path) -> std::path::PathBuf {
-        root.join("chiral-reputation-v2").join("reputation.json")
-    }
-
-    fn manifest_with_event() -> RatingManifest {
-        RatingManifest {
-            events: vec![mk_event(
-                "t-valid",
-                "0xA",
-                "0xB",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(5),
-                1_700_000_000,
-            )],
-        }
-    }
-
-    #[test]
-    fn load_manifest_missing_file_starts_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-
-        let manifest = load_manifest_from_path(&path);
-
-        assert!(manifest.events.is_empty());
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn load_manifest_reads_valid_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        let manifest = manifest_with_event();
-
-        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
-        let loaded = load_manifest_from_path(&path);
-
-        assert_eq!(loaded.events.len(), 1);
-        assert_eq!(loaded.events[0].transfer_id, "t-valid");
-        assert_eq!(loaded.events[0].seeder_wallet, "0xA");
-    }
-
-    #[test]
-    fn load_manifest_quarantines_malformed_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let malformed = "{not valid json";
-        std::fs::write(&path, malformed).unwrap();
-
-        let loaded = load_manifest_from_path(&path);
-
-        assert!(loaded.events.is_empty());
-        assert!(!path.exists());
-        let quarantines: Vec<_> = std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("reputation.json.malformed-")
-            })
-            .collect();
-        assert_eq!(quarantines.len(), 1);
-        assert_eq!(
-            std::fs::read_to_string(quarantines[0].path()).unwrap(),
-            malformed
-        );
-    }
-
-    #[test]
-    fn load_manifest_quarantines_invalid_utf8_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let corrupted = vec![0xff, 0xfe, 0xfd];
-        std::fs::write(&path, &corrupted).unwrap();
-
-        let loaded = load_manifest_from_path(&path);
-
-        assert!(loaded.events.is_empty());
-        assert!(!path.exists());
-        let quarantines: Vec<_> = std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("reputation.json.malformed-")
-            })
-            .collect();
-        assert_eq!(quarantines.len(), 1);
-        assert_eq!(std::fs::read(quarantines[0].path()).unwrap(), corrupted);
-    }
-
-    #[test]
-    fn save_manifest_refuses_to_overwrite_malformed_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let malformed = "{still not valid json";
-        std::fs::write(&path, malformed).unwrap();
-        let manifest = manifest_with_event();
-
-        let err = save_manifest_to_path(&manifest, &path)
-            .expect_err("malformed manifest should not be overwritten");
-
-        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
-    }
-
-    #[test]
-    fn save_manifest_refuses_to_overwrite_invalid_utf8_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let corrupted = vec![0xff, 0xfe, 0xfd];
-        std::fs::write(&path, &corrupted).unwrap();
-        let manifest = manifest_with_event();
-
-        let err = save_manifest_to_path(&manifest, &path)
-            .expect_err("invalid UTF-8 manifest should not be overwritten");
-
-        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
-        assert_eq!(std::fs::read(&path).unwrap(), corrupted);
-    }
-
-    #[test]
-    fn save_manifest_to_path_persists_valid_manifest() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(&dir.path().join("nested"));
-        let manifest = manifest_with_event();
-
-        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
-
-        let loaded = load_manifest_from_path(&path);
-        assert_eq!(loaded.events.len(), 1);
-        assert_eq!(loaded.events[0].transfer_id, "t-valid");
-    }
-
-    #[test]
-    fn save_manifest_to_path_surfaces_directory_creation_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent = dir.path().join("not-a-directory");
-        std::fs::write(&parent, "blocking file").unwrap();
-        let path = parent.join("reputation.json");
-        let manifest = manifest_with_event();
-
-        let err = save_manifest_to_path(&manifest, &path)
-            .expect_err("directory creation failure should surface");
-
-        assert!(err.contains("create reputation manifest directory"));
-    }
-
-    #[test]
-    fn save_manifest_to_path_surfaces_write_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = test_manifest_path(dir.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::create_dir(&path).unwrap();
-        let manifest = manifest_with_event();
-
-        let err =
-            save_manifest_to_path(&manifest, &path).expect_err("write failure should surface");
-
-        assert!(err.contains("write reputation manifest"));
-    }
-
-    #[test]
-    fn now_secs_at_accepts_post_epoch_clock() {
-        let now =
-            now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
-                .expect("post-epoch clock should be valid");
-
-        assert_eq!(now, 1_700_000_000);
-    }
-
-    #[test]
-    fn now_secs_at_rejects_pre_epoch_clock() {
-        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
-            .expect_err("pre-epoch clock should be rejected");
-
-        assert!(err.contains("system clock is before UNIX_EPOCH"));
-    }
-
-    #[test]
-    fn test_event_id_is_deterministic() {
-        let a = generate_event_id("t-1", "0xA", "0xB", "h");
-        let b = generate_event_id("t-1", "0xA", "0xB", "h");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn test_base_score_with_no_events() {
-        let snap = compute_reputation_for_wallet(&[], "0xA", 1_700_000_000);
-        assert_eq!(snap.elo, 50.0);
-        assert_eq!(snap.transaction_count, 0);
-    }
-
-    #[test]
-    fn test_completed_transfer_with_positive_rating_increases_elo() {
-        let now = 1_700_000_000;
-        let events = vec![mk_event(
-            "t-1",
-            "0xA",
-            "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000",
-            Some(5),
-            now - 86_400,
-        )];
-        let snap = compute_reputation_for_wallet(&events, "0xA", now);
-        assert!(snap.elo > 50.0);
-        assert_eq!(snap.completed_count, 1);
-    }
-
-    #[test]
-    fn test_failed_transfer_decreases_elo() {
-        let now = 1_700_000_000;
-        let events = vec![mk_event(
-            "t-1",
-            "0xA",
-            "0xB",
-            TransferOutcome::Failed,
-            "0",
-            None,
-            now - 86_400,
-        )];
-        let snap = compute_reputation_for_wallet(&events, "0xA", now);
-        assert!(snap.elo < 50.0);
-        assert_eq!(snap.failed_count, 1);
-    }
-
-    #[test]
-    fn test_recent_events_have_more_weight_than_old_events() {
-        let now = 1_700_000_000;
-        let recent = mk_event(
-            "recent",
-            "0xA",
-            "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000",
-            Some(5),
-            now - 2 * 86_400,
-        );
-        let old = mk_event(
-            "old",
-            "0xA",
-            "0xC",
-            TransferOutcome::Completed,
-            "1000000000000000000",
-            Some(5),
-            now - 170 * 86_400,
-        );
-        let recent_only = compute_reputation_for_wallet(&[recent.clone()], "0xA", now);
-        let old_only = compute_reputation_for_wallet(&[old], "0xA", now);
-        assert!(recent_only.elo > old_only.elo);
-    }
-
-    #[test]
-    fn test_events_older_than_lookback_are_ignored() {
-        let now = 1_700_000_000;
-        let events = vec![mk_event(
-            "old",
-            "0xA",
-            "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000",
-            Some(5),
-            now - 200 * 86_400,
-        )];
-        let snap = compute_reputation_for_wallet(&events, "0xA", now);
-        assert_eq!(snap.elo, 50.0);
-        assert_eq!(snap.transaction_count, 0);
-    }
-
-    // --- clamp_elo ---
-
-    #[test]
-    fn test_clamp_elo_below_minimum_returns_zero() {
-        assert_eq!(clamp_elo(-10.0), MIN_ELO);
-        assert_eq!(clamp_elo(-0.001), MIN_ELO);
-    }
-
-    #[test]
-    fn test_clamp_elo_above_maximum_returns_hundred() {
-        assert_eq!(clamp_elo(150.0), MAX_ELO);
-        assert_eq!(clamp_elo(100.001), MAX_ELO);
-    }
-
-    #[test]
-    fn test_clamp_elo_within_range_unchanged() {
-        assert_eq!(clamp_elo(0.0), 0.0);
-        assert_eq!(clamp_elo(50.0), 50.0);
-        assert_eq!(clamp_elo(100.0), 100.0);
-        assert_eq!(clamp_elo(73.5), 73.5);
-    }
-
-    // --- wei_to_chi_f64 ---
-
-    #[test]
-    fn test_wei_to_chi_valid_one_ether() {
-        let chi = wei_to_chi_f64("1000000000000000000");
-        assert!((chi - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_wei_to_chi_zero() {
-        let chi = wei_to_chi_f64("0");
-        assert_eq!(chi, 0.0);
-    }
-
-    #[test]
-    fn test_wei_to_chi_invalid_string_returns_zero() {
-        assert_eq!(wei_to_chi_f64("not_a_number"), 0.0);
-        assert_eq!(wei_to_chi_f64(""), 0.0);
-        assert_eq!(wei_to_chi_f64("-100"), 0.0);
-    }
-
-    // --- generate_event_id ---
-
-    #[test]
-    fn test_generate_event_id_different_inputs_produce_different_ids() {
-        let a = generate_event_id("t-1", "0xA", "0xB", "h1");
-        let b = generate_event_id("t-2", "0xA", "0xB", "h1");
-        let c = generate_event_id("t-1", "0xA", "0xC", "h1");
-        let d = generate_event_id("t-1", "0xA", "0xB", "h2");
-        assert_ne!(a, b);
-        assert_ne!(a, c);
-        assert_ne!(a, d);
-    }
-
-    #[test]
-    fn test_generate_event_id_wallet_case_insensitive() {
-        let lower = generate_event_id("t-1", "0xabc", "0xdef", "h");
-        let upper = generate_event_id("t-1", "0xABC", "0xDEF", "h");
-        assert_eq!(lower, upper);
-    }
-
-    // --- multiple completed transfers vs single ---
-
-    #[test]
-    fn test_multiple_completed_transfers_higher_elo_than_single() {
-        let now = 1_700_000_000;
-        let single = vec![mk_event(
-            "t-1",
-            "0xA",
-            "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000",
-            Some(5),
-            now - 86_400,
-        )];
-        let multiple = vec![
-            mk_event(
-                "t-1",
-                "0xA",
-                "0xB",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(5),
-                now - 3 * 86_400,
-            ),
-            mk_event(
-                "t-2",
-                "0xA",
-                "0xC",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(5),
-                now - 2 * 86_400,
-            ),
-            mk_event(
-                "t-3",
-                "0xA",
-                "0xD",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(5),
-                now - 86_400,
-            ),
-        ];
-        let snap_single = compute_reputation_for_wallet(&single, "0xA", now);
-        let snap_multi = compute_reputation_for_wallet(&multiple, "0xA", now);
-        assert!(snap_multi.elo > snap_single.elo);
-        assert_eq!(snap_multi.completed_count, 3);
-    }
-
-    // --- mixed completed + failed ---
-
-    #[test]
-    fn test_mixed_completed_and_failed_moderate_elo() {
-        let now = 1_700_000_000;
-        let events = vec![
-            mk_event(
-                "t-1",
-                "0xA",
-                "0xB",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(5),
-                now - 3 * 86_400,
-            ),
-            mk_event(
-                "t-2",
-                "0xA",
-                "0xC",
-                TransferOutcome::Failed,
-                "0",
-                None,
-                now - 2 * 86_400,
-            ),
-            mk_event(
-                "t-3",
-                "0xA",
-                "0xD",
-                TransferOutcome::Completed,
-                "1000000000000000000",
-                Some(4),
-                now - 86_400,
-            ),
-        ];
-        let snap = compute_reputation_for_wallet(&events, "0xA", now);
-        // Should be near base (50) — not extremely high or low
-        assert!(snap.elo > 45.0, "elo {} should be above 45", snap.elo);
-        assert!(snap.elo < 60.0, "elo {} should be below 60", snap.elo);
-        assert_eq!(snap.completed_count, 2);
-        assert_eq!(snap.failed_count, 1);
-    }
-
-    // --- ReputationSnapshot serialization roundtrip ---
-
-    #[test]
-    fn test_reputation_snapshot_serialization_roundtrip() {
-        let snap = ReputationSnapshot {
-            elo: 72.3,
-            base_elo: 50.0,
-            completed_count: 10,
-            failed_count: 2,
-            transaction_count: 12,
-            total_earned_wei: "5000000000000000000".to_string(),
+    use crate::protocol::{self, ModelSpec, PriceSchedule, Quote};
+    use crate::reputation::{compute_reputation, Feedback};
+    const PAYER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const PROVIDER: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    pub(crate) fn submission(now: u64) -> FeedbackSubmission {
+        let network = NetworkIdentity {
+            chain_id: crate::network::ESPACE_TESTNET_CHAIN_ID,
+            genesis_hash: crate::network::ESPACE_TESTNET_GENESIS.into(),
+            deployment_id: "test".into(),
         };
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let deser: ReputationSnapshot = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(deser.elo, snap.elo);
-        assert_eq!(deser.base_elo, snap.base_elo);
-        assert_eq!(deser.completed_count, snap.completed_count);
-        assert_eq!(deser.failed_count, snap.failed_count);
-        assert_eq!(deser.transaction_count, snap.transaction_count);
-        assert_eq!(deser.total_earned_wei, snap.total_earned_wei);
+        let q = Quote {
+            id: format!("0x{}", "11".repeat(32)),
+            network: network.clone(),
+            offer_id: format!("0x{}", "22".repeat(32)),
+            provider_wallet: crate::wallet::address_from_private_key(PROVIDER).unwrap(),
+            consumer_wallet: crate::wallet::address_from_private_key(PAYER).unwrap(),
+            model: ModelSpec {
+                id: "m".into(),
+                revision: "ab".repeat(20),
+                tokenizer_revision: "ab".repeat(20),
+                chat_template_sha256: "ab".repeat(32),
+                quantization: None,
+                context_length: 4096,
+                max_output_tokens: 512,
+                capabilities: vec!["chat".into()],
+                serving: None,
+            },
+            price: PriceSchedule {
+                input_wei_per_1k: "1".into(),
+                output_wei_per_1k: "2".into(),
+            },
+            funding_wei: "1000000000000000000".into(),
+            platform_wallet: format!("0x{}", "33".repeat(20)),
+            fee_bps: 50,
+            max_concurrency: 1,
+            nonce: "nonce".into(),
+            issued_at: now,
+            expires_at: now + 60,
+        };
+        let f = Feedback {
+            network,
+            provider_wallet: q.provider_wallet.clone(),
+            consumer_wallet: q.consumer_wallet.clone(),
+            quote_id: q.id.clone(),
+            tx_hash: format!("0x{}", "44".repeat(32)),
+            score: 100,
+            revision: 1,
+            issued_at: now,
+        };
+        FeedbackSubmission {
+            feedback: protocol::sign(protocol::FEEDBACK_DOMAIN, f, PAYER).unwrap(),
+            quote: protocol::sign(protocol::QUOTE_DOMAIN, q, PROVIDER).unwrap(),
+            raw_transaction: "0x01".into(),
+        }
     }
-
-    // --- RatingManifest default ---
-
     #[test]
-    fn test_rating_manifest_default_is_empty() {
-        let manifest = RatingManifest::default();
-        assert!(manifest.events.is_empty());
+    fn updates_replace_and_reorg_removes_vote() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = submission(100);
+        let n = s.feedback.payload.network.clone();
+        let wallet = s.feedback.payload.provider_wallet.clone();
+        let store = RatingStore::open(&dir.path().join("ratings.db"), &n).unwrap();
+        store.upsert(&s, "1000000000000000000", 100).unwrap();
+        store.upsert(&s, "1000000000000000000", 100).unwrap();
+        assert_eq!(store.events(&wallet).unwrap().len(), 1);
+        s.feedback.payload.score = 0;
+        s.feedback.payload.revision = 2;
+        s.feedback.payload.issued_at = 101;
+        s.feedback = protocol::sign(protocol::FEEDBACK_DOMAIN, s.feedback.payload, PAYER).unwrap();
+        store.upsert(&s, "1000000000000000000", 101).unwrap();
+        let events = store.events(&wallet).unwrap();
+        assert_eq!(events[0].created_at, 100);
+        assert_eq!(compute_reputation(&events, &n, &wallet, 101).vote_count, 1);
+        assert!(compute_reputation(&events, &n, &wallet, 101).elo < 50.0);
+        store
+            .set_eligible(&s.feedback.payload.quote_id, false)
+            .unwrap();
+        assert_eq!(
+            compute_reputation(&store.events(&wallet).unwrap(), &n, &wallet, 101).vote_count,
+            0
+        );
+        assert!(store
+            .upsert(&submission(100), "1000000000000000000", 102)
+            .is_err());
+    }
+    #[test]
+    fn rejects_free_self_and_forged_feedback() {
+        let mut s = submission(100);
+        let n = s.feedback.payload.network.clone();
+        s.feedback.payload.score = 50;
+        assert!(crate::reputation::validate_submission(&s, &n, 100).is_err());
+        let mut s = submission(100);
+        s.quote.payload.funding_wei = "0".into();
+        assert!(crate::reputation::validate_submission(&s, &n, 100).is_err());
+        let mut s = submission(100);
+        s.feedback.payload.consumer_wallet = s.feedback.payload.provider_wallet.clone();
+        assert!(crate::reputation::validate_submission(&s, &n, 100).is_err());
+    }
+    #[test]
+    fn refuses_database_network_reuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.db");
+        let mut n = submission(100).feedback.payload.network;
+        drop(RatingStore::open(&path, &n).unwrap());
+        n.deployment_id = "reset".into();
+        assert!(RatingStore::open(&path, &n).is_err());
+    }
+    #[test]
+    fn one_payment_cannot_vote_for_two_agreements() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = submission(100);
+        let store =
+            RatingStore::open(&dir.path().join("r.db"), &first.feedback.payload.network).unwrap();
+        store.upsert(&first, "1000000000000000000", 100).unwrap();
+        let mut second = first.clone();
+        second.quote.payload.id = format!("0x{}", "55".repeat(32));
+        second.feedback.payload.quote_id = second.quote.payload.id.clone();
+        second.quote =
+            protocol::sign(protocol::QUOTE_DOMAIN, second.quote.payload, PROVIDER).unwrap();
+        second.feedback =
+            protocol::sign(protocol::FEEDBACK_DOMAIN, second.feedback.payload, PAYER).unwrap();
+        assert!(store.upsert(&second, "1000000000000000000", 100).is_err());
+        assert_eq!(
+            store
+                .events(&first.feedback.payload.provider_wallet)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

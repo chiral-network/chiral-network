@@ -1,7590 +1,862 @@
-use crate::event_sink::EventSink;
-use futures::StreamExt;
+//! Bounded signed inference discovery. Kademlia supplies candidates, never trusted
+//! records; manifests are merged until a fixed deadline, including after bad replies.
+use crate::{
+    offer_registry::OfferRegistry,
+    protocol::{self, InferenceOffer, NetworkIdentity, Signed},
+    provider_config::DhtConfig,
+};
+use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
 use libp2p::{
-    dcutr, identify, kad, mdns, noise, ping, relay, request_response,
+    connection_limits, identify, identity, kad, noise, ping, relay, request_response as rr,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
-use std::error::Error;
-use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, Mutex, Notify};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    io,
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::sync::{mpsc, oneshot};
 
-/// Custom CBOR codec with appropriate size limits for chunked file transfers.
-/// Individual chunks are 256 KB, but FileInfo responses can be large for big files
-/// (chunk hashes array). 32 MB covers files up to ~100 GB.
-mod cbor_codec {
-    use async_trait::async_trait;
-    use cbor4ii::core::error::DecodeError;
-    use futures::prelude::*;
-    use libp2p::request_response;
-    use libp2p::swarm::StreamProtocol;
-    use serde::{de::DeserializeOwned, Serialize};
-    use std::{collections::TryReserveError, convert::Infallible, io, marker::PhantomData};
+const MAX_PEERS: usize = 64;
+const MAX_LOCAL: usize = 64;
+const PAGE: usize = 8;
+const WINDOW: Duration = Duration::from_secs(8);
+// Keep the 256-connection budget, reserving 64 slots from inbound-only floods.
+// Two connections per identity allow simultaneous inbound/outbound dialing.
+// Pending limits bound handshakes separately; 64 outgoing allows all 32
+// bootstrap peers plus discovery dials, and caps combined pending work at 128.
+const MAX_PENDING_INCOMING: u32 = 64;
+const MAX_PENDING_OUTGOING: u32 = 64;
+const MAX_ESTABLISHED_INCOMING: u32 = 192;
+const MAX_ESTABLISHED: u32 = 256;
+const MAX_ESTABLISHED_PER_PEER: u32 = 2;
 
-    /// Max request size: 1 MB (requests are small metadata)
-    const REQUEST_SIZE_MAXIMUM: u64 = 1 * 1024 * 1024;
-    /// Max response size: 32 MB (FileInfo with chunk hashes for large files)
-    const RESPONSE_SIZE_MAXIMUM: u64 = 32 * 1024 * 1024;
-
-    pub type Behaviour<Req, Resp> = request_response::Behaviour<Codec<Req, Resp>>;
-
-    pub struct Codec<Req, Resp> {
-        phantom: PhantomData<(Req, Resp)>,
-    }
-
-    impl<Req, Resp> Default for Codec<Req, Resp> {
-        fn default() -> Self {
-            Codec {
-                phantom: PhantomData,
-            }
-        }
-    }
-
-    impl<Req, Resp> Clone for Codec<Req, Resp> {
-        fn clone(&self) -> Self {
-            Self::default()
-        }
-    }
-
-    #[async_trait]
-    impl<Req, Resp> request_response::Codec for Codec<Req, Resp>
-    where
-        Req: Send + Serialize + DeserializeOwned,
-        Resp: Send + Serialize + DeserializeOwned,
-    {
-        type Protocol = StreamProtocol;
-        type Request = Req;
-        type Response = Resp;
-
-        async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Req>
-        where
-            T: AsyncRead + Unpin + Send,
-        {
-            let mut vec = Vec::new();
-            io.take(REQUEST_SIZE_MAXIMUM).read_to_end(&mut vec).await?;
-            cbor4ii::serde::from_slice(vec.as_slice()).map_err(decode_into_io_error)
-        }
-
-        async fn read_response<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Resp>
-        where
-            T: AsyncRead + Unpin + Send,
-        {
-            let mut vec = Vec::new();
-            io.take(RESPONSE_SIZE_MAXIMUM).read_to_end(&mut vec).await?;
-            cbor4ii::serde::from_slice(vec.as_slice()).map_err(decode_into_io_error)
-        }
-
-        async fn write_request<T>(
-            &mut self,
-            _: &Self::Protocol,
-            io: &mut T,
-            req: Self::Request,
-        ) -> io::Result<()>
-        where
-            T: AsyncWrite + Unpin + Send,
-        {
-            let data: Vec<u8> =
-                cbor4ii::serde::to_vec(Vec::new(), &req).map_err(encode_into_io_error)?;
-            io.write_all(data.as_ref()).await?;
-            Ok(())
-        }
-
-        async fn write_response<T>(
-            &mut self,
-            _: &Self::Protocol,
-            io: &mut T,
-            resp: Self::Response,
-        ) -> io::Result<()>
-        where
-            T: AsyncWrite + Unpin + Send,
-        {
-            let data: Vec<u8> =
-                cbor4ii::serde::to_vec(Vec::new(), &resp).map_err(encode_into_io_error)?;
-            io.write_all(data.as_ref()).await?;
-            Ok(())
-        }
-    }
-
-    fn decode_into_io_error(err: cbor4ii::serde::DecodeError<Infallible>) -> io::Error {
-        match err {
-            cbor4ii::serde::DecodeError::Core(DecodeError::Read(e)) => {
-                io::Error::new(io::ErrorKind::Other, e)
-            }
-            cbor4ii::serde::DecodeError::Core(e @ DecodeError::Unsupported { .. }) => {
-                io::Error::new(io::ErrorKind::Unsupported, e)
-            }
-            cbor4ii::serde::DecodeError::Core(e @ DecodeError::Eof { .. }) => {
-                io::Error::new(io::ErrorKind::UnexpectedEof, e)
-            }
-            cbor4ii::serde::DecodeError::Core(e) => io::Error::new(io::ErrorKind::InvalidData, e),
-            cbor4ii::serde::DecodeError::Custom(e) => {
-                io::Error::new(io::ErrorKind::Other, e.to_string())
-            }
-        }
-    }
-
-    fn encode_into_io_error(err: cbor4ii::serde::EncodeError<TryReserveError>) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, err)
-    }
+fn connection_limits() -> connection_limits::ConnectionLimits {
+    connection_limits::ConnectionLimits::default()
+        .with_max_pending_incoming(Some(MAX_PENDING_INCOMING))
+        .with_max_pending_outgoing(Some(MAX_PENDING_OUTGOING))
+        .with_max_established_incoming(Some(MAX_ESTABLISHED_INCOMING))
+        .with_max_established_outgoing(Some(MAX_ESTABLISHED))
+        .with_max_established(Some(MAX_ESTABLISHED))
+        .with_max_established_per_peer(Some(MAX_ESTABLISHED_PER_PEER))
 }
-
-/// Get bootstrap nodes for the active Chiral Network DHT.
-pub fn get_bootstrap_nodes() -> Vec<String> {
-    crate::network::active()
-        .libp2p_bootstrap_addrs
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestRequest {
+    network: NetworkIdentity,
+    model: Option<String>,
+    offset: usize,
 }
-
-/// Get relay server nodes — only bootstrap nodes that run a relay server.
-/// Do NOT listen_on non-relay bootstrap nodes; the failed RESERVE creates a closed
-/// listener whose dropped receiver poisons the handler's to_listener channel on the
-/// SAME handler if libp2p reuses connections.
-pub fn get_relay_nodes() -> Vec<String> {
-    crate::network::active()
-        .libp2p_relay_addrs
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestResponse {
+    offers: Vec<Signed<InferenceOffer>>,
+    next: Option<usize>,
 }
-
-/// Get unique peer IDs of all bootstrap nodes
-pub fn get_bootstrap_peer_ids() -> Vec<String> {
-    let mut ids = Vec::new();
-    for addr_str in get_bootstrap_nodes() {
-        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                let id_str = peer_id.to_string();
-                if !ids.contains(&id_str) {
-                    ids.push(id_str);
-                }
-            }
-        }
-    }
-    ids
-}
-
-/// Extract peer ID from a multiaddr like /ip4/.../tcp/.../p2p/<peer_id>
-fn extract_peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
-    use libp2p::multiaddr::Protocol;
-    for proto in addr.iter() {
-        if let Protocol::P2p(peer_id) = proto {
-            return Some(peer_id);
-        }
-    }
-    None
-}
-
-/// Remove the /p2p/<peer_id> component from a multiaddr
-fn remove_peer_id_from_multiaddr(addr: &Multiaddr) -> Multiaddr {
-    use libp2p::multiaddr::Protocol;
-    addr.iter()
-        .filter(|p| !matches!(p, Protocol::P2p(_)))
-        .collect()
-}
-
-// Ping protocol messages
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PingRequest(pub String);
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PingResponse(pub String);
-
-// Echo protocol messages (arbitrary payload delivery)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EchoRequest(pub Vec<u8>);
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EchoResponse(pub Vec<u8>);
-
-// File transfer protocol messages (for direct file push / ChiralDrop)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileTransferRequest {
-    pub transfer_id: String,
-    pub file_name: String,
-    pub file_data: Vec<u8>,
-    /// Price in wei (as string for CBOR safety). "0" or empty = free.
-    #[serde(default)]
-    pub price_wei: String,
-    /// Sender's wallet address for receiving payment.
-    #[serde(default)]
-    pub sender_wallet: String,
-    /// SHA-256 hash of the file (needed for paid downloads via chunked protocol).
-    #[serde(default)]
-    pub file_hash: String,
-    /// Actual file size in bytes (for paid transfers where file_data is empty).
-    #[serde(default)]
-    pub file_size: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileTransferResponse {
-    pub transfer_id: String,
-    pub accepted: bool,
-    pub error: Option<String>,
-}
-
-/// Chunk size for file transfers: 256 KB
-const CHUNK_SIZE: usize = 256 * 1024;
-/// Maximum retries per chunk before aborting
-const MAX_CHUNK_RETRIES: u8 = 3;
-/// Retry delay schedule for chunk failures (attempt 1..=3), plus jitter.
-const CHUNK_RETRY_BASE_MS: [u64; 3] = [150, 400, 900];
-/// How often to refresh the host registry from DHT for auto peer discovery.
-const AUTO_HOST_REGISTRY_REFRESH_SECS: u64 = 20;
-/// Minimum delay between automatic dial attempts to the same discovered peer.
-const AUTO_PEER_DIAL_COOLDOWN_SECS: u64 = 20;
-/// DHT key used for host advertisement registry.
-const HOST_REGISTRY_KEY: &str = "chiral_host_registry";
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AutoHostRegistryEntry {
-    peer_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HostRegistryMergeEntry {
-    peer_id: String,
-    #[serde(default)]
-    wallet_address: String,
-    #[serde(default)]
-    updated_at: u64,
-}
-
-// Chunked file request protocol messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ChunkRequest {
-    /// Ask the seeder for file metadata and chunk manifest
-    FileInfo {
-        request_id: String,
-        file_hash: String,
-        #[serde(default)]
-        folder_hash: Option<String>,
-    },
-    /// Ask for a specific chunk by index
-    Chunk {
-        request_id: String,
-        file_hash: String,
-        chunk_index: u32,
-    },
-    /// Send proof of payment to seeder
-    PaymentProof {
-        request_id: String,
-        file_hash: String,
-        #[serde(default)]
-        folder_hash: Option<String>,
-        payment_tx: String,
-        payer_address: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ChunkResponse {
-    /// File metadata with per-chunk SHA-256 hashes
-    FileInfo {
-        request_id: String,
-        file_hash: String,
-        file_name: String,
-        file_size: u64,
-        chunk_size: u32,
-        total_chunks: u32,
-        chunk_hashes: Vec<String>,
-        /// Price in wei as string (u128 as string for CBOR safety)
-        price_wei: String,
-        /// Seeder's wallet address for payment
-        wallet_address: String,
-        /// Folder bundle this FileInfo is scoped to, when the file is
-        /// being downloaded as a member of a paid folder bundle.
-        #[serde(default)]
-        folder_hash: Option<String>,
-        /// ECDSA signature by `wallet_address` over the canonical
-        /// payload of every other field (see `file_info_sign_payload`).
-        /// Empty string means "unsigned" — readers reject unsigned
-        /// FileInfo so a hostile seeder cannot substitute its own
-        /// `wallet_address` to divert the buyer's payment (FM-A09).
-        #[serde(default)]
-        signature: String,
-        error: Option<String>,
-    },
-    /// A single chunk of file data
-    Chunk {
-        request_id: String,
-        file_hash: String,
-        chunk_index: u32,
-        chunk_data: Option<Vec<u8>>,
-        chunk_hash: String,
-        error: Option<String>,
-    },
-    /// Acknowledgement of payment verification
-    PaymentAck {
-        request_id: String,
-        file_hash: String,
-        accepted: bool,
-        error: Option<String>,
-    },
-}
-
-fn parse_protocol_price_wei(price_wei: &str, field: &str) -> Result<u128, String> {
-    if price_wei.is_empty() {
-        return Ok(0);
-    }
-    let trimmed = price_wei.trim();
-    if trimmed.is_empty() {
-        return Err(format!(
-            "{field} must be empty, 0, or a valid u128 wei amount"
+#[derive(Clone, Default)]
+struct ManifestCodec;
+async fn read_frame<T: AsyncRead + Unpin + Send, V: serde::de::DeserializeOwned>(
+    io: &mut T,
+    max: usize,
+) -> io::Result<V> {
+    let mut length = [0u8; 4];
+    io.read_exact(&mut length).await?;
+    let length = u32::from_be_bytes(length) as usize;
+    if length > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "manifest frame too large",
         ));
     }
-    trimmed
-        .parse::<u128>()
-        .map_err(|_| format!("{field} must be empty, 0, or a valid u128 wei amount"))
+    let mut bytes = vec![0; length];
+    io.read_exact(&mut bytes).await?;
+    serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
-
-/// Length-prefixed canonical bytes for the FileInfo signature. Same
-/// encoding pattern as `version::canonical_signing_payload` and
-/// `SiteDirectoryEntry::sign_payload`: every variable-length field is
-/// preceded by its `u32` LE byte length so an attacker can't shift
-/// content across field boundaries by embedding NUL or other separator
-/// bytes. `chunk_hashes` is encoded as a count followed by each
-/// length-prefixed element.
-pub fn file_info_sign_payload(
-    file_hash: &str,
-    file_name: &str,
-    file_size: u64,
-    chunk_size: u32,
-    total_chunks: u32,
-    chunk_hashes: &[String],
-    price_wei: &str,
-    wallet_address: &str,
-    folder_hash: Option<&str>,
-) -> Vec<u8> {
-    let mut out = Vec::with_capacity(256 + chunk_hashes.len() * 36);
-    out.extend_from_slice(b"file-info-v1");
-    for part in [
-        file_hash.as_bytes(),
-        file_name.as_bytes(),
-        price_wei.as_bytes(),
-        wallet_address.as_bytes(),
-    ] {
-        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
-        out.extend_from_slice(part);
+async fn write_frame<T: AsyncWrite + Unpin + Send, V: Serialize>(
+    io: &mut T,
+    value: V,
+    max: usize,
+) -> io::Result<()> {
+    let bytes =
+        serde_json::to_vec(&value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if bytes.len() > max {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "manifest frame too large",
+        ));
     }
-    out.extend_from_slice(&file_size.to_le_bytes());
-    out.extend_from_slice(&chunk_size.to_le_bytes());
-    out.extend_from_slice(&total_chunks.to_le_bytes());
-    out.extend_from_slice(&(chunk_hashes.len() as u32).to_le_bytes());
-    for h in chunk_hashes {
-        out.extend_from_slice(&(h.len() as u32).to_le_bytes());
-        out.extend_from_slice(h.as_bytes());
+    io.write_all(&(bytes.len() as u32).to_be_bytes()).await?;
+    io.write_all(&bytes).await?;
+    io.close().await
+}
+#[async_trait::async_trait]
+impl rr::Codec for ManifestCodec {
+    type Protocol = StreamProtocol;
+    type Request = ManifestRequest;
+    type Response = ManifestResponse;
+    async fn read_request<T: AsyncRead + Unpin + Send>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request> {
+        read_frame(io, 2048).await
     }
-    if let Some(folder_hash) = folder_hash.filter(|h| !h.trim().is_empty()) {
-        out.extend_from_slice(&(folder_hash.len() as u32).to_le_bytes());
-        out.extend_from_slice(folder_hash.as_bytes());
+    async fn read_response<T: AsyncRead + Unpin + Send>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response> {
+        read_frame(io, 262_144).await
     }
-    out
+    async fn write_request<T: AsyncWrite + Unpin + Send>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+        value: Self::Request,
+    ) -> io::Result<()> {
+        write_frame(io, value, 2048).await
+    }
+    async fn write_response<T: AsyncWrite + Unpin + Send>(
+        &mut self,
+        _: &StreamProtocol,
+        io: &mut T,
+        value: Self::Response,
+    ) -> io::Result<()> {
+        write_frame(io, value, 262_144).await
+    }
 }
-
-enum SwarmCommand {
-    SendPing(PeerId),
-    SendFile {
-        peer_id: PeerId,
-        transfer_id: String,
-        file_name: String,
-        file_data: Vec<u8>,
-        price_wei: String,
-        sender_wallet: String,
-        file_hash: String,
-        file_size: u64,
-    },
-    RequestFileInfo {
-        peer_id: PeerId,
-        request_id: String,
-        file_hash: String,
-        folder_hash: Option<String>,
-        /// Known multiaddresses for this peer (from DHT SeederInfo).
-        /// Used to dial the peer directly when not already connected.
-        multiaddrs: Vec<String>,
-        /// Synchronous ack so caller can try another seeder if this one is unreachable immediately.
-        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
-    },
-    PutDhtValue {
-        key: String,
-        value: String,
-        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
-    },
-    GetDhtValue {
-        key: String,
-        response_tx: tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
-    },
-    /// Remove a record from the local Kademlia store. Stops the automatic
-    /// republish cycle for that key so stale records (e.g. per-seeder
-    /// entries for files we no longer host) stop propagating.
-    RemoveDhtRecord {
-        key: String,
-    },
-    HealthCheck {
-        response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
-    },
-    CheckPeerConnected {
-        peer_id: PeerId,
-        response_tx: tokio::sync::oneshot::Sender<bool>,
-    },
-    Echo {
-        peer_id: PeerId,
-        payload: Vec<u8>,
-        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
-    },
-    GetListeningAddresses {
-        response_tx: tokio::sync::oneshot::Sender<Vec<String>>,
-    },
-    /// Register this node as a Kademlia provider for a file hash.
-    /// Kademlia handles republishing on the configured interval.
-    StartProviding {
-        file_hash: String,
-        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
-    },
-    /// Stop advertising this node as a provider for a file hash.
-    StopProviding {
-        file_hash: String,
-    },
-    /// Query the DHT for the current set of providers (live seeders) for a
-    /// file hash. Results accumulate across multiple FoundProviders events
-    /// and resolve when the query finishes.
-    GetProviders {
-        file_hash: String,
-        response_tx: tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
-    },
-    /// Send a deferred FileInfo/Chunk response. Used when the response had
-    /// to be built off the libp2p reactor (e.g. SHA-256 chunk-hash
-    /// computation on a cold seeder). Only the swarm task can call
-    /// `send_response` on the request_response behaviour, so the worker
-    /// task hands the channel + response back to the swarm via this
-    /// command.
-    SendChunkResponse {
-        channel: request_response::ResponseChannel<ChunkResponse>,
-        response: ChunkResponse,
-    },
-}
-
-#[derive(Clone, Debug)]
-struct PendingFileInfoRequest {
-    request_id: String,
-    file_hash: String,
-    folder_hash: Option<String>,
-}
-
-#[derive(Clone, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct DhtHealthInfo {
-    pub running: bool,
-    pub peer_id: Option<String>,
-    pub listening_addresses: Vec<String>,
-    pub connected_peer_count: usize,
-    pub kademlia_peers: usize,
-    pub bootstrap_nodes: Vec<BootstrapNodeStatus>,
-    pub shared_files: usize,
-    pub protocols: Vec<String>,
-}
-
-#[derive(Clone, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct BootstrapNodeStatus {
-    pub address: String,
-    pub reachable: bool,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerInfo {
-    pub id: String,
-    pub address: String,
-    pub multiaddrs: Vec<String>,
-    pub last_seen: i64,
-}
-
-#[derive(Clone, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NetworkStats {
-    pub connected_peers: usize,
-    pub total_peers: usize,
-}
-
 #[derive(NetworkBehaviour)]
-struct DhtBehaviour {
-    relay_client: relay::client::Behaviour,
-    dcutr: dcutr::Behaviour,
+struct Behaviour {
+    // Admission must run before any protocol allocates a connection handler.
+    limits: connection_limits::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
-    mdns: mdns::tokio::Behaviour,
-    ping: ping::Behaviour,
+    manifest: rr::Behaviour<ManifestCodec>,
     identify: identify::Behaviour,
-    ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
-    file_transfer: cbor_codec::Behaviour<FileTransferRequest, FileTransferResponse>,
-    file_request: cbor_codec::Behaviour<ChunkRequest, ChunkResponse>,
-    echo_protocol: request_response::cbor::Behaviour<EchoRequest, EchoResponse>,
+    ping: ping::Behaviour,
+    relay: relay::Behaviour,
 }
-
-/// Map of file hash -> file path for files we're seeding
-pub type SharedFilesMap = Arc<Mutex<std::collections::HashMap<String, SharedFileInfo>>>;
-
-#[derive(Clone, Debug)]
-pub struct FolderAccessPolicy {
-    pub folder_hash: String,
-    pub price_wei: u128,
-    pub wallet_address: String,
+enum Command {
+    Publish(Signed<InferenceOffer>, oneshot::Sender<Result<(), String>>),
+    Withdraw(String, oneshot::Sender<()>),
+    Discover(
+        Option<String>,
+        oneshot::Sender<Result<Vec<Signed<InferenceOffer>>, String>>,
+    ),
+    Status(oneshot::Sender<serde_json::Value>),
+    Stop(oneshot::Sender<()>),
 }
-
-#[derive(Clone, Debug)]
-struct AuthorizedChunkAccess {
-    peer_id: PeerId,
-    scope: PaymentScope,
-}
-
-type SeederAuthorizedChunksMap = Arc<Mutex<HashMap<String, AuthorizedChunkAccess>>>;
-
-#[derive(Clone, Debug)]
-pub struct SharedFileInfo {
-    pub file_path: String,
-    pub file_name: String,
-    pub file_size: u64,
-    /// Cached chunk hashes, precomputed at registration when possible
-    pub chunk_hashes: Option<Vec<String>>,
-    /// Price in wei (0 = free)
-    pub price_wei: u128,
-    /// Seeder's wallet address for receiving payment
-    pub wallet_address: String,
-    /// Seeder's private key (hex, 0x-prefixed) used to sign the
-    /// `ChunkResponse::FileInfo` envelope. Without this signature, a
-    /// hostile peer could answer the FileInfo request with their own
-    /// `wallet_address` substituted and divert the buyer's payment
-    /// (FM-A09). Empty string means "this seeder has not unlocked a
-    /// wallet" — FileInfo responses for that file refuse to serve
-    /// rather than send an unsigned envelope.
-    pub private_key: String,
-    /// Paid folder bundle contexts this file belongs to. When a child
-    /// file is published as part of a paid folder at price 0, direct
-    /// file-hash requests are rejected unless they carry one of these
-    /// folder hashes.
-    pub folder_access: HashMap<String, FolderAccessPolicy>,
-}
-
-#[derive(Clone, Debug)]
-struct ResolvedFileAccess {
-    price_wei: u128,
-    wallet_address: String,
-    folder_hash: Option<String>,
-}
-
-fn normalize_folder_hash(folder_hash: &str) -> String {
-    folder_hash.trim().to_lowercase()
-}
-
-fn resolve_file_access(
-    file_info: &SharedFileInfo,
-    requested_folder_hash: Option<&str>,
-) -> Result<ResolvedFileAccess, String> {
-    if let Some(folder_hash) = requested_folder_hash
-        .map(str::trim)
-        .filter(|h| !h.is_empty())
-    {
-        let normalized = normalize_folder_hash(folder_hash);
-        let policy = file_info
-            .folder_access
-            .get(&normalized)
-            .ok_or_else(|| "File is not a member of the requested folder bundle".to_string())?;
-        return Ok(ResolvedFileAccess {
-            price_wei: policy.price_wei,
-            wallet_address: policy.wallet_address.clone(),
-            folder_hash: Some(policy.folder_hash.clone()),
-        });
-    }
-
-    let paid_folder_only = file_info.price_wei == 0
-        && file_info
-            .folder_access
-            .values()
-            .any(|policy| policy.price_wei > 0);
-    if paid_folder_only {
-        return Err(
-            "File is part of a paid folder bundle; request it through the folder hash".to_string(),
-        );
-    }
-
-    Ok(ResolvedFileAccess {
-        price_wei: file_info.price_wei,
-        wallet_address: file_info.wallet_address.clone(),
-        folder_hash: None,
-    })
-}
-
-fn payment_scope_for_access(file_hash: &str, access: &ResolvedFileAccess) -> PaymentScope {
-    match access.folder_hash.clone() {
-        Some(folder_hash) => PaymentScope::Folder { folder_hash },
-        None => PaymentScope::DirectFile {
-            file_hash: file_hash.to_string(),
-        },
-    }
-}
-
-async fn remember_authorized_chunk_access(
-    authorized_chunks: &SeederAuthorizedChunksMap,
-    request_id: String,
-    peer_id: PeerId,
-    scope: PaymentScope,
-) {
-    authorized_chunks
-        .lock()
-        .await
-        .insert(request_id, AuthorizedChunkAccess { peer_id, scope });
-}
-
-fn authorized_scope_matches_file(
-    access: &AuthorizedChunkAccess,
-    peer_id: PeerId,
-    file_hash: &str,
-    file_info: &SharedFileInfo,
-) -> bool {
-    if access.peer_id != peer_id {
-        return false;
-    }
-
-    match &access.scope {
-        PaymentScope::DirectFile {
-            file_hash: paid_hash,
-        } => paid_hash.eq_ignore_ascii_case(file_hash),
-        PaymentScope::Folder { folder_hash } => file_info
-            .folder_access
-            .contains_key(&normalize_folder_hash(folder_hash)),
-    }
-}
-
-fn chunk_request_access_error(
-    authorized: Option<&AuthorizedChunkAccess>,
-    peer_id: PeerId,
-    file_hash: &str,
-    file_info: &SharedFileInfo,
-) -> Option<String> {
-    if let Ok(access) = resolve_file_access(file_info, None) {
-        if access.price_wei == 0 {
-            return None;
-        }
-    }
-
-    match authorized {
-        Some(access) if authorized_scope_matches_file(access, peer_id, file_hash, file_info) => {
-            None
-        }
-        Some(_) => Some(
-            "Payment proof does not authorize this chunk request for the requested file"
-                .to_string(),
-        ),
-        None => Some(
-            "Payment proof required before downloading chunks for this file or folder member"
-                .to_string(),
-        ),
-    }
-}
-
-fn file_info_error_response(
-    request_id: String,
-    file_hash: String,
-    error: impl Into<String>,
-    folder_hash: Option<String>,
-) -> ChunkResponse {
-    ChunkResponse::FileInfo {
-        request_id,
-        file_hash,
-        file_name: String::new(),
-        file_size: 0,
-        chunk_size: CHUNK_SIZE as u32,
-        total_chunks: 0,
-        chunk_hashes: vec![],
-        price_wei: "0".to_string(),
-        wallet_address: String::new(),
-        folder_hash,
-        signature: String::new(),
-        error: Some(error.into()),
-    }
-}
-
-fn signed_file_info_response(
-    request_id: String,
-    file_hash: String,
-    file_name: String,
-    file_size: u64,
-    chunk_hashes: Vec<String>,
-    access: ResolvedFileAccess,
-    private_key: &str,
-) -> ChunkResponse {
-    let price_str = access.price_wei.to_string();
-    if private_key.is_empty() || access.wallet_address.is_empty() {
-        return file_info_error_response(
-            request_id,
-            file_hash,
-            "Seeder cannot sign FileInfo (wallet not unlocked)",
-            access.folder_hash,
-        );
-    }
-
-    let total_chunks = chunk_hashes.len() as u32;
-    let payload = file_info_sign_payload(
-        &file_hash,
-        &file_name,
-        file_size,
-        CHUNK_SIZE as u32,
-        total_chunks,
-        &chunk_hashes,
-        &price_str,
-        &access.wallet_address,
-        access.folder_hash.as_deref(),
-    );
-    match crate::wallet::sign_message(private_key, &payload) {
-        Ok(signature) if !signature.is_empty() => ChunkResponse::FileInfo {
-            request_id,
-            file_hash,
-            file_name,
-            file_size,
-            chunk_size: CHUNK_SIZE as u32,
-            total_chunks,
-            chunk_hashes,
-            price_wei: price_str,
-            wallet_address: access.wallet_address,
-            folder_hash: access.folder_hash,
-            signature,
-            error: None,
-        },
-        Ok(_) => file_info_error_response(
-            request_id,
-            file_hash,
-            "Seeder cannot sign FileInfo: empty signature",
-            access.folder_hash,
-        ),
-        Err(err) => file_info_error_response(
-            request_id,
-            file_hash,
-            format!("Seeder cannot sign FileInfo: {}", err),
-            access.folder_hash,
-        ),
-    }
-}
-
-/// Shared reference to the custom download directory setting
-pub type DownloadDirectoryRef = Arc<Mutex<Option<String>>>;
-
-/// Credentials for sending payment during download (wallet address + private key)
-#[derive(Clone, Debug)]
-pub struct DownloadCredentials {
-    pub wallet_address: String,
-    pub private_key: String,
-    pub folder_hash: Option<String>,
-    pub folder_payment_tx: Option<String>,
-}
-
-/// Map of request_id -> download credentials for payment during chunked transfer
-pub type DownloadCredentialsMap = Arc<Mutex<HashMap<String, DownloadCredentials>>>;
-
-/// Tracks an in-progress chunked download on the downloader side
-struct ActiveChunkedDownload {
-    request_id: String,
-    file_hash: String,
-    file_name: String,
-    file_size: u64,
-    total_chunks: u32,
-    chunk_hashes: Vec<String>,
-    received_chunks: Vec<bool>,
-    output_path: PathBuf,
-    bytes_written: u64,
-    peer_id: PeerId,
-    backup_peers: Vec<PeerId>,
-    retry_counts: Vec<u8>,
-    current_chunk_index: u32,
-    start_time: std::time::Instant,
-    /// Whether payment has been confirmed by seeder
-    payment_confirmed: bool,
-}
-
-/// Map of request_id -> active chunked download state
-type ActiveDownloadsMap = HashMap<String, ActiveChunkedDownload>;
-
 #[derive(Clone)]
-struct DhtBootstrapGate {
-    ready: Arc<AtomicBool>,
-    notify: Arc<Notify>,
-}
-
-impl DhtBootstrapGate {
-    fn new() -> Self {
-        Self {
-            ready: Arc::new(AtomicBool::new(false)),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    fn reset(&self) {
-        self.ready.store(false, Ordering::SeqCst);
-    }
-
-    fn mark_ready(&self) {
-        if !self.ready.swap(true, Ordering::SeqCst) {
-            self.notify.notify_waiters();
-        }
-    }
-
-    fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::SeqCst)
-    }
-
-    async fn wait_ready(&self, timeout: Duration) -> bool {
-        self.wait_ready_inner(timeout, || {}).await
-    }
-
-    async fn wait_ready_inner<F>(&self, timeout: Duration, mut before_ready_check: F) -> bool
-    where
-        F: FnMut(),
-    {
-        if self.is_ready() {
-            return true;
-        }
-        tokio::time::timeout(timeout, async {
-            loop {
-                let notified = self.notify.notified();
-                before_ready_check();
-                if self.is_ready() {
-                    return;
-                }
-                notified.await;
-                if self.is_ready() {
-                    return;
-                }
-            }
-        })
-        .await
-        .is_ok()
-    }
-}
-
-/// Compute SHA-256 hashes for each chunk of a file
-fn compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String> {
-    let mut file =
-        std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let metadata = file
-        .metadata()
-        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
-    let file_size = metadata.len();
-    let total_chunks = ((file_size as usize + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32;
-    let mut hashes = Vec::with_capacity(total_chunks as usize);
-
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    for _ in 0..total_chunks {
-        let bytes_read = file
-            .read(&mut buf)
-            .map_err(|e| format!("Failed to read chunk: {}", e))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&buf[..bytes_read]);
-        hashes.push(hex::encode(hasher.finalize()));
-    }
-
-    Ok(hashes)
-}
-
 pub struct DhtService {
-    peers: Arc<Mutex<Vec<PeerInfo>>>,
-    is_running: Arc<Mutex<bool>>,
-    local_peer_id: Arc<Mutex<Option<String>>>,
-    command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
-    file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
-    shared_files: SharedFilesMap,
-    download_directory: DownloadDirectoryRef,
-    active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
-    download_credentials: DownloadCredentialsMap,
-    bootstrap_gate: DhtBootstrapGate,
+    commands: mpsc::Sender<Command>,
+    peer: String,
+}
+struct Search {
+    query: kad::QueryId,
+    model: Option<String>,
+    deadline: tokio::time::Instant,
+    seen: HashSet<PeerId>,
+    reply: oneshot::Sender<Result<Vec<Signed<InferenceOffer>>, String>>,
+    received: HashMap<PeerId, HashSet<String>>,
+    invalid: HashSet<PeerId>,
+}
+struct Pending {
+    query: kad::QueryId,
+    peer: PeerId,
+    offset: usize,
 }
 
-impl DhtService {
-    pub fn new(
-        file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>,
-        download_directory: DownloadDirectoryRef,
-        download_credentials: DownloadCredentialsMap,
-    ) -> Self {
-        Self {
-            peers: Arc::new(Mutex::new(Vec::new())),
-            is_running: Arc::new(Mutex::new(false)),
-            local_peer_id: Arc::new(Mutex::new(None)),
-            command_sender: Arc::new(Mutex::new(None)),
-            file_transfer_service: Some(file_transfer_service),
-            shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            download_directory,
-            active_downloads: Arc::new(Mutex::new(HashMap::new())),
-            download_credentials,
-            bootstrap_gate: DhtBootstrapGate::new(),
-        }
-    }
-
-    /// Register a file for sharing (seeding)
-    pub async fn register_shared_file(
-        &self,
-        file_hash: String,
-        file_path: String,
-        file_name: String,
-        file_size: u64,
-        price_wei: u128,
-        wallet_address: String,
-        private_key: String,
-    ) {
-        self.register_shared_file_with_folder_access(
-            file_hash,
-            file_path,
-            file_name,
-            file_size,
-            price_wei,
-            wallet_address,
-            private_key,
-            Vec::new(),
-        )
-        .await;
-    }
-
-    pub async fn register_shared_file_with_folder_access(
-        &self,
-        file_hash: String,
-        file_path: String,
-        file_name: String,
-        file_size: u64,
-        price_wei: u128,
-        wallet_address: String,
-        private_key: String,
-        folder_access: Vec<FolderAccessPolicy>,
-    ) {
-        println!("=== REGISTERING SHARED FILE ===");
-        println!("  Name: {}", file_name);
-        println!("  Hash: {}", file_hash);
-        println!("  Path: {}", file_path);
-        println!("  Size: {} bytes", file_size);
-        if price_wei > 0 {
-            println!("  Price: {} wei", price_wei);
-            println!("  Wallet: {}", wallet_address);
-        } else {
-            println!("  Price: Free");
-        }
-
-        let folder_access = folder_access
-            .into_iter()
-            .map(|policy| (normalize_folder_hash(&policy.folder_hash), policy))
-            .collect::<HashMap<_, _>>();
-
-        let mut shared = self.shared_files.lock().await;
-        shared.insert(
-            file_hash.clone(),
-            SharedFileInfo {
-                file_path: file_path.clone(),
-                file_name,
-                file_size,
-                // Keep seeding registration instant; chunk hashes are computed lazily
-                // on first request (and we also warm them in the background below).
-                chunk_hashes: None,
-                price_wei,
-                wallet_address,
-                private_key,
-                folder_access,
-            },
-        );
-        println!("  Total shared files now: {}", shared.len());
-        println!("  Seeding registration is instant; chunk hashes warming in background");
-        println!("================================");
-
-        // Warm chunk hashes in the background so first download request is faster,
-        // without blocking publish/seed operations.
-        let shared_files = self.shared_files.clone();
-        let file_hash_for_task = file_hash;
-        tokio::spawn(async move {
-            let path_for_hashing = file_path;
-            match tokio::task::spawn_blocking(move || compute_chunk_hashes(&path_for_hashing)).await
+fn load_identity(path: &Path) -> Result<identity::Keypair, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            #[cfg(unix)]
             {
-                Ok(Ok(hashes)) => {
-                    let hash_count = hashes.len();
-                    let mut shared = shared_files.lock().await;
-                    if let Some(info) = shared.get_mut(&file_hash_for_task) {
-                        if info.chunk_hashes.is_none() {
-                            info.chunk_hashes = Some(hashes);
-                            println!(
-                                "  Background chunk hash warmup complete for {} ({} chunks)",
-                                file_hash_for_task, hash_count
-                            );
-                        }
-                    }
-                }
-                Ok(Err(e)) => {
-                    println!(
-                        "  Background chunk hash warmup failed for {}: {}",
-                        file_hash_for_task, e
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "  Background chunk hash warmup task failed for {}: {}",
-                        file_hash_for_task, e
-                    );
+                use std::os::unix::fs::PermissionsExt;
+                if std::fs::metadata(path)
+                    .map_err(|e| e.to_string())?
+                    .permissions()
+                    .mode()
+                    & 0o077
+                    != 0
+                {
+                    return Err("persisted peer identity must be owner-only".into());
                 }
             }
-        });
-    }
-
-    /// Attach folder-level payment policy to already-registered child files.
-    /// The child file's direct price may be 0 because buyers pay once at
-    /// the folder level; this context prevents direct child-hash requests
-    /// from bypassing that folder payment.
-    pub async fn register_folder_bundle_access(
-        &self,
-        folder_hash: String,
-        file_hashes: Vec<String>,
-        price_wei: u128,
-        wallet_address: String,
-    ) -> usize {
-        let normalized_folder_hash = normalize_folder_hash(&folder_hash);
-        let policy = FolderAccessPolicy {
-            folder_hash,
-            price_wei,
-            wallet_address,
-        };
-        let file_hashes: HashSet<String> = file_hashes
-            .into_iter()
-            .map(|h| h.trim().to_lowercase())
-            .filter(|h| !h.is_empty())
-            .collect();
-
-        let mut shared = self.shared_files.lock().await;
-        let mut registered = 0usize;
-        for (file_hash, info) in shared.iter_mut() {
-            if file_hashes.contains(&file_hash.to_lowercase()) {
-                info.folder_access
-                    .insert(normalized_folder_hash.clone(), policy.clone());
-                registered += 1;
+            identity::Keypair::from_protobuf_encoding(&bytes)
+                .map_err(|e| format!("invalid persisted peer identity: {e}"))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-        }
-        registered
-    }
-
-    /// Unregister a shared file
-    pub async fn unregister_shared_file(&self, file_hash: &str) {
-        let mut shared = self.shared_files.lock().await;
-        if let Some(info) = shared.remove(file_hash) {
-            println!(
-                "Unregistered shared file: {} (hash: {})",
-                info.file_name, file_hash
-            );
-        }
-    }
-
-    /// Get shared files map for the event loop
-    pub fn get_shared_files(&self) -> SharedFilesMap {
-        self.shared_files.clone()
-    }
-
-    pub async fn start(&self, app: tauri::AppHandle) -> Result<String, String> {
-        self.start_with_sink(EventSink::tauri(app)).await
-    }
-
-    pub async fn start_headless(&self) -> Result<String, String> {
-        self.start_with_sink(EventSink::noop()).await
-    }
-
-    async fn start_with_sink(&self, events: EventSink) -> Result<String, String> {
-        let mut running = self.is_running.lock().await;
-        if *running {
-            return Err("DHT already running".to_string());
-        }
-        self.bootstrap_gate.reset();
-
-        // Create libp2p swarm
-        let (swarm, peer_id) = create_swarm().await.map_err(|e| e.to_string())?;
-
-        // Store peer ID
-        let mut local_id = self.local_peer_id.lock().await;
-        *local_id = Some(peer_id.clone());
-        drop(local_id);
-
-        *running = true;
-
-        // Create command channel. The sender is stored for outside callers
-        // and *also* cloned into the event loop so deferred response paths
-        // (e.g. the off-reactor chunk-hash worker) can hand work back to
-        // the swarm task itself.
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let cmd_tx_for_loop = cmd_tx.clone();
-        let mut cmd_sender = self.command_sender.lock().await;
-        *cmd_sender = Some(cmd_tx);
-        drop(cmd_sender);
-
-        // Spawn event loop
-        let peers_clone = self.peers.clone();
-        let is_running_clone = self.is_running.clone();
-        let file_transfer_clone = self.file_transfer_service.clone();
-        let shared_files_clone = self.shared_files.clone();
-        let download_dir_clone = self.download_directory.clone();
-        let active_downloads_clone = self.active_downloads.clone();
-        let download_credentials_clone = self.download_credentials.clone();
-        let bootstrap_gate = self.bootstrap_gate.clone();
-        let events_clone = events.clone();
-
-        tokio::spawn(async move {
-            event_loop(
-                swarm,
-                peers_clone,
-                is_running_clone,
-                events_clone,
-                cmd_rx,
-                cmd_tx_for_loop,
-                file_transfer_clone,
-                shared_files_clone,
-                download_dir_clone,
-                active_downloads_clone,
-                download_credentials_clone,
-                bootstrap_gate,
-            )
-            .await;
-        });
-
-        Ok(format!("DHT started with peer ID: {}", peer_id))
-    }
-
-    pub async fn stop(&self) -> Result<(), String> {
-        let mut running = self.is_running.lock().await;
-        *running = false;
-
-        let mut peers = self.peers.lock().await;
-        peers.clear();
-        self.bootstrap_gate.reset();
-
-        Ok(())
-    }
-
-    pub fn is_bootstrap_ready(&self) -> bool {
-        self.bootstrap_gate.is_ready()
-    }
-
-    pub async fn wait_for_bootstrap_ready(&self, timeout: Duration) -> bool {
-        self.bootstrap_gate.wait_ready(timeout).await
-    }
-
-    pub async fn is_running(&self) -> bool {
-        *self.is_running.lock().await
-    }
-
-    pub async fn get_peers(&self) -> Vec<PeerInfo> {
-        self.peers.lock().await.clone()
-    }
-
-    pub async fn get_stats(&self) -> NetworkStats {
-        let peers = self.peers.lock().await;
-        NetworkStats {
-            connected_peers: peers.len(),
-            total_peers: peers.len(),
-        }
-    }
-
-    pub async fn get_peer_id(&self) -> Option<String> {
-        self.local_peer_id.lock().await.clone()
-    }
-
-    pub async fn get_health(&self) -> DhtHealthInfo {
-        let running = *self.is_running.lock().await;
-        if !running {
-            return DhtHealthInfo {
-                running: false,
-                peer_id: None,
-                listening_addresses: vec![],
-                connected_peer_count: 0,
-                kademlia_peers: 0,
-                bootstrap_nodes: get_bootstrap_nodes()
-                    .iter()
-                    .map(|addr| BootstrapNodeStatus {
-                        address: addr.clone(),
-                        reachable: false,
-                    })
-                    .collect(),
-                shared_files: 0,
-                protocols: vec![],
-            };
-        }
-
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            if tx
-                .send(SwarmCommand::HealthCheck {
-                    response_tx: resp_tx,
-                })
-                .is_ok()
+            let key = identity::Keypair::generate_ed25519();
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
             {
-                if let Ok(mut info) = resp_rx.await {
-                    info.peer_id = self.local_peer_id.lock().await.clone();
-                    info.shared_files = self.shared_files.lock().await.len();
-                    return info;
-                }
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
             }
-        }
-
-        // Fallback if command channel fails
-        let peers = self.peers.lock().await;
-        let shared = self.shared_files.lock().await;
-        DhtHealthInfo {
-            running: true,
-            peer_id: self.local_peer_id.lock().await.clone(),
-            listening_addresses: vec![],
-            connected_peer_count: peers.len(),
-            kademlia_peers: 0,
-            bootstrap_nodes: vec![],
-            shared_files: shared.len(),
-            protocols: vec![],
-        }
-    }
-
-    pub async fn ping_peer(
-        &self,
-        peer_id: String,
-        app: tauri::AppHandle,
-    ) -> Result<String, String> {
-        self.ping_peer_with_sink(peer_id, EventSink::tauri(app))
-            .await
-    }
-
-    pub async fn ping_peer_headless(&self, peer_id: String) -> Result<String, String> {
-        self.ping_peer_with_sink(peer_id, EventSink::noop()).await
-    }
-
-    async fn ping_peer_with_sink(
-        &self,
-        peer_id: String,
-        events: EventSink,
-    ) -> Result<String, String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            tx.send(SwarmCommand::SendPing(peer_id_parsed))
+            let mut file = options.open(path).map_err(|e| e.to_string())?;
+            use std::io::Write;
+            file.write_all(&key.to_protobuf_encoding().map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
-            events.emit("ping-sent", peer_id.clone());
-            Ok(format!("Ping sent to {}", peer_id))
-        } else {
-            Err("DHT not running".to_string())
+            file.sync_all().map_err(|e| e.to_string())?;
+            Ok(key)
         }
-    }
-
-    pub async fn send_file(
-        &self,
-        peer_id: String,
-        transfer_id: String,
-        file_name: String,
-        file_data: Vec<u8>,
-        price_wei: String,
-        sender_wallet: String,
-        file_hash: String,
-        file_size: u64,
-    ) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            tx.send(SwarmCommand::SendFile {
-                peer_id: peer_id_parsed,
-                transfer_id,
-                file_name,
-                file_data,
-                price_wei,
-                sender_wallet,
-                file_hash,
-                file_size,
-            })
-            .map_err(|e| e.to_string())?;
-            Ok(())
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Store a value in the DHT
-    pub async fn put_dht_value(&self, key: String, value: String) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::PutDhtValue {
-                key,
-                value,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Get a value from the DHT
-    pub async fn get_dht_value(&self, key: String) -> Result<Option<String>, String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::GetDhtValue { key, response_tx })
-                .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Remove a record from the local Kademlia store. Prevents the auto-
-    /// republish cycle from continuing to push stale records to the network.
-    /// Fire-and-forget — the remote TTL still applies to any replicas.
-    pub async fn remove_dht_record(&self, key: String) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            tx.send(SwarmCommand::RemoveDhtRecord { key })
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Register this node as a Kademlia provider for a file hash. After this
-    /// returns, Kademlia automatically republishes on the configured interval
-    /// until `stop_providing_file` is called or the node shuts down.
-    pub async fn start_providing_file(&self, file_hash: String) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::StartProviding {
-                file_hash,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Stop advertising this node as a provider for a file hash.
-    pub async fn stop_providing_file(&self, file_hash: String) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            tx.send(SwarmCommand::StopProviding { file_hash })
-                .map_err(|e| e.to_string())?;
-            Ok(())
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Look up the current provider peer IDs (live seeders) for a file hash.
-    /// Returns the union of provider sets found across the DHT query.
-    pub async fn get_file_providers(&self, file_hash: String) -> Result<Vec<String>, String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::GetProviders {
-                file_hash,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Check if a specific peer is currently connected to the swarm
-    pub async fn is_peer_connected(&self, peer_id: &str) -> Result<bool, String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let peer_id_parsed = PeerId::from_str(peer_id).map_err(|e| e.to_string())?;
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::CheckPeerConnected {
-                peer_id: peer_id_parsed,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Send an echo message to a peer and wait for the response
-    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::Echo {
-                peer_id: peer_id_parsed,
-                payload,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Request a file from a remote peer by hash (initiates chunked transfer).
-    /// `multiaddrs` are known addresses for the peer (from DHT SeederInfo) used for direct dialing.
-    pub async fn request_file(
-        &self,
-        peer_id: String,
-        file_hash: String,
-        request_id: String,
-        multiaddrs: Vec<String>,
-        folder_hash: Option<String>,
-    ) -> Result<(), String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::RequestFileInfo {
-                peer_id: peer_id_parsed,
-                request_id,
-                file_hash,
-                folder_hash,
-                multiaddrs,
-                response_tx,
-            })
-            .map_err(|e| e.to_string())?;
-            response_rx.await.map_err(|e| e.to_string())?
-        } else {
-            Err("DHT not running".to_string())
-        }
-    }
-
-    /// Get this node's listening addresses (TCP + relay circuit).
-    /// Used to populate SeederInfo.multiaddrs so other peers can dial us directly.
-    pub async fn get_listening_addresses(&self) -> Vec<String> {
-        let sender = self.command_sender.lock().await;
-        if let Some(tx) = sender.as_ref() {
-            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            if tx
-                .send(SwarmCommand::GetListeningAddresses { response_tx })
-                .is_ok()
-            {
-                response_rx.await.unwrap_or_default()
-            } else {
-                vec![]
-            }
-        } else {
-            vec![]
-        }
+        Err(e) => Err(e.to_string()),
     }
 }
-
-/// Run the full PaymentProof verification dance off the libp2p reactor.
-/// Distinguishes "tx not yet mined" (retryable) from "wrong amount or
-/// recipient" (permanent), and atomically claims the tx in the spent
-/// ledger only on success so the buyer can safely retry the same
-/// PaymentProof if the seeder's RPC node was lagging.
-async fn verify_payment_proof(
-    payment_tx: &str,
-    payer_address: &str,
-    expected_wallet: &str,
-    expected_price: u128,
-    file_hash: &str,
-    scope: PaymentScope,
-    request_id: String,
-    events: &EventSink,
-    authorized_chunks: SeederAuthorizedChunksMap,
-    peer_id: PeerId,
-) -> ChunkResponse {
-    // Stage 3: replay guard — peek before doing any chain work so we
-    // don't burn an RPC call on a tx that's already been redeemed.
-    match payment_claim_status(payment_tx, &scope, payer_address, &peer_id).await {
-        PaymentClaimStatus::Available => {}
-        PaymentClaimStatus::ClaimedSameFolder => {
-            println!(
-                "✅ Reusing verified folder payment tx {} for member {}",
-                payment_tx, file_hash
-            );
-            remember_authorized_chunk_access(
-                &authorized_chunks,
-                request_id.clone(),
-                peer_id,
-                scope.clone(),
-            )
-            .await;
-            return ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: true,
-                error: None,
-            };
-        }
-        PaymentClaimStatus::ClaimedDirectFile | PaymentClaimStatus::ClaimedOtherScope => {
-            println!(
-                "❌ Payment tx {} already redeemed for a different download scope",
-                payment_tx
-            );
-            return ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: false,
-                error: Some(
-                    "Payment tx already redeemed for a different file or folder".to_string(),
-                ),
-            };
-        }
-    }
-
-    // FM-A25: distinguish mined-vs-not so the buyer gets a retryable
-    // "not yet confirmed" answer instead of a generic verification
-    // failure. The spent-tx ledger only records on success, so the
-    // buyer can safely retry the same PaymentProof.
-    let mined = match crate::wallet::wait_for_tx_mined(payment_tx).await {
-        Ok(v) => v,
-        Err(e) => {
-            println!("❌ wait_for_tx_mined error: {}", e);
-            return ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: false,
-                error: Some(format!("Payment verification error: {} (please retry)", e)),
-            };
-        }
-    };
-    if !mined {
-        println!(
-            "⏳ Payment tx {} not yet mined — buyer should retry shortly",
-            payment_tx
-        );
-        return ChunkResponse::PaymentAck {
-            request_id,
-            file_hash: file_hash.to_string(),
-            accepted: false,
-            error: Some(
-                "Payment not yet confirmed on-chain (retryable) — please retry in 30s".to_string(),
-            ),
-        };
-    }
-
-    match verify_payment_on_chain(payment_tx, payer_address, expected_wallet, expected_price).await
-    {
-        Ok(true) => {
-            // Atomically claim this tx so concurrent replays can't slip
-            // through between the peek above and this point.
-            match claim_payment_tx(payment_tx, &scope, payer_address, &peer_id).await {
-                Ok(PaymentClaimStatus::Available) => {}
-                Ok(PaymentClaimStatus::ClaimedSameFolder) => {
-                    println!(
-                        "✅ Concurrent folder payment tx {} already claimed for this folder",
-                        payment_tx
-                    );
-                }
-                Ok(PaymentClaimStatus::ClaimedDirectFile)
-                | Ok(PaymentClaimStatus::ClaimedOtherScope) => {
-                    println!(
-                        "❌ Race: tx {} redeemed by a concurrent request",
-                        payment_tx
-                    );
-                    return ChunkResponse::PaymentAck {
-                        request_id,
-                        file_hash: file_hash.to_string(),
-                        accepted: false,
-                        error: Some(
-                            "Payment tx already redeemed by a concurrent request".to_string(),
-                        ),
-                    };
-                }
-                Err(e) => {
-                    println!(
-                        "❌ Payment tx {} verified but replay-protection ledger could not be persisted: {}",
-                        payment_tx, e
-                    );
-                    return ChunkResponse::PaymentAck {
-                        request_id,
-                        file_hash: file_hash.to_string(),
-                        accepted: false,
-                        error: Some(
-                            "Payment verified but replay-protection could not be persisted; please retry later".to_string(),
-                        ),
-                    };
-                }
-            }
-            println!(
-                "✅ Payment verified for {} from {}",
-                file_hash, payer_address
-            );
-            remember_authorized_chunk_access(
-                &authorized_chunks,
-                request_id.clone(),
-                peer_id,
-                scope,
-            )
-            .await;
-            let price_wei_str = expected_price.to_string();
-            let _ = events.emit(
-                "chiraldrop-payment-received",
-                serde_json::json!({
-                    "fileHash": file_hash,
-                    "txHash": payment_tx,
-                    "priceWei": price_wei_str,
-                    "fromWallet": payer_address,
-                    "toWallet": expected_wallet,
-                }),
-            );
-            ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: true,
-                error: None,
-            }
-        }
-        Ok(false) => {
-            println!("❌ Payment verification failed for {}", file_hash);
-            ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: false,
-                error: Some(
-                    "Payment verification failed: insufficient amount or wrong recipient"
-                        .to_string(),
-                ),
-            }
-        }
-        Err(e) => {
-            println!("❌ Payment verification error: {}", e);
-            ChunkResponse::PaymentAck {
-                request_id,
-                file_hash: file_hash.to_string(),
-                accepted: false,
-                error: Some(format!("Payment verification error: {}", e)),
-            }
-        }
-    }
+fn index(network: &NetworkIdentity, model: Option<&str>) -> kad::RecordKey {
+    let bytes = protocol::canonical_json(&(network, model)).expect("network index serializes");
+    kad::RecordKey::new(&protocol::digest(&bytes))
 }
-
-/// Verify a payment transaction on-chain.
-/// Checks that the transaction was sent to the expected recipient with at least the expected value.
-async fn verify_payment_on_chain(
-    tx_hash: &str,
-    expected_sender: &str,
-    expected_recipient: &str,
-    expected_min_wei: u128,
-) -> Result<bool, String> {
-    // Use the wallet module's verify_payment which uses the shared RPC client
-    // and checks both the transaction details and the receipt status. Stage 3:
-    // we now pass the sender through so a stranger can't claim someone else's
-    // payment tx to unlock a file.
-    crate::wallet::verify_payment(
-        tx_hash,
-        expected_sender,
-        expected_recipient,
-        expected_min_wei,
-    )
-    .await
-}
-
-// ============================================================================
-// Spent-tx guard (Stage 3).
-//
-// Each successful payment tx is persisted under the scope it unlocked. Direct
-// file payments can only unlock one file delivery. Folder payments can unlock
-// every manifest member for that same folder, payer, and peer, but cannot be
-// replayed by another downloader that learns the public tx hash.
-//
-// Store: a set of lowercased claim keys, JSON-serialised as
-// `{"spent":[...]}`, persisted at `<data_dir>/seeder_spent_tx.json`.
-// Corruption on read is treated as an empty store (the on-chain verification
-// still prevents double withdrawal of funds; worst case is one stale-replay
-// delivery after a corrupted restart, which we judge acceptable vs. crashing
-// the seeder).
-// ============================================================================
-
-static SPENT_TX_STORE: tokio::sync::OnceCell<Mutex<HashSet<String>>> =
-    tokio::sync::OnceCell::const_new();
-
-#[derive(Clone, Debug)]
-enum PaymentScope {
-    DirectFile { file_hash: String },
-    Folder { folder_hash: String },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PaymentClaimStatus {
-    Available,
-    ClaimedDirectFile,
-    ClaimedSameFolder,
-    ClaimedOtherScope,
-}
-
-fn spent_tx_path() -> std::path::PathBuf {
-    crate::network::data_dir().join("seeder_spent_tx.json")
-}
-
-async fn load_spent_tx_set() -> HashSet<String> {
-    let path = spent_tx_path();
-    match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
-            .ok()
-            .and_then(|v| v.get("spent").cloned())
-            .and_then(|a| serde_json::from_value::<Vec<String>>(a).ok())
-            .map(|v| v.into_iter().map(|s| s.to_lowercase()).collect())
-            .unwrap_or_default(),
-        Err(_) => HashSet::new(),
-    }
-}
-
-async fn spent_tx_store() -> &'static Mutex<HashSet<String>> {
-    SPENT_TX_STORE
-        .get_or_init(|| async { Mutex::new(load_spent_tx_set().await) })
-        .await
-}
-
-async fn persist_spent_tx_set(set: &HashSet<String>) -> Result<(), String> {
-    persist_spent_tx_set_to_path(&spent_tx_path(), set).await
-}
-
-async fn persist_spent_tx_set_to_path(path: &Path, set: &HashSet<String>) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            format!(
-                "create seeder spent-tx ledger directory {}: {}",
-                parent.display(),
-                e
-            )
-        })?;
-    }
-    let mut list: Vec<&String> = set.iter().collect();
-    list.sort();
-    let json = serde_json::json!({ "spent": list }).to_string();
-    tokio::fs::write(path, json)
-        .await
-        .map_err(|e| format!("write seeder spent-tx ledger {}: {}", path.display(), e))
-}
-
-fn payment_scope_key(
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> String {
-    let tx = tx_hash.to_lowercase();
-    match scope {
-        PaymentScope::DirectFile { file_hash } => {
-            format!("file:{}:{}", tx, file_hash.to_lowercase())
-        }
-        PaymentScope::Folder { folder_hash } => {
-            format!(
-                "folder:{}:{}:{}:{}",
-                tx,
-                normalize_folder_hash(folder_hash),
-                payer_address.trim().to_lowercase(),
-                peer_id
-            )
-        }
-    }
-}
-
-fn ledger_entry_uses_tx(entry: &str, tx_hash: &str) -> bool {
-    let tx = tx_hash.to_lowercase();
-    entry == tx
-        || entry.starts_with(&format!("{}:", tx))
-        || entry.starts_with(&format!("file:{}:", tx))
-        || entry.starts_with(&format!("folder:{}:", tx))
-}
-
-fn ledger_entry_matches_scope(
-    entry: &str,
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> bool {
-    let tx = tx_hash.to_lowercase();
-    match scope {
-        PaymentScope::DirectFile { file_hash } => {
-            let file_hash = file_hash.to_lowercase();
-            entry == format!("file:{}:{}", tx, file_hash)
-                || entry == format!("{}:{}", tx, file_hash)
-        }
-        PaymentScope::Folder { .. } => {
-            entry == payment_scope_key(tx_hash, scope, payer_address, peer_id)
-        }
-    }
-}
-
-fn classify_payment_claim(
-    spent: &HashSet<String>,
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> PaymentClaimStatus {
-    let exact_scope_match = spent
-        .iter()
-        .any(|entry| ledger_entry_matches_scope(entry, tx_hash, scope, payer_address, peer_id));
-    if exact_scope_match {
-        return match scope {
-            PaymentScope::DirectFile { .. } => PaymentClaimStatus::ClaimedDirectFile,
-            PaymentScope::Folder { .. } => PaymentClaimStatus::ClaimedSameFolder,
-        };
-    }
-    if spent
-        .iter()
-        .any(|entry| ledger_entry_uses_tx(entry, tx_hash))
-    {
-        PaymentClaimStatus::ClaimedOtherScope
-    } else {
-        PaymentClaimStatus::Available
-    }
-}
-
-async fn payment_claim_status(
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> PaymentClaimStatus {
-    let store = spent_tx_store().await;
-    let guard = store.lock().await;
-    classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id)
-}
-
-/// Records a verified payment claim. `Available` means this call inserted a
-/// new claim. A same-folder repeat is accepted because one folder payment
-/// unlocks all manifest members.
-async fn claim_payment_tx(
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> Result<PaymentClaimStatus, String> {
-    let store = spent_tx_store().await;
-    claim_payment_tx_in_store(
-        store,
-        &spent_tx_path(),
-        tx_hash,
-        scope,
-        payer_address,
-        peer_id,
-    )
-    .await
-}
-
-async fn claim_payment_tx_in_store(
-    store: &Mutex<HashSet<String>>,
-    path: &Path,
-    tx_hash: &str,
-    scope: &PaymentScope,
-    payer_address: &str,
-    peer_id: &PeerId,
-) -> Result<PaymentClaimStatus, String> {
-    let mut guard = store.lock().await;
-    let status = classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id);
-    if status != PaymentClaimStatus::Available {
-        return Ok(status);
-    }
-    let key = payment_scope_key(tx_hash, scope, payer_address, peer_id);
-    let mut snapshot = guard.clone();
-    snapshot.insert(key);
-    persist_spent_tx_set_to_path(path, &snapshot).await?;
-    *guard = snapshot;
-    Ok(PaymentClaimStatus::Available)
-}
-
-// Legacy verify function kept for reference but replaced by wallet::verify_payment above
-
-const P2P_PORT_ENV: &str = "CHIRAL_P2P_PORT";
-
-fn parse_configured_p2p_port(raw_port: Option<&str>) -> Result<u16, String> {
-    let Some(raw_port) = raw_port else {
-        return Ok(0);
-    };
-    raw_port.parse::<u16>().map_err(|_| {
-        format!(
-            "{} requires a valid port number from 0 to 65535, got '{}'",
-            P2P_PORT_ENV, raw_port
-        )
-    })
-}
-
-fn configured_p2p_port_from_env() -> Result<u16, String> {
-    match std::env::var(P2P_PORT_ENV) {
-        Ok(raw_port) => parse_configured_p2p_port(Some(&raw_port)),
-        Err(std::env::VarError::NotPresent) => parse_configured_p2p_port(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            Err(format!("{} must be valid UTF-8", P2P_PORT_ENV))
-        }
-    }
-}
-
-async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
-    let local_key = load_or_generate_keypair();
-    let local_peer_id = PeerId::from(local_key.public());
-
-    println!("Local peer ID: {}", local_peer_id);
-
-    let kad_store = kad::store::MemoryStore::new(local_peer_id);
-    // Use custom Kademlia protocol name to match v1 bootstrap nodes
-    let mut kad_config = kad::Config::default();
-    kad_config.set_protocol_names(vec![StreamProtocol::new("/chiral/kad/1.0.0")]);
-    // Provider records carry the live seeder list for each file hash. TTL must
-    // be significantly larger than the republish interval so a brief network
-    // hiccup doesn't evict a healthy seeder, while short enough that offline
-    // seeders drop out of search results quickly. With a 10 min TTL and 3 min
-    // republish, a healthy peer refreshes ~3x before expiry, and an offline
-    // peer's stale entry clears within 10 minutes.
-    kad_config.set_provider_record_ttl(Some(Duration::from_secs(10 * 60)));
-    kad_config.set_provider_publication_interval(Some(Duration::from_secs(3 * 60)));
-    // Regular KV records (chiral_seeder_* per-seeder metadata, chiral_file_*
-    // immutable headers) default to a 22-hour publish cycle AND a 1-hour
-    // replication job cadence. Both gates matter: the PutRecordJob only
-    // runs at `record_replication_interval`, and within a run only
-    // publishes when `record_publication_interval` has elapsed. Default
-    // setup means a failed initial put only retries once per hour.
-    //
-    // Tighten all three so a QuorumFailed put on startup retries within
-    // minutes. TTL must stay larger than the publication interval.
-    kad_config.set_replication_interval(Some(Duration::from_secs(3 * 60)));
-    kad_config.set_publication_interval(Some(Duration::from_secs(3 * 60)));
-    kad_config.set_record_ttl(Some(Duration::from_secs(22 * 60)));
-    let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
+fn build_swarm(
+    key: identity::Keypair,
+    network: &NetworkIdentity,
+) -> Result<Swarm<Behaviour>, String> {
+    let peer = key.public().to_peer_id();
+    let scope = protocol::hash_hex(&protocol::canonical_json(network)?);
+    let mut kc = kad::Config::default();
+    kc.set_protocol_names(vec![StreamProtocol::try_from_owned(format!(
+        "/chiral/inference/kad/1/{scope}"
+    ))
+    .map_err(|e| e.to_string())?]);
+    kc.set_query_timeout(WINDOW);
+    kc.set_provider_record_ttl(Some(Duration::from_secs(600)));
+    kc.set_provider_publication_interval(Some(Duration::from_secs(120)));
+    let mut sc = kad::store::MemoryStoreConfig::default();
+    sc.max_records = 0;
+    sc.max_provided_keys = 128;
+    sc.max_providers_per_key = MAX_PEERS;
+    let mut kad =
+        kad::Behaviour::with_config(peer, kad::store::MemoryStore::with_config(peer, sc), kc);
     kad.set_mode(Some(kad::Mode::Server));
-
-    // Add bootstrap nodes to Kademlia routing table
-    for addr_str in get_bootstrap_nodes() {
-        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            // Extract peer ID from the multiaddr (last component is /p2p/<peer_id>)
-            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                // Remove the /p2p/<peer_id> suffix to get the transport address
-                let transport_addr = remove_peer_id_from_multiaddr(&addr);
-                kad.add_address(&peer_id, transport_addr);
-                println!("Added bootstrap node to Kademlia: {}", peer_id);
-            }
-        }
-    }
-
-    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
-    let ping =
-        ping::Behaviour::new(ping::Config::new().with_interval(std::time::Duration::from_secs(15)));
-
-    // Phase 4 of version enforcement: stamp our compile-time version into
-    // the Identify `agent_version` so remote peers can decide whether to
-    // talk to us. Format matches the version-policy comparator (a leading
-    // semver is parsed; "chiral/" prefix is informational).
-    let identify_config = identify::Config::new("/chiral/id/1.0.0".to_string(), local_key.public())
-        .with_agent_version(crate::version::agent_version_string());
-    let identify = identify::Behaviour::new(identify_config);
-
-    let ping_protocol = request_response::cbor::Behaviour::new(
+    let manifest = rr::Behaviour::with_codec(
+        ManifestCodec,
         [(
-            StreamProtocol::new("/chiral/ping/1.0.0"),
-            request_response::ProtocolSupport::Full,
+            StreamProtocol::new("/chiral/inference/manifest/1"),
+            rr::ProtocolSupport::Full,
         )],
-        request_response::Config::default().with_request_timeout(std::time::Duration::from_secs(5)),
+        rr::Config::default()
+            .with_request_timeout(Duration::from_secs(4))
+            .with_max_concurrent_streams(64),
     );
-
-    let file_transfer = cbor_codec::Behaviour::new(
-        [(
-            StreamProtocol::new("/chiral/file-transfer/1.0.0"),
-            request_response::ProtocolSupport::Full,
-        )],
-        request_response::Config::default()
-            .with_request_timeout(std::time::Duration::from_secs(30)),
+    let identify = identify::Behaviour::new(
+        identify::Config::new(format!("/chiral/inference/id/1/{scope}"), key.public())
+            .with_agent_version(crate::version::agent_version_string()),
     );
-
-    let file_request = cbor_codec::Behaviour::new(
-        [(
-            StreamProtocol::new("/chiral/file-request/3.0.0"),
-            request_response::ProtocolSupport::Full,
-        )],
-        request_response::Config::default()
-            .with_request_timeout(std::time::Duration::from_secs(12)),
-    );
-
-    let echo_protocol = request_response::cbor::Behaviour::new(
-        [(
-            StreamProtocol::new("/chiral/echo/1.0.0"),
-            request_response::ProtocolSupport::Full,
-        )],
-        request_response::Config::default().with_request_timeout(std::time::Duration::from_secs(5)),
-    );
-
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
+    let mut relay_config = relay::Config::default();
+    relay_config.max_reservations = 128;
+    relay_config.max_reservations_per_peer = 2;
+    relay_config.max_circuits = 128;
+    relay_config.max_circuits_per_peer = 4;
+    let behaviour = Behaviour {
+        limits: connection_limits::Behaviour::new(connection_limits()),
+        kad,
+        manifest,
+        identify,
+        ping: ping::Behaviour::default(),
+        relay: relay::Behaviour::new(peer, relay_config),
+    };
+    Ok(libp2p::SwarmBuilder::with_existing_identity(key)
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
             noise::Config::new,
             yamux::Config::default,
-        )?
-        .with_relay_client(noise::Config::new, yamux::Config::default)?
-        .with_behaviour(|_key, relay_client| {
-            let dcutr = dcutr::Behaviour::new(local_peer_id);
-            DhtBehaviour {
-                relay_client,
-                dcutr,
-                kad,
-                mdns,
-                ping,
-                identify,
-                ping_protocol,
-                file_transfer,
-                file_request,
-                echo_protocol,
-            }
-        })?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
-        .build();
-
-    // Listen on all interfaces (dual-stack: IPv4 + IPv6).
-    // CHIRAL_P2P_PORT pins the libp2p TCP port — set this on containerized nodes
-    // (k3s/Docker) so the bound port matches the externally exposed NodePort.
-    // Without it, the OS picks a random ephemeral port that won't be reachable
-    // from outside the pod and will leave stale unreachable multiaddrs in the DHT.
-    let p2p_port = configured_p2p_port_from_env()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?)?;
-    swarm.listen_on(format!("/ip6/::/tcp/{}", p2p_port).parse()?)?;
-
-    // Request relay reservations ONLY on nodes that run a relay server.
-    // Using get_relay_nodes() (not get_bootstrap_nodes()) to avoid sending RESERVE to
-    // non-relay nodes — a failed RESERVE closes the transport listener, which drops the
-    // receiver end of the to_listener channel. On the handler side, the next
-    // forward_messages_to_transport_listener poll sees the closed channel and resets
-    // Reservation to None, causing STOP requests to be denied with NO_RESERVATION.
-    //
-    // Only one listen_on per unique relay peer ID — multiple listen_on calls for the same
-    // relay (e.g., IPv4 + IPv6) cause multiple RESERVE requests on the same handler.
-    //
-    // Do NOT call swarm.dial() or kad.bootstrap() here — the swarm polls behaviours
-    // BEFORE the transport, so Kademlia's bootstrap query would race and dial the relay
-    // server before the relay client transport has delivered the ListenReq. kad.bootstrap()
-    // is deferred to the event loop (with a timer fallback).
-    let mut relay_peer_ids_seen = std::collections::HashSet::new();
-    for addr_str in get_relay_nodes() {
-        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                // Only one listen_on per unique relay peer
-                if !relay_peer_ids_seen.insert(peer_id) {
-                    println!("⏭️ Skipping duplicate relay listen for peer {}", peer_id);
-                    continue;
-                }
-                let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
-                match swarm.listen_on(relay_addr.clone()) {
-                    Ok(id) => println!(
-                        "✅ Relay listen requested: {} (listener {:?})",
-                        relay_addr, id
-                    ),
-                    Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
-                }
-            }
-        }
-    }
-
-    Ok((swarm, local_peer_id.to_string()))
+        )
+        .map_err(|e| e.to_string())?
+        .with_behaviour(|_| behaviour)
+        .map_err(|e| e.to_string())?
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(120)))
+        .build())
 }
 
-/// Path to the failed-peers persistence file.
-fn failed_peers_path() -> Option<PathBuf> {
-    Some(crate::network::data_dir().join("failed_peers.txt"))
-}
-
-/// Path to the persisted libp2p identity keypair.
-fn identity_key_path() -> Option<PathBuf> {
-    Some(crate::network::data_dir().join("peer_identity.key"))
-}
-
-fn hosting_agreement_path(agreement_id: &str) -> PathBuf {
-    crate::network::data_dir()
-        .join("agreements")
-        .join(format!("{}.json", agreement_id))
-}
-
-fn save_hosting_agreement_to_path(
-    path: &Path,
-    agreement: &serde_json::Value,
-    action: &str,
-) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "{action}: create hosting agreement directory {}: {e}",
-                parent.display()
+impl DhtService {
+    pub async fn start(
+        config: DhtConfig,
+        network: NetworkIdentity,
+        registry: Arc<OfferRegistry>,
+    ) -> Result<Self, String> {
+        let key = load_identity(&config.identity_file)?;
+        let peer = key.public().to_peer_id();
+        let mut swarm = build_swarm(key, &network)?;
+        swarm
+            .listen_on(
+                config
+                    .listen
+                    .parse::<Multiaddr>()
+                    .map_err(|e| e.to_string())?,
             )
-        })?;
-    }
-    let json = serde_json::to_string(agreement)
-        .map_err(|e| format!("{action}: serialize hosting agreement JSON: {e}"))?;
-    std::fs::write(path, json)
-        .map_err(|e| format!("{action}: write hosting agreement {}: {e}", path.display()))
-}
-
-fn save_hosting_agreement(
-    agreement_id: &str,
-    agreement: &serde_json::Value,
-    action: &str,
-) -> Result<(), String> {
-    save_hosting_agreement_to_path(&hosting_agreement_path(agreement_id), agreement, action)
-}
-
-fn emit_hosting_agreement_persistence_error(
-    events: &EventSink,
-    agreement_id: &str,
-    action: &str,
-    err: String,
-) {
-    println!(
-        "⚠️ Failed to persist hosting agreement {} while {}: {}",
-        agreement_id, action, err
-    );
-    let _ = events.emit(
-        "hosting_agreement_persistence_error",
-        serde_json::json!({
-            "agreementId": agreement_id,
-            "action": action,
-            "error": err,
-        }),
-    );
-}
-
-/// Load or generate the libp2p Ed25519 keypair.
-/// If a keypair file exists on disk, it is loaded so the PeerId stays
-/// consistent across app restarts.  Otherwise a fresh keypair is generated
-/// and written to disk for future runs.
-fn load_or_generate_keypair() -> libp2p::identity::Keypair {
-    if let Some(path) = identity_key_path() {
-        // Try to load existing key
-        if path.exists() {
-            if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(kp) = libp2p::identity::Keypair::from_protobuf_encoding(&bytes) {
-                    println!("✅ Loaded persisted peer identity from {:?}", path);
-                    return kp;
-                } else {
-                    println!("⚠️ Corrupt peer identity file, generating new keypair");
-                }
+            .map_err(|e| e.to_string())?;
+        if config.bootstrap.len() > 32 {
+            return Err("too many bootstrap peers".into());
+        }
+        for raw in config.bootstrap {
+            let mut addr: Multiaddr = raw
+                .parse()
+                .map_err(|e: libp2p::multiaddr::Error| e.to_string())?;
+            let Some(libp2p::multiaddr::Protocol::P2p(id)) = addr.pop() else {
+                return Err("bootstrap address must end in /p2p/peer-id".into());
+            };
+            swarm.behaviour_mut().kad.add_address(&id, addr.clone());
+            swarm.add_peer_address(id, addr);
+            if id != peer {
+                let _ = swarm.dial(id);
             }
         }
-
-        // Generate and persist
-        let kp = libp2p::identity::Keypair::generate_ed25519();
-        if let Ok(encoded) = kp.to_protobuf_encoding() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&path, &encoded) {
-                println!("⚠️ Failed to save peer identity: {}", e);
-            } else {
-                println!("✅ Generated and saved new peer identity to {:?}", path);
-            }
-        }
-        kp
-    } else {
-        // No data dir available — ephemeral key only
-        libp2p::identity::Keypair::generate_ed25519()
-    }
-}
-
-/// Load failed peers from disk, discarding entries older than 24 hours.
-fn load_failed_peers() -> HashSet<PeerId> {
-    let mut set = HashSet::new();
-    let Some(path) = failed_peers_path() else {
-        return set;
-    };
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return set;
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let cutoff = now.saturating_sub(24 * 3600);
-    for line in contents.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() == 2 {
-            if let Ok(ts) = parts[1].parse::<u64>() {
-                if ts >= cutoff {
-                    if let Ok(pid) = PeerId::from_str(parts[0]) {
-                        set.insert(pid);
-                    }
-                }
-            }
-        }
-    }
-    set
-}
-
-/// Save the current failed peers set to disk.
-fn save_failed_peers(failed: &HashSet<PeerId>) -> Result<(), String> {
-    let path =
-        failed_peers_path().ok_or_else(|| "failed-peer cache path is unavailable".to_string())?;
-    save_failed_peers_to_path_at(&path, failed, SystemTime::now())
-}
-
-fn save_failed_peers_to_path_at(
-    path: &Path,
-    failed: &HashSet<PeerId>,
-    now: SystemTime,
-) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "create failed-peer cache directory {}: {e}",
-                parent.display()
-            )
-        })?;
-    }
-    let now = now
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| {
-            format!("resolve failed-peer cache timestamp: system clock before UNIX_EPOCH: {e}")
-        })?
-        .as_secs();
-    let mut lines: Vec<String> = failed
-        .iter()
-        .map(|pid| format!("{}\t{}", pid, now))
-        .collect();
-    lines.sort();
-    std::fs::write(path, lines.join("\n"))
-        .map_err(|e| format!("write failed-peer cache {}: {e}", path.display()))
-}
-
-fn log_failed_peer_cache_save(failed: &HashSet<PeerId>, context: &str) {
-    if let Err(err) = save_failed_peers(failed) {
-        println!(
-            "⚠️ Failed to persist failed-peer cache while {}: {}",
-            context, err
-        );
-    }
-}
-
-fn peer_timestamp_secs_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
-    now.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-}
-
-fn peer_timestamp_millis_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
-    now.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-}
-
-fn current_peer_timestamp_secs(context: &str) -> i64 {
-    match peer_timestamp_secs_at(SystemTime::now()) {
-        Ok(timestamp) => timestamp,
-        Err(err) => {
-            println!(
-                "⚠️ System clock is before UNIX_EPOCH while {}; using peer timestamp 0: {}",
-                context, err
-            );
-            0
-        }
-    }
-}
-
-fn kademlia_peer_sync_timestamp_secs_at(
-    now: SystemTime,
-) -> Result<i64, std::time::SystemTimeError> {
-    peer_timestamp_secs_at(now)
-}
-
-fn current_kademlia_peer_sync_timestamp_secs(context: &str) -> Option<i64> {
-    match kademlia_peer_sync_timestamp_secs_at(SystemTime::now()) {
-        Ok(timestamp) => Some(timestamp),
-        Err(err) => {
-            println!(
-                "System clock is before UNIX_EPOCH while {}; skipping visible Kademlia peer sync: {}",
-                context, err
-            );
-            None
-        }
-    }
-}
-
-fn current_peer_timestamp_millis(context: &str) -> i64 {
-    match peer_timestamp_millis_at(SystemTime::now()) {
-        Ok(timestamp) => timestamp,
-        Err(err) => {
-            println!(
-                "⚠️ System clock is before UNIX_EPOCH while {}; using peer timestamp 0: {}",
-                context, err
-            );
-            0
-        }
-    }
-}
-
-/// Decrement pending file-info seeder attempts for a download request.
-/// Returns the remaining number of candidate attempts.
-fn decrement_file_request_attempt(
-    pending_attempts: &mut HashMap<String, usize>,
-    request_id: &str,
-) -> usize {
-    if let Some(count) = pending_attempts.get_mut(request_id) {
-        if *count > 1 {
-            *count -= 1;
-            *count
-        } else {
-            pending_attempts.remove(request_id);
-            0
-        }
-    } else {
-        0
-    }
-}
-
-fn chunk_retry_delay(attempt: u8, chunk_index: u32) -> std::time::Duration {
-    let idx = attempt.saturating_sub(1) as usize;
-    let base_ms = CHUNK_RETRY_BASE_MS
-        .get(idx)
-        .copied()
-        .unwrap_or(*CHUNK_RETRY_BASE_MS.last().unwrap_or(&900));
-    // Keep jitter deterministic per chunk/attempt so retries are staggered
-    // without introducing additional randomness in tests.
-    let jitter_ms = ((chunk_index as u64 * 31) + (attempt as u64 * 17)) % 80;
-    std::time::Duration::from_millis(base_ms + jitter_ms)
-}
-
-async fn wait_for_chunk_retry_delay(attempt: u8, chunk_index: u32) {
-    tokio::time::sleep(chunk_retry_delay(attempt, chunk_index)).await;
-}
-
-fn take_next_backup_peer(download: &mut ActiveChunkedDownload) -> Option<PeerId> {
-    while let Some(candidate) = download.backup_peers.pop() {
-        if candidate != download.peer_id {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn remove_active_download_for_cleanup(
-    downloads: &mut ActiveDownloadsMap,
-    request_id: &str,
-    context: &str,
-) -> Option<ActiveChunkedDownload> {
-    let removed = downloads.remove(request_id);
-    if removed.is_none() {
-        println!(
-            "⚠️ Missing active download state for request {} during {}; ignoring stale event",
-            request_id, context
-        );
-    }
-    removed
-}
-
-fn add_backup_peer(download: &mut ActiveChunkedDownload, peer: PeerId) -> bool {
-    if download.peer_id == peer || download.backup_peers.iter().any(|p| *p == peer) {
-        return false;
-    }
-    download.backup_peers.push(peer);
-    true
-}
-
-fn looks_like_file_metadata(value: &serde_json::Value) -> bool {
-    value
-        .as_object()
-        .map(|obj| {
-            obj.get("hash").and_then(|v| v.as_str()).is_some()
-                && obj.get("fileName").and_then(|v| v.as_str()).is_some()
-                && obj.get("fileSize").and_then(|v| v.as_u64()).is_some()
+        let _ = swarm.behaviour_mut().kad.bootstrap();
+        let (commands, receiver) = mpsc::channel(64);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        tokio::spawn(run(swarm, network, registry, receiver, ready_tx));
+        tokio::time::timeout(Duration::from_secs(5), ready_rx)
+            .await
+            .map_err(|_| "DHT listen timeout")?
+            .map_err(|_| "DHT listener stopped")??;
+        Ok(Self {
+            commands,
+            peer: peer.to_string(),
         })
-        .unwrap_or(false)
-}
-
-fn merge_seeder_record(existing: &mut serde_json::Value, candidate: &serde_json::Value) {
-    let Some(existing_obj) = existing.as_object_mut() else {
-        *existing = candidate.clone();
-        return;
-    };
-    let Some(candidate_obj) = candidate.as_object() else {
-        return;
-    };
-
-    let existing_addr_count = existing_obj
-        .get("multiaddrs")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let candidate_addr_count = candidate_obj
-        .get("multiaddrs")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-
-    let mut merged_addr_set = std::collections::HashSet::new();
-    let mut merged_addrs = Vec::new();
-
-    let existing_addrs = existing_obj
-        .get("multiaddrs")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let candidate_addrs = candidate_obj
-        .get("multiaddrs")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    for addr in existing_addrs.iter().chain(candidate_addrs.iter()) {
-        let Some(addr_str) = addr.as_str() else {
-            continue;
-        };
-        let trimmed = addr_str.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if merged_addr_set.insert(trimmed.to_string()) {
-            merged_addrs.push(serde_json::Value::String(trimmed.to_string()));
+    }
+    pub fn peer_id(&self) -> String {
+        self.peer.clone()
+    }
+    pub async fn publish(&self, offer: &Signed<InferenceOffer>) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Command::Publish(offer.clone(), tx))
+            .await
+            .map_err(|_| "DHT stopped")?;
+        rx.await.map_err(|_| "DHT stopped")?
+    }
+    pub async fn withdraw(&self, id: &str) {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .commands
+            .send(Command::Withdraw(id.into(), tx))
+            .await
+            .is_ok()
+        {
+            let _ = rx.await;
         }
     }
-    existing_obj.insert(
-        "multiaddrs".to_string(),
-        serde_json::Value::Array(merged_addrs),
+    pub async fn discover(
+        &self,
+        model: Option<&str>,
+    ) -> Result<Vec<Signed<InferenceOffer>>, String> {
+        if model.is_some_and(|m| m.is_empty() || m.len() > 256) {
+            return Err("invalid model selector".into());
+        }
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Command::Discover(model.map(str::to_owned), tx))
+            .await
+            .map_err(|_| "DHT stopped")?;
+        tokio::time::timeout(WINDOW + Duration::from_secs(2), rx)
+            .await
+            .map_err(|_| "discovery timed out")?
+            .map_err(|_| "DHT stopped")?
+    }
+    pub async fn status(&self) -> serde_json::Value {
+        let (tx, rx) = oneshot::channel();
+        if self.commands.send(Command::Status(tx)).await.is_err() {
+            return serde_json::json!({"running":false,"peer_id":self.peer});
+        }
+        rx.await.unwrap_or(serde_json::json!({"running":false}))
+    }
+    pub async fn stop(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self.commands.send(Command::Stop(tx)).await.is_ok() {
+            let _ = rx.await;
+        }
+    }
+}
+fn request_peer(
+    swarm: &mut Swarm<Behaviour>,
+    network: &NetworkIdentity,
+    search: &mut Search,
+    pending: &mut HashMap<rr::OutboundRequestId, Pending>,
+    peer: PeerId,
+    offset: usize,
+) {
+    if peer == *swarm.local_peer_id() || offset >= MAX_LOCAL {
+        return;
+    }
+    if offset == 0 && (search.seen.len() >= MAX_PEERS || !search.seen.insert(peer)) {
+        return;
+    }
+    let id = swarm.behaviour_mut().manifest.send_request(
+        &peer,
+        ManifestRequest {
+            network: network.clone(),
+            model: search.model.clone(),
+            offset,
+        },
     );
-
-    let existing_price = existing_obj
-        .get("priceWei")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let candidate_price = candidate_obj
-        .get("priceWei")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if !candidate_price.is_empty()
-        && (existing_price.is_empty() || candidate_addr_count > existing_addr_count)
-    {
-        existing_obj.insert(
-            "priceWei".to_string(),
-            serde_json::Value::String(candidate_price.to_string()),
-        );
-    }
-
-    let existing_wallet = existing_obj
-        .get("walletAddress")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let candidate_wallet = candidate_obj
-        .get("walletAddress")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if !candidate_wallet.is_empty()
-        && (existing_wallet.is_empty() || candidate_addr_count > existing_addr_count)
-    {
-        existing_obj.insert(
-            "walletAddress".to_string(),
-            serde_json::Value::String(candidate_wallet.to_string()),
-        );
-    }
+    pending.insert(
+        id,
+        Pending {
+            query: search.query,
+            peer,
+            offset,
+        },
+    );
 }
-
-fn merge_file_metadata_records(records: &[String]) -> Option<String> {
-    let mut parsed_records: Vec<serde_json::Value> = Vec::new();
-    let mut target_hash: Option<String> = None;
-
-    for raw in records {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-            continue;
-        };
-        if !looks_like_file_metadata(&value) {
-            continue;
-        }
-        let hash = value
-            .get("hash")
-            .and_then(|v| v.as_str())
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())?
-            .to_string();
-
-        if let Some(existing_hash) = target_hash.as_ref() {
-            if existing_hash != &hash {
-                continue;
-            }
-        } else {
-            target_hash = Some(hash);
-        }
-
-        parsed_records.push(value);
+fn sync_indexes(
+    swarm: &mut Swarm<Behaviour>,
+    network: &NetworkIdentity,
+    local: &BTreeMap<String, Signed<InferenceOffer>>,
+    advertised: &mut HashSet<kad::RecordKey>,
+) -> Result<(), String> {
+    let mut wanted = HashSet::new();
+    if !local.is_empty() {
+        wanted.insert(index(network, None));
     }
-
-    if parsed_records.is_empty() {
-        return None;
+    for offer in local.values() {
+        wanted.insert(index(network, Some(&offer.payload.model.id)));
     }
-
-    let mut base = parsed_records
-        .iter()
-        .max_by_key(|record| {
-            record
-                .get("createdAt")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-        })
-        .cloned()
-        .unwrap_or_else(|| parsed_records[0].clone());
-
-    let mut seeders_by_peer: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
-
-    for record in &parsed_records {
-        if let Some(seeders) = record.get("seeders").and_then(|v| v.as_array()) {
-            for seeder in seeders {
-                let Some(peer_id) = seeder
-                    .get("peerId")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v.trim())
-                    .filter(|v| !v.is_empty())
-                else {
-                    continue;
-                };
-
-                let candidate = seeder.clone();
-                seeders_by_peer
-                    .entry(peer_id.to_string())
-                    .and_modify(|existing| merge_seeder_record(existing, &candidate))
-                    .or_insert(candidate);
-            }
-        }
-
-        // Legacy single-seeder metadata support.
-        if let Some(peer_id) = record
-            .get("peerId")
-            .and_then(|v| v.as_str())
-            .map(|v| v.trim())
-            .filter(|v| !v.is_empty())
-        {
-            let legacy = serde_json::json!({
-                "peerId": peer_id,
-                "priceWei": record.get("priceWei").and_then(|v| v.as_str()).unwrap_or(""),
-                "walletAddress": record.get("walletAddress").and_then(|v| v.as_str()).unwrap_or(""),
-                "multiaddrs": [],
-            });
-            seeders_by_peer
-                .entry(peer_id.to_string())
-                .and_modify(|existing| merge_seeder_record(existing, &legacy))
-                .or_insert(legacy);
-        }
+    for key in advertised.difference(&wanted) {
+        swarm.behaviour_mut().kad.stop_providing(key);
     }
-
-    let mut merged_seeders: Vec<serde_json::Value> = seeders_by_peer.into_values().collect();
-    merged_seeders.sort_by(|a, b| {
-        let a_peer = a.get("peerId").and_then(|v| v.as_str()).unwrap_or("");
-        let b_peer = b.get("peerId").and_then(|v| v.as_str()).unwrap_or("");
-        a_peer.cmp(b_peer)
-    });
-
-    if let Some(base_obj) = base.as_object_mut() {
-        base_obj.insert(
-            "seeders".to_string(),
-            serde_json::Value::Array(merged_seeders.clone()),
-        );
-
-        if let Some(primary) = merged_seeders.iter().find_map(|s| {
-            s.get("peerId")
-                .and_then(|v| v.as_str())
-                .map(|v| v.trim())
-                .filter(|v| !v.is_empty())
-                .map(|v| v.to_string())
-        }) {
-            base_obj.insert(
-                "peerId".to_string(),
-                serde_json::Value::String(primary.clone()),
-            );
-
-            if let Some(primary_seeder) = merged_seeders.iter().find(|s| {
-                s.get("peerId").and_then(|v| v.as_str()).map(|v| v.trim()) == Some(primary.as_str())
-            }) {
-                if let Some(price) = primary_seeder.get("priceWei").and_then(|v| v.as_str()) {
-                    base_obj.insert(
-                        "priceWei".to_string(),
-                        serde_json::Value::String(price.to_string()),
-                    );
-                }
-                if let Some(wallet) = primary_seeder.get("walletAddress").and_then(|v| v.as_str()) {
-                    base_obj.insert(
-                        "walletAddress".to_string(),
-                        serde_json::Value::String(wallet.to_string()),
-                    );
-                }
-            }
-        } else {
-            base_obj.insert(
-                "peerId".to_string(),
-                serde_json::Value::String(String::new()),
-            );
-        }
+    for key in wanted.difference(advertised) {
+        swarm
+            .behaviour_mut()
+            .kad
+            .start_providing(key.clone())
+            .map_err(|e| e.to_string())?;
     }
-
-    serde_json::to_string(&base).ok()
+    *advertised = wanted;
+    Ok(())
 }
-
-fn merge_host_registry_records(records: &[String]) -> Option<String> {
-    let mut merged_by_peer: HashMap<String, HostRegistryMergeEntry> = HashMap::new();
-    let mut saw_registry_record = false;
-
-    for raw in records {
-        let Ok(entries) = serde_json::from_str::<Vec<HostRegistryMergeEntry>>(raw) else {
-            continue;
-        };
-        saw_registry_record = true;
-
-        for mut entry in entries {
-            let peer_id = entry.peer_id.trim().to_string();
-            if peer_id.is_empty() || PeerId::from_str(&peer_id).is_err() {
-                continue;
-            }
-            entry.peer_id = peer_id.clone();
-
-            merged_by_peer
-                .entry(peer_id)
-                .and_modify(|existing| {
-                    if entry.updated_at > existing.updated_at {
-                        *existing = entry.clone();
-                    } else if existing.wallet_address.is_empty() && !entry.wallet_address.is_empty()
-                    {
-                        existing.wallet_address = entry.wallet_address.clone();
-                    }
-                })
-                .or_insert(entry);
-        }
-    }
-
-    if !saw_registry_record || merged_by_peer.is_empty() {
-        return None;
-    }
-
-    let mut merged_entries: Vec<HostRegistryMergeEntry> = merged_by_peer.into_values().collect();
-    merged_entries.sort_by(|a, b| {
-        b.updated_at
-            .cmp(&a.updated_at)
-            .then_with(|| a.peer_id.cmp(&b.peer_id))
-    });
-
-    serde_json::to_string(&merged_entries).ok()
-}
-
-fn select_best_get_record_value(results: Vec<String>) -> Option<String> {
-    if results.is_empty() {
-        return None;
-    }
-
-    // For file metadata keys, merge all observed copies to avoid stale seeder
-    // addresses after restart/republish races.
-    if let Some(merged) = merge_file_metadata_records(&results) {
-        return Some(merged);
-    }
-
-    // For host registry values, merge per-peer entries so concurrent publishers
-    // do not clobber each other when records are fetched from multiple peers.
-    if let Some(merged) = merge_host_registry_records(&results) {
-        return Some(merged);
-    }
-
-    // Generic fallback for non-file records.
-    results.into_iter().max_by_key(|record| record.len())
-}
-
-fn build_relay_circuit_dial_addrs(target_peer_id: &PeerId) -> Vec<Multiaddr> {
-    let mut dial_addrs: Vec<Multiaddr> = Vec::new();
-    let mut seen_addrs: HashSet<String> = HashSet::new();
-    let mut relay_peer_ids_tried: HashSet<PeerId> = HashSet::new();
-
-    for relay_addr_str in get_relay_nodes() {
-        if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
-            if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                if !relay_peer_ids_tried.insert(relay_pid) {
-                    continue;
-                }
-            }
-            let circuit_addr = relay_addr
-                .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                .with(libp2p::multiaddr::Protocol::P2p(target_peer_id.clone()));
-            let key = circuit_addr.to_string();
-            if seen_addrs.insert(key) {
-                dial_addrs.push(circuit_addr);
-            }
-        }
-    }
-
-    dial_addrs
-}
-
-fn parse_host_registry_peer_ids(raw_registry_json: &str) -> Vec<PeerId> {
-    let entries: Vec<AutoHostRegistryEntry> = match serde_json::from_str(raw_registry_json) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("Failed to parse host registry JSON: {:?}", e);
-            return Vec::new();
-        }
-    };
-
-    let mut peer_ids = Vec::new();
-    let mut seen = HashSet::new();
-    for entry in entries {
-        let peer_id_str = entry.peer_id.trim();
-        if peer_id_str.is_empty() {
-            continue;
-        }
-        match PeerId::from_str(peer_id_str) {
-            Ok(peer_id) => {
-                if seen.insert(peer_id.clone()) {
-                    peer_ids.push(peer_id);
-                }
-            }
-            Err(e) => {
-                println!(
-                    "Ignoring invalid host registry peer ID '{}': {:?}",
-                    peer_id_str, e
-                );
-            }
-        }
-    }
-
-    peer_ids
-}
-
-fn auto_dial_discovered_hosts_from_registry(
-    registry_json: Option<String>,
-    swarm: &mut Swarm<DhtBehaviour>,
-    failed_peers: &HashSet<PeerId>,
-    auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
+async fn run(
+    mut swarm: Swarm<Behaviour>,
+    network: NetworkIdentity,
+    registry: Arc<OfferRegistry>,
+    mut commands: mpsc::Receiver<Command>,
+    ready: oneshot::Sender<Result<(), String>>,
 ) {
-    let Some(registry_json) = registry_json else {
-        return;
-    };
-
-    let discovered_peer_ids = parse_host_registry_peer_ids(&registry_json);
-    if discovered_peer_ids.is_empty() {
-        return;
-    }
-
-    let local_peer_id = swarm.local_peer_id().clone();
-    let bootstrap_peer_ids: HashSet<String> = get_bootstrap_peer_ids().into_iter().collect();
-    let cooldown = Duration::from_secs(AUTO_PEER_DIAL_COOLDOWN_SECS);
-    let now = Instant::now();
-    let mut started = 0usize;
-
-    for peer_id in discovered_peer_ids {
-        if peer_id == local_peer_id {
-            continue;
-        }
-        if bootstrap_peer_ids.contains(&peer_id.to_string()) {
-            continue;
-        }
-        if failed_peers.contains(&peer_id) {
-            continue;
-        }
-        if swarm.is_connected(&peer_id) {
-            continue;
-        }
-        if auto_peer_dial_attempts
-            .get(&peer_id)
-            .is_some_and(|last| now.duration_since(*last) < cooldown)
-        {
-            continue;
-        }
-
-        let dial_addrs = build_relay_circuit_dial_addrs(&peer_id);
-        if dial_addrs.is_empty() {
-            continue;
-        }
-
-        let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
-            .addresses(dial_addrs)
-            .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
-            .build();
-        match swarm.dial(opts) {
-            Ok(_) => {
-                auto_peer_dial_attempts.insert(peer_id.clone(), now);
-                started += 1;
-                println!("🤝 Auto-dialing discovered host peer {}", peer_id);
-            }
-            Err(e) => {
-                auto_peer_dial_attempts.insert(peer_id.clone(), now);
-                println!(
-                    "Auto-dial setup failed for discovered host {}: {:?}",
-                    peer_id, e
-                );
-            }
-        }
-    }
-
-    if started > 0 {
-        println!(
-            "🤝 Auto-discovery dialed {} peer(s) from DHT host registry",
-            started
-        );
-    }
-}
-
-async fn event_loop(
-    mut swarm: Swarm<DhtBehaviour>,
-    peers: Arc<Mutex<Vec<PeerInfo>>>,
-    is_running: Arc<Mutex<bool>>,
-    events: EventSink,
-    mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
-    cmd_tx: mpsc::UnboundedSender<SwarmCommand>,
-    file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
-    shared_files: SharedFilesMap,
-    download_directory: DownloadDirectoryRef,
-    active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
-    download_credentials: DownloadCredentialsMap,
-    bootstrap_gate: DhtBootstrapGate,
-) {
-    // Track pending get queries
-    let mut pending_get_queries: HashMap<
-        kad::QueryId,
-        tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
-    > = HashMap::new();
-    // Accumulate all FoundRecord results for a GET query before resolving.
-    // Without this, the first FoundRecord (often from local stale MemoryStore)
-    // would resolve the query, ignoring more up-to-date remote records.
-    let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
-    // Track pending GetProviders queries and accumulate the union of peer IDs
-    // found across all FoundProviders events for each query.
-    let mut pending_get_providers_queries: HashMap<
-        kad::QueryId,
-        tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
-    > = HashMap::new();
-    let mut pending_get_providers_results: HashMap<kad::QueryId, HashSet<PeerId>> = HashMap::new();
-    // Periodic auto-discovery query IDs for host registry refresh.
-    let mut pending_auto_host_registry_queries: HashSet<kad::QueryId> = HashSet::new();
-    // Map libp2p OutboundRequestId -> our request_id for failure correlation
-    let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> =
-        HashMap::new();
-    // File requests deferred until relay circuit is established.
-    // send_request() triggers its own dial via DialOpts::peer_id(), but the relay
-    // transport needs the full /p2p-circuit/p2p/<target> address which only our
-    // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
-    // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
-    let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<PendingFileInfoRequest>> =
-        HashMap::new();
-    // Ping requests deferred until a connection exists to the target peer.
-    // send_request() may race dialing and fail with DialFailure when only relay
-    // circuit paths are viable. We explicitly dial relay addresses first, then
-    // send ping on ConnectionEstablished.
-    let mut pending_ping_requests: HashMap<libp2p::PeerId, usize> = HashMap::new();
-    // request_id -> number of in-flight FileInfo seeder attempts.
-    // Used to avoid failing the download early when one candidate seeder is down.
-    let mut pending_file_attempts: HashMap<String, usize> = HashMap::new();
-    // request_id -> file_hash for final failure events when all seeder attempts are exhausted.
-    let mut pending_file_hashes: HashMap<String, String> = HashMap::new();
-    // Seeder-side request IDs that are allowed to read chunks. Paid direct
-    // files and paid folder members are inserted only after PaymentProof
-    // succeeds; free direct files are inserted after a signed FileInfo.
-    let seeder_authorized_chunks: SeederAuthorizedChunksMap = Arc::new(Mutex::new(HashMap::new()));
-    // Pending echo responses
-    let mut pending_echo: HashMap<
-        request_response::OutboundRequestId,
-        tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
-    > = HashMap::new();
-    // Peers that have failed to connect — prevents re-adding via mDNS/Identify.
-    // Persisted to disk with 24h expiry so restarts don't re-try known-bad peers.
-    let mut failed_peers: HashSet<PeerId> = load_failed_peers();
-    if !failed_peers.is_empty() {
-        println!(
-            "Loaded {} previously-failed peers from disk",
-            failed_peers.len()
-        );
-    }
-    // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
-    // to prevent Kademlia from racing the relay client for the bootstrap connection.
-    // A timer fallback ensures bootstrap happens even if relay reservation never completes.
-    let mut kad_bootstrapped = false;
-    let kad_bootstrap_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
-    let kad_bootstrap_timer = tokio::time::sleep_until(kad_bootstrap_deadline);
-    let mut kad_bootstrap_timer = std::pin::pin!(kad_bootstrap_timer);
-    let mut auto_peer_dial_attempts: HashMap<PeerId, Instant> = HashMap::new();
-    let mut auto_host_registry_refresh = tokio::time::interval(tokio::time::Duration::from_secs(
-        AUTO_HOST_REGISTRY_REFRESH_SECS,
-    ));
-    auto_host_registry_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-    // Periodically sync Kademlia routing table entries into the peer list
-    // so newly discovered peers become visible in the UI.
-    let mut kad_peer_sync_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-    kad_peer_sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
+    let mut ready = Some(ready);
+    let mut local: BTreeMap<String, Signed<InferenceOffer>> = BTreeMap::new();
+    let mut advertised = HashSet::new();
+    let mut searches: HashMap<kad::QueryId, Search> = HashMap::new();
+    let mut pending = HashMap::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(200));
+    let mut bootstrap = tokio::time::interval(Duration::from_secs(30));
+    let mut inbound: HashMap<PeerId, (tokio::time::Instant, u32)> = HashMap::new();
     loop {
-        let running = *is_running.lock().await;
-        if !running {
-            break;
-        }
-
         tokio::select! {
-            // Fallback: bootstrap Kademlia after 10s even if relay hasn't confirmed
-            _ = &mut kad_bootstrap_timer, if !kad_bootstrapped => {
-                kad_bootstrapped = true;
-                println!("⏰ Kademlia bootstrap timer fired (relay reservation may not have completed)");
-                // Manually dial bootstrap nodes so Kademlia has peers to query.
-                // Use DialOpts with PeerCondition::Disconnected to avoid duplicate
-                // connections (relay client may already be connected to relay nodes).
-                for addr_str in get_bootstrap_nodes() {
-                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                        if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
-                            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
-                                .addresses(vec![addr])
-                                .condition(libp2p::swarm::dial_opts::PeerCondition::Disconnected)
-                                .build();
-                            let _ = swarm.dial(opts);
-                        }
+            command = commands.recv() => match command {
+                Some(Command::Publish(offer,reply)) => {
+                    let result = if offer.payload.peer_id != swarm.local_peer_id().to_string() { Err("offer peer ID does not match persisted identity".into()) }
+                    else if local.len() >= MAX_LOCAL && !local.values().any(|o| o.payload.provider_wallet == offer.payload.provider_wallet && o.payload.deployment_id == offer.payload.deployment_id && o.payload.model.id == offer.payload.model.id) { Err("local manifest is full".into()) }
+                    else { registry.insert(offer.clone()).and_then(|id| {
+                        local.retain(|_,old| !(old.payload.provider_wallet == offer.payload.provider_wallet && old.payload.deployment_id == offer.payload.deployment_id && old.payload.model.id == offer.payload.model.id));
+                        local.insert(id,offer); sync_indexes(&mut swarm,&network,&local,&mut advertised)
+                    }) }; let _ = reply.send(result);
+                }
+                Some(Command::Withdraw(id,reply)) => { local.remove(&id); registry.withdraw(&id); let _ = sync_indexes(&mut swarm,&network,&local,&mut advertised); let _ = reply.send(()); }
+                Some(Command::Discover(model,reply)) => {
+                    if searches.len() >= 4 { let _ = reply.send(Err("discovery is busy".into())); continue; }
+                    let query = swarm.behaviour_mut().kad.get_providers(index(&network,model.as_deref()));
+                    let mut search = Search { query,model,deadline:tokio::time::Instant::now()+WINDOW,seen:HashSet::new(),received:HashMap::new(),invalid:HashSet::new(),reply };
+                    // Connected bootstrap peers are candidates too, not authoritative answers.
+                    let peers: Vec<_> = swarm.connected_peers().copied().take(MAX_PEERS).collect();
+                    for peer in peers { request_peer(&mut swarm,&network,&mut search,&mut pending,peer,0); }
+                    searches.insert(query,search);
+                }
+                Some(Command::Status(reply)) => { let _ = reply.send(serde_json::json!({"running":true,"peer_id":swarm.local_peer_id().to_string(),"connected_peers":swarm.connected_peers().count(),"listening_addresses":swarm.listeners().map(ToString::to_string).collect::<Vec<_>>(),"published_offers":local.len(),"verified_offers":registry.list().len()})); }
+                Some(Command::Stop(reply)) => { let _ = reply.send(()); break; }
+                None => break,
+            },
+            _ = bootstrap.tick() => { let _ = swarm.behaviour_mut().kad.bootstrap(); },
+            _ = tick.tick() => {
+                let now = tokio::time::Instant::now();
+                let finished: Vec<_> = searches.iter().filter(|(_,s)| s.deadline <= now || s.reply.is_closed()).map(|(id,_)| *id).collect();
+                for id in finished {
+                    if let Some(search) = searches.remove(&id) {
+                        if let Some(mut query) = swarm.behaviour_mut().kad.query_mut(&id) { query.finish(); }
+                        pending.retain(|_,p: &mut self::Pending| p.query != id);
+                        let offers = registry.list().into_iter().filter(|o| search.model.as_ref().map_or(true,|m| &o.payload.model.id == m)).collect();
+                        let _ = search.reply.send(Ok(offers));
                     }
                 }
-                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                    println!("Kademlia bootstrap error: {:?}", e);
-                } else {
-                    println!("✅ Kademlia bootstrap triggered via timer fallback");
+                let clock = protocol::now().unwrap_or(u64::MAX);
+                local.retain(|id,o| { if o.payload.expires_at <= clock { registry.withdraw(id); false } else { true } });
+                let _ = sync_indexes(&mut swarm,&network,&local,&mut advertised);
+                inbound.retain(|_,(start,_)| now.duration_since(*start) < Duration::from_secs(30));
+            },
+            event = swarm.select_next_some() => match event {
+                SwarmEvent::NewListenAddr {address,..} => {
+                    if address.iter().any(|p| match p {
+                        libp2p::multiaddr::Protocol::Ip4(ip) => ip.is_loopback() || crate::offer_registry::public_ip(ip.into()),
+                        libp2p::multiaddr::Protocol::Ip6(ip) => ip.is_loopback() || crate::offer_registry::public_ip(ip.into()),
+                        _ => false,
+                    }) { swarm.add_external_address(address); }
+                    if let Some(ready) = ready.take() { let _ = ready.send(Ok(())); }
                 }
-            }
-            _ = auto_host_registry_refresh.tick(), if kad_bootstrapped => {
-                let query_id = swarm
-                    .behaviour_mut()
-                    .kad
-                    .get_record(kad::RecordKey::new(&HOST_REGISTRY_KEY));
-                pending_auto_host_registry_queries.insert(query_id);
-            }
-            // Periodically re-bootstrap Kademlia to actively discover new peers,
-            // then sync the routing table into the visible peer list.
-            // kad.bootstrap() sends GET_CLOSEST_PEERS queries to random keys —
-            // this is the standard Kademlia mechanism for discovering peers that
-            // joined the DHT since our last lookup.
-            _ = kad_peer_sync_interval.tick(), if kad_bootstrapped => {
-                // Active discovery: random walk to find new peers on the network
-                let _ = swarm.behaviour_mut().kad.bootstrap();
-
-                let Some(now) = current_kademlia_peer_sync_timestamp_secs(
-                    "syncing Kademlia routing table into visible peer list",
-                ) else {
-                    continue;
-                };
-                let mut changed = false;
-                let mut kad_entries: Vec<(String, Vec<String>)> = Vec::new();
-                for bucket in swarm.behaviour_mut().kad.kbuckets() {
-                    for entry in bucket.iter() {
-                        let pid = entry.node.key.preimage().to_string();
-                        let addrs: Vec<String> = entry.node.value.iter()
-                            .map(|a| a.to_string())
-                            .collect();
-                        kad_entries.push((pid, addrs));
-                    }
+                SwarmEvent::ListenerError { error,.. } => { if let Some(ready) = ready.take() { let _ = ready.send(Err(error.to_string())); } }
+                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {peer_id,info,..})) => {
+                    let policy = crate::version::effective_policy();
+                    let valid_version = crate::version::version_is_below(info.agent_version.trim_start_matches("chiral/"),&policy.min_required) == Ok(false);
+                    let scope = protocol::hash_hex(&protocol::canonical_json(&network).expect("network serializes"));
+                    if !valid_version || info.protocol_version != format!("/chiral/inference/id/1/{scope}") { let _ = swarm.disconnect_peer_id(peer_id); continue; }
+                    for addr in info.listen_addrs.into_iter().take(8) { swarm.behaviour_mut().kad.add_address(&peer_id,addr.clone()); swarm.add_peer_address(peer_id,addr); }
                 }
-                // Also include currently connected peers (may not be in Kademlia table)
-                for pid in swarm.connected_peers() {
-                    let pid_str = pid.to_string();
-                    if !kad_entries.iter().any(|(p, _)| p == &pid_str) {
-                        // Get external addresses from the swarm's address book
-                        let ext_addrs: Vec<String> = swarm.external_addresses()
-                            .map(|a| a.to_string())
-                            .collect();
-                        kad_entries.push((pid_str, ext_addrs));
-                    }
+                SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::OutboundQueryProgressed {id,result:kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {providers,..})),..})) => {
+                    if let Some(search) = searches.get_mut(&id) { for peer in providers { request_peer(&mut swarm,&network,search,&mut pending,peer,0); } }
                 }
-                if !kad_entries.is_empty() {
-                    let mut peers_guard = peers.lock().await;
-                    for (pid, addrs) in &kad_entries {
-                        if let Some(existing) = peers_guard.iter_mut().find(|p| &p.id == pid) {
-                            // Update last_seen and addresses for existing peers
-                            existing.last_seen = now;
-                            if !addrs.is_empty() {
-                                existing.multiaddrs = addrs.clone();
-                            }
-                        } else {
-                            // New peer discovered
-                            peers_guard.push(PeerInfo {
-                                id: pid.clone(),
-                                address: pid.clone(),
-                                multiaddrs: addrs.clone(),
-                                last_seen: now,
-                            });
-                            changed = true;
-                        }
+                SwarmEvent::Behaviour(BehaviourEvent::Manifest(rr::Event::Message {peer,message})) => match message {
+                    rr::Message::Request {request,channel,..} => {
+                        if inbound.len() >= 256 && !inbound.contains_key(&peer) { continue; }
+                        let rate = inbound.entry(peer).or_insert((tokio::time::Instant::now(),0)); rate.1 += 1;
+                        if rate.1 > 32 || request.network != network || request.offset >= MAX_LOCAL || request.offset % PAGE != 0 || request.model.as_ref().is_some_and(|m| m.len()>256) { continue; }
+                        let now = protocol::now().unwrap_or(u64::MAX);
+                        let all: Vec<_> = local.values().filter(|o| o.payload.expires_at>now && request.model.as_ref().map_or(true,|m| &o.payload.model.id==m)).collect();
+                        let offers = all.iter().skip(request.offset).take(PAGE).map(|o| (*o).clone()).collect();
+                        let next = (all.len()>request.offset+PAGE).then_some(request.offset+PAGE);
+                        let _ = swarm.behaviour_mut().manifest.send_response(channel,ManifestResponse {offers,next});
                     }
-                    // Remove stale peers not in Kademlia or connections for 5 minutes
-                    let stale_cutoff = now - 300;
-                    let before = peers_guard.len();
-                    peers_guard.retain(|p| {
-                        kad_entries.iter().any(|(pid, _)| pid == &p.id)
-                            || p.last_seen > stale_cutoff
-                    });
-                    if peers_guard.len() != before {
-                        changed = true;
-                    }
-                    if changed {
-                        let _ = events.emit("peer-discovered", peers_guard.clone());
-                    }
-                }
-            }
-            event = swarm.select_next_some() => {
-                match event {
-                    SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(
-                            event,
-                            &peers,
-                            &events,
-                            &mut swarm,
-                            &file_transfer_service,
-                            &mut pending_get_queries,
-                            &mut pending_get_results,
-                            &mut pending_get_providers_queries,
-                            &mut pending_get_providers_results,
-                            &mut pending_auto_host_registry_queries,
-                            &shared_files,
-                            &download_directory,
-                            &active_downloads,
-                            &mut outbound_request_map,
-                            &mut pending_file_attempts,
-                            &mut pending_file_hashes,
-                            &seeder_authorized_chunks,
-                            &download_credentials,
-                            &mut failed_peers,
-                            &mut auto_peer_dial_attempts,
-                            &mut pending_echo,
-                            &cmd_tx,
-                            &bootstrap_gate,
-                        )
-                        .await;
-                    }
-                    SwarmEvent::NewListenAddr { address, .. } => {
-                        // Check if this is a relay circuit address
-                        let is_relay = address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit));
-                        if is_relay {
-                            println!("✅ Relay reservation confirmed! Listening on relay: {}", address);
-                            // Add as external address so Identify advertises it to other peers
-                            swarm.add_external_address(address.clone());
-
-                            // Also add our own relay circuit address to our Kademlia record
-                            // so other peers can find us via relay when direct connection fails
-                            let our_peer = *swarm.local_peer_id();
-                            swarm.behaviour_mut().kad.add_address(&our_peer, address.clone());
-                            println!("  → Added relay circuit address to own Kademlia record");
-
-                            // Now that relay is established, bootstrap Kademlia (deferred from startup
-                            // to prevent Kademlia from racing the relay client for the bootstrap connection)
-                            if !kad_bootstrapped {
-                                kad_bootstrapped = true;
-                                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                                    println!("Kademlia bootstrap error: {:?}", e);
-                                } else {
-                                    println!("✅ Kademlia bootstrap triggered after relay reservation");
+                    rr::Message::Response {request_id,response} => {
+                        let Some(p) = pending.remove(&request_id) else { continue; };
+                        if p.peer != peer || response.offers.len()>PAGE { continue; }
+                        if let Some(search) = searches.get_mut(&p.query) {
+                            for offer in response.offers {
+                                if offer.payload.peer_id != peer.to_string() || !search.model.as_ref().map_or(true,|m| &offer.payload.model.id==m) { search.invalid.insert(peer); continue; }
+                                match registry.insert(offer) {
+                                    Ok(id) => { search.received.entry(peer).or_default().insert(id); }
+                                    Err(_) => { search.invalid.insert(peer); }
                                 }
                             }
-                        } else {
-                            println!("Listening on {:?}", address);
-                        }
-                    }
-                    SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
-                        println!("Connection established with {:?}", peer_id);
-
-                        // Peer is reachable — remove from failed set
-                        if failed_peers.remove(&peer_id) {
-                            log_failed_peer_cache_save(
-                                &failed_peers,
-                                "removing a reconnected peer",
-                            );
-                        }
-                        auto_peer_dial_attempts.remove(&peer_id);
-
-                        // Send any file requests that were waiting for this connection
-                        if let Some(pending) = pending_file_requests.remove(&peer_id) {
-                            println!("📤 Sending {} deferred file request(s) to {}", pending.len(), peer_id);
-                            for pending_req in pending {
-                                let request = ChunkRequest::FileInfo {
-                                    request_id: pending_req.request_id.clone(),
-                                    file_hash: pending_req.file_hash,
-                                    folder_hash: pending_req.folder_hash,
-                                };
-                                let outbound_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                                outbound_request_map.insert(outbound_id, pending_req.request_id);
-                            }
-                        }
-
-                        if let Some(pending_count) = pending_ping_requests.remove(&peer_id) {
-                            println!(
-                                "📤 Sending {} deferred ping request(s) to {}",
-                                pending_count, peer_id
-                            );
-                            for _ in 0..pending_count {
-                                let request = PingRequest("PING".to_string());
-                                let request_id = swarm
-                                    .behaviour_mut()
-                                    .ping_protocol
-                                    .send_request(&peer_id, request);
-                                println!("Deferred ping request sent with ID: {:?}", request_id);
-                            }
-                        }
-
-                        let bootstrap_peer_ids = get_bootstrap_peer_ids();
-                        if bootstrap_peer_ids.contains(&peer_id.to_string()) {
-                            println!("✅ Connected to bootstrap/relay node: {}", peer_id);
-                        }
-
-                        // Add to peers list so ChiralDrop and Network page can see them
-                        let peer_id_str = peer_id.to_string();
-                        let now = current_peer_timestamp_secs("recording established peer connection");
-                        let addr_str = endpoint.get_remote_address().to_string();
-
-                        {
-                            let mut peers_guard = peers.lock().await;
-                            if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
-                                existing.last_seen = now;
-                                if !existing.multiaddrs.contains(&addr_str) {
-                                    existing.multiaddrs.push(addr_str);
-                                }
-                            } else {
-                                peers_guard.push(PeerInfo {
-                                    id: peer_id_str.clone(),
-                                    address: peer_id_str.clone(),
-                                    multiaddrs: vec![addr_str],
-                                    last_seen: now,
-                                });
-                            }
-                            // Don't emit peer-discovered on every connection — the 5s
-                            // polling and 30s Kademlia sync handle UI updates. Emitting
-                            // on every ConnectionEstablished floods the frontend at startup.
-                        }
-
-                        let _ = events.emit("connection-established", peer_id_str);
-
-                        // If this is an incoming connection, notify that we're being pinged
-                        if endpoint.is_listener() {
-                            println!("Incoming connection from {}", peer_id);
-                            let _ = events.emit("ping-received", peer_id.to_string());
-                        }
-                    }
-                    SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
-                        // Only remove when all connections to this peer are gone
-                        if num_established == 0 {
-                            let peer_id_str = peer_id.to_string();
-                            println!("All connections closed with {}", peer_id_str);
-                            let mut peers_guard = peers.lock().await;
-                            peers_guard.retain(|p| p.id != peer_id_str);
-                            let _ = events.emit("peer-discovered", peers_guard.clone());
-
-                            // Auto-reconnect to bootstrap/relay nodes when connection drops.
-                            // macOS WiFi aggressively kills idle TCP connections; without
-                            // reconnection, the node loses relay access and can't discover
-                            // remote peers.
-                            let bootstrap_ids = get_bootstrap_peer_ids();
-                            if bootstrap_ids.contains(&peer_id_str) {
-                                println!("🔄 Bootstrap connection lost to {}, scheduling reconnect...", peer_id_str);
-                                for addr_str in get_bootstrap_nodes() {
-                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                                        if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
-                                            if pid == peer_id {
-                                                let transport_addr = remove_peer_id_from_multiaddr(&addr);
-                                                swarm.behaviour_mut().kad.add_address(&pid, transport_addr.clone());
-                                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(pid)
-                                                    .addresses(vec![transport_addr])
-                                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
-                                                    .build();
-                                                match swarm.dial(opts) {
-                                                    Ok(_) => println!("🔄 Reconnect dial initiated to bootstrap {}", peer_id),
-                                                    Err(e) => println!("🔄 Reconnect dial failed: {:?}", e),
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // Also re-request relay reservation
-                                for addr_str in get_relay_nodes() {
-                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                                        if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
-                                            if pid == peer_id {
-                                                let relay_addr = addr.clone()
-                                                    .with(libp2p::multiaddr::Protocol::P2pCircuit);
-                                                match swarm.listen_on(relay_addr.clone()) {
-                                                    Ok(_) => println!("🔄 Re-requested relay reservation via {}", addr),
-                                                    Err(e) => println!("🔄 Relay re-listen failed: {:?}", e),
-                                                }
-                                            }
+                            if response.next == Some(p.offset+PAGE) { request_peer(&mut swarm,&network,search,&mut pending,peer,p.offset+PAGE); }
+                            else if response.next.is_none() && !search.invalid.contains(&peer) {
+                                // An authenticated complete manifest can withdraw this peer's
+                                // cached offers only. Invalid/partial replies never erase votes.
+                                for offer in registry.list() {
+                                    if offer.payload.peer_id == peer.to_string() && search.model.as_ref().map_or(true,|m| &offer.payload.model.id==m) {
+                                        if let Ok(id) = protocol::offer_id(&offer.payload) {
+                                            if !search.received.get(&peer).is_some_and(|ids| ids.contains(&id)) { registry.withdraw(&id); }
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        if let Some(peer) = peer_id {
-                            // Multiple addresses can be dialed for the same peer (direct + relay).
-                            // A single failed path should not mark a peer as failed if another path
-                            // is already connected.
-                            if swarm.is_connected(&peer) {
-                                // One dial path failed but another succeeded — silently ignore.
-                                continue;
-                            }
-
-                            let peer_id_str = peer.to_string();
-                            let bootstrap_peer_ids = get_bootstrap_peer_ids();
-                            let is_bootstrap_peer = bootstrap_peer_ids.contains(&peer_id_str);
-
-                            // Bootstrap peers are long-lived infra nodes; don't permanently
-                            // evict on transient failures — they'll be redialed on the next
-                            // ConnectionClosed reconnect cycle or Kademlia bootstrap timer.
-                            // Routine outgoing-dial failures (ResourceLimitExceeded on relay,
-                            // ConnectionRefused behind firewalls, link-local/RFC1918 advertised
-                            // addrs) are expected P2P churn and intentionally not logged here —
-                            // Kademlia handles routing-table eviction internally.
-                            let _ = (is_bootstrap_peer, &error);
-
-                            // Fail any deferred file requests for this peer
-                            if let Some(pending) = pending_file_requests.remove(&peer) {
-                                let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
-                                for pending_req in pending {
-                                    let req_id = pending_req.request_id;
-                                    println!("❌ Deferred file request {} failed: peer unreachable", req_id);
-                                    let remaining = decrement_file_request_attempt(
-                                        &mut pending_file_attempts,
-                                        &req_id,
-                                    );
-                                    if remaining == 0 {
-                                        pending_file_hashes.remove(&req_id);
-                                        let _ = events.emit("file-download-failed", serde_json::json!({
-                                            "requestId": req_id,
-                                            "fileHash": pending_req.file_hash,
-                                            "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
-                                        }));
-                                    } else {
-                                        println!(
-                                            "🔁 Seeder failed for request {}, still trying {} other seeder(s)",
-                                            req_id, remaining
-                                        );
-                                    }
-                                }
-                            }
-
-                            if pending_ping_requests.remove(&peer).is_some() {
-                                println!(
-                                    "❌ Deferred ping request(s) failed: peer {} unreachable",
-                                    peer
-                                );
-                            }
-                        }
-                    }
-                    SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
-                        println!("📥 Incoming connection: local={}, remote={}", local_addr, send_back_addr);
-                    }
-                    SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
-                        println!("❌ Incoming connection error: local={}, remote={}, error={:?}", local_addr, send_back_addr, error);
-                    }
-                    SwarmEvent::ListenerClosed { listener_id, reason, addresses, .. } => {
-                        let was_relay = addresses.iter().any(|a| {
-                            a.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
-                        });
-                        if was_relay {
-                            println!("⚠️ Relay listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
-                            // Delay before retrying to avoid hammering a resource-limited relay
-                            let relay_nodes = get_relay_nodes();
-                            let swarm_ref = &mut swarm;
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                            println!("🔄 Re-requesting relay reservation after delay...");
-                            let mut relay_peer_ids_seen = std::collections::HashSet::new();
-                            for addr_str in &relay_nodes {
-                                if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                                    if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                                        if !relay_peer_ids_seen.insert(peer_id) {
-                                            continue;
-                                        }
-                                        let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
-                                        match swarm_ref.listen_on(relay_addr.clone()) {
-                                            Ok(id) => println!("✅ Relay re-listen requested: {} (listener {:?})", relay_addr, id),
-                                            Err(e) => println!("❌ Relay re-listen failed for {}: {:?}", relay_addr, e),
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            println!("⚠️ Listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
-                        }
-                    }
-                    SwarmEvent::ListenerError { listener_id, error, .. } => {
-                        println!("❌ Listener {:?} error: {:?}", listener_id, error);
-                    }
-                    SwarmEvent::ExternalAddrConfirmed { address, .. } => {
-                        println!("✅ External address confirmed: {}", address);
-                    }
-                    _ => {}
-                }
-            }
-            Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    SwarmCommand::SendPing(peer_id) => {
-                        println!("Sending custom ping request to: {}", peer_id);
-                        if swarm.is_connected(&peer_id) {
-                            let request = PingRequest("PING".to_string());
-                            let request_id = swarm
-                                .behaviour_mut()
-                                .ping_protocol
-                                .send_request(&peer_id, request);
-                            println!("Ping request sent with ID: {:?}", request_id);
-                        } else {
-                            // Peer not connected — explicitly dial relay circuit paths first.
-                            let dial_addrs = build_relay_circuit_dial_addrs(&peer_id);
-
-                            if dial_addrs.is_empty() {
-                                println!("Ping dial skipped: no relay addresses available");
-                            } else {
-                                println!(
-                                    "📡 Ping dialing {} relay address(es) for {}",
-                                    dial_addrs.len(),
-                                    peer_id
-                                );
-                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
-                                    .addresses(dial_addrs)
-                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
-                                    .build();
-                                match swarm.dial(opts) {
-                                    Ok(_) => {
-                                        let pending =
-                                            pending_ping_requests.entry(peer_id.clone()).or_insert(0);
-                                        *pending += 1;
-                                        println!("📋 Ping queued, waiting for connection to {}", peer_id);
-                                    }
-                                    Err(e) => {
-                                        println!("Ping dial setup failed for {}: {:?}", peer_id, e);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data, price_wei, sender_wallet, file_hash, file_size } => {
-                        println!("Sending file '{}' to peer {} (price: {} wei, size: {} bytes)", file_name, peer_id, price_wei, file_size);
-                        let request = FileTransferRequest {
-                            transfer_id: transfer_id.clone(),
-                            file_name: file_name.clone(),
-                            file_size,
-                            file_data,
-                            price_wei,
-                            sender_wallet,
-                            file_hash,
-                        };
-                        let request_id = swarm.behaviour_mut().file_transfer.send_request(&peer_id, request);
-                        println!("File transfer request sent with ID: {:?}", request_id);
-                        let _ = events.emit("file-transfer-started", serde_json::json!({
-                            "transferId": transfer_id,
-                            "peerId": peer_id.to_string(),
-                            "fileName": file_name
-                        }));
-                    }
-                    SwarmCommand::PutDhtValue { key, value, response_tx } => {
-                        println!("Storing DHT value for key: {}", key);
-                        let record_key = kad::RecordKey::new(&key);
-                        // Mark ourselves as publisher so the PutRecordJob
-                        // treats this record as owned — otherwise it's
-                        // filtered as "cached from a remote" and the
-                        // republish semantics get confused.
-                        let record = kad::Record {
-                            key: record_key,
-                            value: value.into_bytes(),
-                            publisher: Some(*swarm.local_peer_id()),
-                            expires: None,
-                        };
-                        match swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {
-                            Ok(_) => {
-                                println!("DHT put initiated for key: {}", key);
-                                let _ = response_tx.send(Ok(()));
-                            }
-                            Err(e) => {
-                                println!("Failed to initiate DHT put: {:?}", e);
-                                let _ = response_tx.send(Err(format!("Failed to put DHT value: {:?}", e)));
-                            }
-                        }
-                    }
-                    SwarmCommand::GetDhtValue { key, response_tx } => {
-                        println!("Getting DHT value for key: {}", key);
-                        let record_key = kad::RecordKey::new(&key);
-                        let query_id = swarm.behaviour_mut().kad.get_record(record_key);
-                        pending_get_queries.insert(query_id, response_tx);
-                    }
-                    SwarmCommand::RemoveDhtRecord { key } => {
-                        let record_key = kad::RecordKey::new(&key);
-                        swarm.behaviour_mut().kad.remove_record(&record_key);
-                        println!("Removed DHT record from local store: {}", key);
-                    }
-                    SwarmCommand::StartProviding { file_hash, response_tx } => {
-                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
-                        match swarm.behaviour_mut().kad.start_providing(record_key) {
-                            Ok(_query_id) => {
-                                println!("DHT start_providing initiated for {}", file_hash);
-                                // Resolve synchronously once the local provider record
-                                // is stored. The async QueryResult::StartProviding event
-                                // confirms republish to remote peers but we don't gate
-                                // callers on that — they can publish seeder metadata
-                                // immediately and providers converge in the background.
-                                let _ = response_tx.send(Ok(()));
-                            }
-                            Err(e) => {
-                                println!("Failed to start providing {}: {:?}", file_hash, e);
-                                let _ = response_tx.send(Err(format!(
-                                    "Failed to start providing: {:?}",
-                                    e
-                                )));
-                            }
-                        }
-                    }
-                    SwarmCommand::StopProviding { file_hash } => {
-                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
-                        swarm.behaviour_mut().kad.stop_providing(&record_key);
-                        println!("DHT stop_providing for {}", file_hash);
-                    }
-                    SwarmCommand::GetProviders { file_hash, response_tx } => {
-                        println!("DHT get_providers for {}", file_hash);
-                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
-                        let query_id = swarm.behaviour_mut().kad.get_providers(record_key);
-                        pending_get_providers_queries.insert(query_id, response_tx);
-                        pending_get_providers_results.insert(query_id, HashSet::new());
-                    }
-                    SwarmCommand::SendChunkResponse { channel, response } => {
-                        // Dispatch a response that was built on a worker task
-                        // (because computing it required SHA-256 over a
-                        // multi-MB file, which we refuse to run on the
-                        // libp2p reactor). The behaviour's send_response
-                        // is sync once the channel is in hand.
-                        if let Err(e) = swarm
-                            .behaviour_mut()
-                            .file_request
-                            .send_response(channel, response)
-                        {
-                            println!("Failed to send deferred chunk response: {:?}", e);
-                        }
-                    }
-                    SwarmCommand::HealthCheck { response_tx } => {
-                        let listeners: Vec<String> = swarm.listeners().map(|a| a.to_string()).collect();
-                        let connected: Vec<PeerId> = swarm.connected_peers().cloned().collect();
-                        let kad_peers: usize = swarm.behaviour_mut().kad.kbuckets()
-                            .map(|b| b.num_entries())
-                            .sum();
-
-                        let bootstrap_addrs = get_bootstrap_nodes();
-                        let bootstrap_status: Vec<BootstrapNodeStatus> = bootstrap_addrs.iter().map(|addr| {
-                            // Check if any connected peer matches a bootstrap node's peer ID
-                            let reachable = if let Ok(maddr) = addr.parse::<Multiaddr>() {
-                                if let Some(pid) = extract_peer_id_from_multiaddr(&maddr) {
-                                    connected.contains(&pid)
-                                } else { false }
-                            } else { false };
-                            BootstrapNodeStatus {
-                                address: addr.clone(),
-                                reachable,
-                            }
-                        }).collect();
-
-                        let protocols = vec![
-                            "/chiral/id/1.0.0".to_string(),
-                            "/chiral/ping/1.0.0".to_string(),
-                            "/chiral/file-transfer/1.0.0".to_string(),
-                            "/chiral/file-request/3.0.0".to_string(),
-                            "/chiral/kad/1.0.0".to_string(),
-                        ];
-
-                        let _ = response_tx.send(DhtHealthInfo {
-                            running: true,
-                            peer_id: None, // filled in by get_health()
-                            listening_addresses: listeners,
-                            connected_peer_count: connected.len(),
-                            kademlia_peers: kad_peers,
-                            bootstrap_nodes: bootstrap_status,
-                            shared_files: 0, // filled in by get_health()
-                            protocols,
-                        });
-                    }
-                    SwarmCommand::CheckPeerConnected { peer_id, response_tx } => {
-                        let is_connected = swarm.is_connected(&peer_id);
-                        let _ = response_tx.send(is_connected);
-                    }
-                    SwarmCommand::Echo { peer_id, payload, response_tx } => {
-                        let req_id = swarm.behaviour_mut().echo_protocol.send_request(&peer_id, EchoRequest(payload));
-                        pending_echo.insert(req_id, response_tx);
-                    }
-                    SwarmCommand::GetListeningAddresses { response_tx } => {
-                        let addrs: Vec<String> = swarm.listeners()
-                            .map(|a| a.to_string())
-                            .collect();
-                        let _ = response_tx.send(addrs);
-                    }
-                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, folder_hash, multiaddrs, response_tx } => {
-                        println!("Requesting file info for {} from peer {}", file_hash, peer_id);
-                        pending_file_hashes
-                            .entry(request_id.clone())
-                            .or_insert_with(|| file_hash.clone());
-                        let mut started_attempt = false;
-
-                        if swarm.is_connected(&peer_id) {
-                            // Peer already connected — send immediately
-                            let request = ChunkRequest::FileInfo {
-                                request_id: request_id.clone(),
-                                file_hash: file_hash.clone(),
-                                folder_hash: folder_hash.clone(),
-                            };
-                            let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                            outbound_request_map.insert(req_id, request_id.clone());
-                            println!("File info request sent with ID: {:?}", req_id);
-                            started_attempt = true;
-                        } else {
-                            // Peer not connected — dial known reachable addresses + relay fallback.
-                            println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
-                            let mut dial_addrs: Vec<Multiaddr> = Vec::new();
-                            let mut seen_addrs = std::collections::HashSet::new();
-
-                            let mut push_dial_addr = |addr: Multiaddr| {
-                                let key = addr.to_string();
-                                if seen_addrs.insert(key) {
-                                    dial_addrs.push(addr);
-                                }
-                            };
-
-                            // Strategy 1: stored multiaddresses from DHT metadata.
-                            for addr_str in &multiaddrs {
-                                let Ok(addr_raw) = addr_str.parse::<Multiaddr>() else {
-                                    continue;
-                                };
-                                let base_addr = remove_peer_id_from_multiaddr(&addr_raw);
-                                let has_circuit = base_addr
-                                    .iter()
-                                    .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit));
-
-                                // Skip non-routable direct addresses to avoid dead-end dials.
-                                if !has_circuit {
-                                    let mut skip = false;
-                                    for proto in base_addr.iter() {
-                                        match proto {
-                                            libp2p::multiaddr::Protocol::Ip4(ip)
-                                                if ip.is_loopback()
-                                                    || ip.is_private()
-                                                    || ip.is_link_local()
-                                                    || ip.is_unspecified() =>
-                                            {
-                                                skip = true;
-                                                break;
-                                            }
-                                            libp2p::multiaddr::Protocol::Ip6(ip)
-                                                if ip.is_loopback()
-                                                    || ip.is_unspecified()
-                                                    || ip.is_unique_local()
-                                                    || ip.is_unicast_link_local() =>
-                                            {
-                                                skip = true;
-                                                break;
-                                            }
-                                            libp2p::multiaddr::Protocol::Dns(host)
-                                            | libp2p::multiaddr::Protocol::Dns4(host)
-                                            | libp2p::multiaddr::Protocol::Dns6(host)
-                                                if host.eq_ignore_ascii_case("localhost") =>
-                                            {
-                                                skip = true;
-                                                break;
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                    if skip {
-                                        continue;
-                                    }
-                                }
-
-                                let full_addr = base_addr
-                                    .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
-                                push_dial_addr(full_addr);
-                            }
-
-                            // Strategy 2: always include relay fallback addresses.
-                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
-                            for relay_addr_str in get_relay_nodes() {
-                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
-                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                                        if !relay_peer_ids_tried.insert(relay_pid) {
-                                            continue;
-                                        }
-                                    }
-                                    let circuit_addr = relay_addr
-                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
-                                    push_dial_addr(circuit_addr);
-                                }
-                            }
-
-                            if !dial_addrs.is_empty() {
-                                println!(
-                                    "📡 Trying {} dial address(es) for peer {}",
-                                    dial_addrs.len(),
-                                    peer_id
-                                );
-                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
-                                    .addresses(dial_addrs)
-                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
-                                    .build();
-                                match swarm.dial(opts) {
-                                    Ok(_) => {
-                                        println!("📡 Dial initiated for peer {}", peer_id);
-                                        started_attempt = true;
-                                    }
-                                    Err(e) => {
-                                        println!("Dial setup failed: {:?}", e);
-                                    }
-                                }
-                            }
-
-                            if started_attempt {
-                                // Queue the request — will be sent on ConnectionEstablished
-                                pending_file_requests.entry(peer_id.clone())
-                                    .or_default()
-                                    .push(PendingFileInfoRequest {
-                                        request_id: request_id.clone(),
-                                        file_hash: file_hash.clone(),
-                                        folder_hash: folder_hash.clone(),
-                                    });
-                                println!("📋 File request queued, waiting for connection...");
-                            } else {
-                                println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
-                            }
-                        }
-
-                        if started_attempt {
-                            *pending_file_attempts.entry(request_id.clone()).or_insert(0) += 1;
-                            let _ = response_tx.send(Ok(()));
-                            let _ = events.emit("file-request-sent", serde_json::json!({
-                                "requestId": request_id,
-                                "fileHash": file_hash,
-                                "peerId": peer_id.to_string()
-                            }));
-                        } else {
-                            let peer_short = &peer_id.to_string()[..std::cmp::min(8, peer_id.to_string().len())];
-                            if !pending_file_attempts.contains_key(&request_id) {
-                                pending_file_hashes.remove(&request_id);
-                            }
-                            let _ = response_tx.send(Err(format!(
-                                "Seeder ({}...) is offline or unreachable via relay.",
-                                peer_short
-                            )));
-                        }
-                    }
-                }
+                },
+                SwarmEvent::Behaviour(BehaviourEvent::Manifest(rr::Event::OutboundFailure {request_id,..})) => { pending.remove(&request_id); }
+                _ => {}
             }
         }
     }
-}
-
-async fn handle_behaviour_event(
-    event: DhtBehaviourEvent,
-    peers: &Arc<Mutex<Vec<PeerInfo>>>,
-    events: &EventSink,
-    swarm: &mut Swarm<DhtBehaviour>,
-    file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
-    pending_get_queries: &mut HashMap<
-        kad::QueryId,
-        tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
-    >,
-    pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
-    pending_get_providers_queries: &mut HashMap<
-        kad::QueryId,
-        tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
-    >,
-    pending_get_providers_results: &mut HashMap<kad::QueryId, HashSet<PeerId>>,
-    pending_auto_host_registry_queries: &mut HashSet<kad::QueryId>,
-    shared_files: &SharedFilesMap,
-    download_directory: &DownloadDirectoryRef,
-    active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
-    outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
-    pending_file_attempts: &mut HashMap<String, usize>,
-    pending_file_hashes: &mut HashMap<String, String>,
-    seeder_authorized_chunks: &SeederAuthorizedChunksMap,
-    download_credentials: &DownloadCredentialsMap,
-    failed_peers: &mut HashSet<PeerId>,
-    auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
-    pending_echo: &mut HashMap<
-        request_response::OutboundRequestId,
-        tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
-    >,
-    cmd_tx: &mpsc::UnboundedSender<SwarmCommand>,
-    bootstrap_gate: &DhtBootstrapGate,
-) {
-    match event {
-        DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
-            let mut peers_guard = peers.lock().await;
-            let now = current_peer_timestamp_millis("recording mDNS peer discovery");
-
-            for (peer_id, multiaddr) in list {
-                // Skip peers that previously failed to connect
-                if failed_peers.contains(&peer_id) {
-                    continue;
-                }
-
-                let peer_id_str = peer_id.to_string();
-                println!("Discovered peer: {}", peer_id_str);
-
-                // Add peer to Kademlia routing table
-                swarm
-                    .behaviour_mut()
-                    .kad
-                    .add_address(&peer_id, multiaddr.clone());
-
-                // Check if peer already exists
-                if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
-                    existing.last_seen = now;
-                    if !existing.multiaddrs.contains(&multiaddr.to_string()) {
-                        existing.multiaddrs.push(multiaddr.to_string());
-                    }
-                } else {
-                    let peer_info = PeerInfo {
-                        id: peer_id_str.clone(),
-                        address: peer_id_str.clone(),
-                        multiaddrs: vec![multiaddr.to_string()],
-                        last_seen: now,
-                    };
-                    peers_guard.push(peer_info);
-                }
-            }
-
-            // Emit event to frontend
-            let _ = events.emit("peer-discovered", peers_guard.clone());
-        }
-        DhtBehaviourEvent::Mdns(mdns::Event::Expired(list)) => {
-            let mut peers_guard = peers.lock().await;
-            for (peer_id, _) in list {
-                let peer_id_str = peer_id.to_string();
-                peers_guard.retain(|p| p.id != peer_id_str);
-                swarm.behaviour_mut().kad.remove_peer(&peer_id);
-                println!("Peer expired: {}", peer_id_str);
-            }
-        }
-        DhtBehaviourEvent::PingProtocol(event) => {
-            use request_response::Event;
-            match event {
-                Event::Message { peer, message } => {
-                    match message {
-                        request_response::Message::Request {
-                            request, channel, ..
-                        } => {
-                            println!("Received ping request from {}: {:?}", peer, request);
-                            let _ = events.emit("ping-received", peer.to_string());
-                            // Send pong response
-                            let response = PingResponse("PONG".to_string());
-                            if let Err(e) = swarm
-                                .behaviour_mut()
-                                .ping_protocol
-                                .send_response(channel, response)
-                            {
-                                println!("Failed to send ping response: {:?}", e);
-                            } else {
-                                println!("Sent PONG response to {}", peer);
-                            }
-                        }
-                        request_response::Message::Response { response, .. } => {
-                            println!("Received ping response from {}: {:?}", peer, response);
-                            let _ = events.emit("pong-received", peer.to_string());
-                        }
-                    }
-                }
-                Event::OutboundFailure { peer, error, .. } => {
-                    println!("Ping request failed to {:?}: {:?}", peer, error);
-                }
-                Event::InboundFailure { peer, error, .. } => {
-                    println!("Inbound ping failed from {:?}: {:?}", peer, error);
-                }
-                _ => {}
-            }
-        }
-        DhtBehaviourEvent::EchoProtocol(event) => {
-            use request_response::Event;
-            match event {
-                Event::Message { peer, message } => {
-                    match message {
-                        request_response::Message::Request {
-                            request, channel, ..
-                        } => {
-                            let EchoRequest(data) = request;
-
-                            // Check for typed JSON messages (hosting proposals, etc.)
-                            if let Ok(json_str) = std::str::from_utf8(&data) {
-                                if let Ok(parsed) =
-                                    serde_json::from_str::<serde_json::Value>(json_str)
-                                {
-                                    match parsed.get("type").and_then(|v| v.as_str()) {
-                                        Some("hosting_proposal") => {
-                                            if let Some(agreement) = parsed.get("agreement") {
-                                                println!(
-                                                    "📋 Received hosting proposal from peer {}",
-                                                    peer
-                                                );
-                                                // Save to disk immediately
-                                                if let Some(id) = agreement
-                                                    .get("agreementId")
-                                                    .and_then(|v| v.as_str())
-                                                {
-                                                    if let Err(err) = save_hosting_agreement(
-                                                        id,
-                                                        agreement,
-                                                        "saving received hosting proposal",
-                                                    ) {
-                                                        emit_hosting_agreement_persistence_error(
-                                                            events,
-                                                            id,
-                                                            "saving received hosting proposal",
-                                                            err,
-                                                        );
-                                                    }
-                                                }
-                                                let _ = events.emit(
-                                                    "hosting_proposal_received",
-                                                    serde_json::json!({
-                                                        "fromPeer": peer.to_string(),
-                                                        "agreementJson": agreement.to_string(),
-                                                    }),
-                                                );
-                                            }
-                                        }
-                                        Some("hosting_response") => {
-                                            let agreement_id = parsed
-                                                .get("agreementId")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("");
-                                            let status = parsed
-                                                .get("status")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("");
-                                            println!(
-                                                "📋 Received hosting response for agreement {}: {}",
-                                                agreement_id, status
-                                            );
-
-                                            // Update agreement on disk
-                                            if !agreement_id.is_empty() {
-                                                {
-                                                    let path = hosting_agreement_path(agreement_id);
-                                                    if let Ok(contents) =
-                                                        std::fs::read_to_string(&path)
-                                                    {
-                                                        if let Ok(mut ag) = serde_json::from_str::<
-                                                            serde_json::Value,
-                                                        >(
-                                                            &contents
-                                                        ) {
-                                                            if let Some(obj) = ag.as_object_mut() {
-                                                                obj.insert(
-                                                                    "status".to_string(),
-                                                                    serde_json::Value::String(
-                                                                        status.to_string(),
-                                                                    ),
-                                                                );
-                                                                if let Err(err) =
-                                                                    save_hosting_agreement_to_path(
-                                                                        &path,
-                                                                        &ag,
-                                                                        "saving hosting response status",
-                                                                    )
-                                                                {
-                                                                    emit_hosting_agreement_persistence_error(
-                                                                        events,
-                                                                        agreement_id,
-                                                                        "saving hosting response status",
-                                                                        err,
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            let _ = events.emit(
-                                                "hosting_response_received",
-                                                serde_json::json!({
-                                                    "agreementId": agreement_id,
-                                                    "status": status,
-                                                }),
-                                            );
-                                        }
-                                        Some("hosting_cancel_request") => {
-                                            let agreement_id = parsed
-                                                .get("agreementId")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("");
-                                            println!("📋 Received cancellation request for agreement {} from peer {}", agreement_id, peer);
-
-                                            if !agreement_id.is_empty() {
-                                                {
-                                                    let path = hosting_agreement_path(agreement_id);
-                                                    if let Ok(contents) =
-                                                        std::fs::read_to_string(&path)
-                                                    {
-                                                        if let Ok(mut ag) = serde_json::from_str::<
-                                                            serde_json::Value,
-                                                        >(
-                                                            &contents
-                                                        ) {
-                                                            if let Some(obj) = ag.as_object_mut() {
-                                                                let current_status = obj
-                                                                    .get("status")
-                                                                    .and_then(|v| v.as_str())
-                                                                    .unwrap_or("")
-                                                                    .to_string();
-                                                                if current_status == "proposed" {
-                                                                    // Proposed agreements: auto-cancel (proposer is withdrawing)
-                                                                    obj.insert(
-                                                                        "status".to_string(),
-                                                                        serde_json::Value::String(
-                                                                            "cancelled".to_string(),
-                                                                        ),
-                                                                    );
-                                                                    if let Err(err) =
-                                                                        save_hosting_agreement_to_path(
-                                                                            &path,
-                                                                            &ag,
-                                                                            "saving proposed hosting cancellation",
-                                                                        )
-                                                                    {
-                                                                        emit_hosting_agreement_persistence_error(
-                                                                            events,
-                                                                            agreement_id,
-                                                                            "saving proposed hosting cancellation",
-                                                                            err,
-                                                                        );
-                                                                    }
-                                                                    let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
-                                                                        "agreementId": agreement_id,
-                                                                        "fromPeer": peer.to_string(),
-                                                                        "autoCancelled": true,
-                                                                    }));
-                                                                } else {
-                                                                    // Check if we already requested cancellation too
-                                                                    let already_requested = obj
-                                                                        .get("cancelRequestedBy")
-                                                                        .and_then(|v| v.as_str())
-                                                                        .map(|v| !v.is_empty())
-                                                                        .unwrap_or(false);
-
-                                                                    if already_requested {
-                                                                        // Both sides want to cancel — auto-approve
-                                                                        obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
-                                                                        obj.remove(
-                                                                            "cancelRequestedBy",
-                                                                        );
-                                                                        if let Err(err) =
-                                                                            save_hosting_agreement_to_path(
-                                                                                &path,
-                                                                                &ag,
-                                                                                "saving mutual hosting cancellation",
-                                                                            )
-                                                                        {
-                                                                            emit_hosting_agreement_persistence_error(
-                                                                                events,
-                                                                                agreement_id,
-                                                                                "saving mutual hosting cancellation",
-                                                                                err,
-                                                                            );
-                                                                        }
-                                                                        let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
-                                                                            "agreementId": agreement_id,
-                                                                            "fromPeer": peer.to_string(),
-                                                                            "autoCancelled": true,
-                                                                        }));
-                                                                    } else {
-                                                                        // Only other party wants to cancel — needs our consent
-                                                                        obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                        if let Err(err) =
-                                                                            save_hosting_agreement_to_path(
-                                                                                &path,
-                                                                                &ag,
-                                                                                "saving hosting cancellation request",
-                                                                            )
-                                                                        {
-                                                                            emit_hosting_agreement_persistence_error(
-                                                                                events,
-                                                                                agreement_id,
-                                                                                "saving hosting cancellation request",
-                                                                                err,
-                                                                            );
-                                                                        }
-                                                                        let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
-                                                                            "agreementId": agreement_id,
-                                                                            "fromPeer": peer.to_string(),
-                                                                            "autoCancelled": false,
-                                                                        }));
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Some("hosting_cancel_response") => {
-                                            let agreement_id = parsed
-                                                .get("agreementId")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("");
-                                            let approved = parsed
-                                                .get("approved")
-                                                .and_then(|v| v.as_bool())
-                                                .unwrap_or(false);
-                                            println!("📋 Received cancellation response for agreement {}: approved={}", agreement_id, approved);
-
-                                            // Update agreement on disk
-                                            if !agreement_id.is_empty() {
-                                                {
-                                                    let path = hosting_agreement_path(agreement_id);
-                                                    if let Ok(contents) =
-                                                        std::fs::read_to_string(&path)
-                                                    {
-                                                        if let Ok(mut ag) = serde_json::from_str::<
-                                                            serde_json::Value,
-                                                        >(
-                                                            &contents
-                                                        ) {
-                                                            if let Some(obj) = ag.as_object_mut() {
-                                                                if approved {
-                                                                    obj.insert(
-                                                                        "status".to_string(),
-                                                                        serde_json::Value::String(
-                                                                            "cancelled".to_string(),
-                                                                        ),
-                                                                    );
-                                                                }
-                                                                obj.remove("cancelRequestedBy");
-                                                                if let Err(err) =
-                                                                    save_hosting_agreement_to_path(
-                                                                        &path,
-                                                                        &ag,
-                                                                        "saving hosting cancellation response",
-                                                                    )
-                                                                {
-                                                                    emit_hosting_agreement_persistence_error(
-                                                                        events,
-                                                                        agreement_id,
-                                                                        "saving hosting cancellation response",
-                                                                        err,
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            let _ = events.emit(
-                                                "hosting_cancel_response_received",
-                                                serde_json::json!({
-                                                    "agreementId": agreement_id,
-                                                    "approved": approved,
-                                                }),
-                                            );
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            // Echo the data back
-                            let _ = swarm
-                                .behaviour_mut()
-                                .echo_protocol
-                                .send_response(channel, EchoResponse(data));
-                        }
-                        request_response::Message::Response {
-                            request_id,
-                            response,
-                        } => {
-                            if let Some(tx) = pending_echo.remove(&request_id) {
-                                let EchoResponse(data) = response;
-                                let _ = tx.send(Ok(data));
-                            }
-                        }
-                    }
-                }
-                Event::OutboundFailure {
-                    request_id, error, ..
-                } => {
-                    if let Some(tx) = pending_echo.remove(&request_id) {
-                        let _ = tx.send(Err(format!("Echo failed: {:?}", error)));
-                    }
-                }
-                _ => {}
-            }
-        }
-        DhtBehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { id, result, .. }) => {
-            match result {
-                kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
-                    let key_bytes = record.record.key.as_ref();
-                    let key_str = String::from_utf8_lossy(key_bytes);
-                    let source = if record.peer.is_some() {
-                        "remote"
-                    } else {
-                        "local"
-                    };
-                    println!(
-                        "DHT get: found {} record for query {:?}, key: {}",
-                        source, id, key_str
-                    );
-                    let value = String::from_utf8(record.record.value.clone())
-                        .unwrap_or_else(|_| String::new());
-                    println!("DHT record value length: {} bytes", value.len());
-                    // Fire the response on FIRST hit and drop the waiter.
-                    // Kademlia keeps the query alive until convergence
-                    // (often 15-30s) — waiting for that turns every search
-                    // by hash into a multi-second roundtrip even when the
-                    // record is in the local store. The records we read
-                    // here (chiral_file_*, chiral_seeder_*, chiral_folder_*,
-                    // chiral_drive_share_*) are all ECDSA-signed by the
-                    // publisher, so taking the first replica is safe — a
-                    // forgery is rejected by the caller's verify step.
-                    pending_get_results
-                        .entry(id)
-                        .or_default()
-                        .push(value.clone());
-                    if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(Some(value)));
-                    }
-                }
-                kad::QueryResult::GetRecord(Ok(
-                    kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. },
-                )) => {
-                    println!("DHT get finished for query {:?}", id);
-                    let results = pending_get_results.remove(&id).unwrap_or_default();
-                    let selected_value = select_best_get_record_value(results);
-
-                    if pending_auto_host_registry_queries.remove(&id) {
-                        // Auto-host-registry path still waits for all
-                        // replicas — first-hit doesn't apply here because
-                        // we want the union of advertised hosts.
-                        auto_dial_discovered_hosts_from_registry(
-                            selected_value,
-                            swarm,
-                            failed_peers,
-                            auto_peer_dial_attempts,
-                        );
-                    } else if let Some(tx) = pending_get_queries.remove(&id) {
-                        // Caller waiter wasn't fired by first-hit (record
-                        // not found anywhere). Resolve to the best (None)
-                        // so the caller sees Ok(None) instead of hanging.
-                        let _ = tx.send(Ok(selected_value));
-                    }
-                }
-                kad::QueryResult::GetRecord(Err(err)) => {
-                    println!("DHT get failed for query {:?}: {:?}", id, err);
-                    // Some records may have been found before the error (e.g. QuorumFailed)
-                    let results = pending_get_results.remove(&id).unwrap_or_default();
-                    let selected_value = select_best_get_record_value(results);
-
-                    if pending_auto_host_registry_queries.remove(&id) {
-                        auto_dial_discovered_hosts_from_registry(
-                            selected_value,
-                            swarm,
-                            failed_peers,
-                            auto_peer_dial_attempts,
-                        );
-                    } else if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(selected_value));
-                    }
-                }
-                kad::QueryResult::PutRecord(Ok(ok)) => {
-                    let key_bytes = ok.key.as_ref();
-                    let key_str = String::from_utf8_lossy(key_bytes);
-                    println!("DHT put successful for query {:?}, key: {}", id, key_str);
-                }
-                kad::QueryResult::PutRecord(Err(err)) => {
-                    // Record is already stored locally — replication to remote peers
-                    // was incomplete, which is expected in sparse networks.
-                    println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
-                }
-                kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
-                    providers,
-                    ..
-                })) => {
-                    // First-hit: as soon as we see any providers, fire the
-                    // response and let Kademlia keep walking in the
-                    // background. Waiting for FinishedWithNoAdditionalRecord
-                    // adds 10-20s on every search by hash and was the
-                    // dominant source of CDN-search latency complaints.
-                    // Trade-off: a caller may see fewer providers than the
-                    // full set — but the search UI merges seeders from
-                    // multiple sources (DHT + CDN HTTP fallback) and a
-                    // single provider is enough to show the file as
-                    // available. Subsequent FoundProviders events still
-                    // accumulate (no waiter to fire), so the local cache
-                    // gets warmed for the next call.
-                    if let Some(acc) = pending_get_providers_results.get_mut(&id) {
-                        acc.extend(providers.iter().cloned());
-                    }
-                    if !providers.is_empty() {
-                        if let Some(tx) = pending_get_providers_queries.remove(&id) {
-                            let peer_ids: Vec<String> =
-                                providers.into_iter().map(|p| p.to_string()).collect();
-                            let _ = tx.send(Ok(peer_ids));
-                        }
-                    }
-                }
-                kad::QueryResult::GetProviders(Ok(
-                    kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. },
-                )) => {
-                    let providers = pending_get_providers_results
-                        .remove(&id)
-                        .unwrap_or_default();
-                    if let Some(tx) = pending_get_providers_queries.remove(&id) {
-                        let peer_ids: Vec<String> =
-                            providers.into_iter().map(|p| p.to_string()).collect();
-                        let _ = tx.send(Ok(peer_ids));
-                    }
-                }
-                kad::QueryResult::GetProviders(Err(err)) => {
-                    // Even on timeout we may have found providers before the error
-                    // fired — return whatever we have rather than failing the caller.
-                    let providers = pending_get_providers_results
-                        .remove(&id)
-                        .unwrap_or_default();
-                    if let Some(tx) = pending_get_providers_queries.remove(&id) {
-                        if providers.is_empty() {
-                            let _ = tx.send(Err(format!("GetProviders failed: {:?}", err)));
-                        } else {
-                            let peer_ids: Vec<String> =
-                                providers.into_iter().map(|p| p.to_string()).collect();
-                            let _ = tx.send(Ok(peer_ids));
-                        }
-                    }
-                }
-                kad::QueryResult::StartProviding(Ok(ok)) => {
-                    let key_bytes = ok.key.as_ref();
-                    let key_str = String::from_utf8_lossy(key_bytes);
-                    println!(
-                        "✅ DHT start_providing replicated for query {:?}, key: {}",
-                        id, key_str
-                    );
-                }
-                kad::QueryResult::StartProviding(Err(err)) => {
-                    // Replication timeout is logged but not surfaced — the local
-                    // provider record is stored regardless, and Kademlia retries
-                    // on its republish cadence.
-                    println!(
-                        "⚠️ DHT start_providing replication incomplete for query {:?}: {:?}",
-                        id, err
-                    );
-                }
-                kad::QueryResult::Bootstrap(Ok(result)) => {
-                    println!(
-                        "Kademlia bootstrap successful: {:?} peers remaining",
-                        result.num_remaining
-                    );
-                    if result.num_remaining == 0 {
-                        println!("✅ Kademlia bootstrap fully complete — DHT ready");
-
-                        // Populate peers list with all Kademlia routing table entries
-                        // so the Network page and ChiralDrop can see discovered peers.
-                        if let Some(now) = current_kademlia_peer_sync_timestamp_secs(
-                            "populating visible peers after Kademlia bootstrap",
-                        ) {
-                            let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
-                            for bucket in swarm.behaviour_mut().kad.kbuckets() {
-                                for entry in bucket.iter() {
-                                    let pid = entry.node.key.preimage().to_string();
-                                    let addrs: Vec<String> =
-                                        entry.node.value.iter().map(|a| a.to_string()).collect();
-                                    kad_discovered.push((pid, addrs));
-                                }
-                            }
-                            if !kad_discovered.is_empty() {
-                                let mut peers_guard = peers.lock().await;
-                                for (pid, addrs) in &kad_discovered {
-                                    if !peers_guard.iter().any(|p| &p.id == pid) {
-                                        peers_guard.push(PeerInfo {
-                                            id: pid.clone(),
-                                            address: pid.clone(),
-                                            multiaddrs: addrs.clone(),
-                                            last_seen: now,
-                                        });
-                                    }
-                                }
-                                println!(
-                                    "📡 Added {} Kademlia peers to visible peer list",
-                                    kad_discovered.len()
-                                );
-                                let _ = events.emit("peer-discovered", peers_guard.clone());
-                            }
-                        }
-
-                        bootstrap_gate.mark_ready();
-                        let _ = events.emit("dht-bootstrap-complete", ());
-                    }
-                }
-                kad::QueryResult::Bootstrap(Err(err)) => {
-                    println!("Kademlia bootstrap failed: {:?}", err);
-                    let _ = events.emit("dht-bootstrap-complete", ());
-                }
-                _ => {}
-            }
-        }
-        DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            // Drop peers whose Identify says they're below the
-            // currently-effective `min_required`. The peer's
-            // agent_version is the same string we set in our own
-            // identify config — usually "chiral/<semver>" — so we strip
-            // the prefix and run it through the shared comparator.
-            //
-            // Phase 5 swapped the bundled-policy lookup for the global
-            // RwLock-backed slot, so a relay-pushed signed policy
-            // tightening `min_required` at runtime takes effect on
-            // libp2p connections without waiting for redeploy.
-            let policy = crate::version::effective_policy();
-            let agent_v = info
-                .agent_version
-                .trim_start_matches("chiral/")
-                .trim_start_matches('v');
-            match crate::version::version_is_below_named(
-                agent_v,
-                "peer agent_version",
-                &policy.min_required,
-                "policy min_required",
-            ) {
-                Ok(true) => {
-                    println!(
-                        "🚫 Disconnecting peer {} (agent_version='{}' < min_required={})",
-                        peer_id, info.agent_version, policy.min_required
-                    );
-                    let _ = swarm.disconnect_peer_id(peer_id);
-                    if failed_peers.insert(peer_id) {
-                        log_failed_peer_cache_save(
-                            failed_peers,
-                            "recording a peer below the required version",
-                        );
-                    }
-                    return;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    println!(
-                        "🚫 Disconnecting peer {} due to malformed version policy comparison: {}",
-                        peer_id, e
-                    );
-                    let _ = swarm.disconnect_peer_id(peer_id);
-                    if failed_peers.insert(peer_id) {
-                        log_failed_peer_cache_save(
-                            failed_peers,
-                            "recording a peer with malformed version metadata",
-                        );
-                    }
-                    return;
-                }
-            }
-
-            // Skip peers that previously failed to connect
-            if !failed_peers.contains(&peer_id) {
-                // Add all listen addresses to Kademlia for routing.
-                // Kademlia needs addresses to function for inter-node communication.
-                for addr in &info.listen_addrs {
-                    swarm
-                        .behaviour_mut()
-                        .kad
-                        .add_address(&peer_id, addr.clone());
-                }
-            }
-        }
-        DhtBehaviourEvent::Identify(_) => {}
-        DhtBehaviourEvent::FileTransfer(event) => {
-            use request_response::Event;
-            match event {
-                Event::Message { peer, message } => {
-                    match message {
-                        request_response::Message::Request {
-                            request, channel, ..
-                        } => {
-                            let price_wei = match parse_protocol_price_wei(
-                                &request.price_wei,
-                                "FileTransferRequest.price_wei",
-                            ) {
-                                Ok(price_wei) => price_wei,
-                                Err(err) => {
-                                    println!(
-                                        "Rejecting malformed file transfer price from {}: {}",
-                                        peer, err
-                                    );
-                                    let response = FileTransferResponse {
-                                        transfer_id: request.transfer_id.clone(),
-                                        accepted: false,
-                                        error: Some(err),
-                                    };
-                                    if let Err(e) = swarm
-                                        .behaviour_mut()
-                                        .file_transfer
-                                        .send_response(channel, response)
-                                    {
-                                        println!("Failed to send file transfer response: {:?}", e);
-                                    }
-                                    return;
-                                }
-                            };
-                            let is_paid = price_wei > 0;
-
-                            println!(
-                                "Received file transfer from {}: {} (paid: {})",
-                                peer, request.file_name, is_paid
-                            );
-
-                            if is_paid {
-                                // Paid transfer: file_data is empty, emit event with pricing
-                                // so the frontend can prompt the user to accept and pay
-                                let actual_size = if request.file_size > 0 {
-                                    request.file_size
-                                } else {
-                                    request.file_data.len() as u64
-                                };
-                                let _ = events.emit(
-                                    "chiraldrop-paid-request",
-                                    serde_json::json!({
-                                        "transferId": request.transfer_id,
-                                        "fromPeerId": peer.to_string(),
-                                        "fileName": request.file_name,
-                                        "fileHash": request.file_hash,
-                                        "fileSize": actual_size,
-                                        "priceWei": request.price_wei,
-                                        "senderWallet": request.sender_wallet
-                                    }),
-                                );
-                            } else {
-                                // Free transfer: store file data for acceptance
-                                if let Some(fts) = file_transfer_service {
-                                    let fts_lock = fts.lock().await;
-                                    let _ = fts_lock
-                                        .receive_file_request(
-                                            events.clone(),
-                                            peer.to_string(),
-                                            request.file_name.clone(),
-                                            request.file_data.clone(),
-                                            request.transfer_id.clone(),
-                                        )
-                                        .await;
-                                }
-                            }
-
-                            // Protocol requires a response
-                            let response = FileTransferResponse {
-                                transfer_id: request.transfer_id.clone(),
-                                accepted: true,
-                                error: None,
-                            };
-                            if let Err(e) = swarm
-                                .behaviour_mut()
-                                .file_transfer
-                                .send_response(channel, response)
-                            {
-                                println!("Failed to send file transfer response: {:?}", e);
-                            }
-                        }
-                        request_response::Message::Response { response, .. } => {
-                            println!(
-                                "Received file transfer response from {}: accepted={}",
-                                peer, response.accepted
-                            );
-                            if response.accepted {
-                                let _ = events.emit(
-                                    "file-transfer-complete",
-                                    serde_json::json!({
-                                        "transferId": response.transfer_id,
-                                        "status": "completed"
-                                    }),
-                                );
-                            } else {
-                                let _ = events.emit(
-                                    "file-transfer-complete",
-                                    serde_json::json!({
-                                        "transferId": response.transfer_id,
-                                        "status": "declined",
-                                        "error": response.error
-                                    }),
-                                );
-                            }
-                        }
-                    }
-                }
-                Event::OutboundFailure { peer, error, .. } => {
-                    let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
-                    let user_error = match &error {
-                        request_response::OutboundFailure::DialFailure
-                        | request_response::OutboundFailure::UnsupportedProtocols => {
-                            format!("Seeder ({}...) is offline or unreachable", peer_short)
-                        }
-                        request_response::OutboundFailure::Timeout => {
-                            format!("Seeder ({}...) did not respond in time", peer_short)
-                        }
-                        _ => format!("Transfer failed to ({}...): {:?}", peer_short, error),
-                    };
-                    println!("❌ File transfer failed to {:?}: {:?}", peer, error);
-                    let _ = events.emit(
-                        "file-transfer-failed",
-                        serde_json::json!({
-                            "peerId": peer.to_string(),
-                            "error": user_error
-                        }),
-                    );
-                }
-                Event::InboundFailure { peer, error, .. } => {
-                    println!("Inbound file transfer failed from {:?}: {:?}", peer, error);
-                }
-                _ => {}
-            }
-        }
-        DhtBehaviourEvent::FileRequest(event) => {
-            use request_response::Event;
-            match event {
-                Event::Message { peer, message } => {
-                    match message {
-                        // === SEEDER SIDE: Handle incoming requests ===
-                        request_response::Message::Request {
-                            request, channel, ..
-                        } => {
-                            match request {
-                                ChunkRequest::FileInfo {
-                                    request_id,
-                                    file_hash,
-                                    folder_hash,
-                                } => {
-                                    println!(
-                                        "📋 Received FileInfo request from {}: hash={}",
-                                        peer, file_hash
-                                    );
-                                    let shared = shared_files.lock().await;
-
-                                    // Cold path: chunk hashes haven't been
-                                    // warmed yet (the background warmup
-                                    // spawned at register_shared_file is
-                                    // still running, or the seeder just
-                                    // started and hasn't gotten to it). We
-                                    // refuse to hash here on the libp2p
-                                    // reactor — a multi-MB SHA-256 sweep
-                                    // blocks every other peer's events for
-                                    // the whole read. Hand the work to a
-                                    // worker task that hashes off-runtime
-                                    // and bounces the response back via a
-                                    // SendChunkResponse command, so the
-                                    // swarm task continues servicing other
-                                    // peers in the meantime.
-                                    if let Some(file_info) = shared.get(&file_hash) {
-                                        let access = match resolve_file_access(
-                                            file_info,
-                                            folder_hash.as_deref(),
-                                        ) {
-                                            Ok(access) => access,
-                                            Err(err) => {
-                                                drop(shared);
-                                                let response = file_info_error_response(
-                                                    request_id,
-                                                    file_hash,
-                                                    err,
-                                                    folder_hash,
-                                                );
-                                                if let Err(e) = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_response(channel, response)
-                                                {
-                                                    println!(
-                                                        "Failed to send FileInfo response: {:?}",
-                                                        e
-                                                    );
-                                                }
-                                                return;
-                                            }
-                                        };
-                                        if file_info.chunk_hashes.is_none() {
-                                            let path = file_info.file_path.clone();
-                                            let file_name = file_info.file_name.clone();
-                                            let file_size = file_info.file_size;
-                                            let private_key = file_info.private_key.clone();
-                                            let shared_clone = shared_files.clone();
-                                            let cmd_tx_clone = cmd_tx.clone();
-                                            let authorized_chunks =
-                                                Arc::clone(seeder_authorized_chunks);
-                                            let peer_id_for_auth = peer;
-                                            let request_id = request_id.clone();
-                                            let file_hash_owned = file_hash.clone();
-                                            drop(shared);
-                                            tokio::spawn(async move {
-                                                let path_for_hash = path.clone();
-                                                let hash_result =
-                                                    match tokio::task::spawn_blocking(move || {
-                                                        compute_chunk_hashes(&path_for_hash)
-                                                    })
-                                                    .await
-                                                    {
-                                                        Ok(inner) => inner,
-                                                        Err(je) => Err(format!(
-                                                            "Hash task panicked: {}",
-                                                            je
-                                                        )),
-                                                    };
-                                                let response = match hash_result {
-                                                    Ok(hashes) => {
-                                                        // Cache the result so the next request
-                                                        // hits the warm path. Lose-the-race is
-                                                        // fine — another worker may have
-                                                        // populated it concurrently; either
-                                                        // set wins.
-                                                        let mut shared = shared_clone.lock().await;
-                                                        if let Some(info) =
-                                                            shared.get_mut(&file_hash_owned)
-                                                        {
-                                                            if info.chunk_hashes.is_none() {
-                                                                info.chunk_hashes =
-                                                                    Some(hashes.clone());
-                                                            }
-                                                        }
-                                                        drop(shared);
-                                                        let free_scope = if access.price_wei == 0 {
-                                                            Some(payment_scope_for_access(
-                                                                &file_hash_owned,
-                                                                &access,
-                                                            ))
-                                                        } else {
-                                                            None
-                                                        };
-                                                        let response = signed_file_info_response(
-                                                            request_id.clone(),
-                                                            file_hash_owned,
-                                                            file_name,
-                                                            file_size,
-                                                            hashes,
-                                                            access,
-                                                            &private_key,
-                                                        );
-                                                        if matches!(
-                                                            &response,
-                                                            ChunkResponse::FileInfo {
-                                                                error: None,
-                                                                ..
-                                                            }
-                                                        ) {
-                                                            if let Some(scope) = free_scope {
-                                                                remember_authorized_chunk_access(
-                                                                    &authorized_chunks,
-                                                                    request_id,
-                                                                    peer_id_for_auth,
-                                                                    scope,
-                                                                )
-                                                                .await;
-                                                            }
-                                                        }
-                                                        response
-                                                    }
-                                                    Err(msg) => {
-                                                        println!(
-                                                            "Failed to compute chunk hashes for {}: {}",
-                                                            file_hash_owned, msg
-                                                        );
-                                                        file_info_error_response(
-                                                            request_id,
-                                                            file_hash_owned,
-                                                            msg,
-                                                            access.folder_hash,
-                                                        )
-                                                    }
-                                                };
-                                                let _ = cmd_tx_clone.send(
-                                                    SwarmCommand::SendChunkResponse {
-                                                        channel,
-                                                        response,
-                                                    },
-                                                );
-                                            });
-                                            return;
-                                        }
-                                    }
-
-                                    // Warm path: chunk hashes are already
-                                    // cached, so build + send the response
-                                    // synchronously while still on the
-                                    // swarm task. No I/O here — just clones
-                                    // + a (cheap) signature.
-                                    let response = if let Some(file_info) = shared.get(&file_hash) {
-                                        match resolve_file_access(file_info, folder_hash.as_deref())
-                                        {
-                                            Ok(access) => {
-                                                let chunk_hashes =
-                                                    file_info.chunk_hashes.as_ref().unwrap();
-                                                let private_key = file_info.private_key.clone();
-                                                let file_name_owned = file_info.file_name.clone();
-                                                let file_size_owned = file_info.file_size;
-                                                println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
-                                                         file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
-
-                                                let free_scope = if access.price_wei == 0 {
-                                                    Some(payment_scope_for_access(
-                                                        &file_hash, &access,
-                                                    ))
-                                                } else {
-                                                    None
-                                                };
-                                                let response = signed_file_info_response(
-                                                    request_id.clone(),
-                                                    file_hash,
-                                                    file_name_owned,
-                                                    file_size_owned,
-                                                    chunk_hashes.clone(),
-                                                    access,
-                                                    &private_key,
-                                                );
-                                                if matches!(
-                                                    &response,
-                                                    ChunkResponse::FileInfo { error: None, .. }
-                                                ) {
-                                                    if let Some(scope) = free_scope {
-                                                        remember_authorized_chunk_access(
-                                                            seeder_authorized_chunks,
-                                                            request_id,
-                                                            peer,
-                                                            scope,
-                                                        )
-                                                        .await;
-                                                    }
-                                                }
-                                                response
-                                            }
-                                            Err(err) => file_info_error_response(
-                                                request_id,
-                                                file_hash,
-                                                err,
-                                                folder_hash,
-                                            ),
-                                        }
-                                    } else {
-                                        println!("File not found: {}", file_hash);
-                                        file_info_error_response(
-                                            request_id,
-                                            file_hash,
-                                            "File not found",
-                                            folder_hash,
-                                        )
-                                    };
-                                    drop(shared);
-
-                                    if let Err(e) = swarm
-                                        .behaviour_mut()
-                                        .file_request
-                                        .send_response(channel, response)
-                                    {
-                                        println!("Failed to send FileInfo response: {:?}", e);
-                                    }
-                                }
-                                ChunkRequest::Chunk {
-                                    request_id,
-                                    file_hash,
-                                    chunk_index,
-                                } => {
-                                    // Defer the disk read + SHA-256 off the
-                                    // libp2p reactor. The previous version
-                                    // ran std::fs::File::open + seek + read
-                                    // + SHA-256 inline on the swarm task
-                                    // for every chunk request — for a
-                                    // 100-chunk download that's 100 sync
-                                    // I/Os in a row, blocking every other
-                                    // peer's events the whole time.
-                                    let shared = shared_files.lock().await;
-                                    let file_path = match shared.get(&file_hash) {
-                                        Some(info) => {
-                                            let authorized = {
-                                                let authorized_chunks =
-                                                    seeder_authorized_chunks.lock().await;
-                                                authorized_chunks.get(&request_id).cloned()
-                                            };
-                                            if let Some(err) = chunk_request_access_error(
-                                                authorized.as_ref(),
-                                                peer,
-                                                &file_hash,
-                                                info,
-                                            ) {
-                                                drop(shared);
-                                                let response = ChunkResponse::Chunk {
-                                                    request_id,
-                                                    file_hash,
-                                                    chunk_index,
-                                                    chunk_data: None,
-                                                    chunk_hash: String::new(),
-                                                    error: Some(err),
-                                                };
-                                                if let Err(e) = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_response(channel, response)
-                                                {
-                                                    println!(
-                                                        "Failed to send chunk response: {:?}",
-                                                        e
-                                                    );
-                                                }
-                                                return;
-                                            }
-                                            info.file_path.clone()
-                                        }
-                                        None => {
-                                            drop(shared);
-                                            let response = ChunkResponse::Chunk {
-                                                request_id,
-                                                file_hash,
-                                                chunk_index,
-                                                chunk_data: None,
-                                                chunk_hash: String::new(),
-                                                error: Some("File not found".to_string()),
-                                            };
-                                            if let Err(e) = swarm
-                                                .behaviour_mut()
-                                                .file_request
-                                                .send_response(channel, response)
-                                            {
-                                                println!("Failed to send chunk response: {:?}", e);
-                                            }
-                                            return;
-                                        }
-                                    };
-                                    drop(shared);
-
-                                    let cmd_tx_clone = cmd_tx.clone();
-                                    let request_id = request_id.clone();
-                                    let file_hash_owned = file_hash.clone();
-                                    tokio::spawn(async move {
-                                        let path_for_read = file_path.clone();
-                                        let read_result = tokio::task::spawn_blocking(
-                                            move || -> Result<(Vec<u8>, String), String> {
-                                                let mut file = std::fs::File::open(&path_for_read)
-                                                    .map_err(|e| {
-                                                        format!("Failed to open file: {}", e)
-                                                    })?;
-                                                let offset = chunk_index as u64 * CHUNK_SIZE as u64;
-                                                file.seek(SeekFrom::Start(offset)).map_err(
-                                                    |e| format!("Failed to seek: {}", e),
-                                                )?;
-                                                let mut buf = vec![0u8; CHUNK_SIZE];
-                                                let bytes_read =
-                                                    file.read(&mut buf).map_err(|e| {
-                                                        format!("Failed to read chunk: {}", e)
-                                                    })?;
-                                                buf.truncate(bytes_read);
-                                                let mut hasher = Sha256::new();
-                                                hasher.update(&buf);
-                                                let chunk_hash = hex::encode(hasher.finalize());
-                                                Ok((buf, chunk_hash))
-                                            },
-                                        )
-                                        .await;
-                                        let response = match read_result {
-                                            Ok(Ok((buf, chunk_hash))) => ChunkResponse::Chunk {
-                                                request_id,
-                                                file_hash: file_hash_owned,
-                                                chunk_index,
-                                                chunk_data: Some(buf),
-                                                chunk_hash,
-                                                error: None,
-                                            },
-                                            Ok(Err(msg)) => ChunkResponse::Chunk {
-                                                request_id,
-                                                file_hash: file_hash_owned,
-                                                chunk_index,
-                                                chunk_data: None,
-                                                chunk_hash: String::new(),
-                                                error: Some(msg),
-                                            },
-                                            Err(je) => ChunkResponse::Chunk {
-                                                request_id,
-                                                file_hash: file_hash_owned,
-                                                chunk_index,
-                                                chunk_data: None,
-                                                chunk_hash: String::new(),
-                                                error: Some(format!(
-                                                    "Chunk read task panicked: {}",
-                                                    je
-                                                )),
-                                            },
-                                        };
-                                        let _ =
-                                            cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
-                                                channel,
-                                                response,
-                                            });
-                                    });
-                                }
-                                ChunkRequest::PaymentProof {
-                                    request_id,
-                                    file_hash,
-                                    folder_hash,
-                                    payment_tx,
-                                    payer_address,
-                                } => {
-                                    println!(
-                                        "💰 Received payment proof from {}: tx={}, payer={}",
-                                        peer, payment_tx, payer_address
-                                    );
-                                    // Pull what we need from shared_files in
-                                    // a tight window. Anything that can wait
-                                    // for chain RPC is moved to a worker
-                                    // below — the previous version called
-                                    // wait_for_tx_mined inline, blocking the
-                                    // entire libp2p reactor for up to ~88s
-                                    // while a single tx propagated. During
-                                    // that window every other peer's
-                                    // pings/dials/chunks stalled, even if
-                                    // they were unrelated to this download.
-                                    let shared = shared_files.lock().await;
-                                    let (price_wei, expected_wallet, payment_scope) = match shared
-                                        .get(&file_hash)
-                                    {
-                                        Some(info) => {
-                                            let access = match resolve_file_access(
-                                                info,
-                                                folder_hash.as_deref(),
-                                            ) {
-                                                Ok(access) => access,
-                                                Err(err) => {
-                                                    drop(shared);
-                                                    let resp = ChunkResponse::PaymentAck {
-                                                        request_id,
-                                                        file_hash,
-                                                        accepted: false,
-                                                        error: Some(err),
-                                                    };
-                                                    if let Err(e) = swarm
-                                                        .behaviour_mut()
-                                                        .file_request
-                                                        .send_response(channel, resp)
-                                                    {
-                                                        println!("Failed to send PaymentAck response: {:?}", e);
-                                                    }
-                                                    return;
-                                                }
-                                            };
-                                            let scope =
-                                                payment_scope_for_access(&file_hash, &access);
-                                            (access.price_wei, access.wallet_address, scope)
-                                        }
-                                        None => {
-                                            drop(shared);
-                                            let resp = ChunkResponse::PaymentAck {
-                                                request_id,
-                                                file_hash,
-                                                accepted: false,
-                                                error: Some("File not found".to_string()),
-                                            };
-                                            if let Err(e) = swarm
-                                                .behaviour_mut()
-                                                .file_request
-                                                .send_response(channel, resp)
-                                            {
-                                                println!(
-                                                    "Failed to send PaymentAck response: {:?}",
-                                                    e
-                                                );
-                                            }
-                                            return;
-                                        }
-                                    };
-                                    drop(shared);
-
-                                    // Free-file fast path — no chain RPC,
-                                    // no risk of stalling the reactor.
-                                    if price_wei == 0 {
-                                        remember_authorized_chunk_access(
-                                            seeder_authorized_chunks,
-                                            request_id.clone(),
-                                            peer,
-                                            payment_scope.clone(),
-                                        )
-                                        .await;
-                                        let resp = ChunkResponse::PaymentAck {
-                                            request_id,
-                                            file_hash,
-                                            accepted: true,
-                                            error: None,
-                                        };
-                                        if let Err(e) = swarm
-                                            .behaviour_mut()
-                                            .file_request
-                                            .send_response(channel, resp)
-                                        {
-                                            println!("Failed to send PaymentAck response: {:?}", e);
-                                        }
-                                        return;
-                                    }
-
-                                    // Paid file — defer the entire chain-
-                                    // verification dance off the reactor.
-                                    // The worker peeks the spent-tx ledger,
-                                    // waits for the tx to mine (≤88s),
-                                    // verifies the receipt details against
-                                    // the seeder's expected wallet/price,
-                                    // claims the tx atomically, and hands
-                                    // the final PaymentAck back to the
-                                    // swarm task via SendChunkResponse.
-                                    let cmd_tx_clone = cmd_tx.clone();
-                                    let events_clone = events.clone();
-                                    let request_id_owned = request_id.clone();
-                                    let file_hash_owned = file_hash.clone();
-                                    let payment_tx_owned = payment_tx.clone();
-                                    let payer_address_owned = payer_address.clone();
-                                    let authorized_chunks = Arc::clone(seeder_authorized_chunks);
-                                    let peer_id_for_auth = peer;
-                                    tokio::spawn(async move {
-                                        let response = verify_payment_proof(
-                                            &payment_tx_owned,
-                                            &payer_address_owned,
-                                            &expected_wallet,
-                                            price_wei,
-                                            &file_hash_owned,
-                                            payment_scope,
-                                            request_id_owned,
-                                            &events_clone,
-                                            authorized_chunks,
-                                            peer_id_for_auth,
-                                        )
-                                        .await;
-                                        let _ =
-                                            cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
-                                                channel,
-                                                response,
-                                            });
-                                    });
-                                }
-                            }
-                        }
-                        // === DOWNLOADER SIDE: Handle incoming responses ===
-                        request_response::Message::Response {
-                            response,
-                            request_id: outbound_req_id,
-                            ..
-                        } => {
-                            // Clean up outbound request mapping
-                            outbound_request_map.remove(&outbound_req_id);
-
-                            match response {
-                                ChunkResponse::FileInfo {
-                                    request_id,
-                                    file_hash,
-                                    file_name,
-                                    file_size,
-                                    chunk_size: _,
-                                    total_chunks,
-                                    chunk_hashes,
-                                    price_wei,
-                                    wallet_address,
-                                    folder_hash,
-                                    signature,
-                                    error,
-                                } => {
-                                    // Another seeder may have already started this download request.
-                                    // Use duplicate FileInfo responses as backup seeders for failover.
-                                    {
-                                        let mut downloads = active_downloads.lock().await;
-                                        if let Some(existing) = downloads.get_mut(&request_id) {
-                                            if add_backup_peer(existing, peer) {
-                                                println!(
-                                                    "🧭 Added backup seeder {} for request {} ({} backups total)",
-                                                    peer,
-                                                    request_id,
-                                                    existing.backup_peers.len()
-                                                );
-                                            }
-                                            println!(
-                                                "ℹ️ Ignoring duplicate FileInfo for request {} from peer {}",
-                                                request_id, peer
-                                            );
-                                            return;
-                                        }
-                                    }
-
-                                    if let Some(err) = error {
-                                        println!("❌ FileInfo error: {}", err);
-                                        let remaining = decrement_file_request_attempt(
-                                            pending_file_attempts,
-                                            &request_id,
-                                        );
-                                        if remaining > 0 {
-                                            println!(
-                                                "🔁 Seeder returned FileInfo error for request {}, still trying {} other seeder(s)",
-                                                request_id, remaining
-                                            );
-                                            return;
-                                        }
-                                        pending_file_hashes.remove(&request_id);
-                                        let _ = events.emit(
-                                            "file-download-failed",
-                                            serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "error": err
-                                            }),
-                                        );
-                                        return;
-                                    }
-
-                                    // Verify the seeder's FileInfo signature. Without
-                                    // this, a hostile seeder can substitute its own
-                                    // wallet_address into the response and divert the
-                                    // buyer's payment (FM-A09). An invalid signature
-                                    // is treated like a seeder-side error so the
-                                    // downloader fails over to other seeders.
-                                    let payload = file_info_sign_payload(
-                                        &file_hash,
-                                        &file_name,
-                                        file_size,
-                                        CHUNK_SIZE as u32,
-                                        total_chunks,
-                                        &chunk_hashes,
-                                        &price_wei,
-                                        &wallet_address,
-                                        folder_hash.as_deref(),
-                                    );
-                                    let sig_ok = !signature.is_empty()
-                                        && !wallet_address.is_empty()
-                                        && crate::wallet::verify_signature(
-                                            &payload,
-                                            &signature,
-                                            &wallet_address,
-                                        );
-                                    if !sig_ok {
-                                        let reason = if signature.is_empty() {
-                                            "unsigned FileInfo"
-                                        } else {
-                                            "FileInfo signature did not verify against wallet_address"
-                                        };
-                                        println!(
-                                            "❌ {} from peer {} for {}",
-                                            reason, peer, file_hash
-                                        );
-                                        let remaining = decrement_file_request_attempt(
-                                            pending_file_attempts,
-                                            &request_id,
-                                        );
-                                        if remaining > 0 {
-                                            println!(
-                                                "🔁 Trying {} other seeder(s) for request {}",
-                                                remaining, request_id
-                                            );
-                                            return;
-                                        }
-                                        pending_file_hashes.remove(&request_id);
-                                        let _ = events.emit(
-                                            "file-download-failed",
-                                            serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "error": reason,
-                                            }),
-                                        );
-                                        return;
-                                    }
-
-                                    let price = match parse_protocol_price_wei(
-                                        &price_wei,
-                                        "ChunkResponse::FileInfo.price_wei",
-                                    ) {
-                                        Ok(price) => price,
-                                        Err(err) => {
-                                            println!(
-                                                "❌ Invalid FileInfo price from peer {} for {}: {}",
-                                                peer, file_hash, err
-                                            );
-                                            let remaining = decrement_file_request_attempt(
-                                                pending_file_attempts,
-                                                &request_id,
-                                            );
-                                            if remaining > 0 {
-                                                println!(
-                                                    "🔁 Trying {} other seeder(s) for request {}",
-                                                    remaining, request_id
-                                                );
-                                                return;
-                                            }
-                                            pending_file_hashes.remove(&request_id);
-                                            let _ = events.emit(
-                                                "file-download-failed",
-                                                serde_json::json!({
-                                                    "requestId": request_id,
-                                                    "fileHash": file_hash,
-                                                    "error": err,
-                                                }),
-                                            );
-                                            return;
-                                        }
-                                    };
-
-                                    // First successful seeder won this request.
-                                    pending_file_attempts.remove(&request_id);
-                                    pending_file_hashes.remove(&request_id);
-
-                                    println!("📋 Received FileInfo: {} ({} bytes, {} chunks, price={} wei)", file_name, file_size, total_chunks, price);
-
-                                    // Determine output path
-                                    let custom_dir = download_directory.lock().await.clone();
-                                    let downloads_dir = if let Some(ref dir) = custom_dir {
-                                        let p = PathBuf::from(dir);
-                                        if p.exists() && p.is_dir() {
-                                            p
-                                        } else {
-                                            dirs::download_dir()
-                                                .unwrap_or_else(|| PathBuf::from("."))
-                                        }
-                                    } else {
-                                        dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
-                                    };
-
-                                    let output_name = if file_name.is_empty() {
-                                        format!(
-                                            "{}.download",
-                                            &file_hash[..std::cmp::min(8, file_hash.len())]
-                                        )
-                                    } else {
-                                        file_name.clone()
-                                    };
-                                    let output_path = downloads_dir.join(&output_name);
-
-                                    // Create empty output file
-                                    if let Err(e) = std::fs::File::create(&output_path) {
-                                        println!("❌ Failed to create output file: {}", e);
-                                        let _ = events.emit("file-download-failed", serde_json::json!({
-                                            "requestId": request_id,
-                                            "fileHash": file_hash,
-                                            "error": format!("Failed to create output file: {}", e)
-                                        }));
-                                        return;
-                                    }
-
-                                    // Create active download state
-                                    let download = ActiveChunkedDownload {
-                                        request_id: request_id.clone(),
-                                        file_hash: file_hash.clone(),
-                                        file_name: output_name,
-                                        file_size,
-                                        total_chunks,
-                                        chunk_hashes,
-                                        received_chunks: vec![false; total_chunks as usize],
-                                        output_path: output_path.clone(),
-                                        bytes_written: 0,
-                                        peer_id: peer,
-                                        backup_peers: vec![],
-                                        retry_counts: vec![0u8; total_chunks as usize],
-                                        current_chunk_index: 0,
-                                        start_time: std::time::Instant::now(),
-                                        payment_confirmed: price == 0,
-                                    };
-
-                                    {
-                                        let mut downloads = active_downloads.lock().await;
-                                        downloads.insert(request_id.clone(), download);
-                                    }
-
-                                    if price > 0 {
-                                        // Paid file: send payment to seeder, then send proof
-                                        println!(
-                                            "💰 File requires payment of {} wei to {}",
-                                            price, wallet_address
-                                        );
-                                        let _ = events.emit(
-                                            "file-payment-processing",
-                                            serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "priceWei": price_wei,
-                                                "walletAddress": wallet_address
-                                            }),
-                                        );
-
-                                        // Get download credentials for this request
-                                        let creds = {
-                                            let creds_map = download_credentials.lock().await;
-                                            creds_map.get(&request_id).cloned()
-                                        };
-
-                                        if let Some(creds) = creds {
-                                            if let Some(folder_hash_for_payment) =
-                                                folder_hash.clone()
-                                            {
-                                                let expected_folder =
-                                                    normalize_folder_hash(&folder_hash_for_payment);
-                                                let creds_folder = creds
-                                                    .folder_hash
-                                                    .as_deref()
-                                                    .map(normalize_folder_hash);
-                                                let payment_tx = creds
-                                                    .folder_payment_tx
-                                                    .clone()
-                                                    .filter(|tx| !tx.trim().is_empty());
-                                                if creds_folder.as_deref()
-                                                    != Some(expected_folder.as_str())
-                                                    || payment_tx.is_none()
-                                                {
-                                                    println!(
-                                                        "❌ Missing folder payment proof for {}",
-                                                        folder_hash_for_payment
-                                                    );
-                                                    let mut downloads =
-                                                        active_downloads.lock().await;
-                                                    if let Some(dl) = downloads.remove(&request_id)
-                                                    {
-                                                        let _ =
-                                                            std::fs::remove_file(&dl.output_path);
-                                                    }
-                                                    let _ = events.emit("file-download-failed", serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "error": "Folder payment transaction is required for this paid folder member"
-                                                    }));
-                                                    return;
-                                                }
-
-                                                let payment_tx = payment_tx.unwrap();
-                                                let _ = events.emit(
-                                                    "chiraldrop-payment-sent",
-                                                    serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "fileName": file_name,
-                                                        "txHash": payment_tx.clone(),
-                                                        "priceWei": price_wei,
-                                                        "toWallet": wallet_address,
-                                                        "fromWallet": creds.wallet_address,
-                                                        "folderHash": folder_hash_for_payment.clone(),
-                                                    }),
-                                                );
-                                                let request = ChunkRequest::PaymentProof {
-                                                    request_id: request_id.clone(),
-                                                    file_hash: file_hash.clone(),
-                                                    folder_hash: Some(folder_hash_for_payment),
-                                                    payment_tx,
-                                                    payer_address: creds.wallet_address.clone(),
-                                                };
-                                                let req_id = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_request(&peer, request);
-                                                outbound_request_map.insert(req_id, request_id);
-                                            } else {
-                                                // Split: 99.5% to seeder, 0.5% platform fee
-                                                let (seller_wei, fee_wei) =
-                                                    crate::speed_tiers::split_payment(price);
-                                                let seller_chi =
-                                                    crate::speed_tiers::format_wei_as_chi(
-                                                        seller_wei,
-                                                    );
-                                                let fee_chi =
-                                                    crate::speed_tiers::format_wei_as_chi(fee_wei);
-
-                                                // Send seller payment
-                                                match crate::wallet::send_payment(
-                                                    &creds.wallet_address,
-                                                    &wallet_address,
-                                                    &seller_chi,
-                                                    &creds.private_key,
-                                                )
-                                                .await
-                                                {
-                                                    Ok(payment) => {
-                                                        println!(
-                                                            "💰 Payment sent: tx={}",
-                                                            payment.tx_hash
-                                                        );
-                                                        // Send platform fee (best-effort)
-                                                        if fee_wei > 0 {
-                                                            let _ = crate::wallet::send_payment(
-                                                                &creds.wallet_address,
-                                                                crate::speed_tiers::PLATFORM_WALLET,
-                                                                &fee_chi,
-                                                                &creds.private_key,
-                                                            )
-                                                            .await;
-                                                        }
-                                                        // Emit event so frontend can track in transaction history
-                                                        let _ = events.emit(
-                                                        "chiraldrop-payment-sent",
-                                                        serde_json::json!({
-                                                            "requestId": request_id,
-                                                            "fileHash": file_hash,
-                                                            "fileName": file_name,
-                                                            "txHash": payment.tx_hash,
-                                                            "priceWei": price_wei,
-                                                            "toWallet": wallet_address,
-                                                            "fromWallet": creds.wallet_address,
-                                                            "balanceBefore": payment.balance_before,
-                                                            "balanceAfter": payment.balance_after,
-                                                        }),
-                                                    );
-                                                        // Send payment proof to seeder
-                                                        let request = ChunkRequest::PaymentProof {
-                                                            request_id: request_id.clone(),
-                                                            file_hash: file_hash.clone(),
-                                                            folder_hash: None,
-                                                            payment_tx: payment.tx_hash,
-                                                            payer_address: creds
-                                                                .wallet_address
-                                                                .clone(),
-                                                        };
-                                                        let req_id = swarm
-                                                            .behaviour_mut()
-                                                            .file_request
-                                                            .send_request(&peer, request);
-                                                        outbound_request_map
-                                                            .insert(req_id, request_id);
-                                                    }
-                                                    Err(e) => {
-                                                        println!("❌ Payment failed: {}", e);
-                                                        let mut downloads =
-                                                            active_downloads.lock().await;
-                                                        if let Some(dl) =
-                                                            downloads.remove(&request_id)
-                                                        {
-                                                            let _ = std::fs::remove_file(
-                                                                &dl.output_path,
-                                                            );
-                                                        }
-                                                        let _ = events.emit("file-download-failed", serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "error": format!("Payment failed: {}", e)
-                                                    }));
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            println!("❌ No wallet credentials for paid download");
-                                            let mut downloads = active_downloads.lock().await;
-                                            if let Some(dl) = downloads.remove(&request_id) {
-                                                let _ = std::fs::remove_file(&dl.output_path);
-                                            }
-                                            let _ = events.emit("file-download-failed", serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "error": "Wallet not connected. Connect your wallet to download paid files."
-                                            }));
-                                        }
-                                    } else {
-                                        // Free file: request the first chunk immediately
-                                        let request = ChunkRequest::Chunk {
-                                            request_id: request_id.clone(),
-                                            file_hash: file_hash.clone(),
-                                            chunk_index: 0,
-                                        };
-                                        let req_id = swarm
-                                            .behaviour_mut()
-                                            .file_request
-                                            .send_request(&peer, request);
-                                        outbound_request_map.insert(req_id, request_id);
-                                    }
-                                }
-                                ChunkResponse::Chunk {
-                                    request_id,
-                                    file_hash,
-                                    chunk_index,
-                                    chunk_data,
-                                    chunk_hash,
-                                    error,
-                                } => {
-                                    if let Some(err) = error {
-                                        println!("❌ Chunk {} error: {}", chunk_index, err);
-                                        // Check if we should retry
-                                        let mut downloads = active_downloads.lock().await;
-                                        let mut failover: Option<(
-                                            PeerId,
-                                            String,
-                                            String,
-                                            u32,
-                                            String,
-                                        )> = None;
-                                        if let Some(dl) = downloads.get_mut(&request_id) {
-                                            dl.retry_counts[chunk_index as usize] += 1;
-                                            let attempt = dl.retry_counts[chunk_index as usize];
-                                            if attempt <= MAX_CHUNK_RETRIES {
-                                                println!(
-                                                    "🔄 Retrying chunk {} (attempt {}/{})",
-                                                    chunk_index, attempt, MAX_CHUNK_RETRIES
-                                                );
-                                                let peer_id = dl.peer_id.clone();
-                                                let fh = dl.file_hash.clone();
-                                                let rid = dl.request_id.clone();
-                                                drop(downloads);
-                                                wait_for_chunk_retry_delay(attempt, chunk_index)
-                                                    .await;
-                                                let request = ChunkRequest::Chunk {
-                                                    request_id: rid.clone(),
-                                                    file_hash: fh,
-                                                    chunk_index,
-                                                };
-                                                let req_id = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_request(&peer_id, request);
-                                                outbound_request_map.insert(req_id, rid);
-                                                return;
-                                            } else {
-                                                if let Some(next_peer) = take_next_backup_peer(dl) {
-                                                    let previous_peer = dl.peer_id.clone();
-                                                    dl.peer_id = next_peer.clone();
-                                                    dl.current_chunk_index = chunk_index;
-                                                    dl.retry_counts[chunk_index as usize] = 0;
-                                                    failover = Some((
-                                                        next_peer,
-                                                        dl.file_hash.clone(),
-                                                        dl.request_id.clone(),
-                                                        chunk_index,
-                                                        previous_peer.to_string(),
-                                                    ));
-                                                } else {
-                                                    // Max retries exceeded — abort
-                                                    let Some(dl) =
-                                                        remove_active_download_for_cleanup(
-                                                            &mut downloads,
-                                                            &request_id,
-                                                            "chunk error retry exhaustion",
-                                                        )
-                                                    else {
-                                                        drop(downloads);
-                                                        return;
-                                                    };
-                                                    let _ = std::fs::remove_file(&dl.output_path);
-                                                    drop(downloads);
-                                                    let _ = events.emit("file-download-failed", serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "error": format!("Chunk {} failed after {} retries: {}", chunk_index, MAX_CHUNK_RETRIES, err)
-                                                    }));
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                        drop(downloads);
-                                        if let Some((next_peer, fh, rid, idx, previous_peer)) =
-                                            failover
-                                        {
-                                            println!(
-                                                "🔁 Failing over request {} from {} to {} at chunk {}",
-                                                rid, previous_peer, next_peer, idx
-                                            );
-                                            let _ = events.emit(
-                                                "download-peer-failover",
-                                                serde_json::json!({
-                                                    "requestId": rid,
-                                                    "fileHash": fh,
-                                                    "fromPeer": previous_peer,
-                                                    "toPeer": next_peer.to_string(),
-                                                    "chunkIndex": idx,
-                                                }),
-                                            );
-                                            let request = ChunkRequest::Chunk {
-                                                request_id: rid.clone(),
-                                                file_hash: fh,
-                                                chunk_index: idx,
-                                            };
-                                            let req_id = swarm
-                                                .behaviour_mut()
-                                                .file_request
-                                                .send_request(&next_peer, request);
-                                            outbound_request_map.insert(req_id, rid);
-                                        }
-                                        return;
-                                    }
-
-                                    let chunk_data = match chunk_data {
-                                        Some(data) => data,
-                                        None => {
-                                            println!(
-                                                "❌ Chunk {} has no data and no error",
-                                                chunk_index
-                                            );
-                                            return;
-                                        }
-                                    };
-
-                                    // Verify chunk hash against manifest
-                                    let mut downloads = active_downloads.lock().await;
-                                    if let Some(dl) = downloads.get_mut(&request_id) {
-                                        // Reject out-of-sequence chunks. Without this, a hostile
-                                        // seeder can answer chunk N=last first, skipping forward
-                                        // and writing an out-of-order file. The full-file hash
-                                        // catches the corrupt result, but only after wasting
-                                        // bandwidth on the partial download. Bound the damage.
-                                        if (chunk_index as usize) >= dl.chunk_hashes.len()
-                                            || chunk_index != dl.current_chunk_index
-                                        {
-                                            println!(
-                                                "❌ Chunk {} arrived out-of-sequence (expected {}); dropping",
-                                                chunk_index, dl.current_chunk_index
-                                            );
-                                            return;
-                                        }
-                                        let expected_hash = &dl.chunk_hashes[chunk_index as usize];
-                                        let mut hasher = Sha256::new();
-                                        hasher.update(&chunk_data);
-                                        let computed_hash = hex::encode(hasher.finalize());
-
-                                        if computed_hash != *expected_hash
-                                            || computed_hash != chunk_hash
-                                        {
-                                            println!(
-                                                "❌ Chunk {} hash mismatch! Expected: {}, Got: {}",
-                                                chunk_index, expected_hash, computed_hash
-                                            );
-                                            dl.retry_counts[chunk_index as usize] += 1;
-                                            let attempt = dl.retry_counts[chunk_index as usize];
-                                            if attempt <= MAX_CHUNK_RETRIES {
-                                                println!(
-                                                    "🔄 Retrying chunk {} due to hash mismatch (attempt {}/{})",
-                                                    chunk_index,
-                                                    attempt,
-                                                    MAX_CHUNK_RETRIES
-                                                );
-                                                let peer_id = dl.peer_id.clone();
-                                                let fh = dl.file_hash.clone();
-                                                let rid = dl.request_id.clone();
-                                                drop(downloads);
-                                                wait_for_chunk_retry_delay(attempt, chunk_index)
-                                                    .await;
-                                                let request = ChunkRequest::Chunk {
-                                                    request_id: rid.clone(),
-                                                    file_hash: fh,
-                                                    chunk_index,
-                                                };
-                                                let req_id = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_request(&peer_id, request);
-                                                outbound_request_map.insert(req_id, rid);
-                                            } else {
-                                                if let Some(next_peer) = take_next_backup_peer(dl) {
-                                                    let previous_peer = dl.peer_id.clone();
-                                                    dl.peer_id = next_peer.clone();
-                                                    dl.current_chunk_index = chunk_index;
-                                                    dl.retry_counts[chunk_index as usize] = 0;
-                                                    let fh = dl.file_hash.clone();
-                                                    let rid = dl.request_id.clone();
-                                                    drop(downloads);
-                                                    println!(
-                                                        "🔁 Failing over request {} from {} to {} at chunk {} (hash mismatch)",
-                                                        rid, previous_peer, next_peer, chunk_index
-                                                    );
-                                                    let _ = events.emit(
-                                                        "download-peer-failover",
-                                                        serde_json::json!({
-                                                            "requestId": rid,
-                                                            "fileHash": fh,
-                                                            "fromPeer": previous_peer.to_string(),
-                                                            "toPeer": next_peer.to_string(),
-                                                            "chunkIndex": chunk_index,
-                                                        }),
-                                                    );
-                                                    let request = ChunkRequest::Chunk {
-                                                        request_id: rid.clone(),
-                                                        file_hash: fh,
-                                                        chunk_index,
-                                                    };
-                                                    let req_id = swarm
-                                                        .behaviour_mut()
-                                                        .file_request
-                                                        .send_request(&next_peer, request);
-                                                    outbound_request_map.insert(req_id, rid);
-                                                } else {
-                                                    let Some(dl) =
-                                                        remove_active_download_for_cleanup(
-                                                            &mut downloads,
-                                                            &request_id,
-                                                            "chunk hash retry exhaustion",
-                                                        )
-                                                    else {
-                                                        drop(downloads);
-                                                        return;
-                                                    };
-                                                    let _ = std::fs::remove_file(&dl.output_path);
-                                                    drop(downloads);
-                                                    let _ = events.emit("file-download-failed", serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "error": format!("Chunk {} failed integrity check after {} retries", chunk_index, MAX_CHUNK_RETRIES)
-                                                    }));
-                                                }
-                                            }
-                                            return;
-                                        }
-
-                                        // Write chunk to file (append)
-                                        use std::io::Write;
-                                        let write_result = std::fs::OpenOptions::new()
-                                            .append(true)
-                                            .open(&dl.output_path)
-                                            .and_then(|mut f| f.write_all(&chunk_data));
-
-                                        if let Err(e) = write_result {
-                                            println!(
-                                                "❌ Failed to write chunk {}: {}",
-                                                chunk_index, e
-                                            );
-                                            let Some(dl) = remove_active_download_for_cleanup(
-                                                &mut downloads,
-                                                &request_id,
-                                                "chunk write failure",
-                                            ) else {
-                                                drop(downloads);
-                                                return;
-                                            };
-                                            let _ = std::fs::remove_file(&dl.output_path);
-                                            drop(downloads);
-                                            let _ = events.emit(
-                                                "file-download-failed",
-                                                serde_json::json!({
-                                                    "requestId": request_id,
-                                                    "fileHash": file_hash,
-                                                    "error": format!("Failed to write chunk: {}", e)
-                                                }),
-                                            );
-                                            return;
-                                        }
-
-                                        dl.received_chunks[chunk_index as usize] = true;
-                                        dl.bytes_written += chunk_data.len() as u64;
-                                        dl.current_chunk_index = chunk_index + 1;
-
-                                        // Emit progress
-                                        let progress =
-                                            (dl.bytes_written as f64 / dl.file_size as f64) * 100.0;
-                                        let elapsed = dl.start_time.elapsed().as_secs_f64();
-                                        let speed_bps = if elapsed > 0.0 {
-                                            (dl.bytes_written as f64 / elapsed) as u64
-                                        } else {
-                                            0
-                                        };
-                                        let _ = events.emit(
-                                            "download-progress",
-                                            serde_json::json!({
-                                                "requestId": dl.request_id,
-                                                "fileHash": dl.file_hash,
-                                                "fileName": dl.file_name,
-                                                "bytesWritten": dl.bytes_written,
-                                                "totalBytes": dl.file_size,
-                                                "speedBps": speed_bps,
-                                                "progress": progress
-                                            }),
-                                        );
-
-                                        // Check if all chunks received
-                                        if dl.current_chunk_index >= dl.total_chunks {
-                                            // All chunks received — verify full file hash
-                                            let output_path = dl.output_path.clone();
-                                            let expected_file_hash = dl.file_hash.clone();
-                                            let request_id_clone = dl.request_id.clone();
-                                            let file_name_clone = dl.file_name.clone();
-                                            let file_size = dl.file_size;
-                                            let _ = downloads.remove(&request_id);
-                                            drop(downloads);
-
-                                            // Verify full file SHA-256
-                                            let events_clone = events.clone();
-                                            tokio::spawn(async move {
-                                                match tokio::task::spawn_blocking(move || {
-                                                    let mut file =
-                                                        std::fs::File::open(&output_path)?;
-                                                    let mut hasher = Sha256::new();
-                                                    let mut buf = vec![0u8; 256 * 1024];
-                                                    loop {
-                                                        let n = file.read(&mut buf)?;
-                                                        if n == 0 {
-                                                            break;
-                                                        }
-                                                        hasher.update(&buf[..n]);
-                                                    }
-                                                    Ok::<(String, PathBuf), std::io::Error>((
-                                                        hex::encode(hasher.finalize()),
-                                                        output_path,
-                                                    ))
-                                                })
-                                                .await
-                                                {
-                                                    Ok(Ok((computed_hash, output_path))) => {
-                                                        if computed_hash == expected_file_hash {
-                                                            println!(
-                                                                "✅ File verified and saved: {:?}",
-                                                                output_path
-                                                            );
-                                                            events_clone.emit("file-download-complete", serde_json::json!({
-                                                                "requestId": request_id_clone,
-                                                                "fileHash": expected_file_hash,
-                                                                "fileName": file_name_clone,
-                                                                "filePath": output_path.to_string_lossy(),
-                                                                "fileSize": file_size,
-                                                                "status": "completed"
-                                                            }));
-                                                        } else {
-                                                            println!("❌ Full file hash mismatch! Expected: {}, Got: {}", expected_file_hash, computed_hash);
-                                                            let _ =
-                                                                std::fs::remove_file(&output_path);
-                                                            events_clone.emit("file-download-failed", serde_json::json!({
-                                                                "requestId": request_id_clone,
-                                                                "fileHash": expected_file_hash,
-                                                                "error": "File integrity verification failed — hash mismatch after all chunks received"
-                                                            }));
-                                                        }
-                                                    }
-                                                    Ok(Err(e)) => {
-                                                        println!("❌ Failed to verify file: {}", e);
-                                                        events_clone.emit("file-download-failed", serde_json::json!({
-                                                            "requestId": request_id_clone,
-                                                            "fileHash": expected_file_hash,
-                                                            "error": format!("Failed to verify file: {}", e)
-                                                        }));
-                                                    }
-                                                    Err(e) => {
-                                                        println!(
-                                                            "❌ Verification task panicked: {}",
-                                                            e
-                                                        );
-                                                        events_clone.emit("file-download-failed", serde_json::json!({
-                                                            "requestId": request_id_clone,
-                                                            "fileHash": expected_file_hash,
-                                                            "error": format!("Verification task failed: {}", e)
-                                                        }));
-                                                    }
-                                                }
-                                            });
-                                        } else {
-                                            // Request next chunk
-                                            let peer_id = dl.peer_id;
-                                            let fh = dl.file_hash.clone();
-                                            let rid = dl.request_id.clone();
-                                            let next_index = dl.current_chunk_index;
-                                            drop(downloads);
-
-                                            let request = ChunkRequest::Chunk {
-                                                request_id: rid.clone(),
-                                                file_hash: fh,
-                                                chunk_index: next_index,
-                                            };
-                                            let req_id = swarm
-                                                .behaviour_mut()
-                                                .file_request
-                                                .send_request(&peer_id, request);
-                                            outbound_request_map.insert(req_id, rid);
-                                        }
-                                    }
-                                }
-                                ChunkResponse::PaymentAck {
-                                    request_id,
-                                    file_hash,
-                                    accepted,
-                                    error,
-                                } => {
-                                    if !accepted {
-                                        let err_msg = error.unwrap_or_else(|| {
-                                            "Payment rejected by seeder".to_string()
-                                        });
-                                        println!(
-                                            "❌ Payment rejected for {}: {}",
-                                            file_hash, err_msg
-                                        );
-                                        let mut downloads = active_downloads.lock().await;
-                                        if let Some(dl) = downloads.remove(&request_id) {
-                                            let _ = std::fs::remove_file(&dl.output_path);
-                                        }
-                                        let _ = events.emit(
-                                            "file-download-failed",
-                                            serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "error": err_msg
-                                            }),
-                                        );
-                                        return;
-                                    }
-
-                                    println!(
-                                        "✅ Payment accepted for {}, starting chunk download",
-                                        file_hash
-                                    );
-
-                                    // Mark payment confirmed and request first chunk
-                                    let mut downloads = active_downloads.lock().await;
-                                    if let Some(dl) = downloads.get_mut(&request_id) {
-                                        dl.payment_confirmed = true;
-                                        let peer_id = dl.peer_id;
-                                        let fh = dl.file_hash.clone();
-                                        let rid = dl.request_id.clone();
-                                        drop(downloads);
-
-                                        let request = ChunkRequest::Chunk {
-                                            request_id: rid.clone(),
-                                            file_hash: fh,
-                                            chunk_index: 0,
-                                        };
-                                        let req_id = swarm
-                                            .behaviour_mut()
-                                            .file_request
-                                            .send_request(&peer_id, request);
-                                        outbound_request_map.insert(req_id, rid);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Event::OutboundFailure {
-                    peer,
-                    error,
-                    request_id: outbound_req_id,
-                    ..
-                } => {
-                    let our_request_id = outbound_request_map.remove(&outbound_req_id);
-                    let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
-                    let mut emit_failure = true;
-                    let mut request_id_for_error: Option<String> = None;
-                    let mut file_hash_for_error: Option<String> = None;
-
-                    if let Some(request_id) = our_request_id {
-                        request_id_for_error = Some(request_id.clone());
-                        let mut downloads = active_downloads.lock().await;
-                        if let Some(dl) = downloads.get_mut(&request_id) {
-                            if dl.peer_id == peer {
-                                let chunk_index = dl
-                                    .current_chunk_index
-                                    .min(dl.total_chunks.saturating_sub(1));
-                                if (chunk_index as usize) >= dl.retry_counts.len() {
-                                    println!(
-                                        "❌ Invalid retry index {} for request {} (retry len {})",
-                                        chunk_index,
-                                        request_id,
-                                        dl.retry_counts.len()
-                                    );
-                                    if let Some(dl) = remove_active_download_for_cleanup(
-                                        &mut downloads,
-                                        &request_id,
-                                        "invalid outbound retry index",
-                                    ) {
-                                        file_hash_for_error = Some(dl.file_hash.clone());
-                                        let _ = std::fs::remove_file(&dl.output_path);
-                                    } else {
-                                        emit_failure = false;
-                                    }
-                                } else {
-                                    dl.retry_counts[chunk_index as usize] += 1;
-                                    let attempt = dl.retry_counts[chunk_index as usize];
-
-                                    if attempt <= MAX_CHUNK_RETRIES {
-                                        println!(
-                                            "🔄 Retrying chunk {} after outbound failure (attempt {}/{})",
-                                            chunk_index, attempt, MAX_CHUNK_RETRIES
-                                        );
-                                        let peer_id = dl.peer_id.clone();
-                                        let fh = dl.file_hash.clone();
-                                        let rid = dl.request_id.clone();
-                                        drop(downloads);
-                                        wait_for_chunk_retry_delay(attempt, chunk_index).await;
-                                        let request = ChunkRequest::Chunk {
-                                            request_id: rid.clone(),
-                                            file_hash: fh,
-                                            chunk_index,
-                                        };
-                                        let req_id = swarm
-                                            .behaviour_mut()
-                                            .file_request
-                                            .send_request(&peer_id, request);
-                                        outbound_request_map.insert(req_id, rid);
-                                        return;
-                                    } else {
-                                        if let Some(next_peer) = take_next_backup_peer(dl) {
-                                            let previous_peer = dl.peer_id.clone();
-                                            dl.peer_id = next_peer.clone();
-                                            dl.current_chunk_index = chunk_index;
-                                            dl.retry_counts[chunk_index as usize] = 0;
-                                            let fh = dl.file_hash.clone();
-                                            let rid = dl.request_id.clone();
-                                            drop(downloads);
-                                            println!(
-                                                "🔁 Failing over request {} from {} to {} at chunk {} (outbound failure)",
-                                                rid, previous_peer, next_peer, chunk_index
-                                            );
-                                            let _ = events.emit(
-                                                "download-peer-failover",
-                                                serde_json::json!({
-                                                    "requestId": rid,
-                                                    "fileHash": fh,
-                                                    "fromPeer": previous_peer.to_string(),
-                                                    "toPeer": next_peer.to_string(),
-                                                    "chunkIndex": chunk_index,
-                                                }),
-                                            );
-                                            let request = ChunkRequest::Chunk {
-                                                request_id: rid.clone(),
-                                                file_hash: fh,
-                                                chunk_index,
-                                            };
-                                            let req_id = swarm
-                                                .behaviour_mut()
-                                                .file_request
-                                                .send_request(&next_peer, request);
-                                            outbound_request_map.insert(req_id, rid);
-                                            return;
-                                        } else {
-                                            // Max retries exceeded
-                                            if let Some(dl) = remove_active_download_for_cleanup(
-                                                &mut downloads,
-                                                &request_id,
-                                                "outbound failure retry exhaustion",
-                                            ) {
-                                                file_hash_for_error = Some(dl.file_hash.clone());
-                                                let _ = std::fs::remove_file(&dl.output_path);
-                                            } else {
-                                                emit_failure = false;
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Another seeder attempt failed after a different seeder
-                                // already became the active source for this request.
-                                emit_failure = false;
-                            }
-                        } else {
-                            // No active chunked download yet => this was a FileInfo seeder attempt.
-                            let remaining =
-                                decrement_file_request_attempt(pending_file_attempts, &request_id);
-                            if remaining > 0 {
-                                emit_failure = false;
-                                println!(
-                                    "🔁 Seeder {} failed for request {}, still trying {} other seeder(s)",
-                                    peer, request_id, remaining
-                                );
-                            } else {
-                                file_hash_for_error = pending_file_hashes.remove(&request_id);
-                            }
-                        }
-                        drop(downloads);
-                    }
-
-                    if !emit_failure {
-                        return;
-                    }
-
-                    let user_error = match &error {
-                        request_response::OutboundFailure::DialFailure => {
-                            format!("Seeder ({}...) is offline or unreachable. They may have disconnected from the network.", peer_short)
-                        }
-                        request_response::OutboundFailure::UnsupportedProtocols => {
-                            format!("Seeder ({}...) is offline or running an incompatible version. The file cannot be downloaded from this peer.", peer_short)
-                        }
-                        request_response::OutboundFailure::Timeout => {
-                            format!("Seeder ({}...) did not respond in time. They may be offline or experiencing network issues.", peer_short)
-                        }
-                        _ => {
-                            format!("Failed to reach seeder ({}...): {:?}", peer_short, error)
-                        }
-                    };
-                    println!("❌ File request failed to {:?}: {:?}", peer, error);
-                    let _ = events.emit(
-                        "file-download-failed",
-                        serde_json::json!({
-                            "requestId": request_id_for_error,
-                            "fileHash": file_hash_for_error,
-                            "peerId": peer.to_string(),
-                            "error": user_error
-                        }),
-                    );
-                }
-                Event::InboundFailure { peer, error, .. } => {
-                    println!("Inbound file request failed from {:?}: {:?}", peer, error);
-                }
-                _ => {}
-            }
-        }
-        DhtBehaviourEvent::RelayClient(event) => match event {
-            relay::client::Event::ReservationReqAccepted {
-                relay_peer_id,
-                renewal,
-                ..
-            } => {
-                let action = if renewal { "renewed" } else { "accepted" };
-                println!("🔄 Relay reservation {} by {}", action, relay_peer_id);
-                let _ = events.emit(
-                    "relay-reservation",
-                    serde_json::json!({
-                        "relayPeerId": relay_peer_id.to_string(),
-                        "renewal": renewal,
-                    }),
-                );
-            }
-            relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
-                println!(
-                    "✅ Outbound relay circuit established via {}",
-                    relay_peer_id
-                );
-                let _ = events.emit(
-                    "relay-circuit-established",
-                    serde_json::json!({
-                        "relayPeerId": relay_peer_id.to_string(),
-                        "direction": "outbound",
-                    }),
-                );
-            }
-            relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
-                println!("✅ Inbound relay circuit from {}", src_peer_id);
-                let _ = events.emit(
-                    "relay-circuit-established",
-                    serde_json::json!({
-                        "srcPeerId": src_peer_id.to_string(),
-                        "direction": "inbound",
-                    }),
-                );
-            }
-        },
-        DhtBehaviourEvent::Dcutr(event) => match &event.result {
-            Ok(connection_id) => {
-                println!(
-                    "🕳️ DCUtR hole-punch succeeded with {} (conn {:?})",
-                    event.remote_peer_id, connection_id
-                );
-                let _ = events.emit(
-                    "dcutr-event",
-                    serde_json::json!({
-                        "remotePeerId": event.remote_peer_id.to_string(),
-                        "success": true,
-                    }),
-                );
-            }
-            Err(e) => {
-                println!(
-                    "🕳️ DCUtR hole-punch failed with {}: {}",
-                    event.remote_peer_id, e
-                );
-                let _ = events.emit(
-                    "dcutr-event",
-                    serde_json::json!({
-                        "remotePeerId": event.remote_peer_id.to_string(),
-                        "success": false,
-                        "error": format!("{}", e),
-                    }),
-                );
-            }
-        },
-        _ => {}
+    for (_, search) in searches {
+        let _ = search.reply.send(Err("DHT stopped".into()));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_active_download(request_id: &str) -> ActiveChunkedDownload {
-        test_active_download_with_peer(request_id, PeerId::random())
-    }
-
-    fn test_active_download_with_peer(request_id: &str, peer_id: PeerId) -> ActiveChunkedDownload {
-        ActiveChunkedDownload {
-            request_id: request_id.to_string(),
-            file_hash: "file-hash".to_string(),
-            file_name: "file.bin".to_string(),
-            file_size: 1,
-            total_chunks: 1,
-            chunk_hashes: vec!["chunk-hash".to_string()],
-            received_chunks: vec![false],
-            output_path: std::env::temp_dir().join(format!("{request_id}.download")),
-            bytes_written: 0,
-            peer_id,
-            backup_peers: vec![],
-            retry_counts: vec![0],
-            current_chunk_index: 0,
-            start_time: std::time::Instant::now(),
-            payment_confirmed: false,
-        }
-    }
-
     #[test]
-    fn remove_active_download_for_cleanup_returns_existing_download() {
-        let mut downloads = ActiveDownloadsMap::new();
-        downloads.insert("req-1".to_string(), test_active_download("req-1"));
-
-        let removed = remove_active_download_for_cleanup(&mut downloads, "req-1", "test cleanup")
-            .expect("existing download should be removed");
-
-        assert_eq!(removed.request_id, "req-1");
-        assert!(!downloads.contains_key("req-1"));
-    }
-
-    #[test]
-    fn remove_active_download_for_cleanup_handles_missing_download() {
-        let mut downloads = ActiveDownloadsMap::new();
-
-        let removed =
-            remove_active_download_for_cleanup(&mut downloads, "missing-req", "late chunk");
-
-        assert!(removed.is_none());
-        assert!(downloads.is_empty());
-    }
-
-    #[test]
-    fn peer_timestamp_secs_at_returns_epoch_seconds() {
-        let timestamp = peer_timestamp_secs_at(UNIX_EPOCH + Duration::from_secs(42))
-            .expect("post-epoch timestamp should be valid");
-
-        assert_eq!(timestamp, 42);
-    }
-
-    #[test]
-    fn peer_timestamp_millis_at_returns_epoch_millis() {
-        let timestamp = peer_timestamp_millis_at(UNIX_EPOCH + Duration::from_millis(1234))
-            .expect("post-epoch timestamp should be valid");
-
-        assert_eq!(timestamp, 1234);
-    }
-
-    #[test]
-    fn kademlia_peer_sync_timestamp_secs_at_returns_epoch_seconds() {
-        let timestamp = kademlia_peer_sync_timestamp_secs_at(UNIX_EPOCH + Duration::from_secs(99))
-            .expect("post-epoch Kademlia peer-sync timestamp should be valid");
-
-        assert_eq!(timestamp, 99);
-    }
-
-    #[test]
-    fn kademlia_peer_sync_timestamp_secs_at_rejects_pre_epoch_clock() {
-        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
-
-        assert!(kademlia_peer_sync_timestamp_secs_at(pre_epoch).is_err());
-    }
-
-    #[test]
-    fn peer_timestamp_helpers_reject_pre_epoch_clock() {
-        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
-
-        assert!(peer_timestamp_secs_at(pre_epoch).is_err());
-        assert!(peer_timestamp_millis_at(pre_epoch).is_err());
-    }
-
-    #[test]
-    fn save_hosting_agreement_to_path_persists_json() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("agreements").join("agreement-1.json");
-        let agreement = serde_json::json!({
-            "agreementId": "agreement-1",
-            "status": "accepted",
-        });
-
-        save_hosting_agreement_to_path(&path, &agreement, "test save").unwrap();
-
-        let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved, agreement);
-    }
-
-    #[test]
-    fn save_hosting_agreement_to_path_surfaces_directory_creation_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let blocked_parent = dir.path().join("blocked");
-        std::fs::write(&blocked_parent, "not a directory").unwrap();
-        let path = blocked_parent.join("agreement-1.json");
-        let agreement = serde_json::json!({"agreementId": "agreement-1"});
-
-        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
-            .expect_err("directory creation should fail");
-
-        assert!(err.contains("test save"));
-        assert!(err.contains("create hosting agreement directory"));
-        assert!(err.contains("blocked"));
-    }
-
-    #[test]
-    fn save_hosting_agreement_to_path_surfaces_write_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("agreement-1.json");
-        std::fs::create_dir(&path).unwrap();
-        let agreement = serde_json::json!({"agreementId": "agreement-1"});
-
-        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
-            .expect_err("writing over a directory should fail");
-
-        assert!(err.contains("test save"));
-        assert!(err.contains("write hosting agreement"));
-        assert!(err.contains("agreement-1.json"));
-    }
-
-    #[test]
-    fn save_failed_peers_to_path_at_persists_current_peers() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cache").join("failed_peers.txt");
-        let peer_a = PeerId::random();
-        let peer_b = PeerId::random();
-        let mut failed = HashSet::new();
-        failed.insert(peer_a);
-        failed.insert(peer_b);
-
-        save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
-            .unwrap();
-
-        let contents = std::fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = contents.lines().collect();
-        let mut sorted = lines.clone();
-        sorted.sort_unstable();
-        assert_eq!(lines, sorted);
-        assert_eq!(lines.len(), 2);
-        assert!(lines.iter().all(|line| line.ends_with("\t123")));
-        assert!(contents.contains(&peer_a.to_string()));
-        assert!(contents.contains(&peer_b.to_string()));
-    }
-
-    #[test]
-    fn save_failed_peers_to_path_at_surfaces_directory_creation_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let blocked_parent = dir.path().join("blocked");
-        std::fs::write(&blocked_parent, "not a directory").unwrap();
-        let path = blocked_parent.join("failed_peers.txt");
-        let failed = HashSet::from([PeerId::random()]);
-
-        let err =
-            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
-                .expect_err("directory creation should fail");
-
-        assert!(err.contains("create failed-peer cache directory"));
-        assert!(err.contains("blocked"));
-    }
-
-    #[test]
-    fn save_failed_peers_to_path_at_surfaces_write_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("failed_peers.txt");
-        std::fs::create_dir(&path).unwrap();
-        let failed = HashSet::from([PeerId::random()]);
-
-        let err =
-            save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH + Duration::from_secs(123))
-                .expect_err("writing over a directory should fail");
-
-        assert!(err.contains("write failed-peer cache"));
-        assert!(err.contains("failed_peers.txt"));
-    }
-
-    #[test]
-    fn save_failed_peers_to_path_at_rejects_pre_epoch_clock() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("failed_peers.txt");
-        let failed = HashSet::from([PeerId::random()]);
-
-        let err = save_failed_peers_to_path_at(&path, &failed, UNIX_EPOCH - Duration::from_secs(1))
-            .expect_err("pre-epoch timestamps should fail");
-
-        assert!(err.contains("system clock before UNIX_EPOCH"));
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn p2p_port_config_uses_random_port_when_absent() {
-        assert_eq!(parse_configured_p2p_port(None).unwrap(), 0);
-    }
-
-    #[test]
-    fn p2p_port_config_accepts_valid_port() {
-        assert_eq!(parse_configured_p2p_port(Some("4100")).unwrap(), 4100);
-    }
-
-    #[test]
-    fn p2p_port_config_rejects_malformed_port() {
-        let err = parse_configured_p2p_port(Some("not-a-port"))
-            .expect_err("malformed port should be rejected");
-
-        assert!(err.contains(P2P_PORT_ENV));
-        assert!(err.contains("not-a-port"));
-    }
-
-    #[test]
-    fn p2p_port_config_rejects_out_of_range_port() {
-        let err = parse_configured_p2p_port(Some("70000"))
-            .expect_err("out-of-range port should be rejected");
-
-        assert!(err.contains(P2P_PORT_ENV));
-        assert!(err.contains("70000"));
-    }
-
-    #[test]
-    fn add_backup_peer_accepts_first_distinct_peer() {
-        let active_peer = PeerId::random();
-        let backup_peer = PeerId::random();
-        let mut download = test_active_download_with_peer("req-1", active_peer);
-
-        assert!(add_backup_peer(&mut download, backup_peer));
-
-        assert_eq!(download.backup_peers, vec![backup_peer]);
-    }
-
-    #[test]
-    fn add_backup_peer_rejects_active_peer() {
-        let active_peer = PeerId::random();
-        let mut download = test_active_download_with_peer("req-1", active_peer);
-
-        assert!(!add_backup_peer(&mut download, active_peer));
-
-        assert!(download.backup_peers.is_empty());
-    }
-
-    #[test]
-    fn add_backup_peer_rejects_duplicate_backup_peer() {
-        let active_peer = PeerId::random();
-        let backup_peer = PeerId::random();
-        let mut download = test_active_download_with_peer("req-1", active_peer);
-
-        assert!(add_backup_peer(&mut download, backup_peer));
-        assert!(!add_backup_peer(&mut download, backup_peer));
-
-        assert_eq!(download.backup_peers, vec![backup_peer]);
-    }
-
-    #[tokio::test]
-    async fn bootstrap_gate_waits_until_marked_ready() {
-        let gate = DhtBootstrapGate::new();
-        let waiter = {
-            let gate = gate.clone();
-            tokio::spawn(async move { gate.wait_ready(Duration::from_secs(5)).await })
+    fn indexes_bind_network_and_model() {
+        let a = NetworkIdentity {
+            chain_id: 1,
+            genesis_hash: "a".into(),
+            deployment_id: "one".into(),
         };
+        let mut b = a.clone();
+        b.deployment_id = "two".into();
+        assert_ne!(index(&a, None), index(&b, None));
+        assert_ne!(index(&a, None), index(&a, Some("m")));
+        assert_ne!(index(&a, Some("m")), index(&a, Some("n")));
+    }
+    #[test]
+    fn peer_identity_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peer.key");
+        assert_eq!(
+            load_identity(&path).unwrap().public().to_peer_id(),
+            load_identity(&path).unwrap().public().to_peer_id()
+        );
+    }
+    #[tokio::test]
+    async fn oversized_manifest_rejected_before_allocation() {
+        let mut bytes = futures::io::Cursor::new((262_145u32).to_be_bytes());
+        assert!(read_frame::<_, ManifestResponse>(&mut bytes, 262_144)
+            .await
+            .is_err());
+    }
+    fn assert_limit(error: libp2p::swarm::ConnectionDenied, expected: u32) {
+        assert_eq!(
+            error
+                .downcast::<connection_limits::Exceeded>()
+                .expect("connection limiter must deny admission")
+                .limit(),
+            expected
+        );
+    }
 
-        tokio::task::yield_now().await;
-        assert!(!gate.is_ready());
-        gate.mark_ready();
+    #[test]
+    fn pending_connection_admission_is_bounded_in_both_directions() {
+        use libp2p::{core::Endpoint, swarm::ConnectionId};
+        let mut limits = connection_limits::Behaviour::new(connection_limits());
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/1".parse().unwrap();
+        for id in 0..MAX_PENDING_INCOMING {
+            limits
+                .handle_pending_inbound_connection(
+                    ConnectionId::new_unchecked(id as usize),
+                    &address,
+                    &address,
+                )
+                .unwrap();
+        }
+        assert_limit(
+            limits
+                .handle_pending_inbound_connection(
+                    ConnectionId::new_unchecked(1000),
+                    &address,
+                    &address,
+                )
+                .unwrap_err(),
+            MAX_PENDING_INCOMING,
+        );
+        // Saturated incoming handshakes do not consume the outgoing bootstrap budget.
+        for id in 0..MAX_PENDING_OUTGOING {
+            limits
+                .handle_pending_outbound_connection(
+                    ConnectionId::new_unchecked(2000 + id as usize),
+                    None,
+                    &[],
+                    Endpoint::Dialer,
+                )
+                .unwrap();
+        }
+        assert_limit(
+            limits
+                .handle_pending_outbound_connection(
+                    ConnectionId::new_unchecked(3000),
+                    None,
+                    &[],
+                    Endpoint::Dialer,
+                )
+                .unwrap_err(),
+            MAX_PENDING_OUTGOING,
+        );
+    }
 
-        assert!(waiter.await.unwrap());
-        assert!(gate.is_ready());
+    #[test]
+    fn established_connection_admission_reserves_outbound_and_caps_total() {
+        use libp2p::{
+            core::{ConnectedPoint, Endpoint},
+            swarm::{behaviour::ConnectionEstablished, ConnectionId, FromSwarm},
+        };
+        let mut limits = connection_limits::Behaviour::new(connection_limits());
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/1".parse().unwrap();
+        for id in 0..MAX_ESTABLISHED {
+            let peer = PeerId::random();
+            let connection_id = ConnectionId::new_unchecked(id as usize);
+            let endpoint = if id < MAX_ESTABLISHED_INCOMING {
+                limits
+                    .handle_established_inbound_connection(connection_id, peer, &address, &address)
+                    .unwrap();
+                ConnectedPoint::Listener {
+                    local_addr: address.clone(),
+                    send_back_addr: address.clone(),
+                }
+            } else {
+                if id == MAX_ESTABLISHED_INCOMING {
+                    assert_limit(
+                        limits
+                            .handle_established_inbound_connection(
+                                ConnectionId::new_unchecked(1000),
+                                peer,
+                                &address,
+                                &address,
+                            )
+                            .err()
+                            .expect("inbound budget must be full"),
+                        MAX_ESTABLISHED_INCOMING,
+                    );
+                }
+                limits
+                    .handle_established_outbound_connection(
+                        connection_id,
+                        peer,
+                        &address,
+                        Endpoint::Dialer,
+                    )
+                    .unwrap();
+                ConnectedPoint::Dialer {
+                    address: address.clone(),
+                    role_override: Endpoint::Dialer,
+                }
+            };
+            limits.on_swarm_event(FromSwarm::ConnectionEstablished(ConnectionEstablished {
+                peer_id: peer,
+                connection_id,
+                endpoint: &endpoint,
+                failed_addresses: &[],
+                other_established: 0,
+            }));
+        }
+        // Only 64 outbound connections exist: this must hit the combined total,
+        // not the separately configured outbound ceiling or per-identity limit.
+        assert_limit(
+            limits
+                .handle_established_outbound_connection(
+                    ConnectionId::new_unchecked(2000),
+                    PeerId::random(),
+                    &address,
+                    Endpoint::Dialer,
+                )
+                .err()
+                .expect("total connection budget must be full"),
+            MAX_ESTABLISHED,
+        );
     }
 
     #[tokio::test]
-    async fn bootstrap_gate_wait_ready_does_not_miss_racing_mark_ready() {
-        let gate = DhtBootstrapGate::new();
-        let mut marked = false;
-
-        let result = tokio::time::timeout(Duration::from_millis(50), async {
-            gate.wait_ready_inner(Duration::from_secs(180), || {
-                if !marked {
-                    marked = true;
-                    gate.mark_ready();
+    async fn tcp_noise_yamux_connections_are_limited_per_identity() {
+        use libp2p::swarm::{
+            dial_opts::{DialOpts, PeerCondition},
+            ListenError,
+        };
+        let network = crate::offer_registry::tests::offer().payload.network;
+        let mut provider = build_swarm(identity::Keypair::generate_ed25519(), &network).unwrap();
+        provider
+            .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .unwrap();
+        let address = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let SwarmEvent::NewListenAddr { address, .. } = provider.select_next_some().await
+                {
+                    break address;
                 }
-            })
-            .await
+            }
         })
         .await
-        .expect("wait_ready should not wait for timeout when mark_ready races");
-
-        assert!(result);
-        assert!(marked);
-        assert!(gate.is_ready());
-    }
-
-    #[test]
-    fn bootstrap_gate_reset_clears_ready_state() {
-        let gate = DhtBootstrapGate::new();
-        gate.mark_ready();
-        assert!(gate.is_ready());
-
-        gate.reset();
-        assert!(!gate.is_ready());
-    }
-
-    #[test]
-    fn test_chunk_retry_delay_is_deterministic() {
-        assert_eq!(
-            chunk_retry_delay(1, 0),
-            std::time::Duration::from_millis(167)
-        );
-        assert_eq!(
-            chunk_retry_delay(2, 0),
-            std::time::Duration::from_millis(434)
-        );
-        assert_eq!(
-            chunk_retry_delay(3, 0),
-            std::time::Duration::from_millis(951)
-        );
-        assert_eq!(
-            chunk_retry_delay(4, 0),
-            std::time::Duration::from_millis(968)
-        );
-        assert_eq!(chunk_retry_delay(2, 7), chunk_retry_delay(2, 7));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_chunk_retry_wait_uses_tokio_time() {
-        let delay = chunk_retry_delay(2, 7);
-        let started_at = tokio::time::Instant::now();
-        let wait = tokio::spawn(async move {
-            wait_for_chunk_retry_delay(2, 7).await;
-            tokio::time::Instant::now()
-        });
-
-        tokio::task::yield_now().await;
-        assert!(!wait.is_finished());
-
-        tokio::time::advance(delay - std::time::Duration::from_millis(1)).await;
-        tokio::task::yield_now().await;
-        assert!(!wait.is_finished());
-
-        tokio::time::advance(std::time::Duration::from_millis(1)).await;
-        let finished_at = wait.await.expect("retry sleep task should finish");
-        assert_eq!(finished_at.duration_since(started_at), delay);
-    }
-
-    #[test]
-    fn test_select_best_get_record_value_merges_seeder_multiaddrs() {
-        let stale = serde_json::json!({
-            "hash": "abc123",
-            "fileName": "demo.bin",
-            "fileSize": 1024,
-            "protocol": "WebRTC",
-            "createdAt": 100,
-            "peerId": "peer-a",
-            "priceWei": "0",
-            "walletAddress": "",
-            "seeders": [{
-                "peerId": "peer-a",
-                "priceWei": "0",
-                "walletAddress": "",
-                "multiaddrs": ["/ip4/10.0.0.1/tcp/4001/p2p/peer-a"]
-            }]
-        });
-        let fresh = serde_json::json!({
-            "hash": "abc123",
-            "fileName": "demo.bin",
-            "fileSize": 1024,
-            "protocol": "WebRTC",
-            "createdAt": 200,
-            "peerId": "peer-a",
-            "priceWei": "5",
-            "walletAddress": "0xabc",
-            "seeders": [
-                {
-                    "peerId": "peer-a",
-                    "priceWei": "5",
-                    "walletAddress": "0xabc",
-                    "multiaddrs": ["/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a"]
-                },
-                {
-                    "peerId": "peer-b",
-                    "priceWei": "0",
-                    "walletAddress": "",
-                    "multiaddrs": ["/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-b"]
-                }
-            ]
-        });
-
-        let selected = select_best_get_record_value(vec![stale.to_string(), fresh.to_string()])
-            .expect("expected merged value");
-        let parsed: serde_json::Value = serde_json::from_str(&selected).unwrap();
-        let seeders = parsed.get("seeders").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(seeders.len(), 2);
-
-        let peer_a = seeders
-            .iter()
-            .find(|s| s.get("peerId").and_then(|v| v.as_str()) == Some("peer-a"))
-            .expect("peer-a seeder missing");
-        let peer_a_addrs = peer_a.get("multiaddrs").and_then(|v| v.as_array()).unwrap();
-        assert!(peer_a_addrs
-            .iter()
-            .any(|a| a.as_str() == Some("/ip4/10.0.0.1/tcp/4001/p2p/peer-a")));
-        assert!(peer_a_addrs
-            .iter()
-            .any(|a| a.as_str() == Some("/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a")));
-
-        assert_eq!(
-            parsed.get("createdAt").and_then(|v| v.as_u64()),
-            Some(200),
-            "newer metadata should be selected as base"
-        );
-    }
-
-    #[test]
-    fn test_select_best_get_record_value_promotes_legacy_peer_id() {
-        let legacy = serde_json::json!({
-            "hash": "legacy-hash",
-            "fileName": "legacy.dat",
-            "fileSize": 42,
-            "protocol": "WebRTC",
-            "createdAt": 10,
-            "peerId": "legacy-peer",
-            "priceWei": "9",
-            "walletAddress": "0xlegacy"
-        });
-
-        let selected =
-            select_best_get_record_value(vec![legacy.to_string()]).expect("expected value");
-        let parsed: serde_json::Value = serde_json::from_str(&selected).unwrap();
-        let seeders = parsed.get("seeders").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(seeders.len(), 1);
-        let only = &seeders[0];
-        assert_eq!(
-            only.get("peerId").and_then(|v| v.as_str()),
-            Some("legacy-peer")
-        );
-        assert_eq!(only.get("priceWei").and_then(|v| v.as_str()), Some("9"));
-        assert_eq!(
-            only.get("walletAddress").and_then(|v| v.as_str()),
-            Some("0xlegacy")
-        );
-    }
-
-    #[test]
-    fn test_select_best_get_record_value_falls_back_to_longest_for_non_file_records() {
-        let short = serde_json::json!({"foo": "bar"}).to_string();
-        let long = serde_json::json!({"foo": "this is a much longer generic record"}).to_string();
-        let selected =
-            select_best_get_record_value(vec![short.clone(), long.clone()]).expect("expected best");
-        assert_eq!(selected, long);
-    }
-
-    // Bootstrap-discovery tests target the testnet preset directly because
-    // freshnet (the default for new installs) deliberately has no bootstrap
-    // nodes — solo mining only.
-
-    #[test]
-    fn test_testnet_bootstrap_addrs_well_formed() {
-        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
-            let parsed = addr_str.parse::<Multiaddr>();
-            assert!(parsed.is_ok(), "Failed to parse multiaddr: {}", addr_str);
+        .expect("provider must listen");
+        let mut attacker = build_swarm(identity::Keypair::generate_ed25519(), &network).unwrap();
+        // A hostile dialer need not enforce our limits. Keep its single identity
+        // and all accepted sockets alive, forcing concurrent additional dials.
+        *attacker.behaviour_mut().limits.limits_mut() =
+            connection_limits::ConnectionLimits::default();
+        let attempts = MAX_ESTABLISHED_PER_PEER + 4;
+        for _ in 0..attempts {
+            attacker
+                .dial(
+                    DialOpts::peer_id(*provider.local_peer_id())
+                        .condition(PeerCondition::Always)
+                        .addresses(vec![address.clone()])
+                        .build(),
+                )
+                .unwrap();
         }
-        assert_eq!(crate::network::TESTNET.libp2p_bootstrap_addrs.len(), 2);
-    }
-
-    #[test]
-    fn test_testnet_bootstrap_addrs_contain_peer_ids() {
-        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
-            let addr: Multiaddr = addr_str.parse().unwrap();
-            assert!(
-                extract_peer_id_from_multiaddr(&addr).is_some(),
-                "No peer ID in: {}",
-                addr_str
-            );
-        }
-    }
-
-    #[test]
-    fn test_testnet_bootstrap_addrs_share_one_peer_id() {
-        // IPv4 + IPv6 entry for the same primary bootstrap peer
-        let mut seen = Vec::new();
-        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
-            let addr: Multiaddr = addr_str.parse().unwrap();
-            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
-                let id_str = peer_id.to_string();
-                if !seen.contains(&id_str) {
-                    seen.push(id_str);
+        let mut accepted = 0;
+        let mut denied = 0;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while accepted + denied < attempts {
+                tokio::select! {
+                    event = provider.select_next_some() => match event {
+                        SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } => {
+                            assert_eq!(peer_id, *attacker.local_peer_id());
+                            accepted += 1;
+                            assert!(accepted <= MAX_ESTABLISHED_PER_PEER, "one identity exceeded its admission limit");
+                            assert!(num_established.get() <= MAX_ESTABLISHED_PER_PEER);
+                        }
+                        SwarmEvent::IncomingConnectionError { error: ListenError::Denied { cause }, .. } => {
+                            assert_limit(cause, MAX_ESTABLISHED_PER_PEER);
+                            denied += 1;
+                        }
+                        SwarmEvent::IncomingConnectionError { error, .. } => panic!("unexpected handshake failure: {error}"),
+                        SwarmEvent::ConnectionClosed { cause, .. } => panic!("admitted connection unexpectedly closed: {cause:?}"),
+                        _ => {}
+                    },
+                    _ = attacker.select_next_some() => {}
                 }
             }
-        }
+        }).await.expect("all TCP/Noise/Yamux connection attempts must be admitted or denied");
+        assert_eq!(accepted, MAX_ESTABLISHED_PER_PEER);
+        assert_eq!(denied, attempts - MAX_ESTABLISHED_PER_PEER);
+        assert_eq!(provider.connected_peers().count(), 1);
         assert_eq!(
-            seen.len(),
-            1,
-            "expected one unique peer across IPv4 + IPv6 entries"
-        );
-    }
-
-    #[test]
-    fn test_freshnet_has_shared_geth_and_libp2p_bootstrap() {
-        // freshnet clients sync to a single shared geth (so CDN payment
-        // verification works) and bootstrap libp2p against the same .73
-        // relay used by testnet. Empty libp2p bootstrap meant new clients
-        // couldn't enter the DHT — the assertion below pins that we keep
-        // populated entry points on this chain.
-        assert!(!crate::network::FRESHNET.geth_bootstrap_enode.is_empty());
-        assert!(!crate::network::FRESHNET.libp2p_bootstrap_addrs.is_empty());
-        assert!(!crate::network::FRESHNET.libp2p_relay_addrs.is_empty());
-    }
-
-    #[test]
-    fn test_extract_peer_id_from_valid_multiaddr() {
-        let addr: Multiaddr =
-            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-                .parse()
-                .unwrap();
-        let peer_id = extract_peer_id_from_multiaddr(&addr);
-        assert!(peer_id.is_some());
-        assert_eq!(
-            peer_id.unwrap().to_string(),
-            "12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-        );
-    }
-
-    #[test]
-    fn test_extract_peer_id_from_multiaddr_without_p2p() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
-        let peer_id = extract_peer_id_from_multiaddr(&addr);
-        assert!(peer_id.is_none());
-    }
-
-    #[test]
-    fn test_remove_peer_id_from_multiaddr() {
-        let addr: Multiaddr =
-            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-                .parse()
-                .unwrap();
-        let transport = remove_peer_id_from_multiaddr(&addr);
-        assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
-    }
-
-    #[test]
-    fn test_remove_peer_id_from_multiaddr_without_p2p() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
-        let transport = remove_peer_id_from_multiaddr(&addr);
-        assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
-    }
-
-    #[test]
-    fn test_ipv6_listen_multiaddr_parses() {
-        let addr: Multiaddr = "/ip6/::/tcp/0".parse().unwrap();
-        assert_eq!(addr.to_string(), "/ip6/::/tcp/0");
-    }
-
-    #[test]
-    fn test_extract_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr =
-            "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-                .parse()
-                .unwrap();
-        let peer_id = extract_peer_id_from_multiaddr(&addr);
-        assert!(peer_id.is_some());
-        assert_eq!(
-            peer_id.unwrap().to_string(),
-            "12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-        );
-    }
-
-    #[test]
-    fn test_remove_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr =
-            "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-                .parse()
-                .unwrap();
-        let transport = remove_peer_id_from_multiaddr(&addr);
-        assert_eq!(transport.to_string(), "/ip6/::1/tcp/4001");
-    }
-
-    #[test]
-    fn test_ping_request_serialization() {
-        let ping = PingRequest("PING".to_string());
-        let json = serde_json::to_string(&ping).unwrap();
-        let deserialized: PingRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(ping, deserialized);
-    }
-
-    #[test]
-    fn test_ping_response_serialization() {
-        let pong = PingResponse("PONG".to_string());
-        let json = serde_json::to_string(&pong).unwrap();
-        let deserialized: PingResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(pong, deserialized);
-    }
-
-    #[test]
-    fn test_file_transfer_request_serialization() {
-        let request = FileTransferRequest {
-            transfer_id: "tx-001".to_string(),
-            file_name: "test.txt".to_string(),
-            file_data: vec![1, 2, 3, 4, 5],
-            price_wei: "0".to_string(),
-            sender_wallet: String::new(),
-            file_hash: String::new(),
-            file_size: 5,
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(request.transfer_id, deserialized.transfer_id);
-        assert_eq!(request.file_name, deserialized.file_name);
-        assert_eq!(request.file_data, deserialized.file_data);
-    }
-
-    #[test]
-    fn test_file_transfer_request_paid_serialization() {
-        let request = FileTransferRequest {
-            transfer_id: "tx-paid-001".to_string(),
-            file_name: "paid_file.zip".to_string(),
-            file_data: vec![],
-            price_wei: "1000000000000000000".to_string(),
-            sender_wallet: "0xabc123".to_string(),
-            file_hash: "deadbeef".to_string(),
-            file_size: 1048576,
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.price_wei, "1000000000000000000");
-        assert_eq!(deserialized.sender_wallet, "0xabc123");
-        assert_eq!(deserialized.file_hash, "deadbeef");
-        assert_eq!(deserialized.file_size, 1048576);
-        assert!(deserialized.file_data.is_empty());
-    }
-
-    #[test]
-    fn protocol_price_wei_accepts_free_and_paid_values() {
-        assert_eq!(parse_protocol_price_wei("", "test.price_wei").unwrap(), 0);
-        assert_eq!(parse_protocol_price_wei("0", "test.price_wei").unwrap(), 0);
-        assert_eq!(
-            parse_protocol_price_wei("1000000000000000000", "test.price_wei").unwrap(),
-            1_000_000_000_000_000_000
-        );
-    }
-
-    #[test]
-    fn protocol_price_wei_rejects_malformed_chiraldrop_price() {
-        let err = parse_protocol_price_wei("not-a-number", "FileTransferRequest.price_wei")
-            .expect_err("malformed ChiralDrop price should fail closed");
-
-        assert!(err.contains("FileTransferRequest.price_wei"));
-        assert!(err.contains("valid u128 wei amount"));
-    }
-
-    #[test]
-    fn protocol_price_wei_rejects_malformed_file_info_price() {
-        let err = parse_protocol_price_wei("  ", "ChunkResponse::FileInfo.price_wei")
-            .expect_err("whitespace-only FileInfo price should fail closed");
-
-        assert!(err.contains("ChunkResponse::FileInfo.price_wei"));
-        assert!(err.contains("valid u128 wei amount"));
-    }
-
-    #[test]
-    fn test_file_transfer_response_serialization() {
-        let response = FileTransferResponse {
-            transfer_id: "tx-001".to_string(),
-            accepted: true,
-            error: None,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        let deserialized: FileTransferResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(response.transfer_id, deserialized.transfer_id);
-        assert_eq!(response.accepted, deserialized.accepted);
-        assert!(deserialized.error.is_none());
-    }
-
-    #[test]
-    fn test_file_transfer_response_with_error() {
-        let response = FileTransferResponse {
-            transfer_id: "tx-002".to_string(),
-            accepted: false,
-            error: Some("Transfer declined by user".to_string()),
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        let deserialized: FileTransferResponse = serde_json::from_str(&json).unwrap();
-        assert!(!deserialized.accepted);
-        assert_eq!(deserialized.error.unwrap(), "Transfer declined by user");
-    }
-
-    #[test]
-    fn test_chunk_request_file_info_serialization() {
-        let req = ChunkRequest::FileInfo {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123def456".to_string(),
-            folder_hash: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::FileInfo {
-            request_id,
-            file_hash,
-            folder_hash,
-        } = deserialized
-        {
-            assert_eq!(request_id, "req-001");
-            assert_eq!(file_hash, "abc123def456");
-            assert!(folder_hash.is_none());
-        } else {
-            panic!("Expected FileInfo variant");
-        }
-    }
-
-    #[test]
-    fn test_chunk_request_chunk_serialization() {
-        let req = ChunkRequest::Chunk {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            chunk_index: 42,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::Chunk {
-            request_id,
-            file_hash,
-            chunk_index,
-        } = deserialized
-        {
-            assert_eq!(request_id, "req-001");
-            assert_eq!(file_hash, "abc123");
-            assert_eq!(chunk_index, 42);
-        } else {
-            panic!("Expected Chunk variant");
-        }
-    }
-
-    #[test]
-    fn test_chunk_response_file_info_serialization() {
-        let resp = ChunkResponse::FileInfo {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            file_name: "document.pdf".to_string(),
-            file_size: 1048576,
-            chunk_size: 262144,
-            total_chunks: 4,
-            chunk_hashes: vec![
-                "hash0".to_string(),
-                "hash1".to_string(),
-                "hash2".to_string(),
-                "hash3".to_string(),
-            ],
-            price_wei: "1000000000000000".to_string(),
-            wallet_address: "0x1234567890abcdef".to_string(),
-            folder_hash: None,
-            signature: String::new(),
-            error: None,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::FileInfo {
-            total_chunks,
-            chunk_hashes,
-            price_wei,
-            wallet_address,
-            error,
-            ..
-        } = deserialized
-        {
-            assert_eq!(total_chunks, 4);
-            assert_eq!(chunk_hashes.len(), 4);
-            assert_eq!(price_wei, "1000000000000000");
-            assert_eq!(wallet_address, "0x1234567890abcdef");
-            assert!(error.is_none());
-        } else {
-            panic!("Expected FileInfo variant");
-        }
-    }
-
-    #[test]
-    fn test_chunk_response_chunk_serialization() {
-        let resp = ChunkResponse::Chunk {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            chunk_index: 0,
-            chunk_data: Some(vec![10, 20, 30]),
-            chunk_hash: "deadbeef".to_string(),
-            error: None,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::Chunk {
-            chunk_index,
-            chunk_data,
-            chunk_hash,
-            error,
-            ..
-        } = deserialized
-        {
-            assert_eq!(chunk_index, 0);
-            assert_eq!(chunk_data.unwrap(), vec![10, 20, 30]);
-            assert_eq!(chunk_hash, "deadbeef");
-            assert!(error.is_none());
-        } else {
-            panic!("Expected Chunk variant");
-        }
-    }
-
-    #[test]
-    fn test_chunk_response_error() {
-        let resp = ChunkResponse::FileInfo {
-            request_id: "req-002".to_string(),
-            file_hash: "nonexistent".to_string(),
-            file_name: String::new(),
-            file_size: 0,
-            chunk_size: 262144,
-            total_chunks: 0,
-            chunk_hashes: vec![],
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
-            folder_hash: None,
-            signature: String::new(),
-            error: Some("File not found".to_string()),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::FileInfo { error, .. } = deserialized {
-            assert_eq!(error.unwrap(), "File not found");
-        } else {
-            panic!("Expected FileInfo variant");
-        }
-    }
-
-    #[test]
-    fn file_info_sign_payload_is_injective_under_field_shift() {
-        // Regression: FM-A09. The FileInfo signing payload uses
-        // length-prefixed encoding so two distinct field tuples
-        // produce distinct payloads. Without the prefix, an attacker-
-        // controlled `file_name` containing the same bytes a different
-        // `wallet_address` starts with could shift content across
-        // boundaries and let one signature attest to multiple envelopes.
-        let a = file_info_sign_payload(
-            "abc",
-            "report:0xVICTIM",
-            100,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "1000",
-            "0xATTACKER",
-            None,
-        );
-        let b = file_info_sign_payload(
-            "abc",
-            "report",
-            100,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "1000",
-            "0xVICTIM:0xATTACKER",
-            None,
-        );
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn file_info_sign_payload_is_deterministic() {
-        let p1 = file_info_sign_payload(
-            "abc",
-            "doc.pdf",
-            1024,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "100",
-            "0x1234",
-            None,
-        );
-        let p2 = file_info_sign_payload(
-            "abc",
-            "doc.pdf",
-            1024,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "100",
-            "0x1234",
-            None,
-        );
-        assert_eq!(p1, p2);
-    }
-
-    fn test_wallet_for_private_key(private_key: &str) -> String {
-        let probe = b"derive-test-wallet";
-        let sig = crate::wallet::sign_message(private_key, probe).unwrap();
-        crate::wallet::recover_signer(probe, &sig).unwrap()
-    }
-
-    #[test]
-    fn signed_file_info_response_signs_free_and_paid_payloads() {
-        let private_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let wallet = test_wallet_for_private_key(private_key);
-
-        for price_wei in ["0", "1000000000000000000"] {
-            let chunk_hashes = vec!["chunk-a".to_string(), "chunk-b".to_string()];
-            let access = ResolvedFileAccess {
-                price_wei: price_wei.parse::<u128>().unwrap(),
-                wallet_address: wallet.clone(),
-                folder_hash: None,
-            };
-            let response = signed_file_info_response(
-                format!("req-{}", price_wei),
-                "file-hash".to_string(),
-                "document.pdf".to_string(),
-                1024,
-                chunk_hashes.clone(),
-                access,
-                private_key,
-            );
-
-            if let ChunkResponse::FileInfo {
-                file_hash,
-                file_name,
-                file_size,
-                total_chunks,
-                chunk_hashes: response_hashes,
-                price_wei: response_price,
-                wallet_address,
-                folder_hash,
-                signature,
-                error,
-                ..
-            } = response
-            {
-                assert_eq!(file_hash, "file-hash");
-                assert_eq!(file_name, "document.pdf");
-                assert_eq!(file_size, 1024);
-                assert_eq!(total_chunks, 2);
-                assert_eq!(response_hashes, chunk_hashes);
-                assert_eq!(response_price, price_wei);
-                assert_eq!(wallet_address, wallet);
-                assert!(folder_hash.is_none());
-                assert!(!signature.is_empty());
-                assert!(error.is_none());
-
-                let payload = file_info_sign_payload(
-                    &file_hash,
-                    &file_name,
-                    file_size,
-                    CHUNK_SIZE as u32,
-                    total_chunks,
-                    &response_hashes,
-                    &response_price,
-                    &wallet_address,
-                    folder_hash.as_deref(),
-                );
-                assert!(crate::wallet::verify_signature(
-                    &payload,
-                    &signature,
-                    &wallet_address
-                ));
-            } else {
-                panic!("Expected FileInfo variant");
-            }
-        }
-    }
-
-    #[test]
-    fn signed_file_info_response_returns_error_for_invalid_private_key() {
-        let access = ResolvedFileAccess {
-            price_wei: 100,
-            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
-            folder_hash: Some("folder-hash".to_string()),
-        };
-        let response = signed_file_info_response(
-            "req-invalid".to_string(),
-            "file-hash".to_string(),
-            "document.pdf".to_string(),
-            1024,
-            vec!["chunk-a".to_string()],
-            access,
-            "not-a-private-key",
-        );
-
-        if let ChunkResponse::FileInfo {
-            file_size,
-            total_chunks,
-            chunk_hashes,
-            price_wei,
-            wallet_address,
-            folder_hash,
-            signature,
-            error,
-            ..
-        } = response
-        {
-            assert_eq!(file_size, 0);
-            assert_eq!(total_chunks, 0);
-            assert!(chunk_hashes.is_empty());
-            assert_eq!(price_wei, "0");
-            assert!(wallet_address.is_empty());
-            assert_eq!(folder_hash.as_deref(), Some("folder-hash"));
-            assert!(signature.is_empty());
-            assert!(error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Seeder cannot sign FileInfo"));
-        } else {
-            panic!("Expected FileInfo variant");
-        }
-    }
-
-    #[test]
-    fn file_info_sign_payload_binds_folder_hash_when_present() {
-        let direct = file_info_sign_payload(
-            "abc",
-            "doc.pdf",
-            1024,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "100",
-            "0x1234",
-            None,
-        );
-        let folder_a = file_info_sign_payload(
-            "abc",
-            "doc.pdf",
-            1024,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "100",
-            "0x1234",
-            Some("folder-a"),
-        );
-        let folder_b = file_info_sign_payload(
-            "abc",
-            "doc.pdf",
-            1024,
-            256_000,
-            1,
-            &["h1".to_string()],
-            "100",
-            "0x1234",
-            Some("folder-b"),
-        );
-        assert_ne!(direct, folder_a);
-        assert_ne!(folder_a, folder_b);
-    }
-
-    #[test]
-    fn paid_folder_child_rejects_direct_file_info_access() {
-        let mut folder_access = HashMap::new();
-        folder_access.insert(
-            "folder-abc".to_string(),
-            FolderAccessPolicy {
-                folder_hash: "folder-abc".to_string(),
-                price_wei: 10_000,
-                wallet_address: "0xfolder".to_string(),
-            },
-        );
-        let info = SharedFileInfo {
-            file_path: "/path/to/file.txt".to_string(),
-            file_name: "file.txt".to_string(),
-            file_size: 1024,
-            chunk_hashes: Some(vec!["hash0".to_string()]),
-            price_wei: 0,
-            wallet_address: "0xdirect".to_string(),
-            private_key: String::new(),
-            folder_access,
-        };
-
-        let direct = resolve_file_access(&info, None);
-        assert!(
-            direct.is_err(),
-            "paid folder children must not expose free direct FileInfo"
-        );
-
-        let folder = resolve_file_access(&info, Some("folder-abc")).unwrap();
-        assert_eq!(folder.price_wei, 10_000);
-        assert_eq!(folder.wallet_address, "0xfolder");
-        assert_eq!(folder.folder_hash.as_deref(), Some("folder-abc"));
-    }
-
-    #[test]
-    fn folder_payment_claim_is_reusable_only_for_same_folder() {
-        let tx = "0xabc";
-        let payer = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let other_payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let peer = PeerId::random();
-        let other_peer = PeerId::random();
-        let folder_a = PaymentScope::Folder {
-            folder_hash: "folder-a".to_string(),
-        };
-        let folder_b = PaymentScope::Folder {
-            folder_hash: "folder-b".to_string(),
-        };
-        let file = PaymentScope::DirectFile {
-            file_hash: "file-a".to_string(),
-        };
-        let mut spent = HashSet::new();
-        spent.insert(payment_scope_key(tx, &folder_a, payer, &peer));
-
-        assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_a, payer, &peer),
-            PaymentClaimStatus::ClaimedSameFolder
-        );
-        assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_a, other_payer, &peer),
-            PaymentClaimStatus::ClaimedOtherScope
-        );
-        assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_a, payer, &other_peer),
-            PaymentClaimStatus::ClaimedOtherScope
-        );
-        assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_b, payer, &peer),
-            PaymentClaimStatus::ClaimedOtherScope
-        );
-        assert_eq!(
-            classify_payment_claim(&spent, tx, &file, payer, &peer),
-            PaymentClaimStatus::ClaimedOtherScope
+            provider
+                .network_info()
+                .connection_counters()
+                .num_established(),
+            MAX_ESTABLISHED_PER_PEER
         );
     }
 
     #[tokio::test]
-    async fn persist_spent_tx_set_to_path_persists_claims() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("seeder_spent_tx.json");
-        let mut spent = HashSet::new();
-        spent.insert("file:0xabc:file-a".to_string());
-
-        persist_spent_tx_set_to_path(&path, &spent)
-            .await
-            .expect("spent-tx ledger should persist");
-
-        let data = tokio::fs::read_to_string(&path).await.unwrap();
-        let value: serde_json::Value = serde_json::from_str(&data).unwrap();
-        let persisted: Vec<String> =
-            serde_json::from_value(value.get("spent").cloned().unwrap()).unwrap();
-        assert_eq!(persisted, vec!["file:0xabc:file-a"]);
-    }
-
-    #[tokio::test]
-    async fn claim_payment_tx_persists_first_use_and_rejects_reused_direct_tx() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("seeder_spent_tx.json");
-        let store = Mutex::new(HashSet::new());
-        let peer = PeerId::random();
-        let scope = PaymentScope::DirectFile {
-            file_hash: "file-a".to_string(),
-        };
-
-        let first = claim_payment_tx_in_store(
-            &store,
-            &path,
-            "0xabc",
-            &scope,
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            &peer,
+    async fn direct_signed_manifest_discovery_and_withdrawal() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = crate::offer_registry::tests::offer();
+        let network = fixture.payload.network.clone();
+        let provider_registry = Arc::new(OfferRegistry::new(network.clone(), true));
+        let provider = DhtService::start(
+            DhtConfig {
+                listen: "/ip4/127.0.0.1/tcp/0".into(),
+                bootstrap: vec![],
+                identity_file: directory.path().join("provider.key"),
+            },
+            network.clone(),
+            provider_registry,
         )
         .await
-        .expect("first claim should persist");
-        let reused = claim_payment_tx_in_store(
-            &store,
-            &path,
-            "0xabc",
-            &scope,
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            &peer,
+        .unwrap();
+        let mut payload = fixture.payload;
+        payload.peer_id = provider.peer_id();
+        payload.endpoint = "http://127.0.0.1:8080/".into();
+        let first = protocol::sign(
+            protocol::OFFER_DOMAIN,
+            payload.clone(),
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        provider.publish(&first).await.unwrap();
+        payload.deployment_id = "gpu-b".into();
+        let second = protocol::sign(
+            protocol::OFFER_DOMAIN,
+            payload,
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        provider.publish(&second).await.unwrap();
+        let status = provider.status().await;
+        let address = status["listening_addresses"][0].as_str().unwrap();
+        let consumer_registry = Arc::new(OfferRegistry::new(network.clone(), true));
+        let consumer = DhtService::start(
+            DhtConfig {
+                listen: "/ip4/127.0.0.1/tcp/0".into(),
+                bootstrap: vec![format!("{address}/p2p/{}", provider.peer_id())],
+                identity_file: directory.path().join("consumer.key"),
+            },
+            network.clone(),
+            consumer_registry,
         )
         .await
-        .expect("reused claim should classify without rewriting");
-
-        assert_eq!(first, PaymentClaimStatus::Available);
-        assert_eq!(reused, PaymentClaimStatus::ClaimedDirectFile);
-        assert_eq!(store.lock().await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn claim_payment_tx_fails_closed_when_persistence_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("seeder_spent_tx.json");
-        tokio::fs::create_dir(&path).await.unwrap();
-        let store = Mutex::new(HashSet::new());
-        let peer = PeerId::random();
-        let scope = PaymentScope::DirectFile {
-            file_hash: "file-a".to_string(),
-        };
-
-        let err = claim_payment_tx_in_store(
-            &store,
-            &path,
-            "0xabc",
-            &scope,
-            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            &peer,
-        )
-        .await
-        .expect_err("write failure should fail closed");
-
-        assert!(err.contains("write seeder spent-tx ledger"));
-        assert!(store.lock().await.is_empty());
-    }
-
-    #[test]
-    fn paid_folder_child_chunk_request_requires_authorized_scope() {
-        let peer = PeerId::random();
-        let other_peer = PeerId::random();
-        let mut folder_access = HashMap::new();
-        folder_access.insert(
-            "folder-abc".to_string(),
-            FolderAccessPolicy {
-                folder_hash: "folder-abc".to_string(),
-                price_wei: 10_000,
-                wallet_address: "0xfolder".to_string(),
-            },
-        );
-        let info = SharedFileInfo {
-            file_path: "/path/to/file.txt".to_string(),
-            file_name: "file.txt".to_string(),
-            file_size: 1024,
-            chunk_hashes: Some(vec!["hash0".to_string()]),
-            price_wei: 0,
-            wallet_address: "0xdirect".to_string(),
-            private_key: String::new(),
-            folder_access,
-        };
-
-        assert!(
-            chunk_request_access_error(None, peer, "file-hash", &info).is_some(),
-            "direct Chunk requests must not bypass paid folder payment"
-        );
-
-        let folder_auth = AuthorizedChunkAccess {
-            peer_id: peer,
-            scope: PaymentScope::Folder {
-                folder_hash: "folder-abc".to_string(),
-            },
-        };
-        assert!(chunk_request_access_error(Some(&folder_auth), peer, "file-hash", &info).is_none());
-        assert!(
-            chunk_request_access_error(Some(&folder_auth), other_peer, "file-hash", &info)
-                .is_some(),
-            "another peer cannot reuse the paid request_id"
-        );
-
-        let wrong_file_auth = AuthorizedChunkAccess {
-            peer_id: peer,
-            scope: PaymentScope::DirectFile {
-                file_hash: "other-file".to_string(),
-            },
-        };
-        assert!(
-            chunk_request_access_error(Some(&wrong_file_auth), peer, "file-hash", &info).is_some()
-        );
-    }
-
-    #[test]
-    fn free_direct_chunk_request_is_allowed_without_payment_scope() {
-        let info = SharedFileInfo {
-            file_path: "/path/to/file.txt".to_string(),
-            file_name: "file.txt".to_string(),
-            file_size: 1024,
-            chunk_hashes: Some(vec!["hash0".to_string()]),
-            price_wei: 0,
-            wallet_address: "0xdirect".to_string(),
-            private_key: String::new(),
-            folder_access: HashMap::new(),
-        };
-
-        assert!(chunk_request_access_error(None, PeerId::random(), "file-hash", &info).is_none());
-    }
-
-    #[test]
-    fn test_peer_info_serialization() {
-        let peer = PeerInfo {
-            id: "12D3KooWFYTuQ2FY".to_string(),
-            address: "12D3KooWFYTuQ2FY".to_string(),
-            multiaddrs: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
-            last_seen: 1700000000,
-        };
-        let json = serde_json::to_string(&peer).unwrap();
-        // camelCase serialization
-        assert!(json.contains("lastSeen"));
-        let deserialized: PeerInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(peer.id, deserialized.id);
-        assert_eq!(peer.multiaddrs, deserialized.multiaddrs);
-    }
-
-    #[test]
-    fn test_network_stats_serialization() {
-        let stats = NetworkStats {
-            connected_peers: 5,
-            total_peers: 10,
-        };
-        let json = serde_json::to_string(&stats).unwrap();
-        // camelCase serialization
-        assert!(json.contains("connectedPeers"));
-        assert!(json.contains("totalPeers"));
-    }
-
-    #[test]
-    fn test_shared_file_info() {
-        let info = SharedFileInfo {
-            file_path: "/path/to/file.txt".to_string(),
-            file_name: "file.txt".to_string(),
-            file_size: 1024,
-            chunk_hashes: None,
-            price_wei: 0,
-            wallet_address: String::new(),
-            private_key: String::new(),
-            folder_access: HashMap::new(),
-        };
-        assert_eq!(info.file_name, "file.txt");
-        assert_eq!(info.file_size, 1024);
-        assert!(info.chunk_hashes.is_none());
-        assert_eq!(info.price_wei, 0);
-    }
-
-    #[test]
-    fn test_shared_file_info_with_price() {
-        let info = SharedFileInfo {
-            file_path: "/path/to/file.txt".to_string(),
-            file_name: "file.txt".to_string(),
-            file_size: 1024,
-            chunk_hashes: None,
-            price_wei: 5_000_000_000_000_000,
-            wallet_address: "0xabc123".to_string(),
-            private_key: String::new(),
-            folder_access: HashMap::new(),
-        };
-        assert_eq!(info.price_wei, 5_000_000_000_000_000);
-        assert_eq!(info.wallet_address, "0xabc123");
-    }
-
-    #[test]
-    fn test_chunk_request_payment_proof_serialization() {
-        let req = ChunkRequest::PaymentProof {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            folder_hash: None,
-            payment_tx: "0xdeadbeef".to_string(),
-            payer_address: "0x1234".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::PaymentProof {
-            request_id,
-            file_hash,
-            folder_hash,
-            payment_tx,
-            payer_address,
-        } = deserialized
-        {
-            assert_eq!(request_id, "req-001");
-            assert_eq!(file_hash, "abc123");
-            assert!(folder_hash.is_none());
-            assert_eq!(payment_tx, "0xdeadbeef");
-            assert_eq!(payer_address, "0x1234");
-        } else {
-            panic!("Expected PaymentProof variant");
+        .unwrap();
+        // A real TCP/noise/yamux/Kademlia exchange, not an in-memory fake catalog.
+        let offers = consumer.discover(Some("model")).await.unwrap();
+        assert_eq!(offers.len(), 2);
+        for offer in &offers {
+            protocol::verify(
+                protocol::OFFER_DOMAIN,
+                offer,
+                &offer.payload.provider_wallet,
+            )
+            .unwrap();
         }
-    }
-
-    #[test]
-    fn test_chunk_response_payment_ack_serialization() {
-        let resp = ChunkResponse::PaymentAck {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            accepted: true,
-            error: None,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::PaymentAck {
-            accepted, error, ..
-        } = deserialized
-        {
-            assert!(accepted);
-            assert!(error.is_none());
-        } else {
-            panic!("Expected PaymentAck variant");
-        }
-    }
-
-    #[test]
-    fn test_chunk_response_payment_ack_rejected() {
-        let resp = ChunkResponse::PaymentAck {
-            request_id: "req-001".to_string(),
-            file_hash: "abc123".to_string(),
-            accepted: false,
-            error: Some("Insufficient payment".to_string()),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::PaymentAck {
-            accepted, error, ..
-        } = deserialized
-        {
-            assert!(!accepted);
-            assert_eq!(error.unwrap(), "Insufficient payment");
-        } else {
-            panic!("Expected PaymentAck variant");
-        }
-    }
-
-    #[test]
-    fn test_compute_chunk_hashes() {
-        // Create a temp file with known content
-        let dir = std::env::temp_dir();
-        let path = dir.join("chiral_test_chunk_hashes.bin");
-        let data = vec![0xABu8; CHUNK_SIZE * 2 + 100]; // 2.x chunks
-        std::fs::write(&path, &data).unwrap();
-
-        let hashes = compute_chunk_hashes(path.to_str().unwrap()).unwrap();
-        assert_eq!(hashes.len(), 3); // ceil((2*CHUNK_SIZE + 100) / CHUNK_SIZE) = 3
-                                     // Each hash should be a 64-char hex string (SHA-256)
-        for h in &hashes {
-            assert_eq!(h.len(), 64);
-        }
-
-        std::fs::remove_file(&path).unwrap();
+        provider
+            .withdraw(&protocol::offer_id(&first.payload).unwrap())
+            .await;
+        let offers = consumer.discover(None).await.unwrap();
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].payload.deployment_id, "gpu-b");
+        consumer.stop().await;
+        provider.stop().await;
     }
 }
