@@ -1381,6 +1381,7 @@ impl Consumer {
             let cost = crate::offer_registry::validate_money(&request.cost_wei)?;
             let waived = crate::offer_registry::validate_money(&request.waived_wei)?;
             let maximum = crate::offer_registry::validate_money(&request.max_cost_wei)?;
+            crate::offer_registry::validate_money(&request.provider_loss_wei)?;
             if cost > maximum || waived > maximum || (waived != 0 && cost != 0) {
                 return Err("receipt request charge/waiver invariant failed".into());
             }
@@ -2234,6 +2235,7 @@ mod tests {
         mode: std::sync::atomic::AtomicU8,
         open_pending: std::sync::atomic::AtomicBool,
         receipt: std::sync::Mutex<Value>,
+        usage_receipt: std::sync::Mutex<Option<Signed<UsageReceipt>>>,
         started_at: u64,
         canonical_payment_hash: std::sync::Mutex<String>,
         nonce: std::sync::atomic::AtomicU64,
@@ -2410,6 +2412,15 @@ mod tests {
             return (
                 StatusCode::OK,
                 axum::Json(serde_json::to_value(credential).unwrap()),
+            );
+        }
+        if uri.path().ends_with("/receipt") {
+            assert_eq!(method, axum::http::Method::GET);
+            return (
+                StatusCode::OK,
+                axum::Json(serde_json::to_value(
+                    state.usage_receipt.lock().unwrap().as_ref().unwrap(),
+                ).unwrap()),
             );
         }
         if method == axum::http::Method::GET {
@@ -2660,6 +2671,7 @@ mod tests {
             mode: std::sync::atomic::AtomicU8::new(0),
             open_pending: std::sync::atomic::AtomicBool::new(false),
             receipt: std::sync::Mutex::new(Value::Null),
+            usage_receipt: std::sync::Mutex::new(None),
             started_at: protocol::now().unwrap(),
             canonical_payment_hash: std::sync::Mutex::new(format!("0x{}", "77".repeat(32))),
             nonce: std::sync::atomic::AtomicU64::new(0),
@@ -2670,6 +2682,7 @@ mod tests {
             .route("/", axum::routing::post(funding_rpc))
             .route("/v1/auth/challenge", axum::routing::post(funding_control))
             .route("/v1/contracts/:id", axum::routing::get(funding_control))
+            .route("/v1/contracts/:id/receipt", axum::routing::get(funding_control))
             .route(
                 "/v1/contracts/:id/funding-intent",
                 axum::routing::post(funding_control),
@@ -2698,6 +2711,104 @@ mod tests {
         });
         (consumer, saved, state, task)
     }
+    #[tokio::test]
+    async fn signed_receipt_rejects_noncanonical_request_exposure_without_advancing_sequence() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = &saved.quote.payload.id;
+        let mut account = consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let credential = consumer.credential_export(id, None).unwrap();
+        let config = consumer.config.clone();
+        let now = protocol::now().unwrap();
+        // The counterparty supplies signed accounting claims, not measured engine usage.
+        account.spent_wei = "1".into();
+        account.available_wei = "99".into();
+        account.usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
+        let known = crate::billing_store::RequestView {
+            id: uuid::Uuid::new_v4().to_string(),
+            request_id: "receipt-known".into(),
+            contract_id: id.clone(),
+            credential_id: consumer.load_account(id).unwrap().active_credential.unwrap(),
+            status: "completed".into(),
+            usage: account.usage.clone(),
+            cost_wei: "1".into(),
+            max_cost_wei: "1".into(),
+            provider_loss_wei: "0".into(),
+            prompt_tokens_reserved: 1,
+            max_output_tokens: 1,
+            created_at: now - 1,
+            settled_at: Some(now),
+            performance: None,
+            waived_wei: "0".into(),
+        };
+        let unknown = crate::billing_store::RequestView {
+            id: uuid::Uuid::new_v4().to_string(),
+            request_id: "receipt-unknown".into(),
+            status: "cancelled_unknown_usage".into(),
+            usage: TokenUsage::default(),
+            cost_wei: "0".into(),
+            provider_loss_wei: "1".into(),
+            created_at: now - 2,
+            settled_at: Some(now - 1),
+            ..known.clone()
+        };
+        let mut payload = UsageReceipt {
+            network: account.network.clone(),
+            provider_wallet: account.provider_wallet.clone(),
+            account,
+            requests: vec![known],
+            sequence: 1,
+            issued_at: now,
+        };
+        let serve = |payload: &UsageReceipt| {
+            *state.usage_receipt.lock().unwrap() =
+                Some(protocol::sign(RECEIPT_DOMAIN, payload.clone(), &state.key).unwrap());
+        };
+        serve(&payload);
+        let first = consumer.receipt(id).await.unwrap();
+        assert_eq!(serde_json::to_value(&first.payload).unwrap(), serde_json::to_value(&payload).unwrap());
+        let before = private_read(&state.account_path).unwrap();
+        let submissions = state.submissions.lock().unwrap().clone();
+        assert_eq!(consumer.load_account(id).unwrap().receipt_sequence, 1);
+
+        payload.sequence = 2;
+        payload.requests.push(unknown);
+        for amount in [
+            "", "00", "01", "+1", "-1", " 1", "1 ", "1.0", "1e0", "0x1",
+            "١", "1\n", "\t1", "340282366920938463463374607431768211456",
+        ] {
+            // Put the bad exposure after a valid request and sign the changed payload:
+            // a stale signature or malformed envelope must not mask this validation.
+            payload.requests[1].provider_loss_wei = amount.into();
+            serve(&payload);
+            assert!(consumer.receipt(id).await.is_err(), "accepted exposure {amount:?}");
+            assert_eq!(private_read(&state.account_path).unwrap(), before, "exposure {amount:?}");
+            assert_eq!(consumer.credential_export(id, None).unwrap(), credential);
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            assert_eq!(consumer.load_account(id).unwrap().receipt_sequence, 1);
+            assert_eq!(private_read(&state.account_path).unwrap(), before);
+        }
+
+        // Correction at the very same sequence remains recoverable after reopening.
+        payload.requests[1].provider_loss_wei = "1".into();
+        serve(&payload);
+        let recovered = consumer.receipt(id).await.unwrap();
+        assert_eq!(serde_json::to_value(&recovered.payload).unwrap(), serde_json::to_value(&payload).unwrap());
+        let mut expected: Value = decode(&before).unwrap();
+        expected["receipt_sequence"] = json!(2);
+        assert_eq!(serde_json::to_value(consumer.load_account(id).unwrap()).unwrap(), expected);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), credential);
+        let accepted = private_read(&state.account_path).unwrap();
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        assert!(consumer.receipt(id).await.is_err(), "accepted a replay of sequence two");
+        assert_eq!(private_read(&state.account_path).unwrap(), accepted);
+        assert_eq!(*state.submissions.lock().unwrap(), submissions);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
     fn credential_options(scopes: &[&str]) -> Value {
         json!({"expires_at":protocol::now().unwrap()+3600,"spend_cap_wei":null,"max_concurrency":1,"scopes":scopes})
     }

@@ -45,6 +45,13 @@ This register applies to the **LLM-only runtime**, not the retired file-sharing 
 
 The evidence below is from the **historical isolated chiral-coin prototype** unless explicitly labeled otherwise. It records real fixes/results, not requalification of the native CFX/performance cutover.
 
+### Signed receipts accepted malformed request-loss amounts
+
+- **Where:** `src-tauri/src/consumer.rs::receipt`, `RequestView.provider_loss_wei`.
+- **Observed native-CFX failure:** a correctly signed receipt containing an empty request-exposure string passed native receipt acceptance. Charges, maximum holds and waivers were validated, but this monetary field was omitted.
+- **Correction:** apply the existing canonical decimal `u128` validator before advancing the saved receipt sequence. Preserve wire representation, account accounting and the distinction between unknown-usage exposure and funding-orphan compensation; no amount normalization or ledger migration.
+- **Verification:** the new native HTTP regression failed before correction and now passes fourteen invalid forms, exact saved-state/credential preservation through reopening, valid zero/nonzero controls, same-sequence correction and persisted replay refusal. All 451 Rust tests, 15 frontend tests, 46 provisioning tests, available builds/checks and strict foundation-spec validation passed. The isolated counterparty supplies signed accounting claims and synthetic funding responses, not engine or live-chain evidence.
+
 ### Evidence-only qualification renewal preserves existing prepaid accounts
 
 - **Current native-CFX design/fix:** user approved strictly newer evidence for an otherwise identical serving deployment. Original agreements, prices, fees and balances remain unchanged.
