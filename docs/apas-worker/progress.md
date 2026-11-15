@@ -1,24 +1,24 @@
 # APAS progress
 
-## 2026-11-14 — Native top-up credit-response recovery at full quote storage
+## 2026-11-14 — Request-accounting specification foundation
 
 - Authority remains the README-named `docs/chiral-book.md`, previously read in full and retained unchanged (SHA-256 `f57f7ac5af27081616d3e241ac7bb8a326d8919d2edbc9b8919ad7fb8aaadf7e`). No standard whitepaper paths, new author answer or checkout ownership change; retain the answered-but-unimplemented quote-policy decision.
-- Completed **2.8.2.5**: fresh native top-up intent/nonce/preparation/submission, independent provider safe-credit refusal/acceptance and recovery after its genuine credited response is disconnected. Native/provider state reopens at every boundary; `topup`, `resume` and repeated `fund` retain the same original and exported credential.
-- Original paid opening/native history and bulk quote history remain explicit restored prerequisites. No top-up state or evidence is injected. The test observes intent and exact prepared journal bytes before the sole submission, full quote-storage refusal, unchanged money before provider acceptance, exact 1,000/995/5-wei funding/spendable/fee arithmetic and idempotent recovery.
-- Parent **2.8.2 remains open** for other quote-work/issuance and inference-settlement cases. Scripted RPC is not live-chain, actual historical opening/bulk issuance, power-loss or fee-remittance evidence. No production source or whitepaper changes.
+- Created **`specify-inference-request-accounting`** after comparing the book, current/pending requirements and actual ledger/gateway/backend/startup code. Existing quote-capacity exclusions did not define the financial request transitions they protect; this turn supplies that prerequisite specification before broader settlement-pressure acceptance.
+- The new proposal/delta/design/tasks define exact single-rounding holds and charges, atomic account/credential limits, identity/deduplication, authoritative and unknown usage, restart, performance-remedy binding and signed recovery history. The design maps inspected test bodies and distinguishes request exposure from funding-loss credits and bounded timestamp pages from exhaustive history.
+- Specification only: no runtime/test changes, new behavioral verification claim, production-source adoption or whitepaper edit. Acceptance tasks remain open, including opening-intent parent **2.8.2**. No new author answer is needed.
 
 ## Verification
 
-- Passed strict OpenSpec validation, Svelte checking (zero errors/warnings), 15 frontend tests, Vite build, 46 provisioning tests, Python compilation and the protected-book checksum. **390 Rust tests passed** across the initial 324 passes, corrected-observer focused case and 65 remaining-target tests; headless binaries built successfully. **451 passing tests total**, two existing ignored Rust tests unchanged. The new observer initially assumed a signed wrapper for the bare `Challenge` response; correcting its decoder preserved the consumed-challenge assertion. No production failure or check weakening. Browserslist data is stale.
+- Passed strict validation of `specify-inference-request-accounting`, Svelte checking (zero errors/warnings), 451 existing tests (390 Rust, 15 frontend, 46 provisioning; two existing Rust tests ignored), headless binary and Vite builds, Python compilation and the protected-book checksum. These baseline checks do not complete the new contract's open acceptance tasks. Browserslist data is stale; no dependencies or checks changed.
 - Native desktop/WebKit, release policy authority, platform/hardware qualification and external release gates remain blocked; no installation, live-chain operation or deployment attempted.
 
 ## Next steps, in order
 
 1. Native non-reserving cutover (parent 3.1–3.5) and proposal-rate clock/adoption work (2.4–2.5) remain **blocked by entirely owner-untracked ledger/handler/consumer source**. Do not adopt that migration, introduce unused helpers or commit expected-failing regressions alone. Clear both public wallet gates together and migrate affected tests; keep pre-signing work separate from committed issuance.
-2. **Next inventory independent quote-issuance and inference-settlement pressure** under parent 2.8.2. Reuse the completed native top-up storage/recovery and original-journal cases rather than repeat them. Pre-signing quote work is not yet implemented, and issuance-clock/native cutover seams remain owner-untracked; those dimensions are not proved by full stored-quote occupancy.
+2. **Next complete request-accounting task 2.1's focused acceptance map, then 2.4's ledger/request/receipt recovery under full quote storage.** Reuse baseline accounting and native top-up evidence; supplied validated usage is not observed engine usage. Follow with missing transactional/concurrent/gateway cases and independent issuance/work pressure. Pre-signing work is not implemented, and controlled issuance-clock/native cutover seams remain owner-untracked; stored-quote occupancy proves neither budget.
 3. Deterministic elapsed quote/lease expiry after lost acknowledgement (2.3.4.3) remains **blocked on an independently committable private-time seam**; no sleeps, fabricated timestamp changes or false expiry claims. Finish other original-recovery inventory where reachable; accepted-original no-rebroadcast and private-seam cases remain distinct from live settlement/power-loss evidence.
 4. Prioritize any independently committable failing check, then retained code/spec gaps below. Earlier cost/nonce/schema/rollback, exact-raw-string, journal/broadcast-prerequisite, acknowledgement commit-error and native ambiguous-submission evidence remains valid within its limits; none removes the public wallet quotas.
-5. After the bounded pre-credit contract, specify safe-credit/reorg accounting, explicit cancellation, top-ups and fees before broader discovery, credential lifecycle, runtime/performance and consumer/reputation alignment. Keep incomplete changes open; never archive with `--skip-specs`.
+5. Keep the new request-accounting acceptance separate from full safe-credit/reorg, cancellation/top-up/fee lifecycle specifications and broader discovery, credential lifecycle, runtime/performance and reputation work. The new contract does not complete those capabilities. Keep incomplete changes open; never archive with `--skip-specs`.
 
 ## Other retained blockers
 
@@ -31,4 +31,4 @@
 
 ## Checkout discipline
 
-Entry had no staged files and extensive owner migration changes; the candidate test, OpenSpec and APAS files were clean. Commit only this step's `inference_owner_control_test.rs`, opening-intent design/tasks and APAS progress/report. Exclude the owner's whitepaper and production migration; preserve the complete author `Answer:` and unrelated changes. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
+Entry had no staged files and extensive owner migration changes; existing APAS/OpenSpec files were clean. Commit only the new `specify-inference-request-accounting` change and APAS progress/report. Exclude the owner's whitepaper and production migration; preserve the complete author `Answer:` and unrelated changes. No push, stash, reset, restore, deployment or installation. Git identity remains per-command `APAS Worker <apas-worker@localhost>`.
