@@ -1,7 +1,35 @@
 //! Network-scoped inference wire types. Money is always a decimal base-unit string.
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{value::MapAccessDeserializer, MapAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::Value;
 use tiny_keccak::{Hasher, Keccak};
+use std::{fmt, marker::PhantomData};
+
+// Require an object while retaining the derived field decoder's duplicate,
+// unknown and missing-field checks. Do not buffer through serde_json::Value.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct ObjectVisitor<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+        type Value = T;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(ObjectVisitor(PhantomData))
+}
 
 pub const OFFER_DOMAIN: &str = "chiral-inference-offer-v1";
 pub const QUOTE_DOMAIN: &str = "chiral-inference-quote-v1";
@@ -10,12 +38,29 @@ pub const RECEIPT_DOMAIN: &str = "chiral-inference-receipt-v1";
 pub const AUTH_DOMAIN: &str = "chiral-inference-auth-v1";
 pub const FEEDBACK_DOMAIN: &str = "chiral-inference-feedback-v1";
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NetworkIdentity {
     pub chain_id: u64,
     pub genesis_hash: String,
     pub deployment_id: String,
+}
+
+impl<'de> Deserialize<'de> for NetworkIdentity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            chain_id: u64,
+            genesis_hash: String,
+            deployment_id: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            chain_id: fields.chain_id,
+            genesis_hash: fields.genesis_hash,
+            deployment_id: fields.deployment_id,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,14 +245,26 @@ pub struct Quote {
     pub expires_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FundingIntentRequest {
     pub raw_transaction: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for FundingIntentRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            raw_transaction: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            raw_transaction: fields.raw_transaction,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FundingIntent {
     pub network: NetworkIdentity,
     pub provider_wallet: String,
@@ -217,11 +274,50 @@ pub struct FundingIntent {
     pub registered_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+impl<'de> Deserialize<'de> for FundingIntent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            network: NetworkIdentity,
+            provider_wallet: String,
+            consumer_wallet: String,
+            quote_id: String,
+            tx_hash: String,
+            registered_at: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            network: fields.network,
+            provider_wallet: fields.provider_wallet,
+            consumer_wallet: fields.consumer_wallet,
+            quote_id: fields.quote_id,
+            tx_hash: fields.tx_hash,
+            registered_at: fields.registered_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Signed<T> {
     pub payload: T,
     pub signature: String,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Signed<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields<T> {
+            payload: T,
+            signature: String,
+        }
+        let fields: Fields<T> = deserialize_object(deserializer)?;
+        Ok(Self {
+            payload: fields.payload,
+            signature: fields.signature,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

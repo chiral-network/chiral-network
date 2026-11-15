@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Funding messages accepted positional JSON arrays
+
+- **Native-CFX defect:** derived struct decoding accepted a positional funding request and positional acknowledgement envelope, payload or network. Those response projections retained the original valid signature, so signature verification alone did not enforce the required object schemas.
+- **Correction:** object-only decoding lives in the four wire types, preserving all derived missing/type/unknown/duplicate-field checks through a direct map visitor. Valid object serialization and canonical signing bytes are unchanged. No array compatibility alias, payload buffering or persisted-state conversion is introduced.
+- **Verification:** the production-router request matrix retains its member cases and rejects a correctly populated array before both new admission and cached recovery. Three new native response cases refuse before chain access or local acknowledgement/start persistence, then recover the exact original from the genuine object reply after reopening. All 482 available tests and available builds/checks pass. Prepared originals and prior acceptance are disclosed fixture prerequisites, not live-chain or process-crash qualification.
+
 ### Funding registration could predate signed quote issuance
 
 - **Native-CFX defect:** fresh registration rejected expiry but not a clock sample before quote issuance, permitting a signed acknowledgement that the native consumer's unchanged interval guard rejects.

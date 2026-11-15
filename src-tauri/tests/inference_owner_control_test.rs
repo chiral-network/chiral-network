@@ -869,6 +869,7 @@ async fn funding_intent_object_fields_are_strict_before_new_admission_and_cached
         ("object field", |raw| serde_json::to_vec(&json!({"raw_transaction": {"hex": raw}})).unwrap()),
         ("unknown field", |raw| serde_json::to_vec(&json!({"raw_transaction": raw, "quote_id": "another-agreement"})).unwrap()),
         ("duplicate field", |raw| format!(r#"{{"raw_transaction":"{raw}","raw_transaction":"{raw}"}}"#).into_bytes()),
+        ("positional request", |raw| serde_json::to_vec(&json!([raw])).unwrap()),
     ];
     for (registration, registered) in [false, true].into_iter().enumerate() {
         for (index, (name, invalid_body)) in invalid_bodies.iter().enumerate() {

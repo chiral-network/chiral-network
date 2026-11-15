@@ -414,6 +414,29 @@ async fn native_acknowledgement_rejects_duplicate_object_members_before_chain_ac
 }
 
 #[tokio::test]
+async fn native_acknowledgement_rejects_positional_objects_before_chain_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let objects: &[(&str, &[&str])] = &[
+        ("", &["payload", "signature"]),
+        ("/payload", &["network", "provider_wallet", "consumer_wallet",
+            "quote_id", "tx_hash", "registered_at"]),
+        ("/payload/network", &["chain_id", "genesis_hash", "deployment_id"]),
+    ];
+    for (index, (path, fields)) in objects.iter().enumerate() {
+        rejected_case(directory.path(), 45_000 + index as u64, path, |mut document| {
+            let container = document.pointer_mut(path).unwrap();
+            let object = container.as_object_mut().unwrap();
+            // Preserve every original field and the genuine signature. These
+            // arrays used to decode into the same authenticated typed objects.
+            let values = fields.iter().map(|field| object.remove(*field).unwrap()).collect();
+            assert!(object.is_empty());
+            *container = Value::Array(values);
+            serde_json::to_vec(&document).unwrap()
+        }).await;
+    }
+}
+
+#[tokio::test]
 async fn native_recovery_refuses_missing_or_inconsistent_original_journal() {
     let directory = tempfile::tempdir().unwrap();
     for (index, missing) in [true, false].into_iter().enumerate() {
