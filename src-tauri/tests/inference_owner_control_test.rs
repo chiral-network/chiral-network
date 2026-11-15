@@ -2238,6 +2238,25 @@ async fn native_paid_opening_at_free_limit(ledger_wide: bool) {
     assert!(client_rpc_server.await.unwrap_err().is_cancelled());
 }
 
+fn restore_full_quote_storage(db: &mut Connection, pending: &Signed<Quote>, key: &str) {
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get::<_, u64>(0)).unwrap(), 1);
+    let tx = db.transaction().unwrap();
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO quotes(id,owner,expires,record) VALUES(?1,?2,?3,?4)").unwrap();
+        for sequence in 1..10_000_u64 {
+            let mut payload = pending.payload.clone();
+            payload.id = format!("0x{:064x}", 0xcafe_0000 + sequence);
+            payload.nonce = format!("0x{:064x}", 0xbead_0000 + sequence);
+            payload.consumer_wallet = format!("0x{:040x}", 0xa0000 + sequence);
+            let signed = protocol::sign(protocol::QUOTE_DOMAIN, payload, key).unwrap();
+            insert.execute(params![signed.payload.id, signed.payload.consumer_wallet,
+                signed.payload.expires_at, serde_json::to_string(&signed).unwrap()]).unwrap();
+        }
+    }
+    tx.commit().unwrap();
+}
+
 struct TopupRecoveryRpc {
     quote: Quote,
     tx_hash: String,
@@ -2302,24 +2321,7 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
     // without claiming 10,000 historical public issuances or filling either legacy wallet gate.
     let pending = fixture.quote("100").await;
     let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
-    {
-        let tx = db.transaction().unwrap();
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO quotes(id,owner,expires,record) VALUES(?1,?2,?3,?4)").unwrap();
-            for sequence in 1..10_000_u64 {
-                let mut payload = pending.payload.clone();
-                payload.id = format!("0x{:064x}", 0xcafe_0000 + sequence);
-                payload.nonce = format!("0x{:064x}", 0xbead_0000 + sequence);
-                payload.consumer_wallet = format!("0x{:040x}", 0xa0000 + sequence);
-                let signed = protocol::sign(protocol::QUOTE_DOMAIN, payload,
-                    &fixture.provider.state.private_key).unwrap();
-                insert.execute(params![signed.payload.id, signed.payload.consumer_wallet,
-                    signed.payload.expires_at, serde_json::to_string(&signed).unwrap()]).unwrap();
-            }
-        }
-        tx.commit().unwrap();
-    }
+    restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
     let fingerprint = |query: &str| {
         let mut hash = Keccak::v256();
         let mut count = 0_u64;
@@ -2709,4 +2711,400 @@ async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
             assert!(rpc_server.await.unwrap_err().is_cancelled());
         }
     }
+}
+
+struct NativeTopupRpc {
+    view: Arc<TopupRecoveryRpc>,
+    opening: VerifiedPayment,
+    raw: String,
+    account_path: PathBuf,
+    journal_path: PathBuf,
+    submissions: AtomicU64,
+}
+
+async fn native_topup_rpc(
+    State(rpc): State<Arc<NativeTopupRpc>>, Json(request): Json<Value>,
+) -> Json<Value> {
+    // Observe the actual durable intent before any native RPC, and the independently
+    // committed exact journal bytes before submission. No top-up state is seeded here.
+    let saved: Value = serde_json::from_slice(&std::fs::read(&rpc.account_path).unwrap()).unwrap();
+    assert_eq!(saved["raw_transaction"], rpc.opening.raw_transaction);
+    assert_eq!(saved["topup"]["amount_wei"], "1000");
+    let intent = saved["topup"]["id"].as_str().unwrap();
+    uuid::Uuid::parse_str(intent).unwrap();
+    if !saved["topup"]["raw_transaction"].is_null() {
+        assert_eq!(saved["topup"]["raw_transaction"], rpc.raw);
+    }
+    let args = &request["params"];
+    let result = match request["method"].as_str().unwrap() {
+        "eth_getTransactionCount" => {
+            assert_eq!(args[0], rpc.opening.from);
+            assert!(["latest", "pending"].contains(&args[1].as_str().unwrap()));
+            json!("0x1")
+        }
+        "eth_getBalance" => {
+            assert_eq!(args, &json!([rpc.opening.from, "latest"]));
+            json!("0x100000000")
+        }
+        "eth_gasPrice" => json!("0x1"),
+        "eth_estimateGas" => {
+            let data = protocol::topup_data(&rpc.view.quote.id).unwrap();
+            assert_eq!(args[0]["from"], rpc.opening.from);
+            assert_eq!(args[0]["to"], rpc.opening.to);
+            assert_eq!(args[0]["value"], "0x3e8");
+            assert_eq!(args[0]["data"], format!("0x{}", hex::encode(data)));
+            assert_eq!(args[0]["gasPrice"], "0x1");
+            json!("0xf4240")
+        }
+        "eth_sendRawTransaction" => {
+            assert_eq!(args, &json!([rpc.raw]));
+            assert!(saved["topup"]["raw_transaction"].is_null());
+            assert_eq!(rpc.submissions.fetch_add(1, Ordering::AcqRel), 0);
+            let db = Connection::open(&rpc.journal_path).unwrap();
+            let original: (String, String, String, String) = db.query_row(
+                "SELECT nonce,tx_hash,raw,status FROM transactions WHERE sender=?1 AND operation=?2",
+                params![rpc.opening.from, format!("topup:{}:{intent}", rpc.view.quote.id)],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
+            assert_eq!(original, ("1".into(), rpc.view.tx_hash.clone(), rpc.raw.clone(), "prepared".into()));
+            json!(rpc.view.tx_hash)
+        }
+        "eth_getTransactionReceipt" if args[0] == rpc.opening.tx_hash => {
+            json!({"transactionHash":rpc.opening.tx_hash,"from":rpc.opening.from,
+                "to":rpc.opening.to,"type":"0x0","gasUsed":"0x10000","status":"0x1",
+                "blockNumber":"0x1","blockHash":rpc.opening.block_hash})
+        }
+        "eth_getBlockByNumber" if args[0] == "0x1" => {
+            assert_eq!(args[1], false);
+            json!({"number":"0x1","hash":rpc.opening.block_hash,
+                "timestamp":format!("0x{:x}", rpc.view.quote.issued_at)})
+        }
+        _ => return topup_recovery_rpc(State(rpc.view.clone()), Json(request)).await,
+    };
+    rpc.view.requests.lock().unwrap().push(request.clone());
+    Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
+}
+
+#[tokio::test]
+async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
+    use std::io::Write;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 58_000);
+    let other = fixture.open_free().await;
+    // Only the original paid opening/native history is restored. The top-up intent,
+    // nonce allocation, preparation, submission and both verifications run below.
+    let (opened, opening_raw) = fixture.paid_account().await;
+    let id = &opened.account.contract_id;
+    let quote = fixture.provider.state.ledger.quote(id).unwrap();
+    let ack = fixture.provider.state.ledger.funding_intent(&quote.payload, &opening_raw).unwrap().unwrap();
+    let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+    let pending = fixture.quote("100").await;
+    let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    restore_full_quote_storage(&mut db, &pending, &fixture.provider.state.private_key);
+    let fingerprint = |query: &str| {
+        let mut hash = Keccak::v256();
+        let mut count = 0_u64;
+        let mut statement = db.prepare(query).unwrap();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            hash.update(row.get::<_, String>(0).unwrap().as_bytes());
+            count += 1;
+        }
+        let mut digest = [0; 32];
+        hash.finalize(&mut digest);
+        (count, digest)
+    };
+    let protected_state = || [
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(id,owner,quote,sequence,created) FROM accounts ORDER BY id",
+    ].map(&fingerprint);
+    let monetary_state = || [
+        "SELECT json_array(id,account) FROM accounts ORDER BY id",
+        "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash",
+        "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
+        "SELECT json_array(id,record) FROM fee_batches ORDER BY id",
+    ].map(&fingerprint);
+    let full_quotes = || assert_eq!(db.query_row(
+        "SELECT COUNT(*) FROM quotes WHERE expires>?1", [protocol::now().unwrap()],
+        |row| row.get::<_, u64>(0)).unwrap(), 10_000);
+    let protected = protected_state();
+    let before_credit = monetary_state();
+    assert_eq!(protected.map(|entry| entry.0), [10_000, 2, 1, 2]);
+    assert_eq!(before_credit.map(|entry| entry.0), [2, 1, 0, 0]);
+    full_quotes();
+    let rates = rate_records(&fixture.provider.ledger_path);
+    assert!(rates.iter().filter(|(bucket, _, _)| bucket.starts_with("quote:"))
+        .all(|(bucket, _, count)| *count < if bucket == "quote:global" { 600 } else { 12 }));
+    let (status, refused) = fixture.post("/v1/contracts/propose", json!({
+        "offer_id":fixture.provider.offer_id,"consumer_wallet":wallet::address_from_private_key(OTHER_KEY).unwrap(),
+        "funding_wei":"100"
+    })).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    assert_eq!(refused["error"]["code"], "rate_limit");
+    assert_eq!(protected_state(), protected);
+    assert_eq!(monetary_state(), before_credit);
+
+    let client_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let provider_rpc_url = format!("http://{}", provider_listener.local_addr().unwrap());
+    let mut network = fixture.provider.state.config.network.clone();
+    network.rpc_url = format!("http://{}", client_listener.local_addr().unwrap());
+    let config = ConsumerConfig {
+        network, data_dir: directory.path().join("native-topup"),
+        catalog_url: None, development: true, dht: None,
+    };
+    let mut consumer = Consumer::new(config.clone()).unwrap();
+    let import = config.data_dir.join("public-test-scalar.key");
+    wallet::save_private_key(&import, OWNER_KEY).unwrap();
+    assert_eq!(consumer.wallet_import_file(&import).unwrap(), quote.payload.consumer_wallet);
+    let scoped = config.network.scoped_dir(&config.data_dir);
+    let account_path = scoped.join("consumer").join(&quote.payload.consumer_wallet)
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    wallet::secure_directory(account_path.parent().unwrap()).unwrap();
+    let saved_opening = json!({
+        "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
+        "raw_transaction":opening_raw,"tx_hash":ack.payload.tx_hash,"funding_intent":ack,
+        "funding_broadcast_started":true,"funding_cancellation_requested":false,
+        "funding_cancellation":null,"credentials":[opened.credential],
+        "active_credential":opened.credential.id,"receipt_sequence":0,"topup":null
+    });
+    let mut file = wallet::create_secret_file(&account_path).unwrap();
+    file.write_all(&serde_json::to_vec(&saved_opening).unwrap()).unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let opening_evidence: String = db.query_row("SELECT evidence FROM funding WHERE tx_hash=?1",
+        [&ack.payload.tx_hash], |row| row.get(0)).unwrap();
+    let journal_path = scoped.join("wallet-journal/transactions.sqlite3");
+    let journal = Connection::open(&journal_path).unwrap();
+    journal.execute(
+        "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,evidence,created_at)
+         VALUES(?1,?2,'0',?3,?4,'accepted',?5,?6)",
+        params![quote.payload.consumer_wallet, format!("open:{id}"), ack.payload.tx_hash,
+            opening_raw, opening_evidence, quote.payload.issued_at]).unwrap();
+    let originals = || {
+        journal.prepare("SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at)
+            FROM transactions ORDER BY nonce").unwrap().query_map([], |row| row.get::<_, String>(0))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+    };
+    let opening_original = originals();
+    assert_eq!(opening_original.len(), 1);
+    let exported = consumer.credential_export(id, None).unwrap();
+    assert_eq!(exported["api_key"], opened.credential.bearer);
+    drop(consumer);
+
+    let timestamp = protocol::now().unwrap();
+    let client_view = Arc::new(TopupRecoveryRpc {
+        quote: quote.payload.clone(), tx_hash: envelope.tx_hash.clone(), phase: AtomicU64::new(0),
+        timestamp: AtomicU64::new(timestamp), requests: Mutex::new(Vec::new()),
+    });
+    let provider_view = Arc::new(TopupRecoveryRpc {
+        quote: quote.payload.clone(), tx_hash: envelope.tx_hash.clone(), phase: AtomicU64::new(0),
+        timestamp: AtomicU64::new(timestamp), requests: Mutex::new(Vec::new()),
+    });
+    let client_rpc = Arc::new(NativeTopupRpc {
+        view: client_view.clone(), opening: serde_json::from_str(&opening_evidence).unwrap(),
+        raw: raw.clone(), account_path: account_path.clone(), journal_path, submissions: AtomicU64::new(0),
+    });
+    let client_app = Router::new().route("/", post(native_topup_rpc)).with_state(client_rpc.clone());
+    let provider_app = Router::new().route("/", post(topup_recovery_rpc)).with_state(provider_view.clone());
+    let client_server = tokio::spawn(async move { axum::serve(client_listener, client_app).await.unwrap(); });
+    let provider_rpc_server = tokio::spawn(async move { axum::serve(provider_listener, provider_app).await.unwrap(); });
+    let exchanges = Arc::new(Mutex::new(Vec::new()));
+    let lose_next = Arc::new(AtomicBool::new(false));
+    let listener = fixture._listeners[0].try_clone().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let serve = |app: Router| {
+        let observed = exchanges.clone();
+        let lose_next = lose_next.clone();
+        let app = app.layer(from_fn(move |request: Request, next: Next| {
+            let observed = observed.clone();
+            let lose_next = lose_next.clone();
+            async move {
+                let method = request.method().to_string();
+                let path = request.uri().path().to_owned();
+                let (parts, body) = request.into_parts();
+                let body = to_bytes(body, 96 * 1024).await.unwrap();
+                let requested = if body.is_empty() { Value::Null } else { serde_json::from_slice(&body).unwrap() };
+                let response = next.run(Request::from_parts(parts, Body::from(body))).await;
+                let (mut parts, body) = response.into_parts();
+                let body = to_bytes(body, 96 * 1024).await.unwrap();
+                let replied: Value = serde_json::from_slice(&body).unwrap();
+                let topup = path.ends_with("/topup");
+                observed.lock().unwrap().push((method, path, requested, parts.status, replied));
+                if topup && parts.status == StatusCode::OK && lose_next.swap(false, Ordering::AcqRel) {
+                    // Lose the genuine committed credit response, never fabricate success.
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    return Response::from_parts(parts, Body::from_stream(futures_util::stream::once(async {
+                        Err::<axum::body::Bytes, _>(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
+                    })));
+                }
+                Response::from_parts(parts, Body::from(body))
+            }
+        }));
+        let listener = tokio::net::TcpListener::from_std(listener.try_clone().unwrap()).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                .await.unwrap();
+        });
+        (stop, server)
+    };
+    let mut retained_originals = None;
+    let mut retained_saved = None;
+    let mut retained_topup = Value::Null;
+    let mut credited = None;
+    let mut expected_account = serde_json::to_value(&opened.account).unwrap();
+    for (attempt, phase) in [0, 1, 2, 2].into_iter().enumerate() {
+        // Reopen native state and actual provider store/chain/router at every recovery boundary.
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        Arc::get_mut(&mut state.config).unwrap().network.rpc_url = provider_rpc_url.clone();
+        state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+        state.accepting.store(false, Ordering::Release);
+        state.funding_ready.store(false, Ordering::Release);
+        state.qualified_models.write().unwrap().clear();
+        fixture.app = contracts::router(fixture.provider.state.clone());
+        provider_view.phase.store(phase, Ordering::Release);
+        client_view.phase.store(if attempt == 0 { 0 } else { 2 }, Ordering::Release);
+        lose_next.store(attempt == 2, Ordering::Release);
+        full_quotes();
+        let (stop, server) = serve(fixture.app.clone());
+        let consumer = Consumer::new(config.clone()).unwrap();
+        let start = exchanges.lock().unwrap().len();
+        let provider_start = provider_view.requests.lock().unwrap().len();
+        let result = match attempt {
+            0 | 2 => consumer.topup(id, "1000").await,
+            1 => consumer.resume(id).await,
+            _ => consumer.fund(&fixture.provider.offer, &quote).await,
+        };
+        if attempt < 3 { result.expect_err("pending evidence or a disconnected accepted response"); }
+        else {
+            assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), expected_account);
+        }
+        let observed = exchanges.lock().unwrap();
+        let calls = &observed[start..];
+        assert_eq!(calls.len(), if attempt == 0 { 4 } else { 2 });
+        for pair in calls.chunks_exact(2) {
+            assert_eq!((&pair[0].0, pair[0].1.as_str(), pair[0].3),
+                (&"POST".to_owned(), "/v1/auth/challenge", StatusCode::OK));
+            let challenge: Challenge = serde_json::from_value(pair[0].4.clone()).unwrap();
+            let remaining: u64 = db.query_row("SELECT COUNT(*) FROM challenges WHERE nonce=?1",
+                [&challenge.nonce], |row| row.get(0)).unwrap();
+            assert_eq!(remaining, 0);
+        }
+        if attempt == 0 {
+            assert_eq!((&calls[1].0, &calls[1].1, &calls[1].2, calls[1].3, &calls[1].4),
+                (&"GET".into(), &format!("/v1/contracts/{id}"), &Value::Null, StatusCode::OK, &expected_account));
+        }
+        let topup = calls.last().unwrap();
+        assert_eq!((&topup.0, &topup.1, &topup.2), (&"POST".into(), &format!("/v1/contracts/{id}/topup"),
+            &json!({"raw_transaction":raw})));
+        if phase < 2 {
+            assert_eq!(topup.3, StatusCode::CONFLICT);
+            assert_eq!(topup.4["error"]["code"], "funding_pending");
+            assert_eq!(monetary_state(), before_credit);
+            let pending: (String, String, String) = db.query_row(
+                "SELECT tx_hash,raw_transaction,json_extract(record,'$.status') FROM funding_attempts",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+            assert_eq!(pending, (envelope.tx_hash.clone(), raw.clone(), "pending".into()));
+        } else {
+            expected_account["funded_wei"] = json!("1100");
+            expected_account["fee_wei"] = json!("5");
+            expected_account["available_wei"] = json!("1095");
+            assert_eq!(topup.3, StatusCode::OK);
+            assert_eq!(topup.4, expected_account);
+            assert!(!lose_next.load(Ordering::Acquire));
+            let current = monetary_state();
+            assert_eq!(current.map(|entry| entry.0), [2, 2, 1, 0]);
+            if let Some(previous) = credited { assert_eq!(current, previous); }
+            else { credited = Some(current); }
+            assert_eq!(db.query_row("SELECT COUNT(*) FROM funding_attempts", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
+            let evidence: String = db.query_row("SELECT evidence FROM funding WHERE tx_hash=?1",
+                [&envelope.tx_hash], |row| row.get(0)).unwrap();
+            let native_evidence: String = journal.query_row("SELECT evidence FROM transactions WHERE tx_hash=?1",
+                [&envelope.tx_hash], |row| row.get(0)).unwrap();
+            let expected = VerifiedPayment {
+                network: quote.payload.network.clone(), tx_hash: envelope.tx_hash.clone(),
+                from: envelope.from.clone(), to: envelope.to.clone(), value_wei: "1000".into(),
+                data: envelope.data.clone(), block_hash: format!("0x{:064x}", 8), block_number: 8, raw_transaction: raw.clone(),
+            };
+            assert_eq!(serde_json::from_str::<Value>(&evidence).unwrap(), serde_json::to_value(&expected).unwrap());
+            assert_eq!(serde_json::from_str::<Value>(&native_evidence).unwrap(), serde_json::to_value(expected).unwrap());
+            let fee: (String, String, String) = db.query_row("SELECT platform,amount,status FROM fee_obligations",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+            assert_eq!(fee, (quote.payload.platform_wallet.clone(), "5".into(), "pending".into()));
+        }
+        drop(observed);
+        let observed = provider_view.requests.lock().unwrap();
+        let calls = &observed[provider_start..];
+        for method in ["eth_getTransactionReceipt", "eth_syncing"] {
+            assert_eq!(calls.iter().filter(|call| call["method"] == method).count(), if phase < 2 { 1 } else { 2 });
+        }
+        for tag in ["safe", "latest", "0x8"] {
+            assert_eq!(calls.iter().filter(|call| call["method"] == "eth_getBlockByNumber"
+                && call["params"][0] == tag).count(),
+                if phase < 2 { usize::from(tag != "0x8") } else { 2 });
+        }
+        drop(observed);
+        let observed = client_view.requests.lock().unwrap();
+        for (method, count) in [("eth_getTransactionCount", 4), ("eth_getBalance", 1),
+            ("eth_gasPrice", 1), ("eth_estimateGas", 1), ("eth_sendRawTransaction", 1)] {
+            assert_eq!(observed.iter().filter(|call| call["method"] == method).count(), count);
+        }
+        drop(observed);
+        assert_eq!(client_rpc.submissions.load(Ordering::Acquire), 1);
+        let current_originals = originals();
+        assert_eq!(current_originals.len(), 2);
+        assert_eq!(current_originals[0], opening_original[0]);
+        if let Some(previous) = &retained_originals { assert_eq!(&current_originals, previous); }
+        else { retained_originals = Some(current_originals); }
+        let bytes = std::fs::read(&account_path).unwrap();
+        let saved: Value = serde_json::from_slice(&bytes).unwrap();
+        if attempt == 0 {
+            retained_topup = saved["topup"].clone();
+            assert_eq!(retained_topup["raw_transaction"], raw);
+            assert_eq!(retained_topup["amount_wei"], "1000");
+            retained_saved = Some(bytes.clone());
+        }
+        let mut expected_saved = saved_opening.clone();
+        if attempt < 3 {
+            expected_saved["topup"] = retained_topup.clone();
+            assert_eq!(&bytes, retained_saved.as_ref().unwrap());
+        } else { expected_saved["account"] = expected_account.clone(); }
+        assert_eq!(saved, expected_saved, "only confirmed credit clears the original top-up intent");
+        let status: String = journal.query_row("SELECT status FROM transactions WHERE tx_hash=?1",
+            [&envelope.tx_hash], |row| row.get(0)).unwrap();
+        assert_eq!(status, if attempt == 0 { "submitted" } else { "accepted" });
+        assert_eq!(journal.query_row("SELECT COUNT(*) FROM cancellations", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+        assert_eq!(protected_state(), protected);
+        full_quotes();
+        for (credential, account) in [
+            (&opened.credential, expected_account.clone()),
+            (&other.credential, serde_json::to_value(&other.account).unwrap()),
+        ] {
+            let (status, value) = fixture.send("GET", &format!("/v1/contracts/{}", credential.contract_id),
+                &bearer(credential), Vec::new()).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(value, account);
+        }
+        assert_eq!(monetary_state(), credited.unwrap_or(before_credit));
+        drop(consumer);
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
+    let provider_journal = Connection::open(fixture.provider.state.config.network
+        .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+    let operations: (u64, u64) = provider_journal.query_row(
+        "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)",
+        [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+    assert_eq!(operations, (0, 0));
+    assert_eq!(db.query_row("SELECT COUNT(*) FROM requests", [], |row| row.get::<_, u64>(0)).unwrap(), 0);
+    client_server.abort();
+    provider_rpc_server.abort();
+    assert!(client_server.await.unwrap_err().is_cancelled());
+    assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
 }
