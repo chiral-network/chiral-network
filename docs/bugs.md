@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Public proposal accepted a positional request
+
+- **Cause:** The derived `ProposeRequest` decoder accepted a complete three-element array instead of its named-field object. The strengthened production HTTP schema regression reproduced issuance with status 200 instead of the required 400.
+- **Correction:** Reuse the shared direct map visitor and strict derived member decoder before signing-work admission or quote insertion. Preserve the three required strings, canonical monetary validation, public authorization model and signed terms; do not add wallet quotas or normalize array aliases.
+- **Verification:** The regression failed before correction; all 435 Rust tests and 61 frontend/provisioning tests, available checks/builds and strict commercial validation now pass. Malformed request/member/money cases preserve the exact work watermark/window/count and leave standalone storage empty; the unchanged valid-object control verifies successful signed issuance. The restored work record is a fixture prerequisite, not live resource or deployment evidence.
+
 ### Challenge exchange accepted positional arrays
 
 - **Cause:** Complete request and response arrays bypassed the intended named-field object boundary. Extending existing regressions reproduced public HTTP issuance instead of 400 refusal and native acceptance of a positional reply containing the genuine nonce, signing bytes and expiry.

@@ -115,6 +115,16 @@ Four regressions reproduced the original acceptance. Three delivered complete po
 
 The counterparties and profiles are isolated synthetic fixtures, not production issuance, funded chain operations or measured qualification. This closes the named commercial declaration boundaries, not every control request or accounting response schema.
 
+## Public proposal object implementation
+
+Task 2.4.3 requires `ProposeRequest` to reuse the direct map-only visitor and a local strict derived field decoder. The three required strings remain `offer_id`, `consumer_wallet` and `funding_wei`; unknown/missing/mistyped/duplicate members remain invalid. Serialization, named-wallet canonicalization, canonical integer funding and signed quote terms are unchanged. There is no positional compatibility alias, `Value` round-trip, new authentication or financial-state migration.
+
+`production_proposal_schema_and_canonical_money_are_not_normalized` adds a complete positional request using the same valid offer, payer and amount as its successful object control. Its real loopback HTTP requests exercise the production router, not a replacement issuer. Alongside HTTP 400 / `invalid_request`, the regression requires every malformed request and noncanonical amount to preserve the exact signing-work watermark/window/count and leave standalone quote storage empty before the valid object produces its checked signed quote.
+
+The work evidence is a restored previous-minute initialization prerequisite, not observed prior signing. The no-change comparison needs no near-boundary timing or sleeps. Existing input/member/money failures and valid public issuance remain controls; this slice does not establish opening/top-up request schemas, account recovery, live chain execution or public deployment qualification.
+
+Before correction, the complete-array regression returned HTTP 200 instead of 400. The implementation changes the shared request decoder rather than special-casing that input in the route.
+
 ## Historical implementation gaps and ownership constraints
 
 The initial native embedding-price gap was that configuration accepted any canonical output rate while only the reference provisioner enforced zero. Task 2.2 closes that configuration gap; task 2.3 separately closes selected-template admission as documented above.

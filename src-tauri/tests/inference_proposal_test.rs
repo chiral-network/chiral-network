@@ -424,8 +424,14 @@ async fn a_public_free_quote_does_not_authorize_account_opening_or_credentials()
 async fn production_proposal_schema_and_canonical_money_are_not_normalized() {
     let directory = tempfile::tempdir().unwrap();
     let fixture = Fixture::new(directory.path(), 3, "1", "2").await;
+    let work_before = quote_work_evidence(&fixture.ledger_path);
     let original = fixture.request("100");
-    let mut malformed = vec![b"{".to_vec()];
+    let mut malformed = vec![
+        b"{".to_vec(),
+        serde_json::to_vec(&json!([
+            original["offer_id"], original["consumer_wallet"], original["funding_wei"],
+        ])).unwrap(),
+    ];
     for field in ["offer_id", "consumer_wallet", "funding_wei"] {
         let mut missing = original.clone();
         missing.as_object_mut().unwrap().remove(field);
@@ -446,6 +452,11 @@ async fn production_proposal_schema_and_canonical_money_are_not_normalized() {
         reject(fixture.post(PROPOSE, &fixture.request(funding)).await,
             StatusCode::BAD_REQUEST, "invalid_amount").await;
     }
+    assert_eq!(quote_work_evidence(&fixture.ledger_path), work_before,
+        "malformed input must not spend or advance signing-work allowance");
+    let db = rusqlite::Connection::open(&fixture.ledger_path).unwrap();
+    let quotes: u64 = db.query_row("SELECT COUNT(*) FROM quotes", [], |row| row.get(0)).unwrap();
+    assert_eq!(quotes, 0, "malformed input must not persist issued quotes");
     fixture.propose("100").await;
 }
 

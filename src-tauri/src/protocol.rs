@@ -596,12 +596,29 @@ pub struct OpenResult {
     pub credential: Option<Credential>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ProposeRequest {
     pub offer_id: String,
     pub consumer_wallet: String,
     pub funding_wei: String,
+}
+
+impl<'de> Deserialize<'de> for ProposeRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            offer_id: String,
+            consumer_wallet: String,
+            funding_wei: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            offer_id: fields.offer_id,
+            consumer_wallet: fields.consumer_wallet,
+            funding_wei: fields.funding_wei,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
