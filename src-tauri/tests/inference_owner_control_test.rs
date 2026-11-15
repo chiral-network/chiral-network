@@ -487,6 +487,63 @@ impl Fixture {
         assert_eq!(rate_records(&self.provider.ledger_path), rate_records(&control_path));
         winner
     }
+
+    async fn accounting_account(&mut self, profiled: bool) -> (Signed<Quote>, OpenResult) {
+        use chiral_network::performance;
+
+        // Signed synthetic terms and post-verification payment are prerequisites,
+        // not observed enrollment, hardware, engine or safe-chain evidence.
+        let mut terms = self.paid_quote().await.payload;
+        terms.id = protocol::random_id();
+        terms.nonce = protocol::random_id();
+        terms.funding_wei = "1000".into();
+        if profiled {
+            terms.model.serving = Some(protocol::ServingProfile {
+                hf_repo: "test/proposal".into(), tokenizer_repo: "test/tokenizer".into(),
+                artifact_manifest_sha256: "a".repeat(64),
+                engine: "llama.cpp".into(), engine_version: "test-only".into(),
+                runtime_sha256: "b".repeat(64), platform: "linux".into(),
+                backend: "cuda".into(), memory_kind: "dedicated".into(),
+                devices: vec![protocol::EngineDevice {
+                    id: "GPU-ledger-test".into(), name: "synthetic-ledger-test-device".into(),
+                    memory_mib: 8192, driver_version: "test".into(), engine_device: "CUDA0".into(),
+                }],
+                memory_reserve_mib: 256, gpu_layers: 999, split_mode: "none".into(),
+                tensor_split: vec![], cache_type_k: "f16".into(), cache_type_v: "f16".into(),
+                flash_attention: true, batch_size: 512, ubatch_size: 128,
+                capacity_tier: "8gb".into(), region: "test".into(), max_concurrency: 2,
+                arrival_milli_rps: 1000, output_tokens_per_second: 20,
+                policy: performance::POLICY.into(),
+                qualification: protocol::QualificationIdentity {
+                    evidence_sha256: "c".repeat(64), measured_at: terms.issued_at,
+                },
+            });
+            performance::validate_profile(&terms.model, terms.model.serving.as_ref().unwrap()).unwrap();
+        }
+        let mut offer = self.provider.offer.payload.clone();
+        offer.revision += 1;
+        offer.model = terms.model.clone();
+        self.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, offer,
+            &self.provider.state.private_key).unwrap();
+        self.provider.offer_id = self.provider.state.offers.insert(self.provider.offer.clone()).unwrap();
+        terms.offer_id = self.provider.offer_id.clone();
+        let quote = protocol::sign(protocol::QUOTE_DOMAIN, terms,
+            &self.provider.state.private_key).unwrap();
+        self.provider.state.ledger.store_quote(&quote, protocol::now().unwrap()).unwrap();
+        let (raw, envelope) = self.signed_payment(
+            &protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
+        self.acknowledge_fixture(&quote, &raw, &envelope);
+        let payment = VerifiedPayment {
+            network: quote.payload.network.clone(), tx_hash: envelope.tx_hash,
+            from: envelope.from, to: envelope.to, value_wei: envelope.value_wei,
+            data: envelope.data, raw_transaction: raw,
+            block_hash: protocol::hash_hex(b"isolated performance accounting prerequisite"),
+            block_number: 1,
+        };
+        let opened = self.provider.state.ledger.open_account(
+            &quote, Some(&payment), protocol::now().unwrap()).unwrap();
+        (quote, opened)
+    }
 }
 
 #[tokio::test]
@@ -3723,55 +3780,8 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
             let mut fixture = Fixture::new(directory.path(),
                 62_000 + (mode_index * 3 + point_index) as u64);
             let other = fixture.open_free().await;
-            let mut terms = fixture.paid_quote().await.payload;
-            // Signed profile/agreement and post-verification payment are ledger
-            // prerequisites, not observed enrollment, hardware or safe-chain evidence.
-            terms.id = protocol::random_id();
-            terms.nonce = protocol::random_id();
-            terms.funding_wei = "1000".into();
-            terms.model.serving = Some(protocol::ServingProfile {
-                hf_repo: "test/proposal".into(), tokenizer_repo: "test/tokenizer".into(),
-                artifact_manifest_sha256: "a".repeat(64),
-                engine: "llama.cpp".into(), engine_version: "test-only".into(),
-                runtime_sha256: "b".repeat(64), platform: "linux".into(),
-                backend: "cuda".into(), memory_kind: "dedicated".into(),
-                devices: vec![protocol::EngineDevice {
-                    id: "GPU-ledger-test".into(), name: "synthetic-ledger-test-device".into(),
-                    memory_mib: 8192, driver_version: "test".into(), engine_device: "CUDA0".into(),
-                }],
-                memory_reserve_mib: 256, gpu_layers: 999, split_mode: "none".into(),
-                tensor_split: vec![], cache_type_k: "f16".into(), cache_type_v: "f16".into(),
-                flash_attention: true, batch_size: 512, ubatch_size: 128,
-                capacity_tier: "8gb".into(), region: "test".into(), max_concurrency: 2,
-                arrival_milli_rps: 1000, output_tokens_per_second: 20,
-                policy: performance::POLICY.into(),
-                qualification: protocol::QualificationIdentity {
-                    evidence_sha256: "c".repeat(64), measured_at: terms.issued_at,
-                },
-            });
-            performance::validate_profile(&terms.model, terms.model.serving.as_ref().unwrap()).unwrap();
-            let mut offer = fixture.provider.offer.payload.clone();
-            offer.revision += 1;
-            offer.model = terms.model.clone();
-            fixture.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, offer,
-                &fixture.provider.state.private_key).unwrap();
-            fixture.provider.offer_id = fixture.provider.state.offers.insert(fixture.provider.offer.clone()).unwrap();
-            terms.offer_id = fixture.provider.offer_id.clone();
-            let quote = protocol::sign(protocol::QUOTE_DOMAIN, terms,
-                &fixture.provider.state.private_key).unwrap();
-            fixture.provider.state.ledger.store_quote(&quote, protocol::now().unwrap()).unwrap();
-            let (raw, envelope) = fixture.signed_payment(
-                &protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
-            fixture.acknowledge_fixture(&quote, &raw, &envelope);
-            let payment = VerifiedPayment {
-                network: quote.payload.network.clone(), tx_hash: envelope.tx_hash,
-                from: envelope.from, to: envelope.to, value_wei: envelope.value_wei,
-                data: envelope.data, raw_transaction: raw,
-                block_hash: protocol::hash_hex(b"isolated performance accounting prerequisite"),
-                block_number: 1,
-            };
+            let (quote, opened) = fixture.accounting_account(true).await;
             let now = protocol::now().unwrap();
-            let opened = fixture.provider.state.ledger.open_account(&quote, Some(&payment), now).unwrap();
             let id = &opened.account.contract_id;
             let original = &quote.payload.model;
             let mut current = original.clone();
@@ -4479,6 +4489,316 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
             }
             fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
             assert_eq!(ledger_snapshot(&db), expected, "{limit}: final identities, spend and authority");
+        }
+    }
+}
+
+#[tokio::test]
+async fn competing_terminal_outcomes_commit_one_complete_original_result() {
+    use chiral_network::performance;
+
+    const KEY: &str = "terminal-race";
+    const MODES: [&str; 5] = ["partial", "full", "unknown", "invalid", "waived"];
+    let directory = tempfile::tempdir().unwrap();
+    let mut case = 65_000;
+    for profiled in [false, true] {
+        let count = if profiled { 5 } else { 4 };
+        for left in 0..count {
+            for right in left + 1..count {
+                let pair = [MODES[left], MODES[right]];
+                let mut fixture = Fixture::new(directory.path(), case);
+                case += 1;
+                let other = fixture.open_free().await;
+                let (quote, opened) = fixture.accounting_account(profiled).await;
+                let id = &opened.account.contract_id;
+                let now = protocol::now().unwrap();
+                let original = &quote.payload.model;
+                let mut current = original.clone();
+                if let Some(profile) = current.serving.as_mut() {
+                    profile.qualification.evidence_sha256 = "d".repeat(64);
+                    profile.qualification.measured_at = now + 1;
+                }
+                let measure = |model: &protocol::ModelSpec, usage: Option<&TokenUsage>,
+                    status: &str, missed: bool| {
+                    model.serving.as_ref().map(|profile| {
+                        let ttft = usage.map(|_| if missed { 2_000_001 } else { 1_000_000 });
+                        performance::outcome(profile, true, ttft, ttft.map(|_| 1_000_000),
+                            usage, status, false, ttft.map(|time| time + 1_000_000),
+                            &profile.qualification.evidence_sha256)
+                    })
+                };
+                let input = |mode: &str| {
+                    let unknown = matches!(mode, "unknown" | "invalid");
+                    let usage = if mode == "unknown" { TokenUsage::default() } else {
+                        TokenUsage { prompt_tokens: 500, completion_tokens: match mode {
+                            "full" => 256, "invalid" => 257, _ => 128,
+                        }}
+                    };
+                    let status = match mode {
+                        "unknown" => "backend_unknown_usage",
+                        _ => "completed",
+                    };
+                    let measured = measure(&current, if unknown { None } else { Some(&usage) },
+                        if unknown { "backend_unknown_usage" } else { status }, mode == "waived");
+                    if let Some(outcome) = &measured {
+                        assert_eq!(outcome.attained, Some(!unknown && mode != "waived"));
+                        assert_eq!(outcome.remedy, if unknown || mode == "waived" {
+                            "inference_waiver"
+                        } else { "none" });
+                        assert_eq!(outcome.output_tokens,
+                            if unknown { None } else { Some(usage.completion_tokens) });
+                    }
+                    (usage, status, measured)
+                };
+                let ledger = &fixture.provider.state.ledger;
+                let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+                    KEY, 1, 1, now, &other.account.model).unwrap();
+                ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
+                    "completed", now).unwrap();
+                let prior_usage = TokenUsage { prompt_tokens: 500, completion_tokens: 128 };
+                if profiled {
+                    // Preserve an old report's withdrawal while the race binds a newer report.
+                    for index in 0..3 {
+                        let reservation = ledger.reserve(id, &opened.credential.id,
+                            &format!("old-terminal-miss-{index}"), 500, 256, now, original).unwrap();
+                        let missed = measure(original, Some(&prior_usage), "completed", true);
+                        let settled = ledger.settle_measured(&reservation.id, &prior_usage,
+                            "completed", missed.as_ref(), now).unwrap();
+                        assert_eq!((settled.cost_wei.as_str(), settled.waived_wei.as_str()), ("0", "1"));
+                    }
+                    assert!(ledger.performance_withdrawn(original).unwrap());
+                }
+                let prior = ledger.reserve(id, &opened.credential.id, "prior-terminal-spend",
+                    500, 256, now + 2, &current).unwrap();
+                let passed = measure(&current, Some(&prior_usage), "completed", false);
+                assert_eq!(ledger.settle_measured(&prior.id, &prior_usage,
+                    "completed", passed.as_ref(), now + 3).unwrap().cost_wei, "1");
+                let app = ledger.issue_credential(id, &CredentialIssueRequest {
+                    expires_at: now + 3600, spend_cap_wei: Some("20".into()),
+                    max_concurrency: 1, scopes: vec!["infer".into()],
+                }, now + 4).unwrap();
+                let live = ledger.reserve(id, &opened.credential.id, "terminal-live",
+                    2048, 256, now + 4, &current).unwrap();
+                let target = ledger.reserve(id, &app.id, KEY, 500, 256, now + 4, &current).unwrap();
+                assert_eq!((live.max_cost_wei.as_str(), target.max_cost_wei.as_str()), ("3", "2"));
+                assert_eq!(target.model, current);
+                let account = ledger.account(id).unwrap();
+                assert_eq!(account.model, *original);
+                assert_eq!(account.price, quote.payload.price);
+                assert_eq!((account.funded_wei.as_str(), account.fee_wei.as_str(),
+                    account.available_wei.as_str(), account.reserved_wei.as_str(),
+                    account.spent_wei.as_str(), account.waived_wei.as_str()),
+                    ("1000", "5", "989", "5", "1", if profiled { "3" } else { "0" }));
+                assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens),
+                    if profiled { (2000, 512) } else { (500, 128) });
+                let path = fixture.provider.ledger_path.clone();
+                let db = Connection::open(&path).unwrap();
+                let before = ledger_snapshot(&db);
+                assert_eq!(before[13], if profiled {
+                    vec![json!([original.id, "c".repeat(64)])]
+                } else { vec![] });
+                let pending = serde_json::to_value(ledger.request_view(id, KEY).unwrap()).unwrap();
+                if profiled {
+                    assert_eq!(pending["performance"]["evidence_sha256"], "d".repeat(64));
+                    assert_eq!(pending["performance"]["eligibility"], "pending");
+                } else {
+                    assert!(pending["performance"].is_null());
+                }
+
+                // Expected amounts are fixture arithmetic, not production usage_cost.
+                // This applies only the fixed 500/256, two-wei candidate shape.
+                let expect_terminal = |snapshot: &mut [Vec<Value>; 14],
+                    request_id: &str, mode: &str, when: u64| {
+                    let known = !matches!(mode, "unknown" | "invalid");
+                    let cost = match mode { "partial" => 1, "full" => 2, _ => 0 };
+                    let waived = u64::from(mode == "waived");
+                    let output = if mode == "full" { 256 } else { 128 };
+                    let account = &mut snapshot[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+                    for (field, increase, decrease) in [
+                        ("available_wei", 2 - cost, 0), ("reserved_wei", 0, 2),
+                        ("spent_wei", cost, 0), ("waived_wei", waived, 0),
+                    ] {
+                        let previous: u64 = account[field].as_str().unwrap().parse().unwrap();
+                        account[field] = json!((previous + increase - decrease).to_string());
+                    }
+                    if known {
+                        account["usage"]["prompt_tokens"] = json!(account["usage"]["prompt_tokens"].as_u64().unwrap() + 500);
+                        account["usage"]["completion_tokens"] = json!(account["usage"]["completion_tokens"].as_u64().unwrap() + output);
+                    }
+                    let credential = &mut snapshot[1].iter_mut().find(|row| row[0] == app.id).unwrap()[3];
+                    assert_eq!(credential["reserved_wei"], "2");
+                    credential["reserved_wei"] = json!("0");
+                    let spent: u64 = credential["spent_wei"].as_str().unwrap().parse().unwrap();
+                    credential["spent_wei"] = json!((spent + cost).to_string());
+                    let (_, status, measured) = input(mode);
+                    let status = if mode == "invalid" { "invalid_usage_unknown_usage" } else { status };
+                    let row = snapshot[2].iter_mut().find(|row| row[0] == request_id).unwrap();
+                    row[4] = json!(status);
+                    row[6]["status"] = json!(status);
+                    row[6]["usage"] = json!({"prompt_tokens":if known { 500 } else { 0 },
+                        "completion_tokens":if known { output } else { 0 }});
+                    row[6]["cost_wei"] = json!(cost.to_string());
+                    row[6]["waived_wei"] = json!(waived.to_string());
+                    row[6]["provider_loss_wei"] = json!(if known { "0" } else { "2" });
+                    row[6]["settled_at"] = json!(when);
+                    row[6]["performance"] = serde_json::to_value(measured).unwrap();
+                    let terminal = row[6].clone();
+                    if profiled {
+                        let evidence = &current.serving.as_ref().unwrap().qualification.evidence_sha256;
+                        let sequence = snapshot[12].len() + 1;
+                        let miss = u64::from(!known || mode == "waived");
+                        snapshot[12].push(json!([sequence, request_id, original.id, evidence, miss]));
+                        let misses = snapshot[12].iter().filter(|row|
+                            row[3] == *evidence && row[4] == 1).count();
+                        if misses == 3 && !snapshot[13].iter().any(|row| row[1] == *evidence) {
+                            snapshot[13].push(json!([original.id, evidence]));
+                        }
+                    }
+                    terminal
+                };
+                let inputs = pair.map(input);
+                let race = |when: u64| {
+                    // Open before spawning: a failed open cannot strand a barrier peer.
+                    let writers = [0, 1].map(|index| (
+                        BillingStore::open(&path, &quote.payload.network).unwrap(), index));
+                    let barrier = Barrier::new(2);
+                    thread::scope(|scope| {
+                        let handles = writers.map(|(store, index)| {
+                            let barrier = &barrier;
+                            let request_id = &target.id;
+                            let input = &inputs[index];
+                            scope.spawn(move || {
+                                barrier.wait();
+                                store.settle_measured(request_id, &input.0, input.1,
+                                    input.2.as_ref(), when + index as u64)
+                            })
+                        });
+                        handles.map(|handle| handle.join().unwrap())
+                    })
+                };
+                let results = race(now + 10);
+                let observed = fixture.provider.state.ledger.request_view(id, KEY).unwrap();
+                let winner = if observed.settled_at == Some(now + 10) { 0 } else {
+                    assert_eq!(observed.settled_at, Some(now + 11));
+                    1
+                };
+                let mut expected = before.clone();
+                let terminal = expect_terminal(&mut expected, &target.id, pair[winner], now + 10 + winner as u64);
+                assert_eq!(serde_json::to_value(observed).unwrap(), terminal);
+                for (index, result) in results.into_iter().enumerate() {
+                    if index == winner && pair[index] == "invalid" {
+                        assert!(result.unwrap_err().starts_with("usage_over_reservation:"));
+                    } else {
+                        assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), terminal);
+                    }
+                }
+                assert_eq!(ledger_snapshot(&db), expected, "profiled={profiled}, {pair:?}");
+                for reopened in [false, true] {
+                    if reopened {
+                        fixture.app = Router::new();
+                        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+                        state.ledger = Arc::new(BillingStore::open(&path, &quote.payload.network).unwrap());
+                        fixture.app = contracts::router(fixture.provider.state.clone());
+                    }
+                    for result in race(now + 20) {
+                        assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), terminal);
+                    }
+                    let ledger = &fixture.provider.state.ledger;
+                    for lookup in [KEY, target.id.as_str()] {
+                        assert_eq!(serde_json::to_value(ledger.request_view(id, lookup).unwrap()).unwrap(), terminal);
+                    }
+                    // Later conflicting report/status/usage cannot rewrite a terminal result.
+                    let stale = measure(original, Some(&prior_usage), "completed", false);
+                    assert_eq!(serde_json::to_value(ledger.settle_measured(&target.id,
+                        &prior_usage, "completed", stale.as_ref(), now + 22).unwrap()).unwrap(), terminal);
+                    assert!(ledger.reserve(id, &app.id, KEY, 500, 256, now + 22, &current)
+                        .unwrap_err().starts_with("duplicate_request:"));
+                    fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                    assert_eq!(ledger_snapshot(&db), expected, "reopened={reopened}, {pair:?}");
+                }
+                // Each candidate independently commits on a fresh key, even if it lost
+                // above. These are explicit ledger controls, not automatic inference retries.
+                for (index, mode) in pair.into_iter().enumerate() {
+                    let ledger = &fixture.provider.state.ledger;
+                    let key = format!("terminal-control-{index}");
+                    let control = ledger.reserve(id, &app.id, &key, 500, 256,
+                        now + 30, &current).unwrap();
+                    let mut control_record = pending.clone();
+                    control_record["id"] = json!(control.id);
+                    control_record["request_id"] = json!(key);
+                    control_record["created_at"] = json!(now + 30);
+                    expected[2].push(json!([control.id, id, key, app.id, "reserved",
+                        now + 30, control_record]));
+                    expected[2].sort_by(|a, b| a[0].as_str().unwrap().cmp(b[0].as_str().unwrap()));
+                    let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+                    let available: u64 = account["available_wei"].as_str().unwrap().parse().unwrap();
+                    assert_eq!(account["reserved_wei"], "3");
+                    account["available_wei"] = json!((available - 2).to_string());
+                    account["reserved_wei"] = json!("5");
+                    expected[1].iter_mut().find(|row| row[0] == app.id).unwrap()[3]["reserved_wei"] = json!("2");
+                    assert_eq!(ledger_snapshot(&db), expected);
+                    let when = now + 31 + index as u64;
+                    let control_terminal = expect_terminal(&mut expected, &control.id, mode, when);
+                    let (usage, status, measured) = input(mode);
+                    let result = ledger.settle_measured(&control.id, &usage, status, measured.as_ref(), when);
+                    if mode == "invalid" {
+                        assert!(result.unwrap_err().starts_with("usage_over_reservation:"));
+                    } else {
+                        assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), control_terminal);
+                    }
+                    assert_eq!(serde_json::to_value(ledger.request_view(id, &key).unwrap()).unwrap(), control_terminal);
+                    assert_eq!(ledger_snapshot(&db), expected);
+                }
+                // Preserve the unrelated running hold through every race/control; its
+                // own later charge must remain possible even after a withdrawal latch.
+                let live_usage = TokenUsage { prompt_tokens: 2048, completion_tokens: 256 };
+                let live_outcome = measure(&current, Some(&live_usage), "completed", false);
+                let account = &mut expected[0].iter_mut().find(|row| row[0] == *id).unwrap()[3];
+                assert_eq!(account["reserved_wei"], "3");
+                account["reserved_wei"] = json!("0");
+                let spent: u64 = account["spent_wei"].as_str().unwrap().parse().unwrap();
+                account["spent_wei"] = json!((spent + 3).to_string());
+                account["usage"]["prompt_tokens"] = json!(account["usage"]["prompt_tokens"].as_u64().unwrap() + 2048);
+                account["usage"]["completion_tokens"] = json!(account["usage"]["completion_tokens"].as_u64().unwrap() + 256);
+                let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.id).unwrap()[3];
+                assert_eq!(root["reserved_wei"], "3");
+                root["reserved_wei"] = json!("0");
+                root["spent_wei"] = json!("4");
+                let row = expected[2].iter_mut().find(|row| row[0] == live.id).unwrap();
+                row[4] = json!("completed");
+                row[6]["status"] = json!("completed");
+                row[6]["usage"] = serde_json::to_value(&live_usage).unwrap();
+                row[6]["cost_wei"] = json!("3");
+                row[6]["settled_at"] = json!(now + 40);
+                row[6]["performance"] = serde_json::to_value(&live_outcome).unwrap();
+                let live_terminal = row[6].clone();
+                if profiled {
+                    let sequence = expected[12].len() + 1;
+                    expected[12].push(json!([sequence, live.id,
+                        original.id, current.serving.as_ref().unwrap().qualification.evidence_sha256, 0]));
+                }
+                assert_eq!(serde_json::to_value(fixture.provider.state.ledger.settle_measured(
+                    &live.id, &live_usage, "completed", live_outcome.as_ref(), now + 40).unwrap()).unwrap(), live_terminal);
+                let reopened = BillingStore::open(&path, &quote.payload.network).unwrap();
+                for (key, request_id, record) in [(KEY, target.id.as_str(), &terminal),
+                    ("terminal-live", live.id.as_str(), &live_terminal)] {
+                    for lookup in [key, request_id] {
+                        assert_eq!(serde_json::to_value(reopened.request_view(id, lookup).unwrap()).unwrap(), *record);
+                    }
+                    assert!(reopened.reserve(id, &app.id, key, 500, 256, now + 41, &current)
+                        .unwrap_err().starts_with("duplicate_request:"));
+                }
+                if profiled {
+                    assert!(reopened.performance_withdrawn(original).unwrap());
+                    let all_missed = pair.iter().all(|mode| matches!(*mode, "unknown" | "invalid" | "waived"));
+                    assert_eq!(reopened.performance_withdrawn(&current).unwrap(), all_missed);
+                }
+                for result in race(now + 42) {
+                    assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), terminal);
+                }
+                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                assert_eq!(ledger_snapshot(&db), expected, "final profiled={profiled}, {pair:?}");
+            }
         }
     }
 }
