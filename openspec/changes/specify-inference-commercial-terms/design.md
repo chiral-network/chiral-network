@@ -98,6 +98,15 @@ The validator reuses one selected-template inventory lookup, refuses rather than
 
 Three native regressions cover correctly hashed nonempty/empty selected templates with null/named selectors, missing/non-null selectors without a file, and successful template-free admission followed by same-size model-byte corruption and a jointly altered configured/base template digest. Restoring the original bytes and empty digest restores admission. These tests use the existing synthetic runtime-header/model-byte fixture and launch no process; they do not establish valid executable GGUF content, readiness, capability probes or hardware qualification.
 
+## Profile leaf object implementation
+
+The whitepaper explicitly defines each device and qualification identity as a named-field object. Derived struct decoding also accepted complete positional arrays. Two new regressions reproduced that mismatch in `EngineDevice` and `QualificationIdentity`; an empty-array rejection alone did not exercise it.
+
+Task 2.1.5 reuses the wire foundation's direct map-only visitor for these shared leaf types. Local derived field decoders retain required fields, exact integer/string types, unknown-field refusal and raw duplicate-member checks without buffering through `Value`. Serialization and model/evidence comparisons remain unchanged; no alias, state conversion or additional semantic validation is introduced.
+
+The regressions require array refusal directly and inside raw/preparsed offers, exercising both positions of a two-device inventory. Raw duplicate-member cases cover every leaf field. Existing profile/configuration, integer-boundary, signature and renewal tests remain in place. These are synthetic declaration tests, not live offer admission, measured qualification or proof of duplicate detection after an upstream `Value` parse. Enclosing model/profile/offer/quote object boundaries remain task 2.1.6.
+
+
 ## Historical implementation gaps and ownership constraints
 
 The initial native embedding-price gap was that configuration accepted any canonical output rate while only the reference provisioner enforced zero. Task 2.2 closes that configuration gap; task 2.3 separately closes selected-template admission as documented above.

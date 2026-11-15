@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Serving-profile leaf identities accepted positional arrays
+
+- **Cause:** Derived device and qualification identity decoders accepted complete positional arrays despite the whitepaper's explicit named-field objects. Both new regressions failed on the original decoders; existing empty-array and scalar checks did not cover this alias.
+- **Correction:** `EngineDevice` and `QualificationIdentity` reuse the shared direct map visitor and derived field checks. No intermediate `Value`, alternate signing representation, semantic default or state migration is introduced.
+- **Verification:** Two regressions now reject arrays directly and inside raw/preparsed offers, including the second device, while retaining raw duplicate-member refusal for every leaf field. All 492 available tests, available builds/checks and strict commercial-change validation passed. This is synthetic declaration evidence, not live admission or hardware qualification; enclosing commercial object boundaries remain open.
+
 ### Price schedules accepted positional arrays
 
 - **Cause:** Derived `PriceSchedule` decoding accepted a two-element array instead of the required object with named monetary fields, including inside a signed quote. Two new regression tests reproduced the acceptance before the fix.

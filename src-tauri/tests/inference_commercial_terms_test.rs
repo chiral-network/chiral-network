@@ -3,7 +3,7 @@
 use chiral_network::{
     network::{ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
     offer_registry::validate_model,
-    protocol::{InferenceOffer, ModelSpec, QualificationIdentity},
+    protocol::{EngineDevice, InferenceOffer, ModelSpec, QualificationIdentity},
     provider_config::ProviderConfig,
 };
 use serde_json::{json, Value};
@@ -237,6 +237,66 @@ fn commercial_schema_rejects_wrong_scalar_and_container_types() {
             "wrong wire type at {path}"
         );
     }
+}
+
+#[test]
+fn commercial_schema_requires_device_identity_objects() {
+    let mut offer = offer_document();
+    offer["model"] = with_devices(2);
+    let wire = serde_json::to_string(&offer).unwrap();
+    for index in 0..2 {
+        let path = format!("/model/serving/devices/{index}");
+        let device = offer.pointer(&path).unwrap();
+        let object = serde_json::to_string(device).unwrap();
+        for field in ["id", "name", "memory_mib", "driver_version", "engine_device"] {
+            let duplicate = format!("{{{}:{},{}", json!(field), device[field], &object[1..]);
+            assert!(serde_json::from_str::<EngineDevice>(&duplicate).is_err());
+            assert!(serde_json::from_str::<InferenceOffer>(
+                &wire.replacen(&object, &duplicate, 1)
+            ).is_err(), "duplicate device {index}/{field}");
+        }
+        let positional = json!([
+            device["id"], device["name"], device["memory_mib"],
+            device["driver_version"], device["engine_device"]
+        ]);
+        assert!(serde_json::from_slice::<EngineDevice>(
+            &serde_json::to_vec(&positional).unwrap()
+        ).is_err(), "device {index} must be an object, not a positional array");
+        assert!(serde_json::from_value::<EngineDevice>(positional.clone()).is_err());
+        let changed = replaced(&offer, &path, positional);
+        assert!(serde_json::from_slice::<InferenceOffer>(
+            &serde_json::to_vec(&changed).unwrap()
+        ).is_err(), "raw offer must reject positional device {index}");
+        assert!(serde_json::from_value::<InferenceOffer>(changed).is_err(),
+            "preparsed offer must reject positional device {index}");
+    }
+}
+
+#[test]
+fn commercial_schema_requires_qualification_identity_objects() {
+    let offer = offer_document();
+    let path = "/model/serving/qualification";
+    let qualification = offer.pointer(path).unwrap();
+    let object = serde_json::to_string(qualification).unwrap();
+    let wire = serde_json::to_string(&offer).unwrap();
+    for field in ["evidence_sha256", "measured_at"] {
+        let duplicate = format!("{{{}:{},{}", json!(field), qualification[field], &object[1..]);
+        assert!(serde_json::from_str::<QualificationIdentity>(&duplicate).is_err());
+        assert!(serde_json::from_str::<InferenceOffer>(
+            &wire.replacen(&object, &duplicate, 1)
+        ).is_err(), "duplicate qualification {field}");
+    }
+    let positional = json!([qualification["evidence_sha256"], qualification["measured_at"]]);
+    assert!(serde_json::from_slice::<QualificationIdentity>(
+        &serde_json::to_vec(&positional).unwrap()
+    ).is_err(), "qualification must be an object, not a positional array");
+    assert!(serde_json::from_value::<QualificationIdentity>(positional.clone()).is_err());
+    let changed = replaced(&offer, path, positional);
+    assert!(serde_json::from_slice::<InferenceOffer>(
+        &serde_json::to_vec(&changed).unwrap()
+    ).is_err(), "raw offer must reject positional qualification");
+    assert!(serde_json::from_value::<InferenceOffer>(changed).is_err(),
+        "preparsed offer must reject positional qualification");
 }
 
 #[test]

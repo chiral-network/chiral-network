@@ -125,14 +125,35 @@ impl ModelSpec {
 
 /// Physical device identity and its explicit llama.cpp selector.
 /// Unified system memory is represented by one device, never summed per GPU.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct EngineDevice {
     pub id: String,
     pub name: String,
     pub memory_mib: u64,
     pub driver_version: String,
     pub engine_device: String,
+}
+
+impl<'de> Deserialize<'de> for EngineDevice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            id: String,
+            name: String,
+            memory_mib: u64,
+            driver_version: String,
+            engine_device: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            id: fields.id,
+            name: fields.name,
+            memory_mib: fields.memory_mib,
+            driver_version: fields.driver_version,
+            engine_device: fields.engine_device,
+        })
+    }
 }
 
 /// Provider-declared deployment identity, not independent execution attestation.
@@ -200,11 +221,26 @@ impl ServingProfile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct QualificationIdentity {
     pub evidence_sha256: String,
     pub measured_at: u64,
+}
+
+impl<'de> Deserialize<'de> for QualificationIdentity {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            evidence_sha256: String,
+            measured_at: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            evidence_sha256: fields.evidence_sha256,
+            measured_at: fields.measured_at,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
