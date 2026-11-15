@@ -33,7 +33,7 @@ Reuse existing exact-original paid replay and credential-conservation tests rath
 
 ## Rollout and evidence limits
 
-This step changes specifications only. Runtime root-container enforcement and additional acceptance remain unchecked tasks; strict OpenSpec validation and passing existing project tests cannot claim those tasks are implemented. Rejection of positional aliases is the specified follow-on behavior, not a claimed authentication bypass or signature forgery in current code.
+The decoder and production-router schema slice implements tasks 2.1–2.2. Payment-presence and recovery correspondence in tasks 2.3–2.4 remain separate; passing project checks does not complete those tasks. Positional refusal is a wire-shape correction, not evidence of an authentication bypass or signature forgery.
 
 The source migration is already committed and necessary native edits are authorized. Preserve unrelated changes. No author-only decision is required: these request details fill the book's implementation-level gap without changing payment, ownership, refund or release policy. Never edit the whitepaper or archive this change until its implementation and checks are complete.
 
@@ -41,4 +41,12 @@ The source migration is already committed and necessary native edits are authori
 
 A temporary executable decoded raw JSON through the actual `OpenRequest` type. Objects with omitted payment, null payment and string payment decoded; the omitted form serialized back with explicit null. A complete `[quote_id, null]` array also decoded and projected into that object, while the one-element `[quote_id]` array was already rejected. Unknown members and a numeric payment were rejected. The executable was removed before project checks.
 
-These observations establish only typed decoding and serialization, not HTTP authorization, account creation or validity of the probe's transaction string. Follow-on regression must expose the complete-array acceptance without treating the already-rejected short array as a newly discovered failure. Object omission remains supported when the root guard is implemented.
+These observations established typed decoding and serialization only, not HTTP authorization, account creation or validity of the probe's transaction string. The production-router regression below extends that evidence to opening. The already-rejected short array remains a regression guard, not a newly discovered failure; object omission remains supported.
+
+## Object-only implementation (2026-11-15)
+
+The new production-router regression reproduced HTTP 200 and free-account creation for a correctly signed complete positional request, where the contract requires HTTP 400. `OpenRequest` now uses the existing direct map visitor with a strict derived field decoder. Serialization, nullable/omitted transaction semantics, owner signing bytes and financial guards remain unchanged; no intermediate JSON value or positional compatibility path is introduced.
+
+The regression isolates malformed JSON, root shapes, missing/mistyped members and raw unknown/duplicate members across fresh free opening and existing paid-account replay. Every malformed body has a genuine proof bound to its exact bytes; full snapshots of all fourteen ledger tables must remain unchanged after refusal, including the unconsumed challenge. Positive controls create a usable free account with omitted payment, replay it with explicit null, and replay a paid account using its exact acknowledged original without changing retained accounts, credentials, funding or fees.
+
+Accepted paid credit is an explicit post-verification ledger prerequisite, not an observed chain result. These cases do not complete the separate paid first-credit, payment-presence, exact-body substitution, expiry, readiness/capacity or native recovery inventory. Keep the change open until all remaining tasks and checks are complete.

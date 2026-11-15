@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Account opening accepted a positional request
+
+- **Cause:** The derived `OpenRequest` decoder accepted a complete array instead of its named-field object. A genuinely signed production-router request reproduced HTTP 200 and free-account creation instead of the required 400.
+- **Correction:** Reuse the shared direct map visitor and strict derived field decoder before owner authentication. Preserve required `quote_id`, omitted/null/string transaction syntax, exact-body signing, serialization and retained free/paid payment rules; no positional alias or ledger migration.
+- **Verification:** The regression failed before correction; all 436 Rust tests and 61 frontend/provisioning tests, available builds/checks and strict change validation pass. Malformed requests preserve all fourteen ledger tables, including their unconsumed challenges, across fresh free opening and existing paid replay. Successful controls create a usable free account with omitted payment, recover it with explicit null, and replay the exact paid original without rotating credentials or changing funding/fees. Paid credit is a post-verification fixture prerequisite, not live-chain evidence; broader payment-presence/recovery acceptance remains open.
+
 ### Public proposal accepted a positional request
 
 - **Cause:** The derived `ProposeRequest` decoder accepted a complete three-element array instead of its named-field object. The strengthened production HTTP schema regression reproduced issuance with status 200 instead of the required 400.

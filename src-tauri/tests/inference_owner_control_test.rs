@@ -774,6 +774,105 @@ async fn credential_business_refusals_consume_proof_without_partial_mutations() 
 }
 
 #[tokio::test]
+async fn opening_request_schema_rejects_invalid_shapes_before_owner_consumption() {
+    let directory = tempfile::tempdir().unwrap();
+    let invalid_bodies: &[(&str, fn(&str, Option<&str>) -> Vec<u8>)] = &[
+        ("complete positional", |id, raw| serde_json::to_vec(&json!([id, raw])).unwrap()),
+        ("short positional", |id, _| serde_json::to_vec(&json!([id])).unwrap()),
+        ("invalid JSON", |_, _| b"{".to_vec()),
+        ("null root", |_, _| b"null".to_vec()),
+        ("boolean root", |_, _| b"true".to_vec()),
+        ("numeric root", |_, _| b"1".to_vec()),
+        ("string root", |id, _| serde_json::to_vec(id).unwrap()),
+        ("missing identifier", |_, raw| serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap()),
+        ("null identifier", |_, raw| serde_json::to_vec(&json!({"quote_id": null, "raw_transaction": raw})).unwrap()),
+        ("numeric identifier", |_, raw| serde_json::to_vec(&json!({"quote_id": 1, "raw_transaction": raw})).unwrap()),
+        ("array identifier", |id, raw| serde_json::to_vec(&json!({"quote_id": [id], "raw_transaction": raw})).unwrap()),
+        ("object identifier", |id, raw| serde_json::to_vec(&json!({"quote_id": {"id": id}, "raw_transaction": raw})).unwrap()),
+        ("boolean payment", |id, _| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": true})).unwrap()),
+        ("integer payment", |id, _| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": 1})).unwrap()),
+        ("fractional payment", |id, _| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": 1.5})).unwrap()),
+        ("array payment", |id, raw| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": [raw]})).unwrap()),
+        ("object payment", |id, raw| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": {"hex": raw}})).unwrap()),
+        ("unknown member", |id, raw| serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": raw, "wallet": "ignored"})).unwrap()),
+        ("duplicate identifier", |id, raw| format!(r#"{{"quote_id":"{id}","quote_id":"{id}","raw_transaction":{}}}"#,
+            serde_json::to_string(&raw).unwrap()).into_bytes()),
+        ("duplicate payment", |id, raw| {
+            let raw = serde_json::to_string(&raw).unwrap();
+            format!(r#"{{"quote_id":"{id}","raw_transaction":{raw},"raw_transaction":{raw}}}"#).into_bytes()
+        }),
+    ];
+    for (state, replay) in [false, true].into_iter().enumerate() {
+        for (index, (name, invalid_body)) in invalid_bodies.iter().enumerate() {
+            // Isolate every unconsumed malformed proof from pending/rate ceilings.
+            let mut fixture = Fixture::new(directory.path(),
+                66_000 + (state * invalid_bodies.len() + index) as u64);
+            let unrelated = fixture.open_free().await;
+            let (quote, raw, mut accepted) = if replay {
+                // Paid credit is a post-verification ledger prerequisite, not live chain evidence.
+                let (opened, raw) = fixture.paid_account().await;
+                let quote = fixture.provider.state.ledger.quote(&opened.account.contract_id).unwrap();
+                (quote, Some(raw), Some(opened))
+            } else {
+                (fixture.quote("0").await, None, None)
+            };
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let body = invalid_body(&quote.payload.id, raw.as_deref());
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let before = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{name}, replay={replay}: {document}");
+            assert_eq!(document["error"]["code"], "invalid_request", "{name}, replay={replay}");
+            assert_eq!(ledger_snapshot(&db), before,
+                "{name}, replay={replay}: schema refusal must preserve every row, including its proof");
+            fixture.credentials_usable(&[unrelated.credential.as_ref().unwrap()]);
+            if let Some(opened) = &accepted {
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
+            } else {
+                fixture.unopened(&quote);
+            }
+
+            // Omitted payment creates the free account; explicit null then recovers it.
+            // Paid replay instead carries the exact acknowledged original string.
+            let valid_bodies = if let Some(raw) = &raw {
+                vec![serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": raw})).unwrap()]
+            } else {
+                vec![
+                    serde_json::to_vec(&json!({"quote_id": quote.payload.id})).unwrap(),
+                    serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": null})).unwrap(),
+                ]
+            };
+            for body in valid_bodies {
+                let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+                let before = ledger_snapshot(&db);
+                let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+                assert_eq!(status, StatusCode::OK, "{name}, replay={replay}: {document}");
+                let opened: OpenResult = serde_json::from_value(document).unwrap();
+                assert_eq!(opened.account.contract_id, quote.payload.id);
+                assert_eq!(opened.account.consumer_wallet, quote.payload.consumer_wallet);
+                if let Some(previous) = &accepted {
+                    assert_eq!(serde_json::to_value(&opened.account).unwrap(),
+                        serde_json::to_value(&previous.account).unwrap());
+                    assert!(opened.credential.is_none(), "replay must not issue another secret");
+                    let after = ledger_snapshot(&db);
+                    for row in [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13] {
+                        assert_eq!(after[row], before[row], "{name}: replay changed table {row}");
+                    }
+                    fixture.credentials_usable(&[previous.credential.as_ref().unwrap()]);
+                } else {
+                    assert_eq!(opened.account.status, "free");
+                    assert_eq!(opened.account.funded_wei, "0");
+                    fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
+                    accepted = Some(opened);
+                }
+                fixture.consumed(&proof);
+                fixture.credentials_usable(&[unrelated.credential.as_ref().unwrap()]);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creation() {
     let directory = tempfile::tempdir().unwrap();
     for (index, paid) in [false, true].into_iter().enumerate() {

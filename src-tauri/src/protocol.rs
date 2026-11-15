@@ -621,12 +621,27 @@ impl<'de> Deserialize<'de> for ProposeRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OpenRequest {
     pub quote_id: String,
     /// Absent only for a genuinely zero-priced offer.
     pub raw_transaction: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for OpenRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            quote_id: String,
+            raw_transaction: Option<String>,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            quote_id: fields.quote_id,
+            raw_transaction: fields.raw_transaction,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
