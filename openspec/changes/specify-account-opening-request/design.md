@@ -33,7 +33,7 @@ Reuse existing exact-original paid replay and credential-conservation tests rath
 
 ## Rollout and evidence limits
 
-The decoder and production-router schema slice implements tasks 2.1–2.2. Payment-presence and recovery correspondence in tasks 2.3–2.4 remain separate; passing project checks does not complete those tasks. Positional refusal is a wire-shape correction, not evidence of an authentication bypass or signature forgery.
+The decoder, production-router schema acceptance and payment-presence/body-binding correspondence complete tasks 2.1–2.3. Task 2.4's expiry/readiness/capacity and recovery correspondence remains separate; passing project checks does not complete it. Positional refusal is a wire-shape correction, not evidence of an authentication bypass or signature forgery.
 
 The source migration is already committed and necessary native edits are authorized. Preserve unrelated changes. No author-only decision is required: these request details fill the book's implementation-level gap without changing payment, ownership, refund or release policy. Never edit the whitepaper or archive this change until its implementation and checks are complete.
 
@@ -50,3 +50,15 @@ The new production-router regression reproduced HTTP 200 and free-account creati
 The regression isolates malformed JSON, root shapes, missing/mistyped members and raw unknown/duplicate members across fresh free opening and existing paid-account replay. Every malformed body has a genuine proof bound to its exact bytes; full snapshots of all fourteen ledger tables must remain unchanged after refusal, including the unconsumed challenge. Positive controls create a usable free account with omitted payment, replay it with explicit null, and replay a paid account using its exact acknowledged original without changing retained accounts, credentials, funding or fees.
 
 Accepted paid credit is an explicit post-verification ledger prerequisite, not an observed chain result. These cases do not complete the separate paid first-credit, payment-presence, exact-body substitution, expiry, readiness/capacity or native recovery inventory. Keep the change open until all remaining tasks and checks are complete.
+
+## Payment-presence and exact-body acceptance (2026-11-15)
+
+The source comparison found the payment-presence and body-binding guards already implemented: `contracts::control` authenticates the original bytes before selecting retained terms, `BillingStore::check_open_funding` rejects supplied free payments and requires paid originals, `require_funding_intent` compares both raw spelling and hash, and `auth::authenticate_owner` checks the exact body hash before consuming its challenge. This slice adds missing acceptance, not a new runtime policy or a claimed reproduced production defect.
+
+Existing coverage remains in place: `free_and_paid_opening_require_the_quoted_owner_before_any_account_creation` covers quoted ownership and unregistered paid opening; `existing_free_and_paid_openings_cannot_be_reentered_using_bearers_or_another_owner` covers replay authority; `authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness` covers exact-original replay and retained holds/credentials. Ledger free-session/unregistered-opening tests and native paid safe-credit tests remain complementary, not replaced by fixture credit.
+
+`opening_payment_presence_and_original_guards_precede_chain_verification` adds fresh/existing free, unregistered/acknowledged unopened paid, and existing paid cases. Empty, empty-hex and malformed strings remain supplied payments; free terms also reject a nonzero signed transfer. Paid omission/null is refused, while alternate hexadecimal spelling of the same bytes and a different valid signed nonce cannot replace a registered original. Every business refusal must consume its genuine proof, reject reuse, preserve retained financial/account rows and leave the observed RPC/engine endpoint untouched.
+
+Positive controls retain useful free creation and exact-original paid replay without new credentials or duplicate credit. For unopened paid accounts, explicit fixture admission of the original lets the actual HTTP path reach an unavailable loopback RPC: it must record only the original verification attempt, preserve the acknowledgement/terms and withhold credit. Admission/spendability and already-accepted paid credit are disclosed prerequisites; no live chain execution, broadcast, qualification or automatic repair is claimed.
+
+`opening_omission_and_null_require_their_own_exact_body_proofs` tests both substitution directions on free and paid accounts. The substituted body must receive 401 with the entire ledger and challenge unchanged. The same proof must still authorize its exact original bytes, producing either credential-preserving free replay or paid `funding_intent_required`, then become unusable. Task 2.4's expiry/readiness/capacity and recovery correspondence remains separate.

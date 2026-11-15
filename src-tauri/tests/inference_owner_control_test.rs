@@ -873,6 +873,211 @@ async fn opening_request_schema_rejects_invalid_shapes_before_owner_consumption(
 }
 
 #[tokio::test]
+async fn opening_payment_presence_and_original_guards_precede_chain_verification() {
+    let directory = tempfile::tempdir().unwrap();
+    for (case, (label, paid, registered, replay)) in [
+        ("fresh free", false, false, false),
+        ("existing free", false, false, true),
+        ("unregistered paid", true, false, false),
+        ("acknowledged paid", true, true, false),
+        ("existing paid", true, true, true),
+    ].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 67_000 + case as u64);
+        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let observed = rpc_calls.clone();
+        let rpc_app = Router::new().fallback(move |request: Request| {
+            let observed = observed.clone();
+            async move {
+                observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        fixture._listeners[0].set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(fixture._listeners[0].try_clone().unwrap()).unwrap();
+        let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+        let unrelated = fixture.open_free().await;
+        let (quote, opened) = if replay {
+            if paid {
+                // Accepted credit is a post-verification prerequisite, not observed chain execution.
+                let (quote, opened) = fixture.accounting_account(false).await;
+                (quote, Some(opened))
+            } else {
+                let opened = fixture.open_free().await;
+                let quote = fixture.provider.state.ledger.quote(&opened.account.contract_id).unwrap();
+                (quote, Some(opened))
+            }
+        } else {
+            (if paid { fixture.paid_quote().await } else { fixture.quote("0").await }, None)
+        };
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let data = protocol::opening_data(&quote.payload).unwrap();
+        // Free negative controls supply a nonzero signed transfer, never a fabricated zero payment.
+        let amount = if paid { quote.payload.funding_wei.parse::<u64>().unwrap() } else { 100 };
+        let raw: String = if paid && replay {
+            db.query_row("SELECT raw_transaction FROM funding_intents WHERE contract=?1",
+                [&quote.payload.id], |row| row.get(0)).unwrap()
+        } else {
+            let (raw, envelope) = fixture.signed_payment(&data, amount, 0);
+            if registered {
+                fixture.acknowledge_fixture(&quote, &raw, &envelope);
+            }
+            raw
+        };
+        let body_for = |payment: Value| json!({"quote_id": quote.payload.id, "raw_transaction": payment});
+        let mut refusals = vec![
+            ("empty string", body_for(json!("")), "invalid_payment"),
+            ("empty hex", body_for(json!("0x")), "invalid_payment"),
+            ("malformed hex", body_for(json!("0xgg")), "invalid_payment"),
+        ];
+        if paid {
+            refusals.push(("omitted", json!({"quote_id": quote.payload.id}), "funding_intent_required"));
+            refusals.push(("null", body_for(Value::Null), "funding_intent_required"));
+            if registered {
+                let alternate_hex = format!("0x{}", raw[2..].to_ascii_uppercase());
+                assert_ne!(alternate_hex, raw);
+                assert_eq!(hex::decode(&alternate_hex[2..]).unwrap(), hex::decode(&raw[2..]).unwrap());
+                refusals.push(("same bytes, different spelling", body_for(json!(alternate_hex)), "conflict"));
+                let changed = fixture.signed_payment(&data, amount, 1).0;
+                assert_ne!(changed, raw);
+                refusals.push(("different signed nonce", body_for(json!(changed)), "conflict"));
+            } else {
+                refusals.push(("unregistered original", body_for(json!(raw)), "funding_intent_required"));
+            }
+        } else {
+            refusals.push(("supplied signed transfer", body_for(json!(raw)), "invalid_payment"));
+        }
+        for (name, body, code) in refusals {
+            let body = serde_json::to_vec(&body).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let before = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, body.clone()).await;
+            let expected = if code == "invalid_payment" { StatusCode::BAD_REQUEST } else { StatusCode::CONFLICT };
+            assert_eq!(status, expected, "{label}/{name}: {document}");
+            assert_eq!(document["error"]["code"], code, "{label}/{name}");
+            fixture.consumed(&proof);
+            denied(fixture.send("POST", OPEN, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+            let after = ledger_snapshot(&db);
+            for table in [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13] {
+                assert_eq!(after[table], before[table], "{label}/{name}: changed table {table}");
+            }
+            assert!(rpc_calls.lock().unwrap().is_empty(), "{label}/{name}: payment guard reached RPC/engine");
+            fixture.credentials_usable(&[unrelated.credential.as_ref().unwrap()]);
+            if let Some(opened) = &opened {
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
+            } else {
+                fixture.unopened(&quote);
+            }
+        }
+
+        if paid && !registered {
+            // Explicit fixture admission of the unchanged original, not an implicit HTTP registration.
+            let envelope = fixture.provider.state.chain.validate_payment_envelope(
+                &raw, &quote.payload.consumer_wallet, &quote.payload.provider_wallet,
+                &quote.payload.funding_wei, &data).unwrap();
+            fixture.acknowledge_fixture(&quote, &raw, &envelope);
+        }
+        let body = serde_json::to_vec(&body_for(if paid { json!(raw) } else { Value::Null })).unwrap();
+        let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+        let before = ledger_snapshot(&db);
+        let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+        fixture.consumed(&proof);
+        if paid && !replay {
+            // Exact acknowledged evidence reaches verification, but unavailable RPC cannot create credit.
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{label}: {document}");
+            assert_eq!(document["error"]["code"], "settlement_unavailable");
+            assert!(!rpc_calls.lock().unwrap().is_empty(), "{label}: verification was never attempted");
+            fixture.unopened(&quote);
+            let after = ledger_snapshot(&db);
+            for table in [0, 1, 2, 3, 4, 6, 7, 8, 12, 13] {
+                assert_eq!(after[table], before[table], "{label}: unavailable verification changed table {table}");
+            }
+            assert!(before[5].is_empty());
+            assert_eq!(after[5].len(), 1);
+            assert_eq!(after[5][0][0], protocol::hash_hex(&hex::decode(&raw[2..]).unwrap()));
+            assert_eq!(after[5][0][1], quote.payload.id);
+            assert_eq!(after[5][0][3], raw);
+        } else {
+            assert_eq!(status, StatusCode::OK, "{label}: {document}");
+            let recovered: OpenResult = serde_json::from_value(document).unwrap();
+            if let Some(opened) = &opened {
+                assert_eq!(serde_json::to_value(&recovered.account).unwrap(),
+                    serde_json::to_value(&opened.account).unwrap());
+                assert!(recovered.credential.is_none());
+                let after = ledger_snapshot(&db);
+                for table in [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13] {
+                    assert_eq!(after[table], before[table], "{label}: replay changed table {table}");
+                }
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
+            } else {
+                assert_eq!(recovered.account.contract_id, quote.payload.id);
+                assert_eq!(recovered.account.status, "free");
+                assert_eq!(recovered.account.funded_wei, "0");
+                fixture.credentials_usable(&[recovered.credential.as_ref().unwrap()]);
+            }
+            assert!(rpc_calls.lock().unwrap().is_empty(), "{label}: free opening/replay reached RPC/engine");
+        }
+        fixture.credentials_usable(&[unrelated.credential.as_ref().unwrap()]);
+        rpc_server.abort();
+        assert!(rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn opening_omission_and_null_require_their_own_exact_body_proofs() {
+    let directory = tempfile::tempdir().unwrap();
+    for (case, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 67_100 + case as u64);
+        let rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let observed = rpc_calls.clone();
+        let rpc_app = Router::new().fallback(move |request: Request| {
+            let observed = observed.clone();
+            async move {
+                observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        });
+        fixture._listeners[0].set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(fixture._listeners[0].try_clone().unwrap()).unwrap();
+        let rpc_server = tokio::spawn(async move { axum::serve(listener, rpc_app).await.unwrap(); });
+        let opened = if paid { fixture.accounting_account(false).await.1 } else { fixture.open_free().await };
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let omitted = serde_json::to_vec(&json!({"quote_id": opened.account.contract_id})).unwrap();
+        let explicit_null = serde_json::to_vec(&json!({"quote_id": opened.account.contract_id, "raw_transaction": null})).unwrap();
+        for (original, substituted) in [(&omitted, &explicit_null), (&explicit_null, &omitted)] {
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, original).await;
+            let before = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, substituted.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{document}");
+            assert_eq!(document["error"]["code"], "invalid_api_key");
+            assert_eq!(ledger_snapshot(&db), before, "body substitution consumed authority or changed state");
+
+            // The exact bound body can still spend that proof, even when paid business rules then refuse it.
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, original.clone()).await;
+            if paid {
+                assert_eq!(status, StatusCode::CONFLICT, "{document}");
+                assert_eq!(document["error"]["code"], "funding_intent_required");
+            } else {
+                assert_eq!(status, StatusCode::OK, "{document}");
+                let recovered: OpenResult = serde_json::from_value(document).unwrap();
+                assert_eq!(serde_json::to_value(&recovered.account).unwrap(),
+                    serde_json::to_value(&opened.account).unwrap());
+                assert!(recovered.credential.is_none());
+            }
+            fixture.consumed(&proof);
+            denied(fixture.send("POST", OPEN, &proof.headers, original.clone()).await, StatusCode::UNAUTHORIZED);
+            let after = ledger_snapshot(&db);
+            for table in [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 13] {
+                assert_eq!(after[table], before[table], "exact-body control changed table {table}");
+            }
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
+            assert!(rpc_calls.lock().unwrap().is_empty(), "body binding or absent payment reached RPC/engine");
+        }
+        rpc_server.abort();
+        assert!(rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creation() {
     let directory = tempfile::tempdir().unwrap();
     for (index, paid) in [false, true].into_iter().enumerate() {
