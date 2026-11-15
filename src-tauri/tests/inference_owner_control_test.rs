@@ -3486,6 +3486,19 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
 
 #[tokio::test]
 async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
+    terminal_failure_matrix(&[
+        ("account-release", "AFTER UPDATE ON accounts"),
+        ("credential-release", "AFTER UPDATE ON credentials"),
+        ("request-terminal", "AFTER UPDATE ON requests"),
+    ]).await;
+}
+
+#[tokio::test]
+async fn terminal_commit_refusal_preserves_original_accounting_recovery() {
+    terminal_failure_matrix(&[("commit", "AFTER UPDATE ON requests")]).await;
+}
+
+async fn terminal_failure_matrix(faults: &[(&str, &str)]) {
     const KEY: &str = "terminal-write-fault";
     let directory = tempfile::tempdir().unwrap();
     for (mode_index, (mode, supplied_usage, status, terminal_status)) in [
@@ -3495,13 +3508,9 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
         ("invalid", TokenUsage { prompt_tokens: 1, completion_tokens: 513 },
             "completed", "invalid_usage_unknown_usage"),
     ].into_iter().enumerate() {
-        for (point_index, (point, event)) in [
-            ("account-release", "AFTER UPDATE ON accounts"),
-            ("credential-release", "AFTER UPDATE ON credentials"),
-            ("request-terminal", "AFTER UPDATE ON requests"),
-        ].into_iter().enumerate() {
+        for (point_index, (point, event)) in faults.iter().copied().enumerate() {
             let mut fixture = Fixture::new(directory.path(),
-                61_000 + (mode_index * 3 + point_index) as u64);
+                61_000 + (mode_index * faults.len() + point_index) as u64);
             let other = fixture.open_free().await;
             // Post-verification opening credit and supplied usage are prerequisites,
             // not observed chain execution, cancellation or private-engine evidence.
@@ -3537,15 +3546,47 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
             let target_id = match point {
                 "account-release" => id,
                 "credential-release" => &app.id,
-                "request-terminal" => &target.id,
+                "request-terminal" | "commit" => &target.id,
                 _ => unreachable!(),
             };
-            // FAIL retains the statement's writes inside the transaction. A
-            // persistence error must roll back, unlike committed invalid usage.
-            db.execute_batch(&format!(
-                "CREATE TRIGGER fail_terminal_write {event} WHEN NEW.id='{target_id}'
-                 BEGIN SELECT RAISE(FAIL,'injected terminal {point}'); END;"
-            )).unwrap();
+            if point == "commit" {
+                // This deferred constraint permits every settlement statement.
+                // Only COMMIT rejects the missing parent; there is no RAISE.
+                // Keep a witness of all three writes in that same transaction.
+                db.execute_batch(&format!(
+                    "PRAGMA foreign_keys=ON;
+                     CREATE TABLE terminal_commit_parent(request_id TEXT PRIMARY KEY);
+                     CREATE TABLE terminal_commit_witness(
+                         request_id TEXT PRIMARY KEY REFERENCES terminal_commit_parent(request_id)
+                             DEFERRABLE INITIALLY DEFERRED,
+                         account TEXT NOT NULL, credential TEXT NOT NULL, request TEXT NOT NULL);
+                     CREATE TRIGGER fail_terminal_commit {event} WHEN NEW.id='{target_id}'
+                     BEGIN
+                         INSERT INTO terminal_commit_witness(request_id,account,credential,request)
+                         SELECT NEW.id,
+                             (SELECT account FROM accounts WHERE id=NEW.contract),
+                             (SELECT record FROM credentials WHERE id=NEW.credential),
+                             NEW.record;
+                     END;"
+                )).unwrap();
+            } else {
+                // FAIL retains the statement's writes inside the transaction. A
+                // persistence error must roll back, unlike committed invalid usage.
+                db.execute_batch(&format!(
+                    "CREATE TRIGGER fail_terminal_write {event} WHEN NEW.id='{target_id}'
+                     BEGIN SELECT RAISE(FAIL,'injected terminal {point}'); END;"
+                )).unwrap();
+            }
+            let commit_witness = || {
+                db.prepare("SELECT json_array(request_id,json(account),json(credential),json(request))
+                    FROM terminal_commit_witness ORDER BY request_id").unwrap()
+                    .query_map([], |row| row.get::<_, String>(0)).unwrap()
+                    .map(|row| serde_json::from_str::<Value>(&row.unwrap()).unwrap())
+                    .collect::<Vec<_>>()
+            };
+            if point == "commit" {
+                assert!(commit_witness().is_empty());
+            }
             for reopened in [false, true] {
                 if reopened {
                     fixture.app = Router::new();
@@ -3557,17 +3598,34 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
                 assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
                 let error = fixture.provider.state.ledger.settle(&target.id, &supplied_usage,
                     status, now + 1).unwrap_err();
-                assert!(error.contains(&format!("injected terminal {point}")),
-                    "{mode}/{point}, reopened={reopened}: {error}");
+                if point == "commit" {
+                    assert!(error.contains("FOREIGN KEY constraint failed"),
+                        "{mode}/{point}, reopened={reopened}: {error}");
+                } else {
+                    assert!(error.contains(&format!("injected terminal {point}")),
+                        "{mode}/{point}, reopened={reopened}: {error}");
+                }
                 assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
                 assert_eq!(fixture.provider.state.ledger.request_view(id, KEY).unwrap().status, "reserved");
                 fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
                 assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}: retained holds and authority");
+                if point == "commit" {
+                    assert!(commit_witness().is_empty(), "{mode}: rejected commit left a witness");
+                    assert_eq!(db.query_row("SELECT COUNT(*) FROM terminal_commit_parent", [],
+                        |row| row.get::<_, u64>(0)).unwrap(), 0);
+                }
             }
 
-            // Removing the fixture fault authorizes no automatic inference replay.
+            // Repairing the fixture fault authorizes no automatic inference replay.
             // Reconcile the original reservation and keep its unrelated root hold.
-            db.execute_batch("DROP TRIGGER fail_terminal_write").unwrap();
+            if point == "commit" {
+                // Leave the trigger active: successful settlement must atomically
+                // retain its witness, not bypass the previously failing write.
+                assert_eq!(db.execute("INSERT INTO terminal_commit_parent(request_id) VALUES(?1)",
+                    [&target.id]).unwrap(), 1);
+            } else {
+                db.execute_batch("DROP TRIGGER fail_terminal_write").unwrap();
+            }
             let known = mode == "known";
             let request = json!({
                 "id":target.id, "request_id":KEY, "contract_id":id, "credential_id":app.id,
@@ -3592,6 +3650,12 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
             let record = expected[2].iter_mut().find(|row| row[0] == target.id).unwrap();
             record[4] = json!(terminal_status);
             record[6] = request.clone();
+            let expected_commit_witness = (point == "commit").then(|| json!([
+                target.id,
+                expected[0].iter().find(|row| row[0] == *id).unwrap()[3],
+                expected[1].iter().find(|row| row[0] == app.id).unwrap()[3],
+                request
+            ]));
             let result = fixture.provider.state.ledger.settle(&target.id, &supplied_usage,
                 status, now + 1);
             if mode == "invalid" {
@@ -3600,6 +3664,9 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
                 assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), request);
             }
             assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: first committed outcome");
+            if let Some(witness) = &expected_commit_witness {
+                assert_eq!(commit_witness().as_slice(), std::slice::from_ref(witness));
+            }
 
             for reopened in [false, true] {
                 if reopened {
@@ -3627,6 +3694,12 @@ async fn terminal_write_failures_preserve_holds_until_one_outcome_commits() {
                     .unwrap_err().starts_with("duplicate_request:"));
                 fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
                 assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: no new charge or release");
+                if let Some(witness) = &expected_commit_witness {
+                    assert_eq!(commit_witness().as_slice(), std::slice::from_ref(witness),
+                        "{mode}: terminal replay must preserve the committed witness");
+                    assert_eq!(db.query_row("SELECT request_id FROM terminal_commit_parent", [],
+                        |row| row.get::<_, String>(0)).unwrap(), target.id);
+                }
             }
         }
     }
