@@ -618,8 +618,7 @@ pub struct TopupRequest {
     pub raw_transaction: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ChallengeRequest {
     pub wallet: String,
     pub method: String,
@@ -627,11 +626,49 @@ pub struct ChallengeRequest {
     pub body_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for ChallengeRequest {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            wallet: String,
+            method: String,
+            path: String,
+            body_hash: String,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            wallet: fields.wallet,
+            method: fields.method,
+            path: fields.path,
+            body_hash: fields.body_hash,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Challenge {
     pub nonce: String,
     pub payload_hex: String,
     pub expires_at: u64,
+}
+
+impl<'de> Deserialize<'de> for Challenge {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Unsigned additions remain tolerated; authorization is reconstructed locally.
+        #[derive(Deserialize)]
+        struct Fields {
+            nonce: String,
+            payload_hex: String,
+            expires_at: u64,
+        }
+        let fields: Fields = deserialize_object(deserializer)?;
+        Ok(Self {
+            nonce: fields.nonce,
+            payload_hex: fields.payload_hex,
+            expires_at: fields.expires_at,
+        })
+    }
 }
 
 pub fn now() -> Result<u64, String> {

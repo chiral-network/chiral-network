@@ -6,6 +6,7 @@ The whitepaper's funding order depends on proving the payer's authority over one
 
 - Specify the public challenge request, canonical wallet/body digest, provider-generated nonce, complete request-bound payload, and 120-second issuer lifetime.
 - Specify native reconstruction and verification before signing, separately from the provider's issuance lifetime.
+- Enforce object-shaped challenge requests and responses at their shared decoders. Preserve strict request fields and permitted unsigned response additions; reject positional aliases without changing authorization bytes, lifetimes or persisted state.
 - Require durable, atomic one-use consumption after signature and binding checks, including concurrent and restarted processes.
 - Define which account reads accept an account-scoped read bearer and which operations require the quote/account owner's proof; public proposals and signed payments do not substitute for that proof.
 - Preserve bounded pending challenges and distinguish proof consumption from successful completion of a financial or credential operation.
@@ -25,5 +26,6 @@ None. Canonical encoding and signatures remain in `inference-wire-foundation`; p
 - Read-only authority: `docs/chiral-book.md`, owner-challenge exchange, authorization matrix, control API limits, and funding order.
 - Implementation correspondence: `auth.rs`, `protocol.rs`, `contracts.rs`, `billing_store.rs`, `consumer.rs`, and their existing tests.
 - Acceptance includes the native/ledger correction for authenticated opening retries: return the existing account without issuing or revoking a credential, and allow explicit native credential recovery after a lost first-opening reply. The unsigned opening result has a nullable credential; first creation still returns its newly issued secret.
+- Challenge acceptance also corrects positional request/response aliases, with regressions through the production issuer and native consumer. Successful object exchanges, including unsigned response additions, retain the existing reconstruction and authorization rules.
 - Challenge issuance rate-window policy, complete credential lifecycle, payment admission/settlement, and recovery of original signed transactions remain separate work. Existing behavior is retained, not removed because this slice does not specify it.
 - No whitepaper edit, deployment, live account operation, installation, migration of money, or public-release qualification.

@@ -136,7 +136,10 @@ async fn public_challenge_schema_rejects_missing_mistyped_extra_and_duplicate_fi
         request[field] = json!("caller-must-not-supply-this");
         reject(&mut fixture, &request, StatusCode::BAD_REQUEST, "invalid_request").await;
     }
-    for wrong in [Value::Null, json!([]), json!(true), json!(42), json!("request")] {
+    for wrong in [
+        Value::Null, json!([]), json!(true), json!(42), json!("request"),
+        json!([valid["wallet"], valid["method"], valid["path"], valid["body_hash"]]),
+    ] {
         reject(&mut fixture, &wrong, StatusCode::BAD_REQUEST, "invalid_request").await;
     }
     for field in ["wallet", "method", "path", "body_hash"] {

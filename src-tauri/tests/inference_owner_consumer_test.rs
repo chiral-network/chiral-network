@@ -56,6 +56,7 @@ enum Reply {
     TruncatedBytes,
     TrailingBytes,
     MissingNonce,
+    Positional,
     MistypedExpiry,
     EmptyNonce,
     OversizedNonce,
@@ -132,6 +133,9 @@ fn transform(mode: Reply, mut payload: AuthPayload, mut reply: Value) -> Value {
         Reply::MissingNonce => {
             reply.as_object_mut().unwrap().remove("nonce");
             return reply;
+        }
+        Reply::Positional => {
+            return json!([reply["nonce"], reply["payload_hex"], reply["expires_at"]]);
         }
         Reply::MistypedExpiry => {
             reply["expires_at"] = json!(payload.expires_at.to_string());
@@ -327,7 +331,8 @@ async fn native_rejects_substituted_signing_context_without_transmitting_owner_p
 async fn native_rejects_malformed_challenge_encodings_without_transmitting_owner_proofs() {
     let directory = tempfile::tempdir().unwrap();
     for (index, mode) in [Reply::MissingHexPrefix, Reply::InvalidHex, Reply::OddHex,
-        Reply::TruncatedBytes, Reply::TrailingBytes, Reply::MissingNonce, Reply::MistypedExpiry]
+        Reply::TruncatedBytes, Reply::TrailingBytes, Reply::MissingNonce, Reply::MistypedExpiry,
+        Reply::Positional]
         .into_iter().enumerate() {
         rejected(directory.path(), 200 + index as u64, mode).await;
     }

@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Challenge exchange accepted positional arrays
+
+- **Cause:** Complete request and response arrays bypassed the intended named-field object boundary. Extending existing regressions reproduced public HTTP issuance instead of 400 refusal and native acceptance of a positional reply containing the genuine nonce, signing bytes and expiry.
+- **Correction:** `ChallengeRequest` and `Challenge` reuse the direct map-only visitor. Preserve strict request fields, allowed unsigned response additions, required/type/duplicate-member checks and locally reconstructed authorization; do not change signing bytes, lifetimes or persisted state.
+- **Verification:** Both strengthened regressions failed before the fix; all 435 Rust tests and 61 frontend/provisioning tests, available checks/builds and strict owner-control validation now pass. The native case requires no transmitted owner proof and no accepted account on either side. Successful object exchanges with unsigned extras remain controls; no instrumented signing-call, live-funding or qualification claim.
+
 ### Enclosing commercial declarations accepted positional arrays
 
 - **Cause:** Derived model, serving-profile, offer and quote decoders accepted complete positional arrays instead of their required objects. Four regressions failed before the fix; three demonstrated native HTTP quote acceptance with the original signature despite the changed wire shape.

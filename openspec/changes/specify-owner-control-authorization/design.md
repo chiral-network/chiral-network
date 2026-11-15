@@ -68,7 +68,7 @@ The restart case verifies a persisted response and a valid signature against the
 
 `src-tauri/tests/inference_owner_consumer_test.rs` uses the public `Consumer` API, protected temporary wallet files, real loopback HTTP transport, and the production control router. Its middleware first obtains a genuine persisted challenge, then changes only its response. Negative cases require the intended challenge request to reach that counterparty and reject any subsequent control request, so a signature leaked to a provider that later rejects it cannot pass merely because account opening failed. Both native accepted-account state and a separate provider-ledger connection must show no account.
 
-The 26 negative variants cover each network component, both wallets, method, path, added query, raw-body digest, payload/response nonce and expiry disagreement, signing domain, additional signed fields, malformed hex/framing/required response fields, empty/257-byte nonces, and expiry zero/`u64::MAX`. Nonce/expiry guard cases supply matching reconstructed bytes so another mismatch cannot mask those guards.
+The 27 negative variants cover each network component, both wallets, method, path, added query, raw-body digest, payload/response nonce and expiry disagreement, signing domain, additional signed fields, malformed hex/framing/required response fields, positional response arrays, empty/257-byte nonces, and expiry zero/`u64::MAX`. Nonce/expiry guard cases supply matching reconstructed bytes so another mismatch cannot mask those guards.
 
 Successful native free opening, account reading and credential revocation are exercised with ordinary replies and with uppercase payload hex plus misleading unsigned extra fields. The tests recover the real wallet signer from locally reconstructed bytes, check transmitted method/target and body digest, require empty GET/DELETE bodies, and verify actual account creation and credential revocation. They do not pin incidental JSON key order or treat unsigned additions as authority.
 
@@ -152,6 +152,14 @@ Check results are recorded in APAS progress. Exact native freshness task 2.2.3 s
 The global ceiling is conditional restored-state acceptance, not a claim that native issuance can accumulate 10,000 challenges within its 120-second lifetime and rate limits. These two tests load deterministic records, at most eight per wallet, with future storage-snapshot expiries; native lifetime validation remains covered by task 2.1. They do not move the clock backwards or claim native signing approval of those snapshot expiries.
 
 Slot-release tests use the trusted ledger consumption API where authentication has already been established independently by task 2.3. The collision test additionally verifies a real owner signature. Financial prerequisites use real free HTTP accounts, a locally signed payment envelope and the public acknowledgement-registration boundary after spendability verification; no chain result is fabricated or credited. Challenge rate-window policy and exact native clock acceptance remain separate.
+
+### Task 2.6 challenge object boundaries
+
+The original derived decoders admitted complete positional arrays at both ends of the exchange, despite its named-field object contract. The existing production-router request-schema test and native malformed-response test now include those cases; both failed on the original implementation. Empty arrays and incorrect primitive fields had not exposed this alias.
+
+`ChallengeRequest` and `Challenge` reuse the shared direct map visitor. The request's local derived field decoder still rejects unknown members; the unsigned response deliberately retains additive members, which do not enter the locally reconstructed authorization. Required fields, types and raw duplicate-member checks remain derived, without an intermediate `Value`, alternate signing format or state migration.
+
+The issuer case requires HTTP 400 `invalid_request` and retains the successful valid-object control after malformed requests. The native case changes only the shape of a real persisted challenge reply, retaining the original nonce, payload bytes and expiry; it requires no subsequent owner-proof transmission and no accepted account on either side. Existing successful POST/GET/DELETE operations with ordinary replies and misleading unsigned additions remain controls. Source ordering places decoding before `sign_message`; the tests observe transmission, not an instrumented signing call. Exact native expiry task 2.2.3, rate-window policy and live financial qualification remain separate.
 
 ## Operator and native-client usage consequences
 
