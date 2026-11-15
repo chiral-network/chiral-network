@@ -145,3 +145,22 @@ Actual `Consumer::topup`, `resume` and existing-account `fund` paths reopen nati
 Original opening/native history, supplied usage and restored pressure are prerequisites. The test does not claim live-chain, real engine, remittance, process-kill, power-loss or public-release evidence. Native opening-capacity pressure and canonical/pending-amount edge acceptance remain distinct unticked tasks. Source inspection found the amount checks in `Consumer::topup` and same-original checks in `resume_topup`; existing dropped-broadcast and missing/different-original journal tests remain intact, but do not establish the remaining amount-edge acceptance.
 
 Verification: the full headless Rust run passed 447 tests across 20 suites, with two existing ignored tests, and the headless binary build passed. Strict change validation, Svelte checking (zero errors/warnings), 15 frontend tests, frontend build, 46 provisioning tests, CI Python compilation and the protected-book checksum also passed. Task 2.4.3.1 is complete; its parent and the remaining native capacity/input tasks stay open. Native desktop/release prerequisites remain blocked as previously recorded; no external qualification was attempted.
+
+## Native recovery under free-opening capacity — 2026-11-15
+
+Task 2.4.3.2.1 extends the shared native recovery fixture with separate owned-account and ledger-account cases, retaining all three quote-pressure regressions. The existing complete signed-account/root restoration helper supplies the additional free accounts; these are disclosed storage prerequisites, not observed historical opening admissions.
+
+| Selected free-opening limit | Accounts owned by the native payer | Total accounts | Restored free accounts |
+|---|---:|---:|---:|
+| Owned-account limit | 8 | 8 | 6 |
+| Ledger-account limit | 2 | 10,000 | 9,998 |
+
+The ledger-wide case also checks that no owner exceeds two accounts. Both cases retain only one unaccepted quote, no active unaccepted paid-intent lease, and unexhausted signing-work/committed-issuance budgets. A fresh zero-price offer revision and quote make the free-opening control otherwise eligible. Its genuine exact owner proof must be consumed, but opening must return 429 / `rate_limit` without issuing an account, credential, funding attempt or quote permit.
+
+The original paid offer is retained separately in native history and the explicit `fund` recovery call, rather than substituted with the provider's newer free publication. The existing native missing/unsafe/safe/lost-response/replay sequence then runs with serving/new-funding readiness closed. It must retain the same original operation, signed bytes, nonce and single broadcast; credit once against the accepted paid terms; preserve prior spend/live hold/usage and exported credentials; and clear pending native intent only after confirmed recovery.
+
+Streaming fingerprints now additionally protect every unrelated account's complete financial document, including on first safe credit, across all shared pressure cases. Real bearer GETs exercise the original unrelated account and first/middle/last restored account samples after every native recovery boundary. Restoring the six owned prerequisites avoids exhausting the owner's challenge allowance on setup; no challenge-counter reset, sleep or signed-timestamp rewrite is used.
+
+This is synthetic-RPC/native-local acceptance, not live-chain, engine, remittance, load, process-kill, power-loss or public-release evidence. Native paid-intent capacity remains task 2.4.3.2.2; canonical/pending-amount acceptance remains 2.4.3.3. Parent recovery and integration/archive tasks stay open.
+
+Verification: the full headless Rust run passed 449 tests across 20 suites, with two existing ignored tests, and the headless binary build passed. Strict change validation, Svelte checking (zero errors/warnings), 15 frontend tests, frontend build, 46 provisioning tests, CI Python compilation and the protected-book checksum also passed. Task 2.4.3.2.1 is complete; native paid-intent capacity, amount-input acceptance and their parents remain open. Native desktop/release prerequisites remain blocked as previously recorded; no external qualification was attempted.
