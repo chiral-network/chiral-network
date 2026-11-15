@@ -262,6 +262,17 @@ fn resign_field(raw: &str, kind: u8, chain_id: u64, key: &str, index: usize, enc
     })
 }
 
+// Each payload byte is itself a complete canonical RLP item. Reinterpreting the
+// enclosing bytes as a list therefore isolates field type, not malformed framing.
+fn list_of_byte_items(bytes: &[u8]) -> RlpStream {
+    let mut list = RlpStream::new_list(bytes.len());
+    for byte in bytes {
+        assert!(*byte < 0x80);
+        list.append_raw(std::slice::from_ref(byte), 1);
+    }
+    list
+}
+
 async fn request(app: &mut Router, path: &str, headers: &HeaderMap, body: Vec<u8>) -> (StatusCode, Value) {
     let mut request = Request::builder().method("POST").uri(path)
         .header(header::CONTENT_TYPE, "application/json").body(Body::from(body)).unwrap();
@@ -1271,6 +1282,118 @@ async fn fresh_intent_rejects_resigned_nonminimal_byte_strings() {
                 &original, &candidate, &format!("{envelope_name}: {encoding}"),
             ).await;
         }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_resigned_list_valued_integers() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        let fields: &[(&str, usize)] = match kind {
+            0 => &[("nonce", 0), ("gas-price", 1), ("gas-limit", 2), ("value", 4)],
+            1 => &[("chain-id", 0), ("nonce", 1), ("gas-price", 2), ("gas-limit", 3), ("value", 5)],
+            2 => &[("chain-id", 0), ("nonce", 1), ("priority-fee", 2), ("maximum-fee", 3),
+                ("gas-limit", 4), ("value", 6)],
+            _ => unreachable!(),
+        };
+        for (case, &(name, index)) in fields.iter().enumerate() {
+            let mut fixture = Fixture::new(directory.path(), 18_000 + u64::from(kind) * 100 + case as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let bytes = hex::decode(&original[2..]).unwrap();
+            let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+            let field = rlp.at(index).unwrap();
+            let replacement = list_of_byte_items(field.data().unwrap()).out();
+            // Preserve each numerical payload, but sign the actual list-valued field.
+            // In particular, legacy gas price 11 is the retained c1 0b reproduction.
+            let candidate = resign_field(&original, kind, fields.chain_id, &fixture.owner_key, index, &replacement);
+            fixture.rejects_candidate_preserving_original(
+                &original, &candidate, &format!("{envelope_name}: list-valued {name}"),
+            ).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_list_encoded_typed_signature_parity() {
+    let directory = tempfile::tempdir().unwrap();
+    for kind in [1, 2] {
+        let mut fixture = Fixture::new(directory.path(), 18_500 + u64::from(kind), 100).await;
+        let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+        let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+        let bytes = hex::decode(&original[2..]).unwrap();
+        let rlp = Rlp::new(&bytes[1..]);
+        let count = rlp.item_count().unwrap();
+        let parity_index = count - 3;
+        let parity = rlp.at(parity_index).unwrap();
+        let replacement = list_of_byte_items(parity.data().unwrap()).out();
+        let mut candidate = RlpStream::new_list(count);
+        for index in 0..count {
+            candidate.append_raw(
+                if index == parity_index { &replacement } else { rlp.at(index).unwrap().as_raw() }, 1,
+            );
+        }
+        // Parity is outside the signing preimage. Keep its numerical value and
+        // the original r/s, rather than masking field type with an invalid signature.
+        let candidate = format!("0x{kind:02x}{}", hex::encode(candidate.out()));
+        fixture.rejects_candidate_preserving_original(
+            &original, &candidate, &format!("type-{kind}: list-valued parity"),
+        ).await;
+    }
+}
+
+#[test]
+fn local_envelope_rejects_list_valued_recipient_and_calldata() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = ChainClient::new(NetworkConfig {
+        identity: NetworkIdentity {
+            chain_id: ESPACE_TESTNET_CHAIN_ID,
+            genesis_hash: ESPACE_TESTNET_GENESIS.into(),
+            deployment_id: "opaque-field-shape-test".into(),
+        },
+        rpc_url: "http://127.0.0.1:1".into(),
+        rpc_bearer_file: None, faucet_url: None, explorer_url: None, policy_url: None,
+    }, directory.path().into()).unwrap();
+    let key = format!("{:064x}", 68_001);
+    let payer = wallet::address_from_private_key(&key).unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        for shape in ["recipient", "empty-calldata", "calldata"] {
+            let fields = PaymentFields {
+                chain_id: ESPACE_TESTNET_CHAIN_ID, nonce: 0, recipient: vec![0; 20], value: 100,
+                data: if shape == "empty-calldata" { Vec::new() } else { vec![0, 1, 0x7f] },
+                gas: GAS, max_fee: 11, priority_fee: 2,
+            };
+            let payee = format!("0x{}", hex::encode(&fields.recipient));
+            let validate = |raw: &str| client.validate_payment_envelope(raw, &payer, &payee, "100", &fields.data);
+            let original = signed_payment(&fields, &key, kind, &[0xc0]);
+            let expected = validate(&original).unwrap();
+            assert_eq!(expected.to, payee);
+            assert_eq!(expected.data, fields.data);
+            assert_eq!(expected.tx_hash, protocol::hash_hex(&hex::decode(&original[2..]).unwrap()));
+            let recipient_index = usize::from(kind) + 3;
+            let (index, payload) = if shape == "recipient" {
+                (recipient_index, &fields.recipient)
+            } else {
+                (recipient_index + 2, &fields.data)
+            };
+            let candidate = resign_field(&original, kind, fields.chain_id, &key, index,
+                &list_of_byte_items(payload).out());
+            assert!(matches!(validate(&candidate), Err(ChainError::Rejected(_))), "{envelope_name}: {shape}");
+            assert_eq!(validate(&original).unwrap(), expected, "{envelope_name}: {shape}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn fresh_intent_rejects_list_valued_access_list_addresses() {
+    let directory = tempfile::tempdir().unwrap();
+    let original = encoded_access_list(1, 0, true).out();
+    // Twenty zero-byte children preserve the exact address payload and fit depth four.
+    // Neither an address-width failure nor the nesting guard explains rejection.
+    let candidate = single_access_entry(&list_of_byte_items(&[0; 20]).out(), &[0xc0]).out();
+    for kind in [1, 2] {
+        let mut fixture = Fixture::new(directory.path(), 18_600 + u64::from(kind), 100).await;
+        fixture.access_list_boundary(kind, &original, &candidate, "list-valued access address").await;
     }
 }
 

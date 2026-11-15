@@ -8,13 +8,13 @@ The new `inference-payment-envelope-bounds` capability describes the shared loca
 
 - `chain_client.rs::decode`: nonempty lowercase-prefixed even hex, 16 KiB decoded maximum before hex allocation, only legacy/type-1/type-2, exact field counts, selected chain, 20-byte recipient, 4 KiB calldata, integer widths, typed fee consistency and structural gas.
 - `canonical_rlp`: root depth zero, maximum depth four, at most 1,024 immediate list items, minimal lengths, checked declared-length arithmetic and exact payload consumption.
-- `uint`/`uint64`: minimal unsigned representation and no truncation before conversion to 128/64-bit values.
+- `field_bytes` requires an RLP data item before accessing its payload; `uint`/`uint64` then enforce minimal unsigned representation and no truncation before conversion to 128/64-bit values. Canonical RLP framing alone does not establish a transaction field's semantic type.
 - `access_list`: at most 64 entries and 256 keys in aggregate, exact entry/address/key shapes, duplicate occurrences counted without deduplication.
 - `intrinsic`: checked structural cost including every address/key occurrence; this is not a chain execution estimate.
 - `wallet.rs::recover_digest`: valid scalar/recovery interpretation and low-s enforcement before recovering the payer.
 - `contracts.rs` and `billing_store.rs`: fresh admission refusal versus exact cached acknowledgement recovery remain separate. An existing acknowledgement lookup precedes fresh envelope/spendability checks; do not remove that recovery path.
 
-There is no production behavior change in this specification step. The standalone proposal's public availability report, HTTP reopening/root-rotation mismatch and owner-untracked native source remain outside this change's authority.
+The initial step was specification-only. Task 2.6 now corrects the native shared field-type boundary with signed regressions; the migration source is committed and no longer ownership-blocked. Public proposal-work admission and HTTP reopening/root rotation remain separate capabilities. Historical acceptance sections below retain the scope and limitations of their original steps; current field-shape status is recorded in task 2.6.
 
 ## Why the raw ceiling has no otherwise-valid equality fixture
 
@@ -27,7 +27,7 @@ The byte ceiling is an early defensive check, not a promise that every size up t
 
 An in-memory Python calculation checked those conservative sums this turn. It is source-backed size reasoning, not a runtime parser boundary test. The separate 96 KiB control-body limit does not explain these smaller bounds. Do not weaken the 64/256/4 KiB rules, add opaque padding, or count an oversized transaction already rejected for another reason as isolated proof of the raw ceiling.
 
-The 1,024-item RLP guard is likewise looser than valid envelope/access-list shapes. Direct defensive parser-limit evidence may need a private native test seam. That source and its existing unit-test file are owner-untracked; a source-only note is not a claim that the missing seam or regression is complete.
+The 1,024-item RLP guard is likewise looser than valid envelope/access-list shapes. Direct defensive parser-limit evidence remains open and can now use the committed private native unit-test boundary. No new public API or weaker transaction profile is justified to construct those controls.
 
 ## Acceptance design
 
@@ -45,8 +45,8 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
-| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header, malformed-child-length and freshly signed byte-string groups in 2.5.1–2.5.4 below; conservative size derivation above | Remaining scalar-shape and direct defensive-budget evidence in 2.5–2.6; do not manufacture an unreachable valid raw-ceiling control |
-| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Tasks 2.4 and 2.5.2 cover local calldata boundaries; 2.5.4 covers freshly signed byte-string encodings and 127/128 fee controls; access-list widths/shape have 2.2.2 acceptance. The scalar/list shape defect remains blocked in 2.6 |
+| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header, malformed-child-length and freshly signed byte-string groups in 2.5.1–2.5.4 below; conservative size derivation above | Direct defensive-budget evidence remains in 2.5; task 2.6 supplies the field-type correction and regression matrix. Do not manufacture an unreachable valid raw-ceiling control |
+| Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Tasks 2.4 and 2.5.2 cover local calldata boundaries; 2.5.4 covers freshly signed byte-string encodings and 127/128 fee controls; 2.2.2 covers access-list widths/shape. Task 2.6 adds same-payload list-versus-byte-string discrimination |
 | Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
 | Financial rejection; valid original after a refused candidate | `contracts` fresh admission before ledger registration, exact cached lookup and native original checks; existing route refusal/recovery groups | Count, shape, gas, raw-envelope, RLP root/header, malformed-child and byte-string local/HTTP controls below; shared callers are not independent relay, native-crash or live-settlement qualification |
@@ -144,6 +144,19 @@ Each candidate is freshly signed over its actual nonminimal field bytes; unchang
 Every pair requires local rejection, authenticated HTTP 400 `invalid_payment`, no retained acknowledgement, account credit, funding/fee rows or transaction submission, and successful unchanged-original admission. The existing signer and admission fixture are reused; no decoder, dependency or wire requirement changes.
 
 All mutated fields remain byte-string encodings. This is not evidence that a list used as a scalar is rejected: that distinct, previously observed defect still requires an independently committable native fix and its regression. Direct private budget evidence remains open; these synthetic-RPC results do not establish execution, finality or public-release qualification.
+
+## Task 2.6 shared field-type correction
+
+`Rlp::data()` returns an item's payload without requiring that the item be a byte string. A canonically framed list can therefore supply the same numerical or opaque bytes as a valid field. The retained failure was a freshly signed legacy gas-price field `c1 0b`, interpreted as price 11. `field_bytes` now requires `is_data()` before payload extraction. All its existing integer, recipient, calldata and access-list byte-field callers share the correction, without new allocation on accepted input or a new public API.
+
+Four regression groups in `inference_funding_admission_test` isolate semantic type from canonical framing, widths, payment binding and signature validity:
+
+- `fresh_intent_rejects_resigned_list_valued_integers`: fifteen independently signed local/HTTP refusal-and-original-admission pairs cover nonce, gas price/limit and value in all three profiles, typed chain ID and the type-2 priority/max price. The original numerical payload is a sequence of complete single-byte RLP items, including empty zero-nonce payloads; the candidate signs the actual enclosing list.
+- `fresh_intent_rejects_list_encoded_typed_signature_parity`: two typed-profile pairs preserve numerical recovery parity and the original r/s. Parity lies outside the signing preimage; no stale or invalid signature is substituted to explain refusal.
+- `local_envelope_rejects_list_valued_recipient_and_calldata`: nine local pairs cover a 20-byte zero recipient and empty/nonempty opaque calldata across all three profiles. Exact original data, recipient and transaction hash are preserved. These deliberate non-opening payloads use matching local expectations, not the funding route's exact commitment.
+- `fresh_intent_rejects_list_valued_access_list_addresses`: two typed-profile pairs preserve the exact 20-byte zero address payload in a canonically framed list whose children reach depth four, not five. Address width and nesting cannot mask the required field-type refusal.
+
+All nineteen HTTP pairs use the existing owner-authenticated admission fixture, requiring no acknowledgement, credit, funding/fee records or submission for the candidate, retained signed terms after reopening, and subsequent acknowledgement of the unchanged valid original. Nine additional local pairs do not claim HTTP admission. Existing signature, historical acknowledgement, journal/nonce and recovery tests remain intact. All available checks pass as recorded in APAS progress; direct defensive RLP budgets remain a separate incomplete task. No payment execution, automatic replacement or repair is claimed.
 
 ## Integration
 

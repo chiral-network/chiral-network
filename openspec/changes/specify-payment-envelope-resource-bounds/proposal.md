@@ -25,6 +25,6 @@ None. Complement `inference-wire-foundation` and the pending `inference-opening-
 
 - Read-only authority: `docs/chiral-book.md`, particularly canonical `u128` monetary values, exact-original funding order and signed-envelope settlement evidence.
 - Source correspondence: `chain_client.rs` local decoding, canonical RLP, access-list validation, structural gas and payment construction; existing wallet/chain tests and `inference_funding_admission_test` provide partial evidence.
-- Specification-only step: no runtime, test, ledger schema, wallet, server, deployment or whitepaper changes. No limits are widened and no historical evidence is migrated or discarded.
-- Acceptance work remains open. Owner-untracked native source/private test seams remain ownership blockers where direct parser instrumentation is necessary.
+- Runtime scope: correct the shared decoder's byte-string field-type check and add signed local/HTTP rejection-and-original-recovery regressions. No ledger schema, wallet operation, server deployment or whitepaper change; no limits are widened and no historical evidence is discarded.
+- Direct defensive byte/item/depth acceptance remains open. The native migration is now committed, so the former source-ownership blocker no longer applies; use private unit boundaries rather than a test-only public API.
 - No author-only decision is needed. The named-payer availability report remains open and nonblocking.

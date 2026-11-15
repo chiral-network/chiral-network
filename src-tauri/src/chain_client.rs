@@ -233,9 +233,12 @@ fn canonical_rlp(rlp: &Rlp<'_>, depth: u8) -> Result<(), String> {
     Ok(())
 }
 fn field_bytes<'a>(rlp: &Rlp<'a>, index: usize) -> Result<&'a [u8], String> {
-    rlp.at(index)
-        .map_err(|_| "missing transaction field")?
-        .data()
+    let field = rlp.at(index).map_err(|_| "missing transaction field")?;
+    // Rlp::data exposes list payloads too; canonical framing does not establish field type.
+    if !field.is_data() {
+        return Err("transaction field must be bytes".into());
+    }
+    field.data()
         .map_err(|_| "transaction field must be bytes".into())
 }
 fn uint(rlp: &Rlp<'_>, index: usize, max: usize) -> Result<U256, String> {
