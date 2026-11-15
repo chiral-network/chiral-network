@@ -1264,7 +1264,68 @@ async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding
         let opened = if paid {
             fixture.accounting_account(false).await.1
         } else {
-            fixture.open_free().await
+            // Restore signed historical terms and pre-expiry acceptance, rather
+            // than sleeping or rewriting timestamps on an accepted agreement.
+            let template = fixture.quote("0").await;
+            let issued_at = protocol::now().unwrap() - 600;
+            let expires_at = issued_at + 300;
+            let mut offer = fixture.provider.offer.payload.clone();
+            offer.issued_at = issued_at;
+            offer.expires_at = issued_at + 120;
+            let offer = protocol::sign(protocol::OFFER_DOMAIN, offer, &fixture.provider.state.private_key).unwrap();
+            let historical_offer_id = protocol::offer_id(&offer.payload).unwrap();
+            let ledger = &fixture.provider.state.ledger;
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let quotes: Vec<_> = (0..3).map(|_| {
+                let mut payload = template.payload.clone();
+                payload.id = protocol::random_id();
+                payload.nonce = protocol::random_id();
+                payload.offer_id = historical_offer_id.clone();
+                payload.issued_at = issued_at;
+                payload.expires_at = expires_at;
+                let quote = protocol::sign(protocol::QUOTE_DOMAIN, payload, &fixture.provider.state.private_key).unwrap();
+                ledger.store_quote(&quote, issued_at).unwrap();
+                quote
+            }).collect();
+            ledger.check_open_funding(&quotes[0].payload, None, expires_at - 1).unwrap();
+            let opened = ledger.open_account(&quotes[0], None, expires_at - 1).unwrap();
+            let accepted = serde_json::to_value(&opened.account).unwrap();
+            for (quote, at) in quotes[1..].iter().zip([expires_at, expires_at + 1]) {
+                let before = ledger_snapshot(&db);
+                assert!(ledger.check_open_funding(&quote.payload, None, at).unwrap_err().starts_with("expired_quote:"));
+                assert!(ledger.open_account(quote, None, at).unwrap_err().starts_with("expired_quote:"));
+                fixture.unopened(quote);
+                ledger.check_open_funding(&quotes[0].payload, None, at).unwrap();
+                let replay = ledger.open_account(&quotes[0], None, at).unwrap();
+                assert!(replay.credential.is_none());
+                assert_eq!(serde_json::to_value(replay.account).unwrap(), accepted);
+                assert_eq!(ledger_snapshot(&db), before);
+            }
+            // A current public challenge prunes unaccepted expired quotes, but
+            // must retain the account's original agreement for HTTP recovery.
+            let body = serde_json::to_vec(&json!({"quote_id": quotes[1].payload.id})).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let before = ledger_snapshot(&db);
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert_eq!(document["error"]["code"], "not_found");
+            fixture.consumed(&proof);
+            let after = ledger_snapshot(&db);
+            for index in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13] {
+                assert_eq!(after[index], before[index]);
+            }
+            assert!(fixture.provider.state.ledger.account(&quotes[1].payload.id).is_err());
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.quote(&quotes[0].payload.id).unwrap()).unwrap(),
+                serde_json::to_value(&quotes[0]).unwrap());
+            let body = serde_json::to_vec(&json!({"quote_id": template.payload.id})).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+            assert_eq!(status, StatusCode::OK);
+            fixture.consumed(&proof);
+            let fresh: OpenResult = serde_json::from_value(document).unwrap();
+            assert_eq!(fresh.account.contract_id, template.payload.id);
+            fixture.credentials_usable(&[fresh.credential.as_ref().unwrap(), opened.credential.as_ref().unwrap()]);
+            opened
         };
         let root = opened.credential.as_ref().unwrap();
         let id = &opened.account.contract_id;
@@ -2742,6 +2803,23 @@ async fn native_paid_opening_at_free_limit(ledger_wide: bool) {
     state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
     fixture.app = contracts::router(fixture.provider.state.clone());
     let (stop, server) = serve(fixture.app.clone());
+    // Direct opening replay is distinct from native saved-account GET recovery.
+    // The selected free-capacity limit remains full and provider readiness closed.
+    let body = serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": raw})).unwrap();
+    let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+    let rpc_start = rpc.requests.lock().unwrap().len();
+    let account = serde_json::to_value(fixture.provider.state.ledger.account(&quote.payload.id).unwrap()).unwrap();
+    let (status, replay) = fixture.send("POST", OPEN, &proof.headers, body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replay["account"], account);
+    assert_eq!(replay.get("credential"), Some(&Value::Null));
+    fixture.consumed(&proof);
+    assert_eq!(rpc.requests.lock().unwrap().len(), rpc_start);
+    assert_eq!(credited_records(), credited);
+    assert_eq!(prior_records(), prior);
+    assert_eq!(original(), original_before);
+    assert_eq!(std::fs::read(&account_path).unwrap(), saved_bytes);
+    assert_eq!(consumer.credential_export(&quote.payload.id, None).unwrap(), exported);
     for repeat_fund in [false, true] {
         consumer = Consumer::new(config.clone()).unwrap();
         rpc.timestamp.store(protocol::now().unwrap(), Ordering::Release);
