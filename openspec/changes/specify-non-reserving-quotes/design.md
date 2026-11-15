@@ -10,7 +10,7 @@ The control handler already takes one of 64 process-wide non-queuing permits bef
 
 `register_funding_intent` retrieves an exact cached original before fresh gates. Fresh registration validates the issued quote, permanent transaction/sender-nonce ownership and execution terms, then counts active un-opened intent leases inside the write transaction. It inserts the complete signed acknowledgement/quote/raw transaction before deleting only the matching standalone proposal. The active-intent limit is 10,000; expiry releases admission capacity without deleting accepted evidence.
 
-`open_account` applies its eight-owned-account / 10,000-total-account limits only to a first free opening. First paid opening requires its retained intent and verified payment; an existing account follows its recovery path. Keep that distinction rather than introducing an account-capacity check after paid acknowledgement.
+`open_account` applies its eight-owned-account / 10,000-total-account limits only to a first free opening. First paid opening requires its retained intent and verified payment; an existing account follows its recovery path without issuing or revoking credentials (`OpenResult.credential` is null). Native recovery after a lost opening reply saves the account and leaves missing-secret recovery to explicit owner credential issuance. Keep these distinctions rather than repeating fresh capacity checks or silently rotating keys after acceptance; owner-control task 2.4.3 carries the regression evidence.
 
 ## Decisions
 

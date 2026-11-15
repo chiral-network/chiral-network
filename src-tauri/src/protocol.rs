@@ -275,7 +275,8 @@ pub struct Credential {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenResult {
     pub account: AccountView,
-    pub credential: Credential,
+    /// Present only on first creation; recovery never reissues a bearer.
+    pub credential: Option<Credential>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

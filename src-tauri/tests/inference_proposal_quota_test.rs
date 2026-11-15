@@ -563,7 +563,7 @@ fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budget
         assert_eq!(serde_json::to_value(ledger.challenge(&challenge.nonce).unwrap()).unwrap(),
             serde_json::to_value(challenge).unwrap());
     }
-    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
         "after-global-proposal-exhaustion", 1, 1, NOW, &original.payload.model).unwrap();
     let request = ledger.request_view(&original.payload.id,
         "after-global-proposal-exhaustion").unwrap();
@@ -585,8 +585,8 @@ fn ledger_rate_budget_is_shared_across_terms_but_not_providers_or_control_budget
     let saved = reopened.quote(&original.payload.id).unwrap();
     assert_eq!(saved.payload, original.payload);
     assert_eq!(saved.signature, original.signature);
-    let authenticated = reopened.authenticate(&opened.credential.bearer, NOW + 1).unwrap();
-    assert_eq!(authenticated.credential_id, opened.credential.id);
+    let authenticated = reopened.authenticate(&opened.credential.as_ref().unwrap().bearer, NOW + 1).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
     assert_eq!(authenticated.account.contract_id, original.payload.id);
     assert_eq!(authenticated.account.funded_wei, "0");
     assert!(reopened.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
@@ -602,7 +602,7 @@ fn same_wallet_quotes_across_terms_preserve_independent_control_authority() {
     let before = rate_challenge(&original.payload, 1, NOW);
     ledger.create_challenge(&before, NOW).unwrap();
     // A live reservation must neither spend a proposal unit nor prevent fresh proposals.
-    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
         "before-more-same-wallet-quotes", 1, 1, NOW, &original.payload.model).unwrap();
     let terms = [
         ("test/payer-scope-a", ("0", "0")), ("test/payer-scope-b", ("1", "0")),
@@ -648,8 +648,8 @@ fn same_wallet_quotes_across_terms_preserve_independent_control_authority() {
     assert_eq!(request.id, reservation.id);
     assert_eq!(request.status, "reserved");
     assert_eq!(request.max_cost_wei, "0");
-    let authenticated = ledger.authenticate(&opened.credential.bearer, now).unwrap();
-    assert_eq!(authenticated.credential_id, opened.credential.id);
+    let authenticated = ledger.authenticate(&opened.credential.as_ref().unwrap().bearer, now).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
     assert_eq!(authenticated.account.contract_id, original.payload.id);
     assert_eq!(authenticated.account.funded_wei, "0");
     assert!(ledger.prepare_fee_batches(now, true).unwrap().is_empty());
@@ -715,7 +715,7 @@ fn challenge_ledger_rate_is_independent_of_proposals_providers_and_existing_acco
     assert_rate_rejected_at(&ledger, &rejected_quote, NOW + 1);
     assert_read_context(&ledger, &read, &original.payload, NOW + 1);
     // Reservation only, not dispatched inference or an invented usage/settlement result.
-    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
         "after-both-control-budgets", 1, 1, NOW + 1, &original.payload.model).unwrap();
     for rejected in [&rejected_owner, &rejected_other] {
         assert_challenge_rate_rejected_at(&ledger, rejected, NOW + 1);
@@ -742,8 +742,8 @@ fn challenge_ledger_rate_is_independent_of_proposals_providers_and_existing_acco
     }
     for proposed in &proposals { assert_preserved(&reopened, proposed); }
     assert_read_context(&reopened, &read, &original.payload, NOW + 2);
-    let authenticated = reopened.authenticate(&opened.credential.bearer, NOW + 2).unwrap();
-    assert_eq!(authenticated.credential_id, opened.credential.id);
+    let authenticated = reopened.authenticate(&opened.credential.as_ref().unwrap().bearer, NOW + 2).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
     assert!(authenticated.scopes.iter().any(|scope| scope == "infer"));
     let request = reopened.request_view(&original.payload.id, "after-both-control-budgets").unwrap();
     assert_eq!(request.id, reservation.id);
@@ -766,9 +766,9 @@ fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authori
         expires_at: NOW + 300, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["read".into()],
     }, NOW).unwrap();
     assert_read_context(&ledger, &read, &original.payload, NOW);
-    let reservation = ledger.reserve(&original.payload.id, &opened.credential.id,
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
         "busy-before-wallet-challenges", 1, 1, NOW, &original.payload.model).unwrap();
-    let saturated = ledger.reserve(&original.payload.id, &opened.credential.id,
+    let saturated = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
         "saturated-before-challenges", 1, 1, NOW, &original.payload.model).unwrap_err();
     assert!(saturated.starts_with("saturation:"), "{saturated}");
     assert!(ledger.request_view(&original.payload.id, "saturated-before-challenges").is_err());
@@ -814,8 +814,8 @@ fn challenge_wallet_rate_preserves_other_wallets_and_independent_control_authori
     assert_read_context(&reopened, &read, &original.payload, now);
     assert_eq!(serde_json::to_value(reopened.challenge(&other_wallet.nonce).unwrap()).unwrap(),
         serde_json::to_value(&other_wallet).unwrap());
-    let authenticated = reopened.authenticate(&opened.credential.bearer, now).unwrap();
-    assert_eq!(authenticated.credential_id, opened.credential.id);
+    let authenticated = reopened.authenticate(&opened.credential.as_ref().unwrap().bearer, now).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
     assert!(authenticated.scopes.iter().any(|scope| scope == "infer"));
     let request = reopened.request_view(&original.payload.id, "busy-before-wallet-challenges").unwrap();
     assert_eq!(request.id, reservation.id);
@@ -892,8 +892,8 @@ fn challenge_wallet_refusals_preserve_the_last_global_unit_and_accepted_state() 
     assert_eq!(protected_state(&reopened), before);
     assert_preserved(&reopened, &paid);
     assert_read_context(&reopened, &read, &original.payload, NOW + 1);
-    assert_eq!(reopened.authenticate(&opened.credential.bearer, NOW + 1).unwrap().credential_id,
-        opened.credential.id);
+    assert_eq!(reopened.authenticate(&opened.credential.as_ref().unwrap().bearer, NOW + 1).unwrap().credential_id,
+        opened.credential.as_ref().unwrap().id);
     assert!(reopened.prepare_fee_batches(NOW + 1, true).unwrap().is_empty());
 }
 
@@ -1088,8 +1088,8 @@ fn free_opening_preserves_rate_allowance_and_credentials_at_exhaustion() {
             let saved = ledger.quote(&signed.payload.id).unwrap();
             assert_eq!(saved.payload, signed.payload);
             assert_eq!(saved.signature, signed.signature);
-            let authenticated = ledger.authenticate(&account.credential.bearer, now + 1).unwrap();
-            assert_eq!(authenticated.credential_id, account.credential.id);
+            let authenticated = ledger.authenticate(&account.credential.as_ref().unwrap().bearer, now + 1).unwrap();
+            assert_eq!(authenticated.credential_id, account.credential.as_ref().unwrap().id);
             assert_eq!(authenticated.account.contract_id, signed.payload.id);
             assert_eq!(authenticated.account.funded_wei, "0");
             assert_eq!(serde_json::to_value(&authenticated.account).unwrap(),
@@ -1313,13 +1313,13 @@ fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_cre
         assert_eq!(amount, "0");
     }
     let expected_account = serde_json::to_value(&opened.account).unwrap();
-    let original_scopes = ledger.authenticate(&opened.credential.bearer, NOW).unwrap().scopes;
+    let original_scopes = ledger.authenticate(&opened.credential.as_ref().unwrap().bearer, NOW).unwrap().scopes;
     let assert_recovery = |store: &BillingStore, now| {
         let saved = store.quote(&original.payload.id).unwrap();
         assert_eq!(saved.payload, original.payload);
         assert_eq!(saved.signature, original.signature);
-        let authenticated = store.authenticate(&opened.credential.bearer, now).unwrap();
-        assert_eq!(authenticated.credential_id, opened.credential.id);
+        let authenticated = store.authenticate(&opened.credential.as_ref().unwrap().bearer, now).unwrap();
+        assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
         assert_eq!(authenticated.scopes, original_scopes);
         assert_eq!(serde_json::to_value(authenticated.account).unwrap(), expected_account);
         assert!(store.prepare_fee_batches(now, true).unwrap().is_empty());

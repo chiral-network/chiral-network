@@ -1,5 +1,5 @@
 //! Native owner-proof acceptance against the production control router on isolated loopback.
-//! Adversarial middleware changes only challenge replies; no chain/engine simulation or funds.
+//! Adversarial middleware changes challenge replies or loses one committed opening response; no funds.
 #[path = "support/proposal.rs"]
 mod proposal;
 
@@ -33,6 +33,7 @@ const OPEN: &str = "/v1/contracts/open";
 #[derive(Clone, Copy, Debug)]
 enum Reply {
     Honest,
+    LoseFirstOpeningResponse,
     UnsignedExtrasAndUppercaseHex,
     ChainId,
     Genesis,
@@ -70,7 +71,7 @@ fn change_hex(value: &mut String) {
 
 fn transform(mode: Reply, mut payload: AuthPayload, mut reply: Value) -> Value {
     match mode {
-        Reply::Honest => return reply,
+        Reply::Honest | Reply::LoseFirstOpeningResponse => return reply,
         Reply::UnsignedExtrasAndUppercaseHex => {
             let encoded = reply["payload_hex"].as_str().unwrap();
             reply["payload_hex"] = json!(format!("0x{}", encoded[2..].to_ascii_uppercase()));
@@ -178,6 +179,7 @@ struct DeliveredChallenge {
 struct Observations {
     challenges: Vec<DeliveredChallenge>,
     controls: Vec<ControlRequest>,
+    lost_opening: Option<protocol::OpenResult>,
 }
 
 struct Counterparty {
@@ -190,6 +192,7 @@ async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next
     let (parts, body) = request.into_parts();
     let body = to_bytes(body, 96 * 1024).await.unwrap();
     let is_challenge = parts.uri.path() == CHALLENGE;
+    let is_open = parts.uri.path() == OPEN;
     let challenge_request = is_challenge.then(|| serde_json::from_slice(&body).unwrap());
     let control_index = if !is_challenge && parts.uri.path() != "/v1/contracts/propose" {
         let mut observed = peer.observations.lock().unwrap();
@@ -208,6 +211,21 @@ async fn intercept(State(peer): State<Arc<Counterparty>>, request: Request, next
     let response = next.run(Request::from_parts(parts, Body::from(body))).await;
     if let Some(index) = control_index {
         peer.observations.lock().unwrap().controls[index].status = Some(response.status());
+    }
+    if is_open && response.status() == StatusCode::OK
+        && matches!(peer.mode, Reply::LoseFirstOpeningResponse)
+        && peer.observations.lock().unwrap().lost_opening.is_none() {
+        // Run the real handler through its durable commit before losing its reply.
+        // Retain the real secret only as an isolated authentication control, never
+        // install it into the Consumer or fabricate a replacement account.
+        let (mut parts, body) = response.into_parts();
+        let opened = serde_json::from_slice(&to_bytes(body, 96 * 1024).await.unwrap()).unwrap();
+        peer.observations.lock().unwrap().lost_opening = Some(opened);
+        parts.headers.remove(header::CONTENT_LENGTH);
+        return Response::from_parts(parts, Body::from_stream(futures_util::stream::once(async {
+            Err::<Bytes, _>(std::io::Error::new(std::io::ErrorKind::ConnectionReset,
+                "isolated opening response loss"))
+        })));
     }
     if !is_challenge { return response; }
     assert_eq!(response.status(), StatusCode::OK, "the real issuer must succeed before corruption");
@@ -660,8 +678,8 @@ async fn native_free_opening_and_full_refusal_never_prepare_or_submit_payment() 
             no_payments();
         }
 
-        // Saved accepted accounts take the GET refresh path at full capacity, never
-        // the separately blocked lost-unsaved-response/root-rotation opening path.
+        // Saved accepted accounts take the GET refresh path at full capacity;
+        // genuinely lost first responses are exercised separately below.
         fixture.consumer = Consumer::new(config.clone()).unwrap();
         {
             let mut observed = fixture.observations.lock().unwrap();
@@ -681,4 +699,211 @@ async fn native_free_opening_and_full_refusal_never_prepare_or_submit_payment() 
         rpc_server.abort();
         assert!(rpc_server.await.unwrap_err().is_cancelled());
     }
+}
+
+#[tokio::test]
+async fn native_lost_free_opening_recovers_without_issuing_or_rotating_credentials() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 800;
+    let mut fixture = Fixture::new(directory.path(), case, Reply::LoseFirstOpeningResponse).await;
+    let client_calls = Arc::new(Mutex::new(Vec::new()));
+    let observed = client_calls.clone();
+    let rpc_app = Router::new().fallback(move |request: Request| {
+        let observed = observed.clone();
+        async move {
+            observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    });
+    let rpc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut network = fixture.provider.state.config.network.clone();
+    network.rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
+    let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc_app).await.unwrap(); });
+    let config = ConsumerConfig { network, data_dir: directory.path().join(format!("consumer-{case}")),
+        catalog_url: None, development: true, dht: None };
+    fixture.consumer = Consumer::new(config.clone()).unwrap();
+    let id = fixture.quote.payload.id.clone();
+    let owner = fixture.consumer.address().unwrap();
+    let scoped = config.network.scoped_dir(&config.data_dir);
+    let account_path = scoped.join("consumer").join(&owner)
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    let saved = || -> Value {
+        serde_json::from_slice(&std::fs::read(&account_path).unwrap()).unwrap()
+    };
+    let client_journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
+    let provider_journal = Connection::open(fixture.provider.state.config.network
+        .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    let no_payments = || {
+        assert!(client_calls.lock().unwrap().is_empty(), "free recovery must not reach chain RPC");
+        for journal in [&client_journal, &provider_journal] {
+            let rows: (u64, u64) = journal.query_row(
+                "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)", [],
+                |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            assert_eq!(rows, (0, 0));
+        }
+        let rows: (u64, u64, u64, u64, u64) = db.query_row(
+            "SELECT (SELECT COUNT(*) FROM funding_intents),(SELECT COUNT(*) FROM funding_attempts),
+                    (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations),
+                    (SELECT COUNT(*) FROM fee_batches)", [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap();
+        assert_eq!(rows, (0, 0, 0, 0, 0));
+        assert_no_free_payment(&saved());
+    };
+    let clear_controls = || {
+        let mut observed = fixture.observations.lock().unwrap();
+        observed.challenges.clear();
+        observed.controls.clear();
+    };
+
+    // Native sees an actual transport/body failure, not a forged failure status
+    // or a manufactured pending/account record.
+    assert!(fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.is_err());
+    assert_free_control_exchange(&fixture, &fixture.quote, "POST", StatusCode::OK);
+    let opening = fixture.observations.lock().unwrap().lost_opening.clone().unwrap();
+    let original = opening.credential.as_ref().unwrap();
+    let account = serde_json::to_value(&opening.account).unwrap();
+    assert_eq!(opening.account.contract_id, id);
+    assert_eq!(opening.account.consumer_wallet, owner);
+    assert_eq!(opening.account.status, "free");
+    for amount in [&opening.account.funded_wei, &opening.account.fee_wei,
+        &opening.account.spent_wei, &opening.account.reserved_wei, &opening.account.available_wei,
+        &opening.account.reversed_wei, &opening.account.provider_loss_wei, &opening.account.waived_wei] {
+        assert_eq!(amount, "0");
+    }
+    assert_eq!(serde_json::to_value(fixture.provider.state.ledger.account(&id).unwrap()).unwrap(), account);
+    let root_record = || -> (String, String, String, bool) {
+        db.query_row("SELECT id,token_hash,record,revoked FROM credentials WHERE id=?1",
+            [&original.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap()
+    };
+    let original_record = root_record();
+    let assert_original = |ledger: &BillingStore, expected_count: usize| {
+        assert!(root_record() == original_record, "original root and token hash must remain unchanged");
+        let credentials = ledger.credentials(&id).unwrap();
+        assert_eq!(credentials.len(), expected_count);
+        let root = credentials.iter().find(|credential| credential.id == original.id).unwrap();
+        assert!(root.root && !root.revoked);
+        assert_eq!(credentials.iter().filter(|credential| credential.root).count(), 1);
+        let context = ledger.authenticate(&original.bearer, protocol::now().unwrap()).unwrap();
+        assert_eq!(context.credential_id, original.id);
+        assert_eq!(serde_json::to_value(context.account).unwrap(), account);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get::<_, u64>(0)).unwrap(), 1);
+    };
+    assert_original(&fixture.provider.state.ledger, 1);
+    let pending_saved = saved();
+    assert_eq!(pending_saved["offer"], serde_json::to_value(&fixture.provider.offer).unwrap());
+    assert_eq!(pending_saved["quote"], serde_json::to_value(&fixture.quote).unwrap());
+    assert!(pending_saved["account"].is_null() && pending_saved["active_credential"].is_null());
+    assert_eq!(pending_saved["credentials"], json!([]));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&account_path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    assert!(fixture.consumer.accounts().unwrap().is_empty());
+    let pending = fixture.consumer.pending_accounts().unwrap();
+    assert_eq!(pending["pending"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["pending"][0]["contract_id"], id);
+    assert_eq!(pending["pending"][0]["funding_stage"], "free_open_pending");
+    assert_eq!(pending["pending"][0]["funding_wei"], "0");
+    assert!(pending["pending"][0]["tx_hash"].is_null());
+    assert!(pending["pending"][0]["funding_intent_registered_at"].is_null());
+    assert!(fixture.consumer.credential_export(&id, None).is_err());
+    no_payments();
+
+    // Reopen both durable stores and the production provider router at the same
+    // reserved endpoint. No sleep, clock change, synthetic account or new quote.
+    fixture.shutdown.take().unwrap().send(()).unwrap();
+    fixture.server.take().unwrap().await.unwrap();
+    {
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+    }
+    let listener = TcpListener::bind(fixture.provider.offer.payload.endpoint.strip_prefix("http://").unwrap())
+        .await.unwrap();
+    let peer = Arc::new(Counterparty { mode: Reply::Honest, ledger: fixture.provider.state.ledger.clone(),
+        observations: fixture.observations.clone() });
+    let app = contracts::router(fixture.provider.state.clone()).layer(from_fn_with_state(peer, intercept));
+    let (shutdown, stopped) = oneshot::channel();
+    fixture.shutdown = Some(shutdown);
+    fixture.server = Some(tokio::spawn(async move {
+        axum::serve(listener, app).with_graceful_shutdown(async { let _ = stopped.await; })
+            .await.unwrap();
+    }));
+    assert_original(&fixture.provider.state.ledger, 1);
+    for resume in [true, false] {
+        fixture.consumer = Consumer::new(config.clone()).unwrap();
+        clear_controls();
+        let recovered = if resume { fixture.consumer.resume(&id).await.unwrap() }
+            else { fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.unwrap() };
+        assert_free_control_exchange(&fixture, &fixture.quote, if resume { "POST" } else { "GET" }, StatusCode::OK);
+        assert_eq!(serde_json::to_value(recovered).unwrap(), account);
+        assert_eq!(saved()["account"], account);
+        assert!(saved()["active_credential"].is_null());
+        assert_eq!(saved()["credentials"], json!([]));
+        assert_eq!(fixture.consumer.accounts().unwrap().len(), 1);
+        assert_eq!(fixture.consumer.pending_accounts().unwrap(), json!({"pending":[]}));
+        assert!(fixture.consumer.credential_export(&id, None).is_err(),
+            "recovered account must not pretend the undisclosed root is locally available");
+        assert_original(&fixture.provider.state.ledger, 1);
+        no_payments();
+    }
+
+    clear_controls();
+    let issued = fixture.consumer.credential_issue(&id, json!({
+        "expires_at": protocol::now().unwrap() + 600, "spend_cap_wei": null,
+        "max_concurrency": 1, "scopes": ["infer", "read"]
+    })).await.unwrap();
+    assert!(issued.get("bearer").is_none() && issued.get("api_key").is_none());
+    {
+        let observed = fixture.observations.lock().unwrap();
+        assert_eq!(observed.challenges.len(), 2);
+        assert_eq!(observed.controls.len(), 2);
+        for (control, method) in observed.controls.iter().zip(["GET", "POST"]) {
+            assert_eq!(control.method, method);
+            assert_eq!(control.target, format!("/v1/contracts/{id}/credentials"));
+            assert_eq!(control.status, Some(StatusCode::OK));
+        }
+    }
+    let exported = fixture.consumer.credential_export(&id, None).unwrap();
+    assert_eq!(exported["credential_id"], issued["id"]);
+    assert_ne!(exported["credential_id"], original.id);
+    assert!(exported["api_key"].as_str().unwrap() != original.bearer);
+    let context = fixture.provider.state.ledger.authenticate(exported["api_key"].as_str().unwrap(),
+        protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, exported["credential_id"].as_str().unwrap());
+    assert!(context.scopes.iter().any(|scope| scope == "infer"));
+    assert!(context.scopes.iter().any(|scope| scope == "read"));
+    assert_eq!(serde_json::to_value(context.account).unwrap(), account);
+    assert_eq!(saved()["active_credential"], exported["credential_id"]);
+    assert_eq!(saved()["credentials"].as_array().unwrap().len(), 1);
+    assert!(saved()["credentials"][0]["bearer"] == exported["api_key"]);
+    assert_original(&fixture.provider.state.ledger, 2);
+
+    // Both independently issued secrets still authorize real production reads;
+    // explicit issuance restores native infer/read defaults without revocation.
+    let http = reqwest::Client::new();
+    for bearer in [original.bearer.as_str(), exported["api_key"].as_str().unwrap()] {
+        let response = http.get(format!("{}/v1/contracts/{id}", fixture.provider.offer.payload.endpoint))
+            .bearer_auth(bearer).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap(), account);
+    }
+    for resume in [true, false] {
+        fixture.consumer = Consumer::new(config.clone()).unwrap();
+        clear_controls();
+        let refreshed = if resume { fixture.consumer.resume(&id).await.unwrap() }
+            else { fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.unwrap() };
+        assert_free_control_exchange(&fixture, &fixture.quote, "GET", StatusCode::OK);
+        assert_eq!(serde_json::to_value(refreshed).unwrap(), account);
+        assert!(fixture.consumer.credential_export(&id, None).unwrap() == exported,
+            "native refresh must preserve the explicitly exported key");
+        assert_eq!(saved()["active_credential"], exported["credential_id"]);
+        assert_original(&fixture.provider.state.ledger, 2);
+        no_payments();
+    }
+    fixture.stop().await;
+    rpc_server.abort();
+    assert!(rpc_server.await.unwrap_err().is_cancelled());
 }

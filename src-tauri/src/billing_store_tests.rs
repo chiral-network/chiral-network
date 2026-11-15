@@ -206,7 +206,7 @@ fn concurrent_connections_cannot_overspend_one_balance() {
             let ledger = BillingStore::open(&path, &network()).unwrap();
             let barrier = barrier.clone();
             let id = q.payload.id.clone();
-            let credential = open.credential.id.clone();
+            let credential = open.credential.as_ref().unwrap().id.clone();
             std::thread::spawn(move || {
                 barrier.wait();
                 ledger.reserve(&id, &credential, &format!("request-{i}"), 300, 400, 110, &ledger.account(&id).unwrap().model)
@@ -225,15 +225,133 @@ fn concurrent_connections_cannot_overspend_one_balance() {
 }
 
 #[test]
-fn open_replay_rotates_secret_without_crediting_twice() {
-    let store = memory();
+fn open_replay_preserves_credentials_holds_and_spend_without_crediting_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
     let (q, _, open) = paid(&store);
-    let reopened = store.open_account(&q, None, 500).unwrap();
-    assert_eq!(reopened.account.funded_wei, "1000");
-    assert_ne!(open.credential.bearer, reopened.credential.bearer);
-    assert!(store.authenticate(&open.credential.bearer, 501).is_err());
-    assert!(store.authenticate(&reopened.credential.bearer, 501).is_ok());
+    let root = open.credential.unwrap();
+    let spent = store.reserve(&q.payload.id, &root.id, "spent-before-replay", 100, 100, 110, &q.payload.model).unwrap();
+    store.settle(&spent.id, &TokenUsage { prompt_tokens: 100, completion_tokens: 50 }, "completed", 111).unwrap();
+    let held = store.reserve(&q.payload.id, &root.id, "held-through-replay", 100, 100, 112, &q.payload.model).unwrap();
+    let app = app_credential(&store, &q.payload.id, Some("300"), vec!["read".into()]);
+    let account = encode(&store.account(&q.payload.id).unwrap()).unwrap();
+    let credentials = encode(&store.credentials(&q.payload.id).unwrap()).unwrap();
+    let funding = encode(&store.funding_history(&q.payload.id).unwrap()).unwrap();
+    let batches = store.prepare_fee_batches(113, true).unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].amount_wei, "5");
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    for now in [500, 501] {
+        // Quote/admission expiry and reopening the database are not credential mutations.
+        let reopened = store.open_account(&q, None, now).unwrap();
+        assert!(reopened.credential.is_none());
+        let document = serde_json::to_value(&reopened).unwrap();
+        assert_eq!(document["credential"], serde_json::Value::Null);
+        assert!(!document.to_string().contains(&root.bearer));
+        assert_eq!(encode(&reopened.account).unwrap(), account);
+        assert_eq!(reopened.account.funded_wei, "1000");
+        assert_eq!(reopened.account.fee_wei, "5");
+        assert_eq!(reopened.account.spent_wei, "150");
+        assert_eq!(reopened.account.reserved_wei, "200");
+        assert_eq!(reopened.account.available_wei, "645");
+        assert_eq!(encode(&store.credentials(&q.payload.id).unwrap()).unwrap(), credentials);
+        assert_eq!(encode(&store.funding_history(&q.payload.id).unwrap()).unwrap(), funding);
+        assert_eq!(store.funding_history(&q.payload.id).unwrap().len(), 1);
+        assert_eq!(encode(&store.prepare_fee_batches(now, true).unwrap()).unwrap(), encode(&batches).unwrap());
+        assert_eq!(store.authenticate(&root.bearer, now).unwrap().credential_id, root.id);
+        assert!(store.authenticate(&app.bearer, now).is_ok());
+        assert_eq!(store.request_view(&q.payload.id, &held.id).unwrap().status, "reserved");
+    }
+    let options = CredentialIssueRequest {
+        expires_at: 1000, spend_cap_wei: None, max_concurrency: 2,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let issued = store.issue_credential(&q.payload.id, &options, 502).unwrap();
+    assert!(store.authenticate(&root.bearer, 502).is_ok());
+    assert!(store.authenticate(&issued.bearer, 502).is_ok());
+    let rotated = store.rotate_credential(&q.payload.id, &root.id, &options, 503).unwrap();
+    assert!(rotated.bearer != root.bearer);
+    assert!(store.authenticate(&root.bearer, 503).is_err());
+    assert!(store.authenticate(&rotated.bearer, 503).is_ok());
+    assert!(store.authenticate(&issued.bearer, 503).is_ok());
+    assert_eq!(encode(&store.account(&q.payload.id).unwrap()).unwrap(), account);
+    assert!(store.open_account(&q, None, 504).unwrap().credential.is_none());
+    assert!(store.authenticate(&root.bearer, 504).is_err());
+    assert!(store.authenticate(&rotated.bearer, 504).is_ok());
+    let settled = store.settle(&held.id, &TokenUsage { prompt_tokens: 100, completion_tokens: 50 }, "completed", 505).unwrap();
+    assert_eq!(settled.cost_wei, "150");
+    assert_eq!(store.account(&q.payload.id).unwrap().reserved_wei, "0");
+    assert_eq!(store.account(&q.payload.id).unwrap().spent_wei, "300");
+}
+
+#[test]
+fn open_replay_never_revives_revoked_or_expired_roots() {
+    for revoked in [false, true] {
+        let store = memory();
+        let (q, _, opened) = paid(&store);
+        let root = opened.credential.unwrap();
+        let now = if revoked {
+            store.revoke_credential(&q.payload.id, &root.id).unwrap();
+            500
+        } else {
+            root.expires_at
+        };
+        assert!(store.authenticate(&root.bearer, now).is_err());
+        let credentials = encode(&store.credentials(&q.payload.id).unwrap()).unwrap();
+        let funding = encode(&store.funding_history(&q.payload.id).unwrap()).unwrap();
+        for retry in [now, now + 1] {
+            let reopened = store.open_account(&q, None, retry).unwrap();
+            assert!(reopened.credential.is_none());
+            assert_eq!(encode(&reopened.account).unwrap(), encode(&opened.account).unwrap());
+            assert_eq!(encode(&store.credentials(&q.payload.id).unwrap()).unwrap(), credentials);
+            assert_eq!(encode(&store.funding_history(&q.payload.id).unwrap()).unwrap(), funding);
+            assert!(store.authenticate(&root.bearer, retry).is_err());
+        }
+        let recovered = store.issue_credential(&q.payload.id, &CredentialIssueRequest {
+            expires_at: now + 3600, spend_cap_wei: None, max_concurrency: 1,
+            scopes: vec!["read".into()],
+        }, now + 2).unwrap();
+        assert!(store.authenticate(&recovered.bearer, now + 2).is_ok());
+        assert!(store.authenticate(&root.bearer, now + 2).is_err());
+    }
+}
+
+#[test]
+fn concurrent_openings_issue_only_one_initial_secret_and_credit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let q = quote(1000, false);
+    store.store_quote(&q, 100).unwrap();
+    let payment = payment(&q.payload, true, 1000, 1);
+    register(&store, &q, &payment, 100);
+    let barrier = Arc::new(Barrier::new(2));
+    let workers: Vec<_> = (0..2).map(|_| {
+        let ledger = BillingStore::open(&path, &network()).unwrap();
+        let q = q.clone();
+        let payment = payment.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            ledger.open_account(&q, Some(&payment), 101).unwrap()
+        })
+    }).collect();
+    let results: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|result| result.credential.is_some()).count(), 1);
+    assert_eq!(encode(&results[0].account).unwrap(), encode(&results[1].account).unwrap());
+    let root = results.iter().find_map(|result| result.credential.as_ref()).unwrap();
+    assert!(store.authenticate(&root.bearer, 102).is_ok());
+    assert_eq!(store.credentials(&q.payload.id).unwrap().len(), 1);
     assert_eq!(store.funding_history(&q.payload.id).unwrap().len(), 1);
+    let account = store.account(&q.payload.id).unwrap();
+    assert_eq!(account.funded_wei, "1000");
+    assert_eq!(account.fee_wei, "5");
+    assert_eq!(account.available_wei, "995");
+    let batches = store.prepare_fee_batches(102, true).unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].amount_wei, "5");
 }
 
 #[test]
@@ -308,12 +426,12 @@ fn wrong_payment_dimensions_leave_no_account_or_credential() {
 fn request_ids_are_scoped_and_terminal_usage_is_idempotent() {
     let store = memory();
     let (q, _, open) = paid(&store);
-    let r = store.reserve(&q.payload.id, &open.credential.id, "same-key", 100, 200, 110, &store.account(&q.payload.id).unwrap().model)
+    let r = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "same-key", 100, 200, 110, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     assert!(store
         .reserve(
             &q.payload.id,
-            &open.credential.id,
+            &open.credential.as_ref().unwrap().id,
             "same-key",
             100,
             200,
@@ -345,7 +463,7 @@ fn request_ids_are_scoped_and_terminal_usage_is_idempotent() {
     store.store_quote(&q2, 113).unwrap();
     let o2 = store.open_account(&q2, None, 114).unwrap();
     assert!(store
-        .reserve(&q2.payload.id, &o2.credential.id, "same-key", 100, 200, 115, &q2.payload.model)
+        .reserve(&q2.payload.id, &o2.credential.as_ref().unwrap().id, "same-key", 100, 200, 115, &q2.payload.model)
         .is_ok());
     assert_eq!(
         store.request_view(&q.payload.id, "same-key").unwrap().id,
@@ -394,7 +512,7 @@ fn restart_releases_unknown_holds_and_preserves_deduplication() {
     let path = dir.path().join("ledger.sqlite");
     let store = BillingStore::open(&path, &network()).unwrap();
     let (q, _, open) = paid(&store);
-    let r = store.reserve(&q.payload.id, &open.credential.id, "interrupted", 100, 200, 110, &store.account(&q.payload.id).unwrap().model)
+    let r = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "interrupted", 100, 200, 110, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     drop(store);
     let store = BillingStore::open(&path, &network()).unwrap();
@@ -406,7 +524,7 @@ fn restart_releases_unknown_holds_and_preserves_deduplication() {
     assert_eq!(result.provider_loss_wei, "300");
     assert_eq!(store.account(&q.payload.id).unwrap().available_wei, "995");
     assert!(store
-        .reserve(&q.payload.id, &open.credential.id, "interrupted", 1, 1, 122, &q.payload.model)
+        .reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "interrupted", 1, 1, 122, &q.payload.model)
         .is_err());
     assert_eq!(
         store
@@ -429,7 +547,7 @@ fn restart_releases_unknown_holds_and_preserves_deduplication() {
 fn invalid_usage_cannot_charge_over_hold_or_leave_funds_locked() {
     let store = memory();
     let (q, _, open) = paid(&store);
-    let r = store.reserve(&q.payload.id, &open.credential.id, "bad-usage", 10, 20, 110, &store.account(&q.payload.id).unwrap().model)
+    let r = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "bad-usage", 10, 20, 110, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     assert!(store
         .settle(
@@ -453,7 +571,7 @@ fn invalid_usage_cannot_charge_over_hold_or_leave_funds_locked() {
 fn orphan_credit_freezes_reverses_and_records_consumed_shortfall() {
     let store = memory();
     let (q, p, open) = paid(&store);
-    let spent = store.reserve(&q.payload.id, &open.credential.id, "spent", 200, 300, 110, &store.account(&q.payload.id).unwrap().model)
+    let spent = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "spent", 200, 300, 110, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     store
         .settle(
@@ -466,7 +584,7 @@ fn orphan_credit_freezes_reverses_and_records_consumed_shortfall() {
             111,
         )
         .unwrap();
-    let held = store.reserve(&q.payload.id, &open.credential.id, "held", 100, 100, 112, &store.account(&q.payload.id).unwrap().model)
+    let held = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "held", 100, 100, 112, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     store
         .mark_funding_state(&p.tx_hash, "orphaned", 113)
@@ -479,7 +597,7 @@ fn orphan_credit_freezes_reverses_and_records_consumed_shortfall() {
     assert_eq!(a.reserved_wei, "0");
     assert_eq!(a.fee_wei, "0");
     assert!(store
-        .reserve(&q.payload.id, &open.credential.id, "after", 0, 0, 114, &q.payload.model)
+        .reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "after", 0, 0, 114, &q.payload.model)
         .is_err());
     assert_eq!(
         store
@@ -514,14 +632,14 @@ fn settlement_pending_freezes_then_recovers_without_recredit() {
         .mark_funding_state(&p.tx_hash, "pending", 110)
         .unwrap();
     assert!(store
-        .reserve(&q.payload.id, &open.credential.id, "blocked", 1, 1, 111, &q.payload.model)
+        .reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "blocked", 1, 1, 111, &q.payload.model)
         .is_err());
     store
         .mark_funding_state(&p.tx_hash, "accepted", 112)
         .unwrap();
     assert_eq!(store.account(&q.payload.id).unwrap().funded_wei, "1000");
     assert!(store
-        .reserve(&q.payload.id, &open.credential.id, "available", 1, 1, 113, &q.payload.model)
+        .reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "available", 1, 1, 113, &q.payload.model)
         .is_ok());
 }
 
@@ -554,7 +672,7 @@ fn free_sessions_authenticate_without_funding_or_fee_evidence() {
     assert!(store
         .check_open_funding(&q.payload, Some(&p.raw_transaction), 102)
         .is_err());
-    let r = store.reserve(&q.payload.id, &opened.credential.id, "free", 100, 100, 110, &store.account(&q.payload.id).unwrap().model)
+    let r = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "free", 100, 100, 110, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     assert_eq!(
         store
@@ -1102,7 +1220,7 @@ fn embedding_batches_have_a_separate_bounded_aggregate_token_limit() {
     assert!(store
         .reserve(
             &q.payload.id,
-            &open.credential.id,
+            &open.credential.as_ref().unwrap().id,
             "batch",
             context * 32,
             0,
@@ -1113,7 +1231,7 @@ fn embedding_batches_have_a_separate_bounded_aggregate_token_limit() {
     assert!(store
         .reserve(
             &q.payload.id,
-            &open.credential.id,
+            &open.credential.as_ref().unwrap().id,
             "oversized",
             context * 32 + 1,
             0,
@@ -1124,7 +1242,7 @@ fn embedding_batches_have_a_separate_bounded_aggregate_token_limit() {
     assert!(store
         .reserve(
             &q.payload.id,
-            &open.credential.id,
+            &open.credential.as_ref().unwrap().id,
             "generation",
             context * 2,
             1,
@@ -1173,7 +1291,7 @@ fn funding_transport_failure_preserves_last_observation_but_not_a_canonical_free
         .apply_funding_recheck(&p.tx_hash, &unavailable, 110)
         .unwrap();
     assert_eq!(store.account(&q.payload.id).unwrap().status, "active");
-    let request = store.reserve(&q.payload.id, &open.credential.id, "offline", 10, 10, 111, &store.account(&q.payload.id).unwrap().model)
+    let request = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "offline", 10, 10, 111, &store.account(&q.payload.id).unwrap().model)
         .unwrap();
     store
         .settle(
@@ -1194,7 +1312,7 @@ fn funding_transport_failure_preserves_last_observation_but_not_a_canonical_free
         "settlement_pending"
     );
     assert!(store
-        .reserve(&q.payload.id, &open.credential.id, "pending", 1, 1, 115, &q.payload.model)
+        .reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "pending", 1, 1, 115, &q.payload.model)
         .is_err());
     store
         .apply_funding_recheck(&p.tx_hash, &Ok(PaymentState::Accepted(p.clone())), 116)
@@ -1437,7 +1555,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
         )
         .await
         .is_err());
-    let reservation = ledger.reserve(&q.payload.id, &opened.credential.id, "offline-inference", 1, 1, now, &ledger.account(&q.payload.id).unwrap().model)
+    let reservation = ledger.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "offline-inference", 1, 1, now, &ledger.account(&q.payload.id).unwrap().model)
         .unwrap();
     ledger
         .settle(
@@ -1460,7 +1578,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     let client = reqwest::Client::new();
     let models = client
         .get(format!("{base}/v1/models"))
-        .bearer_auth(&opened.credential.bearer)
+        .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
         .send()
         .await
         .unwrap()
@@ -1471,7 +1589,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     let inference = serde_json::json!({"model":q.payload.model.id,"messages":[{"role":"user","content":"Hi"}],"max_tokens":1});
     let response = client
         .post(format!("{base}/v1/chat/completions"))
-        .bearer_auth(&opened.credential.bearer)
+        .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
         .header("idempotency-key", "offline-http-inference")
         .json(&inference)
         .send()
@@ -1492,7 +1610,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     state.accepting.store(false, Ordering::Release);
     let models = client
         .get(format!("{base}/v1/models"))
-        .bearer_auth(&opened.credential.bearer)
+        .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
         .send()
         .await
         .unwrap()
@@ -1503,7 +1621,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     assert_eq!(
         client
             .post(format!("{base}/v1/chat/completions"))
-            .bearer_auth(&opened.credential.bearer)
+            .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
             .json(&inference)
             .send()
             .await
@@ -1515,7 +1633,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     state.qualified_models.write().unwrap().clear();
     let models = client
         .get(format!("{base}/v1/models"))
-        .bearer_auth(&opened.credential.bearer)
+        .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
         .send()
         .await
         .unwrap()
@@ -1526,7 +1644,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     assert_eq!(
         client
             .post(format!("{base}/v1/chat/completions"))
-            .bearer_auth(&opened.credential.bearer)
+            .bearer_auth(&opened.credential.as_ref().unwrap().bearer)
             .json(&inference)
             .send()
             .await
@@ -1553,7 +1671,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     assert!(ledger
         .reserve(
             &q.payload.id,
-            &opened.credential.id,
+            &opened.credential.as_ref().unwrap().id,
             "pending-inference",
             1,
             1,
@@ -1634,7 +1752,7 @@ fn orphan_restoration_compensates_spending_and_every_fee_state_once_across_resta
         let path = dir.path().join("ledger.sqlite");
         let store = BillingStore::open(&path, &network()).unwrap();
         let (q, p, open) = paid(&store);
-        let spent = store.reserve(&q.payload.id, &open.credential.id, "spent", 200, 300, 110, &store.account(&q.payload.id).unwrap().model)
+        let spent = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "spent", 200, 300, 110, &store.account(&q.payload.id).unwrap().model)
             .unwrap();
         store
             .settle(
@@ -1647,7 +1765,7 @@ fn orphan_restoration_compensates_spending_and_every_fee_state_once_across_resta
                 111,
             )
             .unwrap();
-        let held = store.reserve(&q.payload.id, &open.credential.id, "held", 100, 100, 112, &store.account(&q.payload.id).unwrap().model)
+        let held = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "held", 100, 100, 112, &store.account(&q.payload.id).unwrap().model)
             .unwrap();
         match fee_state {
             "batched" => {
@@ -1747,7 +1865,7 @@ fn restoring_one_funding_never_unfreezes_other_pending_or_orphaned_funding() {
         let (q, opening, open) = paid(&store);
         let topup = payment(&q.payload, false, 1000, 2);
         store.credit_topup(&q.payload.id, &topup, 102).unwrap();
-        let reservation = store.reserve(&q.payload.id, &open.credential.id, "spent", 750, 750, 110, &store.account(&q.payload.id).unwrap().model)
+        let reservation = store.reserve(&q.payload.id, &open.credential.as_ref().unwrap().id, "spent", 750, 750, 110, &store.account(&q.payload.id).unwrap().model)
             .unwrap();
         store
             .settle(
@@ -2370,7 +2488,7 @@ fn performance_waiver_preserves_usage_and_releases_reservation_exactly_once() {
     let funding = payment(&q.payload, true, 1000, 91);
     register(&store, &q, &funding, 100);
     let opened = store.open_account(&q, Some(&funding), 101).unwrap();
-    let reservation = store.reserve(&q.payload.id, &opened.credential.id, "slow-request", 100, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
+    let reservation = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "slow-request", 100, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
     let usage = TokenUsage { prompt_tokens: 100, completion_tokens: 256 };
     let outcome = crate::performance::outcome(q.payload.model.serving.as_ref().unwrap(), true, Some(2_000_001), Some(1_000_000), Some(&usage), "completed", false, Some(3_000_001), &(q.payload.model.serving.as_ref().unwrap()).qualification.evidence_sha256);
     for now in [103, 104] {
@@ -2380,7 +2498,7 @@ fn performance_waiver_preserves_usage_and_releases_reservation_exactly_once() {
         assert_eq!(settled.usage.completion_tokens, 256);
         assert_eq!(settled.settled_at, Some(103));
     }
-    assert!(store.reserve(&q.payload.id, &opened.credential.id, "slow-request", 100, 256, 105, &q.payload.model).is_err());
+    assert!(store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "slow-request", 100, 256, 105, &q.payload.model).is_err());
     let account = store.account(&q.payload.id).unwrap();
     assert_eq!(account.spent_wei, "0");
     assert_eq!(account.reserved_wei, "0");
@@ -2392,7 +2510,7 @@ fn performance_waiver_preserves_usage_and_releases_reservation_exactly_once() {
     let receipt = store.receipt(&q.payload.id, PROVIDER_KEY, 106).unwrap();
     protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
     assert_eq!(receipt.payload.requests[0].performance.as_ref().unwrap().remedy, "inference_waiver");
-    let credential = store.credentials(&q.payload.id).unwrap().into_iter().find(|c| c.id == opened.credential.id).unwrap();
+    let credential = store.credentials(&q.payload.id).unwrap().into_iter().find(|c| c.id == opened.credential.as_ref().unwrap().id).unwrap();
     assert_eq!(credential.reserved_wei, "0");
     assert_eq!(credential.spent_wei, "0");
 }
@@ -2408,7 +2526,7 @@ fn restart_performance_waiver_does_not_invent_usage_or_credit() {
     let funding = payment(&q.payload, true, 1000, 92);
     register(&store, &q, &funding, 100);
     let opened = store.open_account(&q, Some(&funding), 101).unwrap();
-    store.reserve(&q.payload.id, &opened.credential.id, "crash-request", 100, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
+    store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "crash-request", 100, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
     assert_eq!(store.recover_requests(103).unwrap(), 1);
     assert_eq!(store.recover_requests(104).unwrap(), 0);
     let request = store.request_view(&q.payload.id, "crash-request").unwrap();
@@ -2436,7 +2554,7 @@ fn measured_profile_withdraws_below_ninety_five_percent_without_changing_agreeme
     let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 2 };
     for index in 0..21u64 {
         let now = 102 + index;
-        let reservation = store.reserve(&q.payload.id, &opened.credential.id, &format!("window-{index}"), 1, 256, now, &store.account(&q.payload.id).unwrap().model).unwrap();
+        let reservation = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, &format!("window-{index}"), 1, 256, now, &store.account(&q.payload.id).unwrap().model).unwrap();
         let ttft = if index >= 19 { 2_000_001 } else { 1_000_000 };
         let outcome = crate::performance::outcome(q.payload.model.serving.as_ref().unwrap(), true, Some(ttft), Some(50_000), Some(&usage), "completed", false, Some(ttft + 50_000), &(q.payload.model.serving.as_ref().unwrap()).qualification.evidence_sha256);
         store.settle_measured(&reservation.id, &usage, "completed", Some(&outcome), now).unwrap();
@@ -2486,7 +2604,7 @@ fn withdrawal_survives_outstanding_burst_late_completion_and_restart_per_model_e
         stale.nonce = protocol::random_id();
         let stale = protocol::sign(protocol::QUOTE_DOMAIN, stale, PROVIDER_KEY).unwrap();
         store.store_quote(&stale, 100).unwrap();
-        let requests: Vec<_> = (0..32).map(|index| store.reserve(&q.payload.id, &opened.credential.id, &format!("burst-{index}"), 1, 256, 102 + index, &store.account(&q.payload.id).unwrap().model).unwrap()).collect();
+        let requests: Vec<_> = (0..32).map(|index| store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, &format!("burst-{index}"), 1, 256, 102 + index, &store.account(&q.payload.id).unwrap().model).unwrap()).collect();
         let order: Vec<usize> = if misses_first { (0..32).collect() } else { (3..32).chain(0..3).collect() };
         for index in order {
             let settled = settle_performance(&store, &requests[index], index < 3, false);
@@ -2537,7 +2655,7 @@ fn withdrawal_survives_outstanding_burst_late_completion_and_restart_per_model_e
         for (isolated, tag) in [(other_model, 95), (fresh_model, 96)] {
             assert!(!store.performance_withdrawn(&isolated).unwrap());
             let (q, opened) = performance_account(&store, isolated.clone(), tag);
-            let request = store.reserve(&q.payload.id, &opened.credential.id, "independent", 1, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
+            let request = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "independent", 1, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
             settle_performance(&store, &request, true, false);
             assert!(!store.performance_withdrawn(&isolated).unwrap());
             assert!(store.performance_withdrawn(&model).unwrap());
@@ -2553,7 +2671,7 @@ fn ttft_only_successes_neither_dilute_nor_fill_joint_withdrawal_window() {
     let (q, opened) = performance_account(&store, model.clone(), 97);
     for index in 0..35 {
         let missed = index < 2 || index == 34;
-        let request = store.reserve(&q.payload.id, &opened.credential.id, &format!("short-{index}"), 1, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
+        let request = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, &format!("short-{index}"), 1, 256, 102, &store.account(&q.payload.id).unwrap().model).unwrap();
         settle_performance(&store, &request, missed, !missed);
         assert_eq!(store.performance_withdrawn(&model).unwrap(), index == 34);
     }
@@ -2568,18 +2686,18 @@ fn evidence_renewal_preserves_existing_credit_and_request_identity() {
     model.serving = Some(crate::performance::test_profile());
     let (q, opened) = performance_account(&store, model.clone(), 99);
     for index in 0..3 {
-        let request = store.reserve(&q.payload.id, &opened.credential.id,
+        let request = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id,
             &format!("old-miss-{index}"), 1, 256, 102, &model).unwrap();
         settle_performance(&store, &request, true, false);
     }
     assert!(store.performance_withdrawn(&model).unwrap());
-    assert!(store.reserve(&q.payload.id, &opened.credential.id, "withdrawn", 1, 256, 201, &model)
+    assert!(store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "withdrawn", 1, 256, 201, &model)
         .unwrap_err().starts_with("model_unqualified:"));
     let mut current = model.clone();
     let qualification = &mut current.serving.as_mut().unwrap().qualification;
     qualification.evidence_sha256 = "e".repeat(64);
     qualification.measured_at = 201;
-    let request = store.reserve(&q.payload.id, &opened.credential.id, "renewed", 1, 256, 202, &current).unwrap();
+    let request = store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "renewed", 1, 256, 202, &current).unwrap();
     let pending = store.request_view(&q.payload.id, "renewed").unwrap().performance.unwrap();
     assert_eq!(pending.evidence_sha256, "e".repeat(64));
     assert_eq!(pending.eligibility, "pending");
@@ -2607,9 +2725,9 @@ fn evidence_renewal_preserves_existing_credit_and_request_identity() {
     assert_eq!(store.quote(&stale.payload.id).unwrap().payload.model, model);
     let mut changed = current.clone();
     changed.serving.as_mut().unwrap().output_tokens_per_second = 50;
-    assert!(store.reserve(&q.payload.id, &opened.credential.id, "changed-class", 1, 256, 204, &changed)
+    assert!(store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "changed-class", 1, 256, 204, &changed)
         .unwrap_err().starts_with("model_revision_unavailable:"));
-    store.reserve(&q.payload.id, &opened.credential.id, "crashed-renewal", 1, 256, 204, &current).unwrap();
+    store.reserve(&q.payload.id, &opened.credential.as_ref().unwrap().id, "crashed-renewal", 1, 256, 204, &current).unwrap();
     drop(store);
     let store = BillingStore::open(&path, &network()).unwrap();
     assert_eq!(store.recover_requests(205).unwrap(), 1);
@@ -2713,7 +2831,7 @@ fn quote_rate_adoption_preserves_totals_and_retires_wallet_rows_only_on_commit()
         assert_eq!(store.quote(&pending.payload.id).unwrap().payload, pending.payload);
         assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
             encode(&opened.account).unwrap());
-        assert_eq!(store.authenticate(&opened.credential.bearer, 240).unwrap().credential_id, opened.credential.id);
+        assert_eq!(store.authenticate(&opened.credential.as_ref().unwrap().bearer, 240).unwrap().credential_id, opened.credential.as_ref().unwrap().id);
         assert_eq!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().unwrap().payload.quote_id,
             agreement.payload.id);
     }
@@ -2808,7 +2926,7 @@ fn inconsistent_quote_rate_evidence_refuses_without_erasing_recoverable_accounts
         assert!(store.quote(&candidate.payload.id).unwrap_err().starts_with("not_found:"));
         assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(),
             encode(&opened.account).unwrap());
-        assert_eq!(store.authenticate(&opened.credential.bearer, 300).unwrap().credential_id, opened.credential.id);
+        assert_eq!(store.authenticate(&opened.credential.as_ref().unwrap().bearer, 300).unwrap().credential_id, opened.credential.as_ref().unwrap().id);
         assert_eq!(store.quote(&agreement.payload.id).unwrap().payload, agreement.payload);
         assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
         // Restore the exact valid fixture counter explicitly, not automatic repair.

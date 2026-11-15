@@ -212,7 +212,7 @@ impl Fixture {
         let read = self.scoped_credential(&target.account.contract_id, "read");
         let infer = self.scoped_credential(&target.account.contract_id, "infer");
         let cancelled = |opened: &OpenResult| {
-            let reservation = ledger.reserve(&opened.account.contract_id, &opened.credential.id,
+            let reservation = ledger.reserve(&opened.account.contract_id, &opened.credential.as_ref().unwrap().id,
                 REQUEST_KEY, 1, 1, now, &opened.account.model).unwrap();
             ledger.settle(&reservation.id, &TokenUsage::default(), "cancelled_unknown_usage", now).unwrap()
         };
@@ -293,7 +293,7 @@ impl Fixture {
                 let issued: Credential = serde_json::from_value(value).unwrap();
                 assert_eq!(issued.contract_id, previous.contract_id);
                 assert_ne!(issued.id, previous.id);
-                assert_ne!(issued.bearer, previous.bearer);
+                assert!(issued.bearer != previous.bearer);
                 let context = ledger.authenticate(&issued.bearer, now).unwrap();
                 assert_eq!(context.account.contract_id, previous.contract_id);
                 assert_eq!(context.credential_id, issued.id);
@@ -554,11 +554,11 @@ async fn every_control_read_requires_its_owner_or_an_account_scoped_read_bearer(
         let accounts = fixture.accounts().await;
         let path = route.path(&accounts.target.account.contract_id);
         denied(fixture.send("GET", &path, &HeaderMap::new(), Vec::new()).await, StatusCode::UNAUTHORIZED);
-        for credential in [&accounts.infer, &accounts.other.credential] {
+        for credential in [&accounts.infer, accounts.other.credential.as_ref().unwrap()] {
             denied(fixture.send("GET", &path, &bearer(credential), Vec::new()).await, StatusCode::FORBIDDEN);
         }
         fixture.read_ok(route, &accounts, &bearer(&accounts.read)).await;
-        fixture.read_ok(route, &accounts, &bearer(&accounts.target.credential)).await;
+        fixture.read_ok(route, &accounts, &bearer(accounts.target.credential.as_ref().unwrap())).await;
         let mut proof = fixture.proof(OWNER_KEY, "GET", &path, b"").await;
         fixture.read_ok(route, &accounts, &proof.headers).await;
         proof.headers.extend(bearer(&accounts.read));
@@ -678,7 +678,7 @@ async fn credential_mutations_accept_only_the_account_owner_not_any_bearer() {
         let other_before = fixture.credential_state(&accounts.other.account.contract_id);
         let (method, path, body) = mutation.request(id, &accounts.read.id, &credential_options());
         denied(fixture.send(method, &path, &HeaderMap::new(), body.clone()).await, StatusCode::UNAUTHORIZED);
-        for credential in [&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential] {
+        for credential in [accounts.target.credential.as_ref().unwrap(), &accounts.read, &accounts.infer, accounts.other.credential.as_ref().unwrap()] {
             denied(fixture.send(method, &path, &bearer(credential), body.clone()).await, StatusCode::UNAUTHORIZED);
         }
         let mut incomplete = bearer(&accounts.read);
@@ -690,18 +690,18 @@ async fn credential_mutations_accept_only_the_account_owner_not_any_bearer() {
         assert!(fixture.provider.state.ledger.challenge(&wrong_owner.nonce).is_err());
         denied(fixture.send(method, &path, &wrong_owner.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
         assert_eq!(fixture.credential_state(id), before);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.read, &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
 
         let mut owner = fixture.proof(OWNER_KEY, method, &path, &body).await;
         let (status, value) = fixture.send(method, &path, &owner.headers, body.clone()).await;
         assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
         fixture.check_mutation(mutation, &accounts.read, value);
         let after = fixture.credential_state(id);
-        owner.headers.extend(bearer(&accounts.target.credential));
+        owner.headers.extend(bearer(accounts.target.credential.as_ref().unwrap()));
         denied(fixture.send(method, &path, &owner.headers, body).await, StatusCode::UNAUTHORIZED);
         assert_eq!(fixture.credential_state(id), after);
         assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.infer, &accounts.other.credential]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
     }
 }
 
@@ -716,7 +716,7 @@ async fn credential_identifiers_cannot_escape_the_signed_account_even_for_the_sa
         let before = fixture.credential_state(target);
         let other_before = fixture.credential_state(other);
         let options = credential_options();
-        let (method, path, body) = mutation.request(target, &accounts.other.credential.id, &options);
+        let (method, path, body) = mutation.request(target, &accounts.other.credential.as_ref().unwrap().id, &options);
         let proof = fixture.proof(OWNER_KEY, method, &path, &body).await;
         denied(fixture.send(method, &path, &proof.headers, body.clone()).await, StatusCode::NOT_FOUND);
         let persisted = BillingStore::open(&fixture.provider.ledger_path, &fixture.provider.offer.payload.network).unwrap();
@@ -724,16 +724,16 @@ async fn credential_identifiers_cannot_escape_the_signed_account_even_for_the_sa
         denied(fixture.send(method, &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
         assert_eq!(fixture.credential_state(target), before);
         assert_eq!(fixture.credential_state(other), other_before);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.read, &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
 
         // The credential exists and belongs to this wallet, but requires its own account's signed target.
-        let (method, path, body) = mutation.request(other, &accounts.other.credential.id, &options);
+        let (method, path, body) = mutation.request(other, &accounts.other.credential.as_ref().unwrap().id, &options);
         let correct = fixture.proof(OWNER_KEY, method, &path, &body).await;
         let (status, value) = fixture.send(method, &path, &correct.headers, body).await;
         assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
-        fixture.check_mutation(mutation, &accounts.other.credential, value);
+        fixture.check_mutation(mutation, accounts.other.credential.as_ref().unwrap(), value);
         assert_eq!(fixture.credential_state(target), before);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.read, &accounts.infer]);
     }
 }
 
@@ -761,7 +761,7 @@ async fn credential_business_refusals_consume_proof_without_partial_mutations() 
         assert!(persisted.challenge(&proof.nonce).is_err());
         assert_eq!(serde_json::to_value(persisted.credentials(id).unwrap()).unwrap(), before["credentials"]);
         assert_eq!(fixture.credential_state(id), before);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.read, &accounts.infer, &accounts.other.credential]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.read, &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
         denied(fixture.send(method, &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
 
         let (method, path, body) = mutation.request(id, &accounts.read.id, &options);
@@ -769,7 +769,7 @@ async fn credential_business_refusals_consume_proof_without_partial_mutations() 
         let (status, value) = fixture.send(method, &path, &fresh.headers, body).await;
         assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
         fixture.check_mutation(mutation, &accounts.read, value);
-        fixture.credentials_usable(&[&accounts.target.credential, &accounts.infer, &accounts.other.credential]);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
     }
 }
 
@@ -784,7 +784,7 @@ async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creat
         let raw = paid.then(|| fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 100, 0).0);
         let body = serde_json::to_vec(&json!({"quote_id": quote.payload.id, "raw_transaction": raw})).unwrap();
         fixture.payment_denials(OPEN, &body,
-            [&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]).await;
+            [&accounts.read, &accounts.infer, accounts.target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]).await;
         fixture.unopened(&quote);
         let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
         let response = fixture.send("POST", OPEN, &proof.headers, body.clone()).await;
@@ -800,7 +800,7 @@ async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creat
             assert_eq!(opened.account.consumer_wallet, quote.payload.consumer_wallet);
             assert_eq!(opened.account.status, "free");
             assert_eq!(opened.account.funded_wei, "0");
-            fixture.credentials_usable(&[&opened.credential]);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap()]);
         }
         fixture.consumed(&proof);
         denied(fixture.send("POST", OPEN, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
@@ -813,7 +813,7 @@ async fn free_and_paid_opening_require_the_quoted_owner_before_any_account_creat
             fixture.unopened(&quote);
         }
         assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), before);
-        fixture.credentials_usable(&[&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]);
+        fixture.credentials_usable(&[&accounts.read, &accounts.infer, accounts.target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]);
     }
 }
 
@@ -831,7 +831,7 @@ async fn funding_intent_authority_is_required_before_new_admission_and_cached_ac
         let path = format!("/v1/contracts/{}/funding-intent", quote.payload.id);
         let body = serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap();
         fixture.payment_denials(&path, &body,
-            [&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]).await;
+            [&accounts.read, &accounts.infer, accounts.target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]).await;
         // A lost acknowledgement response is recoverable with fresh proofs and identical signed bytes.
         for _ in 0..2 {
             let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
@@ -852,7 +852,7 @@ async fn funding_intent_authority_is_required_before_new_admission_and_cached_ac
         assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_intent(&quote.payload, &raw).unwrap()).unwrap(),
             serde_json::to_value(ack).unwrap());
         assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), before);
-        fixture.credentials_usable(&[&accounts.read, &accounts.infer, &accounts.target.credential, &accounts.other.credential]);
+        fixture.credentials_usable(&[&accounts.read, &accounts.infer, accounts.target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]);
     }
 }
 
@@ -916,7 +916,7 @@ async fn funding_intent_object_fields_are_strict_before_new_admission_and_cached
                 assert!(persisted.account(&quote.payload.id).unwrap_err().starts_with("not_found:"));
                 assert_eq!(json!({"account": persisted.account(account_id).unwrap(),
                     "credentials": persisted.credentials(account_id).unwrap()}), before);
-                fixture.credentials_usable(&[&opened.credential, &read]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &read]);
                 let db = Connection::open(&fixture.provider.ledger_path).unwrap();
                 let monetary_rows: (u64, u64) = db.query_row(
                     "SELECT (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations)",
@@ -942,10 +942,134 @@ async fn existing_free_and_paid_openings_cannot_be_reentered_using_bearers_or_an
         let before = fixture.credential_state(id);
         let funding = serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap();
         let body = serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": raw})).unwrap();
-        fixture.payment_denials(OPEN, &body, [&read, &infer, &target.credential, &accounts.other.credential]).await;
+        fixture.payment_denials(OPEN, &body, [&read, &infer, target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]).await;
         assert_eq!(fixture.credential_state(id), before);
         assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap(), funding);
-        fixture.credentials_usable(&[&read, &infer, &target.credential, &accounts.other.credential]);
+        fixture.credentials_usable(&[&read, &infer, target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]);
+    }
+}
+
+#[tokio::test]
+async fn authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, paid) in [false, true].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 2110 + index as u64);
+        // Paid setup injects verified evidence only after the verification boundary;
+        // every recovery and credential mutation below uses the real authenticated router.
+        let opened = if paid {
+            fixture.accounting_account(false).await.1
+        } else {
+            fixture.open_free().await
+        };
+        let root = opened.credential.as_ref().unwrap();
+        let id = &opened.account.contract_id;
+        let read = fixture.scoped_credential(id, "read");
+        let now = protocol::now().unwrap();
+        let ledger = &fixture.provider.state.ledger;
+        let prior = ledger.reserve(id, &root.id, "before-opening-recovery", 1, 1, now, &opened.account.model).unwrap();
+        ledger.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", now).unwrap();
+        let held = ledger.reserve(id, &root.id, "held-through-opening-recovery", 1000, 512, now, &opened.account.model).unwrap();
+        let account = serde_json::to_value(ledger.account(id).unwrap()).unwrap();
+        assert_eq!(account["funded_wei"], if paid { "1000" } else { "0" });
+        assert_eq!(account["fee_wei"], if paid { "5" } else { "0" });
+        assert_eq!(account["spent_wei"], if paid { "1" } else { "0" });
+        assert_eq!(account["reserved_wei"], if paid { "3" } else { "0" });
+        assert_eq!(account["available_wei"], if paid { "991" } else { "0" });
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let protected = || {
+            let rows = ledger_snapshot(&db);
+            // Challenge issuance/consumption has its own counters. Recovery must
+            // leave every account, credential, request, funding and fee row exact.
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13].map(|index| rows[index].clone())
+        };
+        let before = protected();
+        assert_eq!(before[4].len(), usize::from(paid));
+        assert_eq!(before[7].len(), usize::from(paid));
+        let raw: Option<String> = if paid {
+            Some(db.query_row("SELECT raw_transaction FROM funding_intents WHERE contract=?1",
+                [id], |row| row.get(0)).unwrap())
+        } else { None };
+        if paid {
+            let missing = serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": null})).unwrap();
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &missing).await;
+            let (status, document) = fixture.send("POST", OPEN, &proof.headers, missing).await;
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(document["error"]["code"], "funding_intent_required");
+            fixture.consumed(&proof);
+            assert_eq!(protected(), before);
+        }
+        let body = serde_json::to_vec(&json!({"quote_id": id, "raw_transaction": raw})).unwrap();
+        let mut previous_nonces = Vec::new();
+        for attempt in 0..3 {
+            // Reopen the actual connection and router. No new admission, current
+            // model readiness or RPC/engine response exists to authorize recovery.
+            fixture.app = Router::new();
+            let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+            state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+            state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+            state.accepting.store(false, Ordering::Release);
+            state.funding_ready.store(false, Ordering::Release);
+            state.qualified_models.write().unwrap().clear();
+            fixture.app = contracts::router(fixture.provider.state.clone());
+            let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+            assert!(!previous_nonces.contains(&proof.nonce));
+            previous_nonces.push(proof.nonce.clone());
+            let rates = rate_records(&fixture.provider.ledger_path);
+            let (status, document) = tokio::time::timeout(std::time::Duration::from_secs(2),
+                fixture.send("POST", OPEN, &proof.headers, body.clone())).await.unwrap();
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(document.get("credential"), Some(&Value::Null));
+            assert!(document.get("bearer").is_none());
+            assert!(!document.to_string().contains(&root.bearer));
+            assert!(!document.to_string().contains(&read.bearer));
+            assert_eq!(document["account"], account);
+            let recovered: OpenResult = serde_json::from_value(document).unwrap();
+            assert!(recovered.credential.is_none());
+            fixture.consumed(&proof);
+            assert_eq!(rate_records(&fixture.provider.ledger_path), rates);
+            assert_eq!(protected(), before);
+            fixture.credentials_usable(&[root, &read]);
+            assert_eq!(fixture.provider.state.ledger.request_view(id, &held.id).unwrap().status, "reserved");
+            for credential in [root, &read] {
+                let (status, value) = fixture.send("GET", &format!("/v1/contracts/{id}"),
+                    &bearer(credential), Vec::new()).await;
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(value, account);
+            }
+            denied(fixture.send("POST", OPEN, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
+            assert_eq!(protected(), before, "retry {attempt} must not mutate accepted state");
+        }
+        let options = credential_options();
+        let mut explicit = Vec::new();
+        for mutation in [CredentialMutation::Issue, CredentialMutation::Rotate] {
+            let (method, path, request) = mutation.request(id, &root.id, &options);
+            let proof = fixture.proof(OWNER_KEY, method, &path, &request).await;
+            let (status, value) = fixture.send(method, &path, &proof.headers, request).await;
+            assert_eq!(status, StatusCode::OK);
+            fixture.consumed(&proof);
+            fixture.check_mutation(mutation, root, value.clone());
+            explicit.push(serde_json::from_value::<Credential>(value).unwrap());
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.account(id).unwrap()).unwrap(), account);
+            let after = protected();
+            for index in 0..before.len() {
+                if index != 1 { assert_eq!(after[index], before[index]); }
+            }
+        }
+        // Reopening after explicit rotation must neither resurrect the old root
+        // nor silently rotate the replacement or separately issued application key.
+        let after_mutations = protected();
+        let proof = fixture.proof(OWNER_KEY, "POST", OPEN, &body).await;
+        assert!(!previous_nonces.contains(&proof.nonce));
+        let (status, document) = fixture.send("POST", OPEN, &proof.headers, body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(document.get("credential"), Some(&Value::Null));
+        assert_eq!(document["account"], account);
+        assert!(!document.to_string().contains(&root.bearer));
+        for credential in &explicit { assert!(!document.to_string().contains(&credential.bearer)); }
+        fixture.consumed(&proof);
+        assert_eq!(protected(), after_mutations);
+        fixture.credentials_usable(&[&explicit[0], &explicit[1], &read]);
+        assert!(fixture.provider.state.ledger.authenticate(&root.bearer, protocol::now().unwrap()).is_err());
     }
 }
 
@@ -966,7 +1090,7 @@ async fn topups_require_account_owner_and_business_refusals_consume_only_authori
         let path = format!("/v1/contracts/{id}/topup");
         let (raw, _) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 100, 1);
         let body = serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap();
-        fixture.payment_denials(&path, &body, [&read, &infer, &target.credential, &accounts.other.credential]).await;
+        fixture.payment_denials(&path, &body, [&read, &infer, target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]).await;
         assert_eq!(fixture.credential_state(id), before);
         assert_eq!(serde_json::to_value(fixture.provider.state.ledger.funding_history(id).unwrap()).unwrap(), history);
 
@@ -996,7 +1120,7 @@ async fn topups_require_account_owner_and_business_refusals_consume_only_authori
             assert_eq!(serde_json::to_value(after).unwrap(), history);
         }
         assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
-        fixture.credentials_usable(&[&read, &infer, &target.credential, &accounts.other.credential]);
+        fixture.credentials_usable(&[&read, &infer, target.credential.as_ref().unwrap(), accounts.other.credential.as_ref().unwrap()]);
     }
 }
 
@@ -1105,7 +1229,7 @@ async fn challenge_slots_are_separate_from_proposals_and_cleanup_preserves_accep
         assert_eq!(fixture.credential_state(&accounts.target.account.contract_id), account_before);
         assert_eq!(fixture.credential_state(&accounts.other.account.contract_id), other_before);
         for opened in [&accounts.target, &accounts.other] {
-            assert_eq!(ledger.authenticate(&opened.credential.bearer, cleanup_at).unwrap().account.contract_id,
+            assert_eq!(ledger.authenticate(&opened.credential.as_ref().unwrap().bearer, cleanup_at).unwrap().account.contract_id,
                 opened.account.contract_id);
         }
     }
@@ -1231,7 +1355,7 @@ fn restore_free_accounts(db: &mut Connection, fixture: &Fixture, seed: &OpenResu
         "SELECT accounts.created,credentials.record FROM accounts
          JOIN credentials ON credentials.contract=accounts.id
          WHERE accounts.id=?1 AND credentials.id=?2",
-        params![seed.account.contract_id, seed.credential.id],
+        params![seed.account.contract_id, seed.credential.as_ref().unwrap().id],
         |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
     let original_root: CredentialView = serde_json::from_str(&root).unwrap();
     assert!(original_root.root && !original_root.revoked);
@@ -1264,7 +1388,7 @@ fn restore_free_accounts(db: &mut Connection, fixture: &Fixture, seed: &OpenResu
             insert_credential.execute(params![root.id, root.contract_id,
                 protocol::hash_hex(credential.bearer.as_bytes()), serde_json::to_string(&root).unwrap()]).unwrap();
             if index == 0 || index == count / 2 || index + 1 == count {
-                samples.push(OpenResult { account, credential });
+                samples.push(OpenResult { account, credential: Some(credential) });
             }
         }
     }
@@ -1483,12 +1607,12 @@ async fn free_account_final_slot(ledger_wide: bool) {
     earlier.push(opened);
     for accepted in &earlier {
         for ledger in [&fixture.provider.state.ledger, &second_state.ledger] {
-            let authenticated = ledger.authenticate(&accepted.credential.bearer, protocol::now().unwrap()).unwrap();
-            assert_eq!(authenticated.credential_id, accepted.credential.id);
+            let authenticated = ledger.authenticate(&accepted.credential.as_ref().unwrap().bearer, protocol::now().unwrap()).unwrap();
+            assert_eq!(authenticated.credential_id, accepted.credential.as_ref().unwrap().id);
             assert_eq!(serde_json::to_value(authenticated.account).unwrap(), serde_json::to_value(&accepted.account).unwrap());
         }
         let (status, account) = fixture.send("GET",
-            &format!("/v1/contracts/{}", accepted.account.contract_id), &bearer(&accepted.credential), Vec::new()).await;
+            &format!("/v1/contracts/{}", accepted.account.contract_id), &bearer(accepted.credential.as_ref().unwrap()), Vec::new()).await;
         assert_eq!(status, StatusCode::OK, "{account}");
         assert_eq!(account, serde_json::to_value(&accepted.account).unwrap());
     }
@@ -1612,10 +1736,10 @@ async fn failed_free_opening_rolls_back_account_root_and_quote_handoff() {
             assert_eq!(pending(), pending_before, "{point}");
             assert_eq!(other_records(), prior_records, "{point}");
             for earlier in &accepted {
-                fixture.credentials_usable(&[&earlier.credential]);
+                fixture.credentials_usable(&[earlier.credential.as_ref().unwrap()]);
                 let (status, account) = fixture.send("GET",
                     &format!("/v1/contracts/{}", earlier.account.contract_id),
-                    &bearer(&earlier.credential), Vec::new()).await;
+                    &bearer(earlier.credential.as_ref().unwrap()), Vec::new()).await;
                 assert_eq!(status, StatusCode::OK, "{point}: {account}");
                 assert_eq!(account, serde_json::to_value(&earlier.account).unwrap(), "{point}");
             }
@@ -1632,7 +1756,7 @@ async fn failed_free_opening_rolls_back_account_root_and_quote_handoff() {
         expected_account.contract_id = quote.payload.id.clone();
         assert_eq!(serde_json::to_value(&opened.account).unwrap(),
             serde_json::to_value(expected_account).unwrap(), "{point}");
-        assert_eq!(opened.credential.contract_id, quote.payload.id, "{point}");
+        assert_eq!(opened.credential.as_ref().unwrap().contract_id, quote.payload.id, "{point}");
         fixture.consumed(&proof);
         assert_eq!(target_counts(), (1, 1), "{point}");
         assert_eq!(db.query_row("SELECT COUNT(*) FROM quotes WHERE id=?1",
@@ -1654,10 +1778,10 @@ async fn failed_free_opening_rolls_back_account_root_and_quote_handoff() {
         // Recover by reading actual issued credentials, never by reopening an
         // accepted account through the separate root-rotation recovery blocker.
         for earlier in &accepted {
-            fixture.credentials_usable(&[&earlier.credential]);
+            fixture.credentials_usable(&[earlier.credential.as_ref().unwrap()]);
             let (status, account) = fixture.send("GET",
                 &format!("/v1/contracts/{}", earlier.account.contract_id),
-                &bearer(&earlier.credential), Vec::new()).await;
+                &bearer(earlier.credential.as_ref().unwrap()), Vec::new()).await;
             assert_eq!(status, StatusCode::OK, "{point}: {account}");
             assert_eq!(account, serde_json::to_value(&earlier.account).unwrap(), "{point}");
         }
@@ -1878,9 +2002,9 @@ async fn paid_ledger_opening_at_free_limit(ledger_wide: bool) {
     // path that currently rotates a root after a lost unsaved opening response.
     earlier.push(opened);
     for accepted in &earlier {
-        fixture.credentials_usable(&[&accepted.credential]);
+        fixture.credentials_usable(&[accepted.credential.as_ref().unwrap()]);
         let (status, account) = fixture.send("GET", &format!("/v1/contracts/{}", accepted.account.contract_id),
-            &bearer(&accepted.credential), Vec::new()).await;
+            &bearer(accepted.credential.as_ref().unwrap()), Vec::new()).await;
         assert_eq!(status, StatusCode::OK, "{account}");
         assert_eq!(account, serde_json::to_value(&accepted.account).unwrap());
     }
@@ -2291,9 +2415,9 @@ async fn native_paid_opening_at_free_limit(ledger_wide: bool) {
             serde_json::to_value(retained_quote).unwrap());
     }
     for account in &earlier {
-        fixture.credentials_usable(&[&account.credential]);
+        fixture.credentials_usable(&[account.credential.as_ref().unwrap()]);
         let (status, value) = fixture.send("GET", &format!("/v1/contracts/{}", account.account.contract_id),
-            &bearer(&account.credential), Vec::new()).await;
+            &bearer(account.credential.as_ref().unwrap()), Vec::new()).await;
         assert_eq!(status, StatusCode::OK, "{value}");
         assert_eq!(value, serde_json::to_value(&account.account).unwrap());
     }
@@ -2477,7 +2601,7 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
         rpc.timestamp.store(protocol::now().unwrap(), Ordering::Release);
         full_quotes();
         if attempt == 0 {
-            for headers in [HeaderMap::new(), bearer(&opened.credential)] {
+            for headers in [HeaderMap::new(), bearer(opened.credential.as_ref().unwrap())] {
                 denied(fixture.send("POST", &path, &headers, body.clone()).await, StatusCode::UNAUTHORIZED);
             }
             let wrong = fixture.proof(OTHER_KEY, "POST", &path, &body).await;
@@ -2549,8 +2673,8 @@ async fn paid_topup_recovers_at_full_quote_storage_without_duplicate_credit() {
         denied(fixture.send("POST", &path, &proof.headers, body.clone()).await, StatusCode::UNAUTHORIZED);
         assert_eq!(rpc.requests.lock().unwrap().len(), rpc_count);
         for (credential, account) in [
-            (&opened.credential, expected_account.clone()),
-            (&other.credential, serde_json::to_value(&other.account).unwrap()),
+            (opened.credential.as_ref().unwrap(), expected_account.clone()),
+            (other.credential.as_ref().unwrap(), serde_json::to_value(&other.account).unwrap()),
         ] {
             let (status, value) = fixture.send("GET", &format!("/v1/contracts/{}", credential.contract_id),
                 &bearer(credential), Vec::new()).await;
@@ -2649,8 +2773,8 @@ async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
                 "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
                 "raw_transaction":opening_raw,"tx_hash":ack.payload.tx_hash,"funding_intent":ack,
                 "funding_broadcast_started":true,"funding_cancellation_requested":false,
-                "funding_cancellation":null,"credentials":[opened.credential],
-                "active_credential":opened.credential.id,"receipt_sequence":0,
+                "funding_cancellation":null,"credentials":[opened.credential.as_ref().unwrap()],
+                "active_credential":opened.credential.as_ref().unwrap().id,"receipt_sequence":0,
                 "topup":{"id":intent_id,"amount_wei":"1000","raw_transaction":raw}
             });
             let mut file = wallet::create_secret_file(&account_path).unwrap();
@@ -2677,7 +2801,7 @@ async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
             ]);
             assert!(requests.lock().unwrap().is_empty());
             let exported = consumer.credential_export(id, None).unwrap();
-            assert_eq!(exported["api_key"], opened.credential.bearer);
+            assert!(exported["api_key"] == opened.credential.as_ref().unwrap().bearer);
             let saved_bytes = std::fs::read(&account_path).unwrap();
             let saved: Value = serde_json::from_slice(&saved_bytes).unwrap();
             assert_eq!(saved["topup"]["raw_transaction"], raw);
@@ -2780,7 +2904,7 @@ async fn native_topup_recovery_refuses_missing_or_different_original_journal() {
                 [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))).unwrap();
             assert_eq!(untouched, (0, 0, 0, 0));
             let (status, account) = fixture.send("GET", &format!("/v1/contracts/{id}"),
-                &bearer(&opened.credential), Vec::new()).await;
+                &bearer(opened.credential.as_ref().unwrap()), Vec::new()).await;
             assert_eq!(status, StatusCode::OK, "{account}");
             assert_eq!(account, serde_json::to_value(&opened.account).unwrap());
             assert_eq!(provider_records(), provider_before);
@@ -2946,8 +3070,8 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         "offer":fixture.provider.offer,"quote":quote,"account":opened.account,
         "raw_transaction":opening_raw,"tx_hash":ack.payload.tx_hash,"funding_intent":ack,
         "funding_broadcast_started":true,"funding_cancellation_requested":false,
-        "funding_cancellation":null,"credentials":[opened.credential],
-        "active_credential":opened.credential.id,"receipt_sequence":0,"topup":null
+        "funding_cancellation":null,"credentials":[opened.credential.as_ref().unwrap()],
+        "active_credential":opened.credential.as_ref().unwrap().id,"receipt_sequence":0,"topup":null
     });
     let mut file = wallet::create_secret_file(&account_path).unwrap();
     file.write_all(&serde_json::to_vec(&saved_opening).unwrap()).unwrap();
@@ -2970,7 +3094,7 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
     let opening_original = originals();
     assert_eq!(opening_original.len(), 1);
     let exported = consumer.credential_export(id, None).unwrap();
-    assert_eq!(exported["api_key"], opened.credential.bearer);
+    assert!(exported["api_key"] == opened.credential.as_ref().unwrap().bearer);
     drop(consumer);
 
     let timestamp = protocol::now().unwrap();
@@ -3162,8 +3286,8 @@ async fn native_topup_recovers_lost_credit_response_at_full_quote_storage() {
         assert_eq!(protected_state(), protected);
         full_quotes();
         for (credential, account) in [
-            (&opened.credential, expected_account.clone()),
-            (&other.credential, serde_json::to_value(&other.account).unwrap()),
+            (opened.credential.as_ref().unwrap(), expected_account.clone()),
+            (other.credential.as_ref().unwrap(), serde_json::to_value(&other.account).unwrap()),
         ] {
             let (status, value) = fixture.send("GET", &format!("/v1/contracts/{}", credential.contract_id),
                 &bearer(credential), Vec::new()).await;
@@ -3269,12 +3393,12 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
 
     // Fresh ledger reservations remain independent of quote storage, while their
     // own scope, balance, concurrency and cap checks remain in force.
-    let unknown = fixture.provider.state.ledger.reserve(id, &opened.credential.id,
+    let unknown = fixture.provider.state.ledger.reserve(id, &opened.credential.as_ref().unwrap().id,
         "pressure-unknown", 1000, 512, now, &opened.account.model).unwrap();
     assert_eq!(unknown.max_cost_wei, "3");
     let mut expected_unknown = json!({
         "id":unknown.id, "request_id":"pressure-unknown", "contract_id":id,
-        "credential_id":opened.credential.id, "status":"reserved",
+        "credential_id":opened.credential.as_ref().unwrap().id, "status":"reserved",
         "usage":{"prompt_tokens":0,"completion_tokens":0},
         "cost_wei":"0", "max_cost_wei":"3", "provider_loss_wei":"0",
         "prompt_tokens_reserved":1000, "max_output_tokens":512,
@@ -3284,11 +3408,11 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
     expected_account["reserved_wei"] = json!("5");
     for credential in expected_credentials.as_array_mut().unwrap() {
         if credential["id"] == app.id { credential["reserved_wei"] = json!("2"); }
-        if credential["id"] == opened.credential.id { credential["reserved_wei"] = json!("3"); }
+        if credential["id"] == opened.credential.as_ref().unwrap().id { credential["reserved_wei"] = json!("3"); }
     }
     for (credential, key, error) in [
         (&read, "read-cannot-infer", "forbidden:"),
-        (&opened.credential, "account-saturated", "saturation:"),
+        (opened.credential.as_ref().unwrap(), "account-saturated", "saturation:"),
         (&app, "application-saturated", "saturation:"),
     ] {
         let refused = fixture.provider.state.ledger.reserve(id, &credential.id, key,
@@ -3341,7 +3465,7 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
             expected_account["available_wei"] = json!("99");
             expected_account["reserved_wei"] = json!("0");
             for credential in expected_credentials.as_array_mut().unwrap() {
-                if credential["id"] == opened.credential.id { credential["reserved_wei"] = json!("0"); }
+                if credential["id"] == opened.credential.as_ref().unwrap().id { credential["reserved_wei"] = json!("0"); }
             }
             // Late plausible usage cannot turn an unknown terminal result into a debit.
             assert_eq!(serde_json::to_value(fixture.provider.state.ledger.settle(&unknown.id,
@@ -3353,7 +3477,7 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
                 &TokenUsage { prompt_tokens:1, completion_tokens:512 },
                 "cancelled", now + 4).unwrap()).unwrap(), expected_known);
         }
-        for (key, credential) in [("pressure-known", &app), ("pressure-unknown", &opened.credential)] {
+        for (key, credential) in [("pressure-known", &app), ("pressure-unknown", opened.credential.as_ref().unwrap())] {
             let refused = fixture.provider.state.ledger.reserve(id, &credential.id, key,
                 1, 1, now + 4, &opened.account.model).unwrap_err();
             assert!(refused.starts_with("duplicate_request:"), "{refused}");
@@ -3386,7 +3510,7 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
         let receipt_path = format!("{base}/receipt");
         for path in [&request_path, &receipt_path] {
             denied(fixture.send("GET", path, &HeaderMap::new(), Vec::new()).await, StatusCode::UNAUTHORIZED);
-            for credential in [&other.credential, &app] {
+            for credential in [other.credential.as_ref().unwrap(), &app] {
                 denied(fixture.send("GET", path, &bearer(credential), Vec::new()).await, StatusCode::FORBIDDEN);
             }
         }
@@ -3410,7 +3534,7 @@ async fn request_accounting_and_receipts_recover_at_full_quote_storage() {
         assert_eq!(fixture.credential_state(id), json!({"account":expected_account,"credentials":expected_credentials}));
         assert_eq!(fixture.credential_state(&other.account.contract_id), other_before);
         assert_eq!(serde_json::to_value(fixture.provider.state.ledger.requests(id, None).unwrap()).unwrap(), expected_requests);
-        fixture.credentials_usable(&[&opened.credential, &app, &read, &other.credential]);
+        fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, &read, other.credential.as_ref().unwrap()]);
         assert_eq!(protected_state(), protected);
         assert_eq!(quote_rates(), before_reads);
         assert_eq!(db.query_row("SELECT sequence FROM accounts WHERE id=?1",
@@ -3447,13 +3571,13 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
         }, now).unwrap();
         let ledger = &fixture.provider.state.ledger;
         let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
-        let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+        let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
             KEY, 1, 512, now, &other.account.model).unwrap();
         ledger.settle(&unrelated.id, &usage, "completed", now).unwrap();
-        let settled = ledger.reserve(id, &opened.credential.id, "prior-terminal",
+        let settled = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-terminal",
             1, 512, now, &opened.account.model).unwrap();
         assert_eq!(ledger.settle(&settled.id, &usage, "completed", now).unwrap().cost_wei, "1");
-        let held = ledger.reserve(id, &opened.credential.id, "prior-reservation",
+        let held = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-reservation",
             1000, 512, now, &opened.account.model).unwrap();
         assert_eq!(held.max_cost_wei, "3");
         let account = ledger.account(id).unwrap();
@@ -3493,7 +3617,7 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
             assert_eq!(snapshot(), before, "{point}, reopened={reopened}");
             assert!(fixture.provider.state.ledger.request_view(id, KEY)
                 .unwrap_err().starts_with("not_found:"));
-            fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
             assert_eq!(snapshot(), before, "{point}: reads must preserve rolled-back state");
         }
 
@@ -3532,7 +3656,7 @@ async fn reservation_write_failures_roll_back_request_and_both_holds() {
             assert_eq!(serde_json::to_value(ledger.request_view(id, &reserved.id).unwrap()).unwrap(), request);
             assert!(ledger.reserve(id, &app.id, KEY, 1, 512, now, &opened.account.model)
                 .unwrap_err().starts_with("duplicate_request:"));
-            fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
             assert_eq!(snapshot(), expected, "{point}: duplicate must not add another hold");
         }
     }
@@ -3577,13 +3701,13 @@ async fn terminal_failure_matrix(faults: &[(&str, &str)]) {
             }, now).unwrap();
             let ledger = &fixture.provider.state.ledger;
             let prior_usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
-            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
                 KEY, 1, 512, now, &other.account.model).unwrap();
             ledger.settle(&unrelated.id, &prior_usage, "completed", now).unwrap();
-            let prior = ledger.reserve(id, &opened.credential.id, "prior-terminal",
+            let prior = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-terminal",
                 1, 512, now, &opened.account.model).unwrap();
             assert_eq!(ledger.settle(&prior.id, &prior_usage, "completed", now).unwrap().cost_wei, "1");
-            let held = ledger.reserve(id, &opened.credential.id, "prior-reservation",
+            let held = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-reservation",
                 1000, 512, now, &opened.account.model).unwrap();
             assert_eq!(held.max_cost_wei, "3");
             let target = ledger.reserve(id, &app.id, KEY,
@@ -3661,7 +3785,7 @@ async fn terminal_failure_matrix(faults: &[(&str, &str)]) {
                 }
                 assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}, reopened={reopened}");
                 assert_eq!(fixture.provider.state.ledger.request_view(id, KEY).unwrap().status, "reserved");
-                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), before, "{mode}/{point}: retained holds and authority");
                 if point == "commit" {
                     assert!(commit_witness().is_empty(), "{mode}: rejected commit left a witness");
@@ -3746,7 +3870,7 @@ async fn terminal_failure_matrix(faults: &[(&str, &str)]) {
                 }
                 assert!(ledger.reserve(id, &app.id, KEY, 1, 512, now + 5, &opened.account.model)
                     .unwrap_err().starts_with("duplicate_request:"));
-                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: no new charge or release");
                 if let Some(witness) = &expected_commit_witness {
                     assert_eq!(commit_witness().as_slice(), std::slice::from_ref(witness),
@@ -3787,7 +3911,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
             qualification.measured_at = now + 1;
             let evidence = &current.serving.as_ref().unwrap().qualification.evidence_sha256;
             let ledger = &fixture.provider.state.ledger;
-            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
                 KEY, 1, 1, now, &other.account.model).unwrap();
             ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                 "completed", now).unwrap();
@@ -3799,7 +3923,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
                 (original, true), (original, true), (original, true),
                 (&current, false), (&current, true), (&current, true),
             ].into_iter().enumerate() {
-                let reservation = ledger.reserve(id, &opened.credential.id,
+                let reservation = ledger.reserve(id, &opened.credential.as_ref().unwrap().id,
                     &format!("performance-history-{index}"), 1, 256, now + 2, model).unwrap();
                 let measured = outcome(model, Some(&historical_usage), "completed",
                     Some(if missed { 2_000_001 } else { 1_000_000 }));
@@ -3818,7 +3942,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
                 expires_at: now + 3600, spend_cap_wei: Some("2".into()),
                 max_concurrency: 1, scopes: vec!["infer".into()],
             }, now + 4).unwrap();
-            let live = ledger.reserve(id, &opened.credential.id, "performance-live",
+            let live = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "performance-live",
                 2048, 256, now + 4, &current).unwrap();
             let target = ledger.reserve(id, &app.id, KEY, 1000, 256, now + 4, &current).unwrap();
             assert_eq!(live.max_cost_wei, "3");
@@ -3913,7 +4037,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
                     serde_json::to_value(&pending).unwrap());
                 assert!(ledger.performance_withdrawn(original).unwrap());
                 assert!(!ledger.performance_withdrawn(&current).unwrap());
-                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), before);
             }
             // Explicit fixture repair permits accounting reconciliation, not
@@ -3984,7 +4108,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
                     assert!(ledger.reserve(id, &app.id, "after-withdrawal", 1, 256, now + 6, model)
                         .unwrap_err().starts_with("model_unqualified:"));
                 }
-                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), expected, "{mode}/{point}: immutable result and latches");
                 if point == "commit" {
                     assert_eq!(db.query_row("SELECT COUNT(*) FROM performance_commit_witness", [],
@@ -4002,7 +4126,7 @@ async fn performance_write_failures_preserve_bound_waivers_and_withdrawal_latche
             account["spent_wei"] = json!("4");
             account["usage"] = json!({"prompt_tokens":if known { 3054 } else { 2054 },
                 "completion_tokens":if known { 1920 } else { 1792 }});
-            let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.id).unwrap()[3];
+            let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.as_ref().unwrap().id).unwrap()[3];
             root["reserved_wei"] = json!("0");
             root["spent_wei"] = json!("4");
             let row = expected[2].iter_mut().find(|row| row[0] == live.id).unwrap();
@@ -4044,11 +4168,11 @@ async fn same_key_writers_preserve_one_reservation_and_its_original_bounds() {
             let model = &opened.account.model;
             let now = protocol::now().unwrap();
             let ledger = &fixture.provider.state.ledger;
-            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
                 KEY, 1, 1, now, &other.account.model).unwrap();
             ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                 "completed", now).unwrap();
-            let prior = ledger.reserve(id, &opened.credential.id, "prior-race-spend",
+            let prior = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-race-spend",
                 1, 1, now, model).unwrap();
             ledger.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                 "completed", now).unwrap();
@@ -4172,7 +4296,7 @@ async fn same_key_writers_preserve_one_reservation_and_its_original_bounds() {
                         let replay = reader.settle(&reservation.id, &changed, "cancelled", now + 4).unwrap();
                         assert_eq!(serde_json::to_value(replay).unwrap(), *original);
                     }
-                    fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+                    fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &first, &second, other.credential.as_ref().unwrap()]);
                     assert_eq!(ledger_snapshot(&db), expected,
                         "shared={shared_credential}, terminal={terminal}, reopened={reopened}");
                 }
@@ -4226,7 +4350,7 @@ async fn same_key_writers_preserve_one_reservation_and_its_original_bounds() {
                     assert!(retry.unwrap_err().starts_with("duplicate_request:"));
                 }
             }
-            fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &first, &second, other.credential.as_ref().unwrap()]);
             assert_eq!(ledger_snapshot(&db), expected, "reopened identities, charges and cap authority remain exact");
         }
     }
@@ -4261,12 +4385,12 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
             let prior = ledger.reserve(id, &first.id, "prior-limit-spend", 1, 1, now, model).unwrap();
             ledger.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                 "completed", now).unwrap();
-            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+            let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
                 "limit-candidate-a", 1, 1, now, &other.account.model).unwrap();
             ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                 "completed", now).unwrap();
             let root_live = if limit == "account-concurrency" {
-                Some(ledger.reserve(id, &opened.credential.id, "retained-root-hold",
+                Some(ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "retained-root-hold",
                     2048, 256, now, model).unwrap())
             } else { None };
             let root_hold = if root_live.is_some() { 3_u128 } else { 0 };
@@ -4348,7 +4472,7 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
                 for lookup in [key, reservation.id.as_str()] {
                     assert_eq!(serde_json::to_value(reader.request_view(id, lookup).unwrap()).unwrap(), *original);
                 }
-                fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &first, &second, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), expected, "{limit}, reopened={reopened}");
             }
             // Isolate the limiting dimension while the winner is still held:
@@ -4357,7 +4481,7 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
             let (control_account, control_credential, control_model, control_maximum) = match limit {
                 "spend-cap" => (id.as_str(), first.id.as_str(), model, 1_u128),
                 "credential-concurrency" => (id.as_str(), second.id.as_str(), model, 1_u128),
-                "account-concurrency" => (other.account.contract_id.as_str(), other.credential.id.as_str(),
+                "account-concurrency" => (other.account.contract_id.as_str(), other.credential.as_ref().unwrap().id.as_str(),
                     &other.account.model, 0_u128),
                 _ => unreachable!(),
             };
@@ -4458,7 +4582,7 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
                 account["usage"] = json!({"prompt_tokens":2049 + if known { prompt } else { 0 },
                     "completion_tokens":if known { 258 } else { 257 }});
                 let root_credential = &mut expected[1].iter_mut()
-                    .find(|row| row[0] == opened.credential.id).unwrap()[3];
+                    .find(|row| row[0] == opened.credential.as_ref().unwrap().id).unwrap()[3];
                 root_credential["reserved_wei"] = json!("0");
                 root_credential["spent_wei"] = json!("3");
                 let row = expected[2].iter_mut().find(|row| row[0] == root.id).unwrap();
@@ -4484,7 +4608,7 @@ async fn competing_reservations_preserve_cap_and_concurrency_boundaries() {
                 assert!(reopened.reserve(id, credential, request_key, prompt, 512, now + 10, model)
                     .unwrap_err().starts_with("duplicate_request:"));
             }
-            fixture.credentials_usable(&[&opened.credential, &first, &second, &other.credential]);
+            fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &first, &second, other.credential.as_ref().unwrap()]);
             assert_eq!(ledger_snapshot(&db), expected, "{limit}: final identities, spend and authority");
         }
     }
@@ -4548,7 +4672,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                     (usage, status, measured)
                 };
                 let ledger = &fixture.provider.state.ledger;
-                let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.id,
+                let unrelated = ledger.reserve(&other.account.contract_id, &other.credential.as_ref().unwrap().id,
                     KEY, 1, 1, now, &other.account.model).unwrap();
                 ledger.settle(&unrelated.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 },
                     "completed", now).unwrap();
@@ -4556,7 +4680,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                 if profiled {
                     // Preserve an old report's withdrawal while the race binds a newer report.
                     for index in 0..3 {
-                        let reservation = ledger.reserve(id, &opened.credential.id,
+                        let reservation = ledger.reserve(id, &opened.credential.as_ref().unwrap().id,
                             &format!("old-terminal-miss-{index}"), 500, 256, now, original).unwrap();
                         let missed = measure(original, Some(&prior_usage), "completed", true);
                         let settled = ledger.settle_measured(&reservation.id, &prior_usage,
@@ -4565,7 +4689,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                     }
                     assert!(ledger.performance_withdrawn(original).unwrap());
                 }
-                let prior = ledger.reserve(id, &opened.credential.id, "prior-terminal-spend",
+                let prior = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "prior-terminal-spend",
                     500, 256, now + 2, &current).unwrap();
                 let passed = measure(&current, Some(&prior_usage), "completed", false);
                 assert_eq!(ledger.settle_measured(&prior.id, &prior_usage,
@@ -4574,7 +4698,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                     expires_at: now + 3600, spend_cap_wei: Some("20".into()),
                     max_concurrency: 1, scopes: vec!["infer".into()],
                 }, now + 4).unwrap();
-                let live = ledger.reserve(id, &opened.credential.id, "terminal-live",
+                let live = ledger.reserve(id, &opened.credential.as_ref().unwrap().id, "terminal-live",
                     2048, 256, now + 4, &current).unwrap();
                 let target = ledger.reserve(id, &app.id, KEY, 500, 256, now + 4, &current).unwrap();
                 assert_eq!((live.max_cost_wei.as_str(), target.max_cost_wei.as_str()), ("3", "2"));
@@ -4710,7 +4834,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                         &prior_usage, "completed", stale.as_ref(), now + 22).unwrap()).unwrap(), terminal);
                     assert!(ledger.reserve(id, &app.id, KEY, 500, 256, now + 22, &current)
                         .unwrap_err().starts_with("duplicate_request:"));
-                    fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                    fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                     assert_eq!(ledger_snapshot(&db), expected, "reopened={reopened}, {pair:?}");
                 }
                 // Each candidate independently commits on a fresh key, even if it lost
@@ -4757,7 +4881,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                 account["spent_wei"] = json!((spent + 3).to_string());
                 account["usage"]["prompt_tokens"] = json!(account["usage"]["prompt_tokens"].as_u64().unwrap() + 2048);
                 account["usage"]["completion_tokens"] = json!(account["usage"]["completion_tokens"].as_u64().unwrap() + 256);
-                let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.id).unwrap()[3];
+                let root = &mut expected[1].iter_mut().find(|row| row[0] == opened.credential.as_ref().unwrap().id).unwrap()[3];
                 assert_eq!(root["reserved_wei"], "3");
                 root["reserved_wei"] = json!("0");
                 root["spent_wei"] = json!("4");
@@ -4793,7 +4917,7 @@ async fn competing_terminal_outcomes_commit_one_complete_original_result() {
                 for result in race(now + 42) {
                     assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), terminal);
                 }
-                fixture.credentials_usable(&[&opened.credential, &app, &other.credential]);
+                fixture.credentials_usable(&[opened.credential.as_ref().unwrap(), &app, other.credential.as_ref().unwrap()]);
                 assert_eq!(ledger_snapshot(&db), expected, "final profiled={profiled}, {pair:?}");
             }
         }

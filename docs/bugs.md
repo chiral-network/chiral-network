@@ -67,6 +67,13 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Change:** refresh the already saved open account without issuing another open. Credential rotation remains an explicit user action.
 - **Evidence:** 20 targeted consumer tests passed after the fix. Rebuilt CLI actual `resume` and repeated `fund` returned active, funded total stayed `10000000000000000` wei, the exported credential was unchanged and accepted (HTTP 200). Local report: `/var/tmp/chiral-inference-qualification-20261028/credential-recovery-report.json`. This is a resolved regression, not a claim that every credential/funding scenario passed.
 
+### Authenticated opening retries rotated an existing root credential
+
+- **Current native-CFX mismatch:** the ledger treated a fresh owner proof on `POST /v1/contracts/open` as permission to revoke roots and issue another secret. The saved-native-account refresh fix above did not cover direct HTTP replay or a lost first-opening response.
+- **Correction:** first creation returns a root secret once; existing-account opening returns the unchanged account with `credential: null`, preserving credential authority and exact funding/fee totals. Providers keep token hashes, not recoverable plaintext secrets.
+- **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
+- **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
+
 ### Settled top-up recovery incorrectly required a ready engine
 
 - **Where:** `src-tauri/src/contracts.rs`, existing-agreement top-up settlement.

@@ -645,8 +645,8 @@ fn validate_quote(quote: &Quote) -> Result<(), String> {
 }
 
 impl BillingStore {
-    /// The owner proof is consumed before this operation. A fresh authenticated
-    /// retry rotates the root credential; it never reveals an old bearer.
+    /// The owner proof is consumed before this operation. An existing account
+    /// is returned without changing credentials or disclosing an old bearer.
     pub fn open_account(
         &self,
         quote: &Signed<Quote>,
@@ -694,13 +694,12 @@ impl BillingStore {
             }
             let account = get_account(tx, &q.id)?;
             if account.status == "frozen" { return Err("account_frozen: funding requires operator investigation".into()); }
-            let old: Vec<CredentialView> = rows(tx, "SELECT record FROM credentials WHERE contract=?1 AND revoked=0", [&q.id])?;
-            for mut credential in old.into_iter().filter(|c| c.root) {
-                credential.revoked = true; save_credential(tx, &credential)?;
+            if exists {
+                return Ok(crate::protocol::OpenResult { account, credential: None });
             }
             let request = CredentialIssueRequest { expires_at:now.saturating_add(30*86_400),spend_cap_wei:None,max_concurrency:q.max_concurrency,scopes:vec!["infer".into(),"read".into()] };
             let credential = issue_credential(tx, &account, &request, true, now)?;
-            Ok(crate::protocol::OpenResult { account, credential })
+            Ok(crate::protocol::OpenResult { account, credential: Some(credential) })
         })
     }
 

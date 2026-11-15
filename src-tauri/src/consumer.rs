@@ -1155,8 +1155,8 @@ impl Consumer {
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        // A received opening credential is already durable. Recover funding and refresh
-        // its account without reopening: open rotates the provider's root credential.
+        // A saved account only needs a refresh after original-payment recovery.
+        // Opening again cannot recover a lost credential secret.
         if saved.account.is_some() {
             return self.refresh_account(&mut saved).await;
         }
@@ -1175,7 +1175,9 @@ impl Consumer {
                 .await?,
         )?;
         account_matches(&result.account, &saved)?;
-        self.store_credential(&mut saved, result.credential, true)?;
+        if let Some(credential) = result.credential {
+            self.store_credential(&mut saved, credential, true)?;
+        }
         saved.account = Some(result.account.clone());
         self.save_account(&saved)?;
         Ok(result.account)
@@ -2541,7 +2543,7 @@ mod tests {
             axum::Json(
                 serde_json::to_value(OpenResult {
                     account,
-                    credential,
+                    credential: Some(credential),
                 })
                 .unwrap(),
             ),

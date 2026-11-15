@@ -24,6 +24,6 @@ None. Canonical encoding and signatures remain in `inference-wire-foundation`; p
 
 - Read-only authority: `docs/chiral-book.md`, owner-challenge exchange, authorization matrix, control API limits, and funding order.
 - Implementation correspondence: `auth.rs`, `protocol.rs`, `contracts.rs`, `billing_store.rs`, `consumer.rs`, and their existing tests.
-- This step adds specifications and APAS notes only. Implementation acceptance and any missing regression coverage remain explicit unchecked tasks.
+- Acceptance includes the native/ledger correction for authenticated opening retries: return the existing account without issuing or revoking a credential, and allow explicit native credential recovery after a lost first-opening reply. The unsigned opening result has a nullable credential; first creation still returns its newly issued secret.
 - Challenge issuance rate-window policy, complete credential lifecycle, payment admission/settlement, and recovery of original signed transactions remain separate work. Existing behavior is retained, not removed because this slice does not specify it.
 - No whitepaper edit, deployment, live account operation, installation, migration of money, or public-release qualification.

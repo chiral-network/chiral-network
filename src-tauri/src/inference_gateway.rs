@@ -1032,6 +1032,7 @@ mod tests {
             .open_account(&quote, None, now)
             .unwrap()
             .credential
+            .unwrap()
             .bearer;
         let network = NetworkConfig {
             identity: offer.network.clone(),
@@ -1112,7 +1113,7 @@ mod tests {
         let opened = inner.ledger.open_account(&quote, None, now).unwrap();
         let mut app = router(state.clone());
         let response = app.call(Request::builder().uri("/v1/models")
-            .header(header::AUTHORIZATION, format!("Bearer {}", opened.credential.bearer))
+            .header(header::AUTHORIZATION, format!("Bearer {}", opened.credential.as_ref().unwrap().bearer))
             .body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let data: Value = serde_json::from_slice(
