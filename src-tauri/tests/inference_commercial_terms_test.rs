@@ -1,10 +1,14 @@
-//! Commercial declaration contracts for specify-inference-commercial-terms task 2.1.
-//! Synthetic metadata only: no measured qualification, live offers, clocks, keys or I/O.
+//! Commercial declaration and native configuration contracts for tasks 2.1 and 2.2.
+//! Synthetic metadata/configuration only: no measured qualification, live offers, keys or engines.
 use chiral_network::{
+    network::{ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
     offer_registry::validate_model,
     protocol::{InferenceOffer, ModelSpec, QualificationIdentity},
+    provider_config::ProviderConfig,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::path::Path;
 
 fn model_document() -> Value {
     json!({
@@ -629,4 +633,106 @@ fn unsupported_engine_policy_and_speed_classes_cannot_be_inferred() {
         replaced(&base, "/serving/policy", json!("warm-generation-v2")),
         "unsupported performance policy",
     );
+}
+
+fn embedding_provider_config(development: bool, managed: bool) -> ProviderConfig {
+    let mut model = model_document();
+    model["capabilities"] = json!(["embeddings"]);
+    model["max_output_tokens"] = json!(0);
+    model["tokenizer_revision"] = model["revision"].clone();
+    model["chat_template_sha256"] = json!(hex::encode(Sha256::digest(b"")));
+    let runtime = if managed {
+        json!({
+            "runtime_dir": "runtime", "artifact_dir": "model", "backend": "cpu",
+            "device_ids": [], "memory_reserve_mib": 0, "gpu_layers": 0,
+            "split_mode": "none", "tensor_split": [],
+            "cache_type_k": "f16", "cache_type_v": "f16", "flash_attention": false,
+            "batch_size": 128, "ubatch_size": 64, "startup_timeout_secs": 30
+        })
+    } else {
+        Value::Null
+    };
+    // These paths name no provisioned files; validation is not inventory verification/readiness.
+    serde_json::from_value(json!({
+        "network": {
+            "identity": {
+                "chain_id": ESPACE_TESTNET_CHAIN_ID,
+                "genesis_hash": ESPACE_TESTNET_GENESIS,
+                "deployment_id": "embedding-config-tests"
+            },
+            "rpc_url": "http://127.0.0.1:18545",
+            "rpc_bearer_file": null, "faucet_url": null,
+            "explorer_url": null, "policy_url": null
+        },
+        "data_dir": "data", "signing_key_file": "wallet.key", "admin_token_file": "admin.token",
+        "public_endpoint": if development { "http://127.0.0.1:18082" } else { "https://inference.example.org" },
+        "public_bind": "127.0.0.1:18082", "admin_bind": "127.0.0.1:18083",
+        "platform_wallet": "0x2222222222222222222222222222222222222222",
+        "fee_bps": 50, "min_funding_wei": "1000",
+        "models": [{
+            "model": model,
+            "price": { "input_wei_per_1k": "1000", "output_wei_per_1k": "0" },
+            "engine_url": "http://127.0.0.1:18080", "engine_api_key_file": "engine.key",
+            "runtime": runtime, "max_concurrency": 2, "request_timeout_secs": 30,
+            "qualification_evidence_file": null
+        }],
+        "dht": { "listen": "/ip4/127.0.0.1/tcp/0", "bootstrap": [], "identity_file": "dht.key" },
+        "development": development
+    })).unwrap()
+}
+
+fn assert_native_config_admission(config: &ProviderConfig, path: &Path, accepted: bool) {
+    let direct = config.validate();
+    assert_eq!(direct.is_ok(), accepted, "direct native validation: {direct:?}");
+    std::fs::write(path, serde_json::to_vec(config).unwrap()).unwrap();
+    let loaded = ProviderConfig::load(path);
+    assert_eq!(loaded.is_ok(), accepted, "native configuration file: {loaded:?}");
+}
+
+#[test]
+fn native_embedding_prices_are_input_only_without_provisioning() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("provider.json");
+    let maximum = u128::MAX.to_string();
+    for development in [false, true] {
+        for managed in [false, true] {
+            let mut config = embedding_provider_config(development, managed);
+            for input in ["0", "1000"] {
+                config.models[0].price.input_wei_per_1k = input.into();
+                for output in ["0", "1", maximum.as_str(), "00", "+0", "0.0"] {
+                    config.models[0].price.output_wei_per_1k = output.into();
+                    assert_native_config_admission(&config, &path, output == "0");
+                }
+            }
+            if development {
+                // A zero-output rule for embeddings must not prohibit priced generation.
+                config.models[0].model.capabilities = vec!["chat".into()];
+                config.models[0].model.max_output_tokens = 256;
+                for output in ["0", "1", maximum.as_str()] {
+                    config.models[0].price.output_wei_per_1k = output.into();
+                    assert_native_config_admission(&config, &path, true);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_embedding_price_validation_covers_every_configured_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("provider.json");
+    let mut config = embedding_provider_config(false, false);
+    let mut second = config.models[0].clone();
+    second.model.id = "test/second-model".into();
+    second.model.capabilities = vec!["streaming".into(), "embeddings".into()];
+    second.engine_url = "http://127.0.0.1:18081".into();
+    config.models.push(second);
+    for invalid in 0..config.models.len() {
+        for model in &mut config.models {
+            model.price.output_wei_per_1k = "0".into();
+        }
+        assert_native_config_admission(&config, &path, true);
+        config.models[invalid].price.output_wei_per_1k = "1".into();
+        assert_native_config_admission(&config, &path, false);
+    }
 }

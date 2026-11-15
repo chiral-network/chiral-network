@@ -133,7 +133,12 @@ impl ProviderConfig {
                 return Err("model API identifiers must be unique within a provider".into());
             }
             validate_money(&config.price.input_wei_per_1k)?;
-            validate_money(&config.price.output_wei_per_1k)?;
+            let output_price = validate_money(&config.price.output_wei_per_1k)?;
+            if output_price != 0
+                && config.model.capabilities.iter().any(|capability| capability == "embeddings")
+            {
+                return Err("embedding deployments require zero output price".into());
+            }
             if config.max_concurrency == 0 || config.max_concurrency > 256 {
                 return Err("model concurrency must be between 1 and 256".into());
             }

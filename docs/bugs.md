@@ -74,6 +74,12 @@ The evidence below is from the **historical isolated chiral-coin prototype** unl
 - **Recovery:** native `resume` saves a recovered account even when the original secret was lost. Explicitly issue a credential to restore a missing default; reopening never revives expired/revoked credentials or replaces existing application keys.
 - **Verification:** credential/hold/spend/funding conservation, revoked/expired roots, concurrent one-secret creation, production-router free/paid replay and native post-commit response-loss acceptance pass. Native recovery explicitly issues a new infer/read default without revoking the undisclosed original. All 408 Rust tests and 61 frontend/provisioning tests pass after correcting a paid fixture to supply its original transaction; available builds/checks pass. These isolated tests do not establish live-chain, engine or power-loss qualification.
 
+### Native embedding configuration permitted nonzero output prices
+
+- **Native-CFX mismatch:** direct provider configuration checked canonical monetary syntax but did not enforce the input-only embedding rule. Only the optional reference provisioner rejected a nonzero embedding output rate.
+- **Correction:** shared native configuration validation requires canonical zero output price on every embedding-capable model, regardless of model/capability position, development mode or managed-runtime selection. Generation pricing is unchanged. Invalid configuration requires explicit correction; no rates, accepted agreements or financial state are rewritten.
+- **Verification:** two isolated regressions exercise direct validation and configuration-file loading with free/paid input, zero/nonzero/noncanonical output, multiple models and priced-generation controls. All 485 available tests, available builds/checks and strict commercial-change validation pass. This proves configuration admission, not inventory, startup/readiness or hardware qualification; embedding-template enforcement remains separate.
+
 ### Absolute localhost aliases passed advertised-origin validation
 
 - **Native-CFX defect:** HTTPS/443 origins such as `localhost.` and `provider.localhost.` passed static admission because localhost classification omitted terminal DNS root dots. This was a metadata-validation gap, not demonstrated DNS/transport access to a forbidden address.

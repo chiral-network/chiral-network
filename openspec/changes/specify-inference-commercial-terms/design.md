@@ -80,11 +80,19 @@ Task 2.1.4 corrects static acceptance of `localhost.` and names below `*.localho
 
 The origin regression covers plain, case-folded, percent-encoded and IDNA dot spellings, nested localhost subdomains and repeated terminal dots, with HTTPS/443 and development-style HTTP(S) ports in both modes. Each case first establishes that URL parsing accepts the spelling. Positive controls retain public absolute DNS names, including `localhost.example.org.`, and existing exact-localhost/literal-loopback behavior. These are deterministic static admission checks, not DNS, reachability or transport-bypass evidence.
 
-The shared validator remains the gate for offer-registry insertion, provider public-endpoint configuration and safe outbound client construction. DNS address validation/pinning, disabled redirects/proxies and private-engine configuration are unchanged. Embedding price/template enforcement and the other incomplete commercial tasks remain open; this correction does not complete the change or authorize archival.
+The shared validator remains the gate for offer-registry insertion, provider public-endpoint configuration and safe outbound client construction. DNS address validation/pinning, disabled redirects/proxies and private-engine configuration are unchanged. Embedding template enforcement and the other incomplete commercial tasks remain open; this correction does not complete the change or authorize archival.
+
+## Native embedding-price implementation
+
+Task 2.2 enforces zero output price inside `ProviderConfig::validate`, which is used by both configuration loading and provider startup before secret access or service construction. The check reuses the existing canonical integer parser and examines every model with the `embeddings` capability, independent of capability position, development mode or managed-runtime selection. It does not impose zero output prices on generation or reinterpret broad remote offer declarations.
+
+Two regressions in `inference_commercial_terms_test.rs` exercise both direct validation and actual configuration-file loading. They pair free/paid input and zero-output controls with one-wei/maximal nonzero rates and noncanonical zero spellings, preserve priced development generation, and reject an invalid embedding price in either model position. Synthetic paths and CPU settings test configuration admission only: no keys, artifact inventories, engines, RPC or qualification are supplied.
+
+Invalid configurations must be corrected explicitly; no rate is normalized, no existing quote/account/balance is rewritten, and no ledger migration is introduced. The distinct managed-inventory template requirement remains task 2.3.
 
 ## Historical implementation gaps and ownership constraints
 
-Native embedding output-price enforcement is an observed source-level gap: provider configuration parses any canonical output rate, the managed runtime inventory path has no rate check, and only the reference provisioner enforces zero. The next implementation slice must demonstrate rejection/acceptance at the real native configuration boundary and close it there; no live provider or payment is necessary.
+The initial native embedding-price gap was that configuration accepted any canonical output rate while only the reference provisioner enforced zero. Task 2.2 now closes that configuration gap as documented above; inventory/template acceptance remains separate.
 
 `provider_config.rs`, `engine_runtime.rs`, `contracts.rs`, `consumer.rs`, `billing_store.rs`, `offer_registry.rs`, `performance.rs` and `protocol.rs` include pre-existing uncommitted work (several are entirely untracked). A new standalone integration test can be committed independently. A source fix must not absorb the owner's surrounding uncommitted implementation. If the necessary native-boundary edit cannot be committed separately, record that source-ownership blocker, leave the fix task unticked, and continue another unblocked slice rather than claiming the gap closed or publishing the owner's files.
 
@@ -101,7 +109,7 @@ The native quote cutover is also open owner-source work: remove both public wall
 
 ## Migration Plan
 
-This change began as specifications and now includes isolated acceptance tests and the native origin correction above. Remaining tasks include the embedding-price/template corrections, without migrating money or changing accepted agreement bytes. Archive normally only after all implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
+This change began as specifications and now includes isolated acceptance tests and native origin/embedding-price corrections. Remaining tasks include embedding-template enforcement, without migrating money or changing accepted agreement bytes. Archive normally only after all implementation tasks and relevant checks pass; do not use `--skip-specs`. Strict declaration rules must not be retroactively used to discard acknowledged historical funding.
 
 ## Open Questions
 
