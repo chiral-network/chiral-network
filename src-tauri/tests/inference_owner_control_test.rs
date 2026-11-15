@@ -5024,7 +5024,7 @@ fn snapshot_term_mutations(value: &Value, path: String, cases: &mut Vec<NativeSn
 }
 
 fn wide_snapshot(account: &Value) -> Value {
-    // An unsigned response-only claim, not a provider ledger transition or funding proof.
+    // A response-only claim, not a provider ledger transition or funding proof.
     // Both sides equal 2*u128::MAX; waived money is deliberately not part of that sum.
     let mut value = account.clone();
     for field in ["funded_wei", "provider_loss_wei", "reversed_wei", "waived_wei"] {
@@ -5122,12 +5122,7 @@ fn snapshot_mutation_bytes(case: &NativeSnapshotMutation, original: &Value) -> V
     serde_json::to_vec(&value).unwrap()
 }
 
-#[tokio::test]
-async fn native_account_refresh_preserves_original_terms_money_and_recovery_state() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut fixture = Fixture::new(&directory.path().join("provider-0"), 66_000);
-    let (mut quote, mut opened) = fixture.accounting_account(true).await;
-    let original = serde_json::to_value(&opened.account).unwrap();
+fn native_snapshot_mutations(original: &Value) -> Vec<NativeSnapshotMutation> {
     let mut cases = Vec::new();
     for field in ["contract_id", "network", "provider_wallet", "consumer_wallet", "model", "price", "max_concurrency"] {
         snapshot_term_mutations(&original[field], format!("/{field}"), &mut cases);
@@ -5148,6 +5143,16 @@ async fn native_account_refresh_preserves_original_terms_money_and_recovery_stat
     for form in ["null", "scalar", "array", "extra", "usage-array", "usage-missing", "usage-extra", "usage-duplicate"] {
         cases.push(NativeSnapshotMutation::Shape(form));
     }
+    cases
+}
+
+#[tokio::test]
+async fn native_account_refresh_preserves_original_terms_money_and_recovery_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(&directory.path().join("provider-0"), 66_000);
+    let (mut quote, mut opened) = fixture.accounting_account(true).await;
+    let original = serde_json::to_value(&opened.account).unwrap();
+    let cases = native_snapshot_mutations(&original);
 
     // Four successful controls plus eight refusals fit the real 12/minute owner
     // challenge budget. Each batch has independent state; never reset a budget,
@@ -5233,6 +5238,196 @@ async fn native_account_refresh_preserves_original_terms_money_and_recovery_stat
         assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
         assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
         assert_eq!(financial_state(), provider_before);
+        assert_eq!(native_payment_journal_snapshot(&journal), original_journal);
+        stop.send(()).unwrap();
+        server.await.unwrap();
+    }
+}
+
+#[derive(Clone)]
+enum NativeReceiptSnapshotReply {
+    Original,
+    Wide,
+    Fault(usize),
+    Replay(Vec<u8>),
+}
+
+#[tokio::test]
+async fn native_signed_snapshots_preserve_terms_balances_and_receipt_watermarks() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(&directory.path().join("provider-0"), 67_000);
+    let (mut quote, mut opened) = fixture.accounting_account(true).await;
+    let cases = Arc::new(native_snapshot_mutations(&serde_json::to_value(&opened.account).unwrap()));
+
+    // Seven faults plus original/wide/corrected/replay/recovery requests fit the
+    // unchanged twelve-challenge budget. Each batch has independent ledger state.
+    for (batch, batch_cases) in cases.chunks(7).enumerate() {
+        if batch != 0 {
+            fixture = Fixture::new(&directory.path().join(format!("provider-{batch}")), 67_000 + batch as u64);
+            (quote, opened) = fixture.accounting_account(true).await;
+        }
+        let id = &quote.payload.id;
+        let original = serde_json::to_value(&opened.account).unwrap();
+        let (config, account_path, journal, initial) = restore_native_account(
+            &fixture, &quote, &opened, directory.path().join(format!("native-{batch}")));
+        let original_journal = native_payment_journal_snapshot(&journal);
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let financial_state = || ledger_snapshot(&db).into_iter().enumerate()
+            .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
+        let assert_success_state = |previous: &Value, receipt: &Signed<UsageReceipt>| {
+            let bytes = std::fs::read(&account_path).unwrap();
+            let saved: Value = serde_json::from_slice(&bytes).unwrap();
+            let returned_account = serde_json::to_value(&receipt.payload.account).unwrap();
+            // Do not require a successful receipt to refresh the cache. Either
+            // retaining it or adopting the validated snapshot preserves this contract.
+            assert!(saved["account"] == previous["account"] || saved["account"] == returned_account);
+            let mut expected = previous.clone();
+            expected["account"] = saved["account"].clone();
+            expected["receipt_sequence"] = json!(receipt.payload.sequence);
+            assert_eq!(saved, expected);
+            bytes
+        };
+        let reply = Arc::new(Mutex::new(NativeReceiptSnapshotReply::Original));
+        let delivered = Arc::new(AtomicU64::new(0));
+        let app = fixture.app.clone().layer(from_fn({
+            let reply = reply.clone();
+            let delivered = delivered.clone();
+            let cases = cases.clone();
+            let signer = fixture.provider.state.private_key.clone();
+            let provider = fixture.provider.state.wallet.clone();
+            let path = format!("/v1/contracts/{id}/receipt");
+            move |request: Request, next: Next| {
+                let receipt_read = request.method() == axum::http::Method::GET && request.uri().path() == path;
+                let reply = reply.clone();
+                let delivered = delivered.clone();
+                let cases = cases.clone();
+                let signer = signer.clone();
+                let provider = provider.clone();
+                async move {
+                    let response = next.run(request).await;
+                    if !receipt_read || response.status() != StatusCode::OK { return response; }
+                    let mode = reply.lock().unwrap().clone();
+                    let (mut parts, body) = response.into_parts();
+                    let bytes = to_bytes(body, 96 * 1024).await.unwrap();
+                    let mut signed: Signed<UsageReceipt> = serde_json::from_slice(&bytes).unwrap();
+                    protocol::verify(RECEIPT_DOMAIN, &signed, &provider).unwrap();
+                    let wire = match mode {
+                        NativeReceiptSnapshotReply::Original => bytes.to_vec(),
+                        NativeReceiptSnapshotReply::Wide => {
+                            signed.payload.account = serde_json::from_value(
+                                wide_snapshot(&serde_json::to_value(&signed.payload.account).unwrap())).unwrap();
+                            let signed = protocol::sign(RECEIPT_DOMAIN, signed.payload, &signer).unwrap();
+                            protocol::verify(RECEIPT_DOMAIN, &signed, &provider).unwrap();
+                            serde_json::to_vec(&signed).unwrap()
+                        }
+                        NativeReceiptSnapshotReply::Fault(index) => {
+                            let case = &cases[index];
+                            let account = snapshot_mutation_bytes(case,
+                                &serde_json::to_value(&signed.payload.account).unwrap());
+                            if matches!(case, NativeSnapshotMutation::Term(_)
+                                | NativeSnapshotMutation::Money(_, _) | NativeSnapshotMutation::Unbalanced(_)) {
+                                // Authentic counterparty claims: stale signatures must
+                                // not mask original-term or monetary validation.
+                                signed.payload.account = serde_json::from_slice(&account).unwrap();
+                                let signed = protocol::sign(RECEIPT_DOMAIN, signed.payload, &signer).unwrap();
+                                protocol::verify(RECEIPT_DOMAIN, &signed, &provider).unwrap();
+                                serde_json::to_vec(&signed).unwrap()
+                            } else {
+                                // Preserve the original signature and raw duplicate
+                                // members. A projecting decoder must not normalize and
+                                // authenticate extra members or positional aliases.
+                                let member = format!("\"account\":{}", serde_json::to_string(&signed.payload.account).unwrap());
+                                serde_json::to_string(&signed).unwrap().replacen(&member,
+                                    &format!("\"account\":{}", std::str::from_utf8(&account).unwrap()), 1).into_bytes()
+                            }
+                        }
+                        NativeReceiptSnapshotReply::Replay(wire) => wire,
+                    };
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    // Count only completed fault construction, not a middleware panic.
+                    delivered.fetch_add(1, Ordering::SeqCst);
+                    Response::from_parts(parts, Body::from(wire))
+                }
+            }
+        }));
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); })
+                .await.unwrap();
+        });
+        let mut consumer = Consumer::new(config.clone()).unwrap();
+        let exported = consumer.credential_export(id, None).unwrap();
+        assert_eq!(exported["api_key"], opened.credential.as_ref().unwrap().bearer);
+        let first = consumer.receipt(id).await.unwrap();
+        assert_eq!(first.payload.sequence, 1);
+        assert_eq!(serde_json::to_value(&first.payload.account).unwrap(), original);
+        let first_saved: Value = serde_json::from_slice(&assert_success_state(&initial, &first)).unwrap();
+        *reply.lock().unwrap() = NativeReceiptSnapshotReply::Wide;
+        let wide = consumer.receipt(id).await.unwrap();
+        assert_eq!(wide.payload.sequence, 2);
+        assert_eq!(serde_json::to_value(&wide.payload.account).unwrap(), wide_snapshot(&original));
+        let before = assert_success_state(&first_saved, &wide);
+        let saved_before: Value = serde_json::from_slice(&before).unwrap();
+        let mut provider_expected = financial_state();
+        assert_eq!(provider_expected[0][0][0], *id);
+        assert_eq!(provider_expected[0][0][4], 2);
+        let mut issued = 2_u64;
+
+        for (offset, case) in batch_cases.iter().enumerate() {
+            *reply.lock().unwrap() = NativeReceiptSnapshotReply::Fault(batch * 7 + offset);
+            let count = delivered.load(Ordering::SeqCst);
+            consumer.receipt(id).await.expect_err(&format!("{case:?}"));
+            assert_eq!(delivered.load(Ordering::SeqCst), count + 1, "must reach receipt acceptance: {case:?}");
+            issued += 1;
+            // Issuance commits at the provider even when native acceptance refuses it.
+            provider_expected[0][0][4] = json!(issued);
+            assert_eq!(financial_state(), provider_expected, "{case:?}");
+            assert_eq!(std::fs::read(&account_path).unwrap(), before, "{case:?}");
+            assert_eq!(native_payment_journal_snapshot(&journal), original_journal, "{case:?}");
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported, "{case:?}");
+            drop(consumer);
+            consumer = Consumer::new(config.clone()).unwrap();
+            assert_eq!(std::fs::read(&account_path).unwrap(), before, "{case:?}");
+            assert_eq!(serde_json::to_value(&consumer.accounts().unwrap()[0]).unwrap(), saved_before["account"], "{case:?}");
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported, "{case:?}");
+        }
+        *reply.lock().unwrap() = NativeReceiptSnapshotReply::Original;
+        let corrected = consumer.receipt(id).await.unwrap();
+        issued += 1;
+        assert_eq!(corrected.payload.sequence, issued);
+        assert_eq!(serde_json::to_value(&corrected.payload.account).unwrap(), original);
+        let accepted = assert_success_state(&saved_before, &corrected);
+        provider_expected[0][0][4] = json!(issued);
+        assert_eq!(financial_state(), provider_expected);
+
+        drop(consumer);
+        consumer = Consumer::new(config.clone()).unwrap();
+        *reply.lock().unwrap() = NativeReceiptSnapshotReply::Replay(serde_json::to_vec(&corrected).unwrap());
+        let count = delivered.load(Ordering::SeqCst);
+        consumer.receipt(id).await.expect_err("accepted replay after reopening");
+        assert_eq!(delivered.load(Ordering::SeqCst), count + 1);
+        issued += 1;
+        provider_expected[0][0][4] = json!(issued);
+        assert_eq!(financial_state(), provider_expected);
+        assert_eq!(std::fs::read(&account_path).unwrap(), accepted);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+        assert_eq!(native_payment_journal_snapshot(&journal), original_journal);
+
+        *reply.lock().unwrap() = NativeReceiptSnapshotReply::Original;
+        let recovered = consumer.receipt(id).await.unwrap();
+        issued += 1;
+        assert_eq!(recovered.payload.sequence, issued);
+        assert_eq!(serde_json::to_value(&recovered.payload.account).unwrap(), original);
+        let after = assert_success_state(&serde_json::from_slice(&accepted).unwrap(), &recovered);
+        provider_expected[0][0][4] = json!(issued);
+        assert_eq!(financial_state(), provider_expected);
+        drop(consumer);
+        let consumer = Consumer::new(config).unwrap();
+        assert_eq!(std::fs::read(&account_path).unwrap(), after);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
         assert_eq!(native_payment_journal_snapshot(&journal), original_journal);
         stop.send(()).unwrap();
         server.await.unwrap();
