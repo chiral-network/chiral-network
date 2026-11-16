@@ -6,9 +6,9 @@ Part I explains the product, architecture and trust assumptions. Part II defines
 
 ## Contents
 
-- [Part I: White paper](#part-i-white-paper): [direction](#direction-precedence-and-status), [product and trust](#product-and-trust-model), [architecture](#architecture-and-responsibilities), [engine choice](#why-llamacpp), [hardware participation](#hardware-participation-and-platform-status).
-- [Part II: Design and implementation](#part-ii-design-and-implementation): [identities and signatures](#protocol-identities-signed-offers-and-canonical-bytes); [discovery](#discovery-freshness-withdrawal-and-live-state); [HTTP boundaries](#http-origins-and-trust-boundaries); [authorization and requests](#consumer-control-credentials-and-request-lifecycle); [reputation](#payment-gated-subjective-reputation); [configuration](#configuration-and-state); [funding](#agreements-and-exact-funding-order); [accounting](#durable-accounting-and-fees); [performance](#performance-accounting-and-withdrawal); [API compatibility](#api-compatibility-and-model-qualification); [provider lifecycle](#native-provider-provisioning-and-operations); [security and recovery](#listener-and-secret-boundaries); [release gates](#release-gates-and-source-map).
-- [Appendix A: Desktop GUI text reference](#appendix-a-desktop-gui-text-reference): [global rules](#a1-global-rules-required), [shell](#a2-application-shell), [design language](#a3-design-language-current-presentation), [components](#a4-shared-components), [pages](#a5-pages), [replacing the GUI](#a6-replacing-or-extending-the-gui).
+- [Part I: White paper](#part-i-white-paper): [direction](#direction-precedence-and-status), [product and trust](#product-and-trust-model), [architecture](#architecture-and-responsibilities), [engine choice](#why-llamacpp), [hardware participation](#hardware-participation-and-platform-status), [desktop direction](#desktop-product-a-local-client-that-can-share).
+- [Part II: Design and implementation](#part-ii-design-and-implementation): [identities and signatures](#protocol-identities-signed-offers-and-canonical-bytes); [discovery](#discovery-freshness-withdrawal-and-live-state); [HTTP boundaries](#http-origins-and-trust-boundaries); [peer-to-peer transport (target)](#peer-to-peer-provider-transport-target-design); [authorization and requests](#consumer-control-credentials-and-request-lifecycle); [reputation](#payment-gated-subjective-reputation); [configuration](#configuration-and-state); [funding](#agreements-and-exact-funding-order); [accounting](#durable-accounting-and-fees); [performance](#performance-accounting-and-withdrawal); [API compatibility](#api-compatibility-and-model-qualification); [provider lifecycle](#native-provider-provisioning-and-operations); [security and recovery](#listener-and-secret-boundaries); [desktop local client (target)](#desktop-local-client-workflow-target-design); [release gates](#release-gates-and-source-map).
+- [Appendix A: Desktop GUI text reference](#appendix-a-desktop-gui-text-reference): [global rules](#a1-global-rules-required), [shell](#a2-application-shell), [design language](#a3-design-language-current-presentation), [components](#a4-shared-components), [pages](#a5-pages), [replacing the GUI](#a6-replacing-or-extending-the-gui), [target surface](#a7-target-desktop-surface-not-yet-implemented).
 
 ## Part I: White paper
 
@@ -18,17 +18,19 @@ Part I explains the product, architecture and trust assumptions. Part II defines
 
 Current evidence includes live native eSpace funding/top-up recovery, on-chain platform fee arrival, stock Python/Node SDKs, native Linux desktop generation/accounting and failure recovery. **The user approved 8 GB capacity and dedicated zoo-6 to private inference testing; public rollout remains deferred.** The RTX 4060 has now served actual CFX-funded small-model requests. This limited GPU smoke is not a complete performance-qualification report. Earlier container evidence belongs to the historical chiral-coin stack; current GPU containers and supported-platform installers remain unqualified. See the plan's [dated execution evidence](llm-serving-migration-plan.md#14-execution-evidence-and-open-release-checklist).
 
+**Adopted target design (author decision, not yet implemented).** Two changes now direct new work. (1) The desktop becomes a **local-first LLM client**: browse and download models from Hugging Face, run and chat with them on the user's own hardware, expose a local OpenAI-compatible server, and optionally share a loaded model on the network ([desktop direction](#desktop-product-a-local-client-that-can-share), [workflow](#desktop-local-client-workflow-target-design)). (2) Providers **no longer need public HTTPS reachability**: a provider behind NAT is reached over libp2p — directly, by hole punching or through a relayed, end-to-end-encrypted circuit ([peer-to-peer provider transport](#peer-to-peer-provider-transport-target-design)). Until each change is specified in OpenSpec, implemented and qualified, the implemented runtime keeps the current contracts below (public HTTPS offers; a consumer desktop with a loopback operator dashboard). Sections that state a current rule the target design replaces say so.
+
 ### Product and trust model
 
-Providers operate whole llama.cpp model endpoints on Windows, macOS or Linux, behind their own HTTPS gateways. Consumers discover signed offers, choose a provider, fund a small prepaid balance, and call a bounded OpenAI-compatible subset. Desktop, CLI and SDK clients share agreements and accounting. **llama.cpp is the only selected engine; the vLLM path is retired by this cutover.** The engine runs as a private managed subprocess, not embedded FFI. Models may span GPUs inside one provider's trusted network, **not arbitrary Internet peers**. Native desktop support does not remove public reachability or HTTPS requirements.
+Providers operate whole llama.cpp model endpoints on Windows, macOS or Linux, today behind their own HTTPS gateways and, in the target design, alternatively over libp2p without a public address. Consumers discover signed offers, choose a provider, fund a small prepaid balance, and call a bounded OpenAI-compatible subset. Desktop, CLI and SDK clients share agreements and accounting. **llama.cpp is the only selected engine; the vLLM path is retired by this cutover.** The engine runs as a private managed subprocess, not embedded FFI. Models may span GPUs inside one provider's trusted network, **not arbitrary Internet peers**. In the current runtime, native desktop support does not remove public reachability or HTTPS requirements; the [peer-to-peer transport](#peer-to-peer-provider-transport-target-design) is the adopted target that removes them.
 
 Three planes remain distinct:
 
 - **Discovery:** libp2p/Kademlia indexes identify candidate peers; bounded manifest retrieval and a verified relay catalog yield signed offers. Consumers verify signatures, network, lifetime, and revision. Discovery is bounded and incomplete, not a census of all providers. A relay may omit an offer but cannot legitimately rewrite its signed price or payee.
-- **Serving:** direct provider HTTPS/SSE. The gateway authenticates, validates, reserves, invokes a private model engine, and settles authoritative usage. The relay and blockchain do not carry prompts or model output.
+- **Serving:** provider HTTPS/SSE today; in the target design also libp2p streams — direct, hole-punched or relayed ([peer-to-peer transport](#peer-to-peer-provider-transport-target-design)). The gateway authenticates, validates, reserves, invokes a private model engine, and settles authoritative usage. The relay catalog and blockchain do not carry prompts or model output; a target-design libp2p circuit relay forwards only end-to-end-encrypted bytes it cannot read.
 - **Settlement:** separately operated Conflux eSpace RPC verifies native CFX funding. No blockchain transaction occurs per generated token. The application never starts a node or miner on login; Core mining payouts require an explicit Core-to-eSpace transfer before use.
 
-**Risk disclosure:** provider balances are non-refundable, non-transferable between providers, and not escrow. A provider can disappear, refuse service, misrepresent a model, meter dishonestly, or fail to remit platform fees. Keep deposits small. The provider sees prompts and responses in plaintext at its endpoint; TLS does not hide them from the provider. Signed metadata and receipts prove who made a statement, **not model execution, correct inference, fair measurement, or confidential computing**. Testnet currency and payment-gated reputation are experimental and offer weak economic Sybil resistance.
+**Risk disclosure:** provider balances are non-refundable, non-transferable between providers, and not escrow. A provider can disappear, refuse service, misrepresent a model, meter dishonestly, or fail to remit platform fees. Keep deposits small. The provider sees prompts and responses in plaintext at its endpoint; TLS does not hide them from the provider. Signed metadata and receipts prove who made a statement, **not model execution, correct inference, fair measurement, or confidential computing**. Testnet currency and payment-gated reputation are experimental and offer weak economic Sybil resistance. In the target design, a libp2p relay forwarding a peer-to-peer session sees both peers' IP addresses and peer IDs, timing and traffic volume, though not content; a direct or hole-punched path reveals each side's public IP address to the other.
 
 ### Architecture and responsibilities
 
@@ -39,7 +41,9 @@ flowchart LR
     C[Consumer: desktop / CLI / SDK] -->|Signed offer discovery| D[DHT and provider manifests]
     P[Provider gateway] -->|Publish offers| D
     C -->|Catalog / policy / feedback| R[Relay]
-    C -->|Direct HTTPS control and inference| P
+    C -->|HTTPS or libp2p stream: control and inference| P
+    C -.->|Target: encrypted relayed circuit| X[libp2p relay]
+    X -.-> P
     P -->|Reserve and settle| L[(Provider ledger)]
     P -->|Private authenticated HTTP| E[Managed llama.cpp]
     C -->|Signed funding| B[Conflux eSpace]
@@ -52,8 +56,9 @@ flowchart LR
 | Consumer | Holds its signing key locally, verifies offers/quotes, chooses a provider and privacy boundary, authorizes deposits, manages application credentials and checks receipts. |
 | Provider gateway | Holds its own signing key, verifies funding, owns the account ledger and engine lifecycle, admits bounded work, meters usage and signs statements. It can still lie or disappear. |
 | Private engine | Executes the pinned model and reports tokens/usage. It neither authenticates Chiral payers nor owns accounts, payments, reputation or wallet keys. |
-| DHT and relay catalog | Discover signed candidate offers. Neither is an exhaustive directory, execution attestor, inference proxy or custodian. |
+| DHT and relay catalog | Discover signed candidate offers. Neither is an exhaustive directory, execution attestor or custodian, and the catalog never proxies inference. In the target design, libp2p circuit relays may forward end-to-end-encrypted provider streams they cannot read ([peer-to-peer transport](#peer-to-peer-provider-transport-target-design)). |
 | Relay reputation service | Verifies and stores payment-gated feedback. This is a registry operated by the selected relay, not blockchain consensus over reputation. |
+| Desktop app (target) | Local client: downloads pinned models, runs the managed engine, serves a loopback OpenAI-compatible API, and optionally runs a provider daemon to share a model ([workflow](#desktop-local-client-workflow-target-design)). Keys and credentials stay native. |
 | Chain/RPC | Supplies identity-checked transaction/canonicality evidence. Settlement trusts the configured RPC's view within the application's acceptance policy; the chain does not verify tokens or model quality. |
 | Policy authority / platform | Signs accepted client-version policy and receives provider-remitted fees. Its configured authority and fee wallet are explicit, not discovered from arbitrary peers. |
 
@@ -69,7 +74,7 @@ Chiral reuses the upstream server rather than implementing inference kernels or 
 
 The subprocess is a process-lifecycle and failure boundary, **not an OS security sandbox**. Running it under the same OS identity does not prevent that identity from reading accessible files. Keep installations trusted and inventory-verified; protect the host and keys. No automatic downloads, floating model updates or fallback engines are allowed at request time.
 
-Multi-device configuration selects devices of the managed local runtime explicitly. Private operator-owned endpoints may exist inside one trusted provider network; that does not implement automatic multi-host scheduling, WAN tensor parallelism, cross-provider failover or customer-supplied code execution. Home NAT traversal, raw GPU rental, training, S3 and container-job submission are outside scope.
+Multi-device configuration selects devices of the managed local runtime explicitly. Private operator-owned endpoints may exist inside one trusted provider network; that does not implement automatic multi-host scheduling, WAN tensor parallelism, cross-provider failover or customer-supplied code execution. Raw GPU rental, training, S3 and container-job submission are outside scope. Home NAT traversal for serving was out of scope; it is now adopted as target design through libp2p ([peer-to-peer transport](#peer-to-peer-provider-transport-target-design)), not through these private endpoints.
 
 ### Hardware participation and platform status
 
@@ -95,6 +100,15 @@ Weights, KV cache, batching, context, concurrency, system RAM, loading overhead 
 | CPU development | Useful for API/accounting smoke tests; system RAM and CPU throughput cannot establish a GPU capacity/speed badge. |
 
 Cross-platform support is the current product decision, superseding the old Linux-only provider scope. It does not promise simultaneous public release or authorize public deployment: each OS/backend/model profile and installer must pass its own gates. Linux evidence cannot qualify Windows or Metal. Hardware/model license and redistribution rights remain operator obligations.
+
+### Desktop product: a local client that can share
+
+The target desktop is a **local LLM workbench first and a marketplace client second**, following the familiar workflow of local-model desktop apps: find a model, download it, load it on your own hardware and chat with it — with no wallet, chain, profile or network required. Two optional extensions use the same local engine and window:
+
+- **Use the network:** when a model is too large or slow locally, discover a provider, prepay and use it from the same chat and local API surface. This is the existing consumer workflow, keeping every existing disclosure and adding the transport-path and relay-metadata disclosure of the peer-to-peer transport.
+- **Share online:** turn an installed local model into a provider offer that others pay to use. Sharing reuses Part II's provider contracts — qualification, signed offers, prepaid accounts, admission, fee remittance — and, with the [peer-to-peer transport](#peer-to-peer-provider-transport-target-design), needs no public IP, domain or TLS certificate.
+
+The order matters. Most users never fund anything, and local use never sends prompts off the machine. Sharing is an explicit decision whose obligations — prepaid balances only this machine can serve, uptime, gas for fee remittance — are disclosed before it starts. llama.cpp's native Windows/macOS/Linux and Apple Silicon support is what lets one engine serve all three roles. The [workflow section](#desktop-local-client-workflow-target-design) specifies the design; [Appendix A.7](#a7-target-desktop-surface-not-yet-implemented) gives its screens.
 
 ## Part II: Design and implementation
 
@@ -132,7 +146,7 @@ The wire envelope is `{"payload": <InferenceOffer>, "signature": <hex recoverabl
 | `provider_wallet` | Canonical provider wallet; recovered offer signer must equal it. |
 | `peer_id` | Valid libp2p PeerId. DHT manifest receivers additionally require equality with the authenticated responding peer. |
 | `deployment_id` | 1–128 ASCII letters, digits, `_` or `-`; current publisher uses `peer_id`. |
-| `endpoint` | Public HTTPS origin on port 443, subject to the outbound-origin boundary below. No credentials, path prefix, query or fragment. |
+| `endpoint` | Public HTTPS origin on port 443, subject to the outbound-origin boundary below. No credentials, path prefix, query or fragment. Target design: optional when the offer declares libp2p reachability by `peer_id` ([peer-to-peer transport](#peer-to-peer-provider-transport-target-design)). |
 | `model` | Immutable model and optional serving-profile schema below. |
 | `price` | `{input_wei_per_1k, output_wei_per_1k}`; canonical decimal strings per 1,000 authoritative tokens. |
 | `min_funding_wei` | Minimum opening funding for a paid offer. Current publisher emits `"0"` for a genuinely free offer. |
@@ -259,9 +273,52 @@ Provider administration and engine traffic have different authorization/boundari
 
 - Administration is on a distinct nonzero **loopback-only** listener with its protected administrator bearer. `/admin/*` is not mounted in the public router. An account bearer or wallet control challenge is not an admin token.
 - The inference engine URL is private operator configuration, not the advertised endpoint. It must be an HTTP(S) origin on literal loopback/private IPv4, IPv6 loopback/unique-local, or exact `localhost`. A named arbitrary internal DNS hostname is not accepted by current validation. The current managed llama.cpp subprocess is private; engine credentials are distinct from account/admin/wallet secrets. Private-engine clients disable proxies and redirects as well.
-- A TLS reverse proxy may front the public provider listener, but must not expose the loopback administration listener, private engine, credentials or filesystem. Public HTTPS reachability is still required; libp2p relay support does not turn the inference HTTP endpoint into NAT traversal.
+- A TLS reverse proxy may front the public provider listener, but must not expose the loopback administration listener, private engine, credentials or filesystem. In the current runtime public HTTPS reachability is still required, and libp2p relay support does not turn the inference HTTP endpoint into NAT traversal. The adopted target design replaces this with the [peer-to-peer provider transport](#peer-to-peer-provider-transport-target-design).
 
 Sources: `src-tauri/src/offer_registry.rs:117–216`; `src-tauri/src/provider_config.rs:91–103,143–160,190–211`; `src-tauri/src/app.rs:440–470,540–562`; `src-tauri/src/inference_backend.rs:527–549`.
+
+### Peer-to-peer provider transport (target design)
+
+**Author decision:** a provider does not need to be publicly reachable over HTTPS. A provider without a public address — a home desktop behind NAT or carrier-grade NAT — serves over **libp2p**, using the identity its offer already carries (`peer_id`). Public HTTPS remains a supported transport for operators who have it. This section is the target contract; until it is implemented, the HTTPS origin rules above govern the runtime.
+
+#### Transport and identity
+
+- **One service, a second listener.** The provider's public router — the same `/v1/*` inference, request-status and contract/control routes plus `/healthz` and `/readyz`, with identical authentication, admission, accounting, body limits and deadlines — is also mounted on a libp2p stream protocol, `/chiral/inference/http/1`. Each stream carries HTTP/1.1 requests and responses, including SSE, over yamux on a Noise-encrypted connection. Administration, engine, tokenization and metrics routes are never mounted on it. Both listeners serve **one router instance**: build the `Router` once with `ProviderRuntime::public_router` and clone it, never calling `public_router()` per listener — each call creates a new `Gateway`, which would split the per-account rate window, the qualified arrival envelope, the body-reader slots and the cancellation registry by transport. Status and cancel requests must reach the same live operation whichever transport started it. No TLS ingress fronts this listener, so the stream server itself enforces what Caddy supplies for HTTPS: a header-read timeout, a maximum header size, an idle timeout, a bounded number of requests per stream, and caps on concurrent inbound `/chiral/inference/http/1` streams per peer and globally (yamux allows 512 streams per connection by default), all applied before the router's body limits and deadlines.
+- **Peer identity replaces WebPKI.** The provider-wallet signature on the offer binds `provider_wallet` to `peer_id`; the Noise handshake proves the remote peer ID. A consumer must refuse any stream whose authenticated remote peer ID differs from the offer's `peer_id`, and must not fall back to an address or relay that cannot prove it. DNS names and certificates play no role on this path, and DNS pinning does not apply. The redirect rule still does: the stream client follows no redirects and never dials a URL, host or multiaddr named in a provider response, and the local loopback gateway never passes a provider's 3xx status or `Location` header to SDK clients. The stream client keeps the HTTPS client's connect and response deadlines and its 8 MiB response-size bound.
+- **Address filtering is new work.** Dialing excludes private, loopback, link-local and other non-public addresses learned from peers, using the `offer_registry::public_ip` predicate at the swarm dial boundary for every address source: identify listen addresses, Kademlia routing and provider-record addresses, DCUtR candidates and the relay hop of a circuit address. The only exceptions are operator-configured bootstrap and relay multiaddresses, and loopback under the explicit `development` flag. Current code does not filter peer-supplied addresses: `dht.rs` adds up to eight unfiltered identify listen addresses per peer to Kademlia and the dial set, the relay runs the same `DhtService`, and every node forces Kademlia server mode. A node without an AutoNAT-confirmed public address must run Kademlia in client mode.
+- **Money is unchanged.** Funding still pays `provider_wallet` on chain; quotes, acknowledgements, receipts and feedback are the same signed objects. The transport never changes payee, price or agreement terms.
+
+#### Connectivity ladder
+
+1. **Direct** dial when the provider has a publicly dialable address.
+2. **Hole punching** (libp2p DCUtR), coordinated through a relay, upgrading to a direct connection when the NATs allow it.
+3. **Relayed circuit** (libp2p circuit relay v2) through a Chiral relay when hole punching fails, for example with symmetric NAT or CGNAT on both sides.
+
+Providers detect their reachability (AutoNAT), hold reservations on one or more relays while sharing, and publish direct and relayed multiaddrs through identify and DHT peer records. Consumer interfaces show the active path — *Direct*, *Hole-punched* or *Relayed* — before funding and during use.
+
+Current code is not there yet: nodes run the relay **server** behaviour with near-default circuit limits, but no relay client, DCUtR or AutoNAT, and the inference router is HTTP-only. Manifest discovery already runs over libp2p (`/chiral/inference/manifest/1`) with an unchanged wire format. For a provider without a public address, though, the manifest request itself crosses a relayed or hole-punched connection, so discovery needs its own relay budget: a full manifest page, plus the identify and Kademlia traffic on the same connection, must fit the circuit's byte limit (which counts both directions), and a search's relayed fan-out must fit the relay's per-source concurrent-circuit limit and circuit rate limiter (libp2p defaults: 4 concurrent circuits per peer and a 30-circuit bucket refilled at one per two minutes per source peer). Otherwise NAT-only providers silently drop out of discovery results.
+
+#### Relays carry ciphertext, under explicit limits
+
+A relay forwards Noise-encrypted bytes. It can see both endpoints' IP addresses and peer IDs, connection timing and traffic volume, and it can delay, drop or refuse circuits; it cannot read or modify prompts, outputs, credentials or signed objects. It is not a custodian, an execution attestor or a party to any agreement.
+
+libp2p's default circuit limits (about two minutes and 128 KiB per circuit) are sized for hole-punch coordination, not streaming inference. Relays that carry serving traffic need explicit, operator-chosen per-circuit duration and byte limits, per-peer bandwidth and reservation quotas. Any peer may hold a coordination-sized reservation (about libp2p's defaults), which DCUtR coordination and the share wizard's pre-publication reachability check use; serving-grade limits apply only to circuits whose destination peer has a currently valid signed offer, verified from its own authenticated manifest. Limits apply to the **whole circuit** — one connection, both directions and every stream on it — not to one request. A consumer must not dispatch a paid request on a circuit whose remaining duration or byte budget cannot carry the request's maximum body plus its maximum output within the request deadline; it first upgrades through DCUtR or opens a fresh serving-grade circuit, and serving streams never ride a coordination-sized circuit. A refused or cut circuit is a transport failure: the consumer recovers through request status, never through a blind paid retry. Who operates serving-capable relays, and at what cost, is an open decision ([workflow](#desktop-local-client-workflow-target-design)).
+
+#### Performance and disclosure
+
+Qualification measures provider-side timing and remains the signed guarantee. Hole-punched and relayed paths add latency and can reduce throughput outside that guarantee, as Internet round-trip time already does; waivers cover provider-side misses only. Disclose the active path and the relay's metadata visibility before funding.
+
+#### SDK and tool compatibility
+
+Stock OpenAI SDKs speak HTTPS to a `base_url` and cannot dial libp2p. The native desktop and CLI therefore run a **local loopback gateway** (`http://127.0.0.1:<port>/v1`, the desktop's local API server) that forwards requests for a funded network account to its provider over libp2p while holding the provider credential natively. SDKs authenticate to the gateway with a local key; the provider credential never leaves native storage. HTTPS providers remain directly usable as today.
+
+#### Wire change
+
+`endpoint` becomes optional. An offer declares its transports in a new signed `transports` field (`https`, `libp2p`); `https` requires `endpoint`, and `libp2p` uses the signed `peer_id`. Offers reject unknown fields and are signature-covered, so this is a new offer schema and signing-domain version. During the acceptance window, new-schema offers are published only on a new manifest protocol ID (for example `/chiral/inference/manifest/2`) while `/1` keeps serving current-schema offers, because un-upgraded receivers decode a whole page as typed offers and would drop any page containing a new one. The window governs only new discovery and quotes: persisted current-schema offers, quotes and receipts in saved accounts and provider ledgers stay parseable and verifiable for the life of the account. The OpenSpec change states whether a current-schema account may be served over libp2p by its signed `peer_id`. All of this is specified in OpenSpec before implementation.
+
+#### Release gates
+
+NAT matrix (full-cone, restricted, symmetric, CGNAT, IPv6-only); refusal to dial non-public peer-supplied addresses; stream-server header, idle and stream-count limits; circuit-budget checks before paid dispatch; discovery of NAT-only providers through relays; long SSE streams and cancellation over relayed circuits; relay saturation, quotas and abuse; peer-ID mismatch refusal; reconnection with request-status recovery; and measured, disclosed relay latency and throughput.
 
 ### Consumer control, credentials, and request lifecycle
 
@@ -531,7 +588,7 @@ Embedding response dimensions must match the requested dimensions. The pinned No
 
 Tools and JSON-schema output require separate capability qualification and are not added automatically by a model card. Responses API, image/audio/video, fine-tuning, batch jobs, arbitrary uploads/LoRA loading, tool execution and cross-provider sharding are outside this release. Embeddings have zero output limit/rate, no generation template and no generated-token speed badge. Historical embedding artifacts and results remain in the migration plan, not hard-coded current profiles.
 
-For actual client onboarding, use the [CLI funding and SDK workflow](../README.md#developer-api-quick-start), [Python example](../examples/openai_client.py) and [JavaScript example](../examples/openai-client.mjs). Export only an intentionally scoped application bearer; SDK code does not need a wallet private key. Use the selected origin plus `/v1`, disable automatic paid retries and retain request keys. Treat generated text and tool arguments as untrusted data, not HTML or executable instructions; the provider API does not run returned tools on a consumer's behalf.
+For actual client onboarding, use the [CLI funding and SDK workflow](../README.md#developer-api-quick-start), [Python example](../examples/openai_client.py) and [JavaScript example](../examples/openai-client.mjs). Export only an intentionally scoped application bearer; SDK code does not need a wallet private key. Use the selected origin plus `/v1` (for a libp2p-only provider in the target design, the local loopback gateway described in [peer-to-peer transport](#peer-to-peer-provider-transport-target-design)), disable automatic paid retries and retain request keys. Treat generated text and tool arguments as untrusted data, not HTML or executable instructions; the provider API does not run returned tools on a consumer's behalf.
 
 ### Native provider provisioning and operations
 
@@ -609,6 +666,81 @@ For an incident, stop new admission/publication and funding ingress as needed wh
 
 The cutover creates separate inference namespaces and removes legacy runtime/API paths; it does **not** delete or migrate existing Drive files, chain databases, wallet exports, old CHI history, or file-transfer reputation. Preserve them independently before upgrading. Existing supported private keys can be explicitly imported into native protected storage, but old balances, contracts, reputation, and data are not new-network credit. There is no automatic legacy data importer, token bridge, or claim that every historical installation has been upgraded.
 
+### Desktop local-client workflow (target design)
+
+This section specifies the target desktop described in [Part I](#desktop-product-a-local-client-that-can-share). It reuses existing contracts — artifact identity, the managed runtime, consumer accounts and the provider lifecycle — and adds no payment or reputation semantics. [Appendix A.7](#a7-target-desktop-surface-not-yet-implemented) gives the screens.
+
+#### Modes
+
+| Mode | Needs | Never does |
+|---|---|---|
+| **Local** | Disk space, a pinned runtime and a downloaded model | Contact the chain, a wallet, a catalog or a provider; send prompts off the machine |
+| **Network** (consumer) | Consumer profile, wallet and funding | Relax any consumer rule (Appendix A.1) |
+| **Share** (provider) | Provider profile, a wallet with gas, qualification, and reachability over libp2p or HTTPS | Start without explicit consent and disclosures, or hide outstanding obligations |
+
+Local mode works before any network profile is loaded and, once a model is installed, without connectivity.
+
+#### Discover and download models
+
+- **Source.** Hugging Face repositories that contain GGUF files. Search results and model-card metadata come from the public Hugging Face API through the native process; the webview never fetches them itself.
+- **Selection.** The user picks a repository, then a quantization (one or more GGUF shards) and the install-time contract fields that `provision-model.py` fixes: task (generation or embeddings), per-slot context length (128–32,768), maximum output tokens and, for chat, a named chat template. The app shows file sizes, quantization, license and a **fit estimate** for that context length and the intended concurrency against detected memory — dedicated versus unified, minus the headroom rules in [hardware participation](#hardware-participation-and-platform-status). It is labeled an estimate; actual fit is checked after loading.
+- **Pinning.** At download time the selected branch is resolved to its full commit hash, and the installed model is that immutable revision. A later "update" is a new download with a new identity, never an in-place replacement.
+- **License and gated repositories.** The user acknowledges the repository's declared license before downloading; it is recorded as `provision-model.py --accept-license` records it. Gated repositories use an optional Hugging Face access token stored as a protected native file, never in webview state, URLs or logs.
+- **Transfer and verification.** Downloads run natively over HTTPS, follow redirects only to an allowlist of Hugging Face download hosts, can be paused, resumed and cancelled, and verify every file's size and SHA-256 against the repository's LFS metadata before installation. Partial or unverified files never become installed models.
+- **One artifact contract.** Installation writes the same `chiral-artifact-sha256.json` inventory and `chiral-model.json` ModelSpec that `scripts/provision-model.py` produces, via a native Rust implementation of that contract. A model downloaded in the desktop is therefore usable unchanged by the CLI, the daemon and qualification. The Python script remains the operator path.
+- **Never at request time.** Downloads happen only on explicit user action — never when a request arrives or when a model is chosen for serving.
+
+#### Runtime management
+
+The pinned llama.cpp runtime for the platform and backend (currently v0.9.0, build b12110) is bundled with the installer or installed on explicit request. Its archive SHA-256 is verified at installation, and its `chiral-runtime.json` file inventory and pinned identity are verified before every launch. There are no floating runtime updates; a new runtime is a new identity. CPU, Metal, CUDA and Vulkan follow the [platform status table](#hardware-participation-and-platform-status).
+
+#### My models
+
+Installed models live under the app's protected data directory. The library lists each model's repository, commit, quantization, size, capabilities, license and verification state, and supports load, re-verify, reveal location and delete. Deleting a model that backs an active share is refused until sharing stops. Downloaded GGUF files, including their embedded chat templates, are **untrusted inputs**; on the desktop this replaces the operator assumption of trusted installations ([why llama.cpp](#why-llamacpp)). The engine subprocess is not an OS sandbox and runs as the user, so a file exploiting an engine or template-parser bug could read the wallet key, provider signing key, local bearer and Hugging Face token under `network/` and `local-server/`. Before loading or sharing a model from an unvetted repository the desktop discloses this risk, and native GGUF metadata parsing keeps the artifact contract's bounded reader (declared lengths and counts are capped before allocation). OS confinement that denies the engine those directories is a release-gate item.
+
+#### Local chat
+
+- **Load and eject.** The user loads a model into the managed engine with explicit settings (GPU offload, concurrency); per-slot context length is fixed by the installed artifact, and a different context is a separate install with a new artifact identity (and, for sharing, new qualification). The app shows memory use and refuses settings that fail the fit check. Ejecting stops the engine; a shared model cannot be ejected until sharing stops.
+- **Conversation.** Threads with a system prompt, temperature, top-p and max-token controls, streaming, stop/cancel and token counts. Output stays untrusted text (A.1.5). Chats with network providers use the same view, show the provider, account and cost, and keep every consumer disclosure.
+- **History.** Local chat history is stored only in protected local app data, can be turned off and cleared, and is never published, synced or sent anywhere beyond the requests the user makes. This is the disclosed local retention that [backup and incident response](#backup-incident-response-and-cutover) requires.
+
+#### Local API server
+
+An optional OpenAI-compatible server (`/v1/models`, `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings` and, for paid routes, `/v1/requests/:id` and `/v1/requests/:id/cancel`) for tools on the same machine:
+
+- **Loopback only**, off by default, on a user-chosen port. Exposure to a LAN is out of scope.
+- **Authenticated** by a locally generated bearer stored as a protected file. Requests carrying a browser `Origin` header or an unexpected `Host` are refused, so web pages cannot use it (CSRF and DNS rebinding).
+- **Routing.** Each model name maps either to a loaded local model (free, no accounting; while that model is shared, requests go to the provider daemon and are admitted like local chat, below) or to a funded network account, which the server forwards to its provider over HTTPS or [libp2p](#peer-to-peer-provider-transport-target-design) using one account credential the user created for that route: `infer` scope (plus `read` for recovery), an explicit spend cap and an expiry — never owner or wallet authority. The local bearer reaches only routes the user enabled, and the Local server page shows each route's cap. Paid routes pass the caller's `Idempotency-Key` through unchanged, return the provider's request ID, perform no automatic paid retries and support request-status recovery.
+- It is never advertised and is unrelated to a provider's public listener.
+
+#### Share online
+
+Sharing turns an installed local model into a provider deployment:
+
+1. **Choose** an installed model and serving settings (concurrency, offload; per-slot context is fixed by the installed artifact).
+2. **Provider identity.** A provider profile and wallet. One wallet may act as both consumer and provider because the desktop keeps both roles under one `data_dir` journal ([shared signing-wallet directory](#shared-signing-wallet-directory)). The wallet needs CFX for fee-remittance gas.
+3. **Reachability.** libp2p by default — direct, hole-punched or relayed — or an HTTPS origin the user operates. The wizard verifies reachability through a relay before publishing.
+4. **Qualification.** Paid generation offers require the qualification run and evidence in [API compatibility](#api-compatibility-and-model-qualification) and the [provider guide](provider-qualification.md), executed by the app on this machine within an explicitly approved measurement budget. A machine that fails a speed class cannot publish it.
+5. **Pricing.** Input and output prices and minimum funding, shown with the 0.5% platform fee.
+6. **Publish**, only after the user accepts a disclosure: consumers will prepay non-refundable balances that only this machine can serve; going offline (sleep, quit, network loss) makes the provider unavailable and its offers expire within minutes; stopping sharing does not erase existing balances or obligations; prompts are processed in plaintext on this machine; this machine's public IP address is advertised on the network and visible to the consumers and relays it serves; and reputation reflects paying users' feedback.
+
+While sharing, the desktop runs a provider daemon (`chiral_daemon --config <provider.json> --version-policy <offline-signed policy>`) as a managed child process under its data directory, reads the protected admin token natively over the loopback administration listener, and shows the operator dashboard: status, transport, offers, accounts and liabilities, requests, fees, drain and resume. **Sharing hands the engine to the daemon:** the desktop ejects its own engine for that model, and the daemon launches the managed runtime with the qualified settings. The daemon never uses the desktop's engine as an external endpoint, and the model is never loaded twice. While the model is shared, local chat and every local-API-server route mapped to it go to the daemon, where they acquire the same per-model slot and qualified arrival budget before dispatch — without an account charge, and never calling the engine directly — so local use cannot silently degrade a qualified commitment. Log out and loading a different profile are refused while a share is active; the user stops sharing first, so a share never ends without the drain and liability display. Closing the window keeps sharing running (A.1.10); with the user's consent the app may prevent system sleep while sharing. **Stop sharing** drains, withdraws offers and stops the daemon after showing outstanding prepaid liabilities. Quit's confirmation lists active shares before it stops them.
+
+#### Storage layout
+
+`<app data>/models/<repo>/<commit>/` (artifacts and inventories), `runtimes/<identity>/`, `chats/` (local history), `local-server/` (bearer and settings), and `network/` (the shared `data_dir` and wallet journal, the provider ledger, and separate consumer and provider DHT identity files — a consumer must never run with the provider's peer ID, or its empty manifest replies would withdraw the provider's offers). Every secret is a protected file; the webview receives none except the explicit reveals of A.1.1.
+
+#### Open decisions for the author
+
+1. **Free sharing without qualification:** allow price-zero shares with no speed badge and a lighter readiness probe, or keep requiring qualification for every generation offer as today.
+2. **Relay operation:** who runs serving-capable relays, their bandwidth and duration limits, and whether relayed traffic carries a fee.
+3. **Local chat history default:** on (the familiar local-client behavior) or off (privacy first).
+4. **Sleep prevention:** automatic while sharing, or only on request.
+
+#### Status and milestones
+
+Target design only. Milestones, each with its own OpenSpec change, tests and release gates before it is presented as implemented: (1) model download, library, runtime management and local chat; (2) local API server; (3) libp2p provider transport and the offer schema change; (4) the share wizard with in-app qualification and the provider dashboard.
+
 ### Release gates and source map
 
 Implementation and documentation are not release approval. The [open release checklist](llm-serving-migration-plan.md#open-release-checklist--partial-evidence-does-not-close-a-gate) retains the executable acceptance matrix; [known limitations](bugs.md) distinguishes defects from unexercised qualification. Before any public testnet admission:
@@ -619,6 +751,7 @@ Implementation and documentation are not release approval. The [open release che
 4. Run real per-model/OS/backend capability and performance sweeps, SDK flows, cancellation, missing/malformed usage, timeout/backpressure, engine/OOM/gateway failures and evidence renewal. Do not fabricate reports to enable publication.
 5. Exercise multiple independently operated providers/consumers, bounded discovery and stale/forged records, reputation updates, relay outage, malicious URLs/DNS rebinding and provider disappearance.
 6. Verify real native desktop surfaces, protected state, signed installers where applicable, public HTTPS/firewall separation, version rollback protection, load/soak behavior and consistent backup/incident recovery.
+7. Before presenting the target design as available: qualify verified model download and installation, local API server isolation, the [peer-to-peer transport](#peer-to-peer-provider-transport-target-design) gates, and the desktop sharing lifecycle (sleep, quit, stop sharing with outstanding liabilities).
 
 Public ingress and hardware rental still need authorization; documenting these gates does not authorize deployment. Mainnet, a new mining pool and the retired product domains are not part of this release.
 
@@ -651,12 +784,12 @@ The GUI is a thin view over native consumer commands. It never computes money, s
 
 ### A.1 Global rules (required)
 
-1. **Native boundary.** Wallet private keys, provider admin tokens and bearer files never enter webview state, URLs, storage or logs. The GUI passes *file paths* to native commands and receives only public data. The one exception is an API key the user explicitly reveals for SDK use (A.5.4), shown in a masked field and cleared on hide or account change. See [listener and secret boundaries](#listener-and-secret-boundaries).
+1. **Native boundary.** Wallet private keys, provider admin tokens and bearer files never enter webview state, URLs, storage or logs. The GUI passes *file paths* to native commands and receives only public data. The exceptions are an API key the user explicitly reveals for SDK use (A.5.3) and, in the target design, the local API server bearer the user explicitly reveals on the Local server page (A.7); each is shown in a masked field and cleared on hide or account change. See [listener and secret boundaries](#listener-and-secret-boundaries).
 2. **No simulation.** Outside the native runtime (browser preview) the GUI shows a preview notice and every native action fails with an explanatory error. It never fabricates wallets, offers, balances, credentials, receipts or model output.
 3. **Explicit network.** No network, RPC, catalog, faucet or provider is selected implicitly. Until a consumer profile is loaded in Settings, network actions are disabled and a banner points to Settings. See [configuration and state](#configuration-and-state).
 4. **Money is exact.** Amounts cross the native boundary as canonical decimal wei strings. User input in CFX converts with at most 18 decimals and exact integer arithmetic; display converts wei to CFX without floating point and without rounding away digits.
 5. **Untrusted output.** Model output, provider metadata and JSON responses render as plain text (escaped), never as HTML, Markdown-to-HTML or executable tool calls.
-6. **Risk disclosure before funding.** Before any opening or top-up the user sees, and must actively accept, that funds are non-refundable, usable only with that provider/endpoint, that the provider sees prompts in plaintext, that signed metadata does not prove execution, the platform fee rate, that gas is extra, and that reorganizations can freeze or reverse credit. See [product and trust model](#product-and-trust-model) and [settlement and recovery risks](#settlement-and-recovery-risks).
+6. **Risk disclosure before funding.** Before any opening or top-up the user sees, and must actively accept, that funds are non-refundable, usable only with that provider/endpoint, that the provider sees prompts in plaintext, that signed metadata does not prove execution, the platform fee rate, that gas is extra, and that reorganizations can freeze or reverse credit. For a libp2p offer (target design) it also shows the active path (Direct, Hole-punched or Relayed) and, when relayed, which relay is used and that the relay sees both peers' IP addresses and peer IDs, timing and traffic volume, though not content. See [product and trust model](#product-and-trust-model) and [settlement and recovery risks](#settlement-and-recovery-risks).
 7. **Recovery over retry.** Ambiguous funding or requests are resumed or reconciled, never silently retried. Any pending journaled funding is surfaced and offered as *Resume*; the GUI never prompts for a second payment while one is unresolved. Cancellation is labeled as gas-spending, racy and **not a refund**. See [agreements and exact funding order](#agreements-and-exact-funding-order).
 8. **Session scoping.** Loading a different profile or logging out cancels active streams, clears displayed credentials and remounts the current page so no data from the previous network/session remains visible.
 9. **Accessibility.** Every input has a visible label; status changes use `role="status"`, failures `role="alert"`; navigation exposes `aria-current`; a "Skip to content" link targets the main region; color is never the only signal (status badges carry text); reduced-motion preference is honored.
@@ -710,7 +843,7 @@ The GUI is a thin view over native consumer commands. It never computes money, s
 
 ### A.4 Shared components
 
-- **Offer card:** model ID; provider wallet (monospace); offer revision badge; endpoint; three tiles — input price / 1k tokens, output price / 1k tokens, context tokens; capability badges (`chat`, `completions`, `embeddings`); model revision, minimum funding, expiry; *serving profile* (compact); chain ID, deployment ID and genesis; button "Inspect provider and funding terms".
+- **Offer card:** model ID; provider wallet (monospace); offer revision badge; endpoint (or, for a libp2p-only offer in the target design, its transports and peer ID); three tiles — input price / 1k tokens, output price / 1k tokens, context tokens; capability badges (`chat`, `completions`, `embeddings`); model revision, minimum funding, expiry; *serving profile* (compact); chain ID, deployment ID and genesis; button "Inspect provider and funding terms".
 - **Serving profile:** "Provider-qualified target: *N* output tokens/sec per admitted request"; tiles for capacity tier (`higher` reads "48–80 GB+ / local multi-GPU"), admitted load (concurrency and requests/s), engine/version · platform/backend · quantization, location, and measured hardware (device, memory, unified vs dedicated, reserved headroom). The qualification and remedy terms (95% joint attainment of ≤2 s time-to-first-token and decode target, workload envelope, waiver scope) are always reachable — inline, or behind a "Qualification & remedy terms" disclosure in compact contexts. A "Signed qualification provenance" disclosure lists HF repos, revisions, evidence date and SHA-256s, artifact/runtime hashes and execution settings, labeled as provider measurements, not attestations. Profiles without a serving commitment state that no generation-speed guarantee applies. See [performance accounting and withdrawal](#performance-accounting-and-withdrawal).
 - **Raw result panel:** titled collapsible JSON view (A.3); the only place unparsed native responses appear.
 
@@ -725,7 +858,7 @@ Model marketplace
 [Verified offers] [Models] [Lowest input / 1k] [Lowest output / 1k]
 (search) Discover providers: [ Model filter: All models        ] [Discover providers]
 +-- offer card --+  +-- offer card --+          (two columns ≥1280 px)
-==== Prepay <model>  <provider…> · <endpoint>         (1 Quote)(2 Fund)(3 Open) ====
+==== Prepay <model>  <provider…> · <endpoint | p2p path>  (1 Quote)(2 Fund)(3 Open) ====
 ! Non-refundable, provider-specific prepayment ... (A.1.6)
 Observed readiness: [Health] [Readiness] [Reputation Elo · votes]  > raw response
 1 · Request a signed quote: [ amount CFX ] [Request signed quote]
@@ -818,3 +951,34 @@ Left section menu (Network profile — with a green/amber dot — Appearance, No
 - Add a page by adding a route, a navigation item (label, short label, icon) and a page using the shared header/card/tile/callout vocabulary; call native operations only through the consumer command boundary.
 - Prefer parsed tiles for the few fields users act on, and keep the raw result available for everything else.
 - Verify with `npm run check`, `npm test` and `npm run build`, then exercise the real native desktop; a browser preview is not native verification.
+
+### A.7 Target desktop surface (not yet implemented)
+
+The target desktop reorganizes navigation around the local workflow of the [desktop direction](#desktop-product-a-local-client-that-can-share) and [workflow](#desktop-local-client-workflow-target-design) sections. Today's pages remain, grouped under **Network** and **Wallet**. The A.1 rules apply, with one scoping: A.1.3 and A.1.8 govern Chiral network actions and network sessions only. Local-model chat, Discover, My models and local-model Local server routes need no profile, and logging out or loading another profile does not cancel local-model chats. Share additionally requires an explicitly loaded provider profile, and while a share is active Log out and profile switching are refused until *Stop sharing* completes. A.6 applies when building these pages.
+
+```text
++----+------------------------------------------------------------------------------------+
+|    | [ Select a model to load  v ]   qwen2.5-7b-instruct · Q4_K_M · local · 5.1 / 24 GB  |
+| Ch |  +-- Threads ---+  +-- Chat ------------------------------+  +-- Parameters ------+ |
+| Di |  | + New chat   |  | user: ...                            |  | System prompt      | |
+| Mo |  | Thread A     |  | assistant (streaming) ...            |  | Temperature, top-p | |
+| Sv |  | Thread B     |  |                                      |  | Max tokens         | |
+| Sh |  |              |  | [ message ...                ][Send] |  | GPU layers, slots  | |
+| Nw |  +--------------+  +--------------------------------------+  +--------------------+ |
+| Wa | engine: running · RAM/VRAM 5.1/24 GB · downloads: 1 · sharing: on (relayed) · CFX  |
++----+------------------------------------------------------------------------------------+
+  Ch Chat · Di Discover · Mo My models · Sv Local server · Sh Share · Nw Network · Wa Wallet
+  (Settings and Diagnostics sit at the bottom of the rail.)
+```
+
+| Page | Contents |
+|---|---|
+| **Chat** | Model picker covering installed local models and funded network accounts, each labeled with source and cost; load/eject with settings; threads; streaming conversation; per-thread parameters. Network chats show the provider, account balance and transport path. |
+| **Discover** | Hugging Face search; repository details (card summary, license, files grouped by quantization with size and fit estimate); *Download* after license acknowledgement; a download queue with progress, pause/resume/cancel and verification state. |
+| **My models** | Installed models with revision, quantization, size, capabilities, verification and share status; load, re-verify, reveal and delete. |
+| **Local server** | Enable/disable, port, local bearer (masked; revealed only on explicit request under A.1.1; regenerate), model routing table with each paid route's scoped credential and spend cap, `curl` and SDK snippets for `http://127.0.0.1:<port>/v1`, and a request log of metadata only, never content. |
+| **Share** | The six-step wizard and, while sharing, the provider dashboard: status, transport (direct, hole-punched or relayed, and which relay), offers, accounts and liabilities, requests, earnings and fee remittance, drain/resume, *Stop sharing*. |
+| **Network** | Today's Marketplace, Playground, Usage & API keys, Account (local account index) and Network pages: discover providers, fund, and manage accounts and credentials. Today's Provider page also remains here for administering an external `chiral_daemon` over its loopback administration listener; Share's dashboard covers the app-managed daemon. |
+| **Wallet, Settings, Diagnostics** | As today, plus storage locations, the Hugging Face token file, runtimes and backends, sleep prevention and the chat-history preference. |
+
+A persistent **status bar** shows engine state, memory use, active downloads, sharing state and transport, and wallet balance. The tray (A.2) adds the sharing state to its tooltip.
