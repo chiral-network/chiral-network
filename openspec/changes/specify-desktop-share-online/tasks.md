@@ -1,0 +1,337 @@
+## 1. Specify desktop sharing
+
+- [x] 1.1 Read the book's adopted target design and the sections cited in design.md, plus the provider qualification guide. Compare them with the current code:
+  - `chiral_daemon` startup, shutdown and version-policy handling;
+  - maintenance refresh and automatic fee remittance;
+  - `ProviderConfig::validate` and the gateway's execution-compatibility and rate-limit rules;
+  - `Consumer::provider_admin`, the consumer's development rule and its state layout;
+  - managed-engine child containment;
+  - the runner's sample, warm-up and key-rotation logic;
+  - the desktop capability file and bundle configuration;
+  - the `desktop-window-lifecycle` main spec.
+
+  Record the boundaries with milestones 1–3, including milestone 1's share carve-outs.
+- [x] 1.2 Write the proposal, the design, the `desktop-share-online` delta and the two `desktop-window-lifecycle` modifications, and revise them after independent review. Do not edit the book, code, main specs or other changes.
+- [x] 1.3 Run `openspec validate specify-desktop-share-online --strict --no-interactive`.
+- [ ] 1.4 Record the author's decisions on the blocking open questions and update the affected requirements before starting the tasks they block:
+  - question 1 before task 2.13 (decided 2026-11-16, book *Author decisions* item 1; applied in 1.5);
+  - question 2 before the default in 2.19 (decided 2026-11-16, book *Author decisions* item 4; applied in 1.5);
+  - question 3 before the relayed path in 2.8 (decided 2026-11-16, book *Author decisions* item 2; applied in 1.5);
+  - question 5 before 2.7 and the HTTPS part of the reachability-check mode in 2.5 (decided 2026-11-16, book *Author decisions* item 7, as moot: task 2.7 and that part of 2.5 are withdrawn; applied in 1.7);
+  - question 8 before any relaxation of the interim price rule in 2.14 (decided 2026-11-16 by book *Author decisions* items 8 and 11: published prices are independent of the calibration rates, and the interim rule is withdrawn; applied in 1.9);
+  - question 10 (owned by `specify-p2p-provider-transport` open question 3) before the relayed-path parts of 2.16 and 2.20 (decided 2026-11-16, book *Author decisions* item 6; applied in 1.7).
+- [x] 1.5 Apply the book's *Author decisions* of 2026-11-16 (the uncommitted edit on top of `fe473508`): item 1 (free shares) through the requirement *Free and embedding shares publish after readiness without speed qualification*, the new *Unqualified generation offers are labeled for consumers*, the adapted gas, pricing, publish, daemon, dashboard, local-use and competing-load requirements, and a MODIFIED copy of `specify-inference-commercial-terms`'s *Native deployment constraints cannot be bypassed by declaration validity*; item 2 (relay operation) in the provider profile and open question 3; item 4 (sleep prevention) in *Idle system sleep is prevented automatically while sharing, with consent*; item 3 (chat history, milestone 1's) in open question 4. Re-run strict validation.
+- [ ] 1.6 After `specify-inference-commercial-terms` is archived, rebase this change's MODIFIED *Native deployment constraints cannot be bypassed by declaration validity* and *Existing agreements permit only evidence-only renewal of identical terms* onto the archived text, keeping only the free-generation exception and the pre-promotion free-agreement exception, each with its two scenarios. Archive this change only after that change, after `specify-desktop-local-models`, and after `specify-p2p-provider-transport`, without whose implementation no desktop share can be published (book *Author decisions* item 7). `specify-provider-launch-reputation` (renamed from `specify-provider-track-record`) imposes no archive order, because this change names that change but references none of its requirements; it is a release dependency (3.7).
+- [x] 1.7 Apply the book's *Author decisions* items 5–7 of 2026-11-16 (working-copy SHA-256 `3afcdb876c5422686259b0782ae2b4b3a5f0de968e7ecd60806b91523dfe743a`): item 7 (desktop sharing is libp2p-only) by removing the HTTPS reachability option, origin validation, the HTTPS part of the reachability-check mode, the calibration port rule and the HTTPS tests, deciding open question 5 as moot and recording the milestone 3 dependency (design.md decision 33); item 6 (24-hour relayed grace) by deciding open question 10 and giving the relayed-grace statement on drain, on the dashboard without a current offer and in the *Stop sharing* and Quit confirmations, including the MODIFIED `desktop-window-lifecycle` copy (decision 34); item 5 (offer schema v1 dropped with no acceptance window, milestone 3's) by checking that every share publishes only schema v2 offers and that nothing here depends on a v1 window. Leave items 1–4 as applied and open questions 12 and 13 open. Re-run strict validation.
+- [x] 1.8 Apply the book's *Author decisions* items 8 and 9 and the clarified anchor of item 6's grace (working-copy SHA-256 `c20a3bafebe2adfaedb569de9dbf7d5674688a4c0cf5432e2cd59f25516f6488`):
+  - item 8 (free is the default share) through the new requirements *New shares start free* and *Charging for a shared model is an explicit upgrade*, and the adapted wizard, qualification, free-share, pricing, publish and dashboard requirements (design.md decision 35, open question 14);
+  - item 9 (free service earns no ratings; a relay-observed track record is shown instead) through the publish disclosure, the optional dashboard display and the milestone 5 release dependency, referring to `specify-provider-track-record` (now `specify-provider-launch-reputation`) and its capability `provider-track-record` by name only (decision 36);
+  - the grace anchor (the 24 hours count from the signed `expires_at` of the most recent offer the relay itself verified) in every copy of the relayed-grace statement, the MODIFIED `desktop-window-lifecycle` copy included (decision 34).
+
+  Leave items 1–7 as applied. Re-run strict validation. Superseded by 1.9 for items 8 and 9.
+- [x] 1.9 Apply the book's replacement *Author decisions* items 8–11 (`fe473508` plus the uncommitted 2026-11-16 edit, working-copy SHA-256 `8ee7fd8a114a8aefc7261a5716e2e80f10e051347f575cff645acf742e53e81c`), which replace the earlier items 8 and 9:
+  - item 8 (launch window and Auto-price) through *New shares start free in a launch window* (renamed from *New shares start free*), *Qualification runs automatically in the share's first quiet hour*, *A passing run is promoted into the published deployment in place*, *Auto-price sets the price from launch reputation*, *Manual pricing applies when Auto-price is off* and *A running share is repriced by a new signed offer revision*; removing *Charging for a shared model is an explicit upgrade* and the scenarios *Sharing again with prices after a free share* and *Publication rates follow the calibration rates*; and adapting the wizard, provider-profile (`catalog_url`), qualification, stop-qualification, free-share, pricing, publish, daemon, dashboard, local-use, close, stop and pinning requirements (design.md decisions 37–39, 41, 42 and 44; decisions 1, 2, 6, 11, 18, 22, 23, 27, 29 and 34 revised; decision 35 superseded in place);
+  - item 9 (launch reputation) through the publish disclosure, the dashboard display read from the provider profile's catalog and Auto-price's inputs, referring to `specify-provider-launch-reputation` by change name only (decision 43; decision 36 superseded in place);
+  - item 10 (free allowance) through *Free offers carry a signed free allowance*, relying on `specify-p2p-provider-transport`'s `free_allowance` (decision 40);
+  - item 11 (defaults) in the launch window, ready-to-charge and Auto-price thresholds.
+
+  Decide open question 8, supersede open question 14 in place, update open question 12, and add open questions 15 and 16. Leave items 1–7 as applied. Re-run strict validation.
+- [x] 1.10 Apply the author's chat decisions of 2026-11-16 recorded in the book (working-copy SHA-256 `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933`; *Wire change*, *Share online* step 4 and *Launch reputation*) and the default implementation decisions of the same day:
+  - free accounts opened before a promotion keep being served under their allowance, with the same model and settings and no speed promise, through a second MODIFIED `inference-commercial-terms` requirement, *Existing agreements permit only evidence-only renewal of identical terms*, copied exactly with only the pre-promotion free-agreement exception and two scenarios added; the promotion requirement, publish disclosure, dashboard and tasks 2.33, 3.1 and 3.2 follow it (design.md decision 45; open question 15 decided);
+  - Auto-price is available for embedding shares, with the readiness `specify-provider-launch-reputation` defines for embedding offers (launch criteria minus qualification, embeddings probes and an input-token billing check), and every step keeps a zero output rate (decision 44 revised; open question 16 decided);
+  - the qualification pause's HTTP 503 `qualification_in_progress` carries an integer `Retry-After` from 1 to 3,600 seconds and is never a payment, allowance or funding error, consistent with milestone 2's pass-through and milestone 3's native-consumer handling (decision 45);
+  - the dashboard shows **Billing unchecked** when the catalog reports the billing check unchecked, as neither a mismatch nor an unmet criterion; while charging, the service score is the catalog's walk-back over recent free periods, read as reported (decision 41).
+
+  Leave items 1–11 as applied. Re-run strict validation.
+
+## 2. Implement
+
+Desktop shares are libp2p-only (book *Author decisions* item 7; design.md decision 33). Until `specify-p2p-provider-transport` is implemented, the wizard stops at the reachability step (2.8), so no task below can check reachability, request a qualification budget through the wizard or publish a share, free or paid, against a real network. The tasks can be built and tested against test doubles before then.
+
+- [ ] 2.1 Provider profile: a strict, secret-free document selected explicitly by path, with exactly these fields:
+  - `network` (the consumer-profile network object);
+  - `platform_wallet`;
+  - `dht_bootstrap`;
+  - `relays` (1–32 entries, required because every share uses libp2p and is verified through a relay), which a shipped profile may fill with the project's serving-capable testnet relays from `specify-p2p-provider-transport` task 2.13, and a user's profile with relays any operator runs; no relay fee or relay term is shown;
+  - `version_policy_file`, or `network.policy_url` with a natively verified protected copy;
+  - `catalog_url` (nullable), validated with the consumer profile's outbound-origin rules and refused when the catalog reports another network identity; with none, Auto-price is unavailable (design.md decisions 41 and 43).
+
+  Resolve paths relative to the profile. Reject unknown fields, including `development`. Require a network identity equal to the loaded consumer profile's. Never invent or discover the platform wallet, bootstrap addresses, relays or policy source.
+- [ ] 2.2 Provider wallet, base and identity:
+  - offer the loaded consumer wallet, a generated wallet or an imported protected key;
+  - give a new deployment the loaded consumer profile's `data_dir`, or `<app data>/network/` without one, and reuse the recorded base afterwards;
+  - record each signing wallet's base per network, and refuse consumer-profile loads (a first load included) and daemon starts that would give a recorded wallet a second journal;
+  - warn before importing a key that may be active elsewhere;
+  - keep one published deployment per network and provider wallet, with a provider DHT identity created once, distinct from the consumer's, and reused on every later share;
+  - list accounts the new model will not serve, with exact liability, and require acknowledgement before publishing;
+  - never delete identity or state to clear an error.
+- [ ] 2.3 Gas:
+  - show the verified provider-wallet balance and a labeled remittance-gas estimate, with the statement that the daemon remits automatically;
+  - show the configured faucet and explorer only;
+  - never use a faucet or transfer automatically;
+  - block publishing below the estimate for every share, free shares included, and for a free share state that its own openings create no fee obligation (design.md question 12 asks whether to exempt it);
+  - show RPC errors instead of an unverified balance.
+- [ ] 2.4 Native daemon supervisor:
+  - bundle `chiral_daemon` as a sidecar (`externalBin`), locate it natively, spawn it without any webview shell permission, and refuse a version other than the desktop's;
+  - generate the daemon configuration under `network/`, with `data_dir` set to the deployment's base, and loopback administration, engine and HTTP listeners on distinct ports;
+  - give the published deployment and its reachability-check daemon a non-loopback DHT `listen` address, keeping the calibration DHT listener on loopback;
+  - for every share, write a `null` `public_endpoint` (no advertised HTTPS origin, so the daemon publishes schema v2 offers with `transports` `["libp2p"]` and a `null` `endpoint`) and milestone 3's `libp2p_serving` block into both daemons' configurations: `relays` from the provider profile (1–32), and every stream-server limit (`max_streams`, `max_streams_per_peer`, `request_head_timeout_secs`, `max_header_bytes`, `idle_timeout_secs`, `max_requests_per_stream`) set nonzero by design.md decision 9's rule and shown on the Share page before publishing;
+  - generate protected administrator and engine tokens;
+  - natively verify the signed version policy for every daemon, calibration and reachability-check included;
+  - start the child with a minimal environment, passing secrets only as file paths, and passing `CHIRAL_POLICY_PUBLIC_KEY` exactly when the desktop's authority comes from it;
+  - bind the child to the desktop: parent-death on Linux, a kill-on-close Job Object on Windows, and a graceful drain-and-stop from the native exit handler on shutdown, session end and termination signals;
+  - refuse an occupied port or a held lock;
+  - detect a leftover daemon at startup;
+  - never restart automatically.
+- [ ] 2.5 Add two `chiral_daemon` options, each with a regression test:
+  - start drained, so a published deployment publishes no offer until `resume`;
+  - a reachability-check mode under the deployment's identity and lock that:
+    - starts no engine, loads no model and mounts no inference route;
+    - publishes no offer, so its manifest replies carry none;
+    - runs no maintenance and sends no chain transaction;
+    - holds a coordination-sized relay reservation;
+    - reports its observation on administration status.
+
+  The HTTPS identity-bound probe this mode once included is withdrawn by book *Author decisions* item 7.
+- [ ] 2.6 Choose step, using milestone 1's library and runtimes:
+  - offer installed, verified models only;
+  - use the context and output limits from the installed ModelSpec;
+  - check the remaining settings against the bounds;
+  - run the fit check with the headroom rules, labeling pre-load fit as an estimate;
+  - check qualification eligibility before spending, and offer only *Share without qualification* when the model or machine cannot qualify, stating that its price can then never be nonzero;
+  - disclose the untrusted-GGUF risk before an installation is first shared;
+  - hand the engine over to the daemon only after confirmation, never loading the model twice or using the desktop's engine as the daemon's endpoint.
+- 2.7 Withdrawn by book *Author decisions* item 7 (2026-11-16; design.md decision 33 and question 5): desktop shares offer no HTTPS reachability, so there is no origin validation, ingress guidance or external HTTPS probe to implement. The reachability step's pointer to `chiral_daemon` and the provider guide is part of 2.8.
+- [ ] 2.8 Reachability step, libp2p only: offer no HTTPS origin and accept no HTTP origin or endpoint of any kind, the local API server's address included; state that a provider that wants an HTTPS origin runs `chiral_daemon` with the provider guide and its preflight; and, until milestone 3 is implemented, show the step as unavailable with that explanation, with no reachability check, budget request or publication. Verify libp2p reachability from milestone 3's reachability, path and relay facts plus a peer-ID-authenticated connection through the relay from a native client whose peer ID is not the provider's. Run it in reachability-check mode before the budget and again with the drained published deployment, both with the generated `libp2p_serving` block (1–32 relays and decision 9's stream-server limits) and the non-loopback DHT listener from 2.4. A profile that lists no relay is refused in 2.1. The check is blocked on `specify-p2p-provider-transport`, and every publication with it. The relayed path also needs a serving relay whose deployment is separately authorized and operating (design.md decision 32); it is no longer blocked on an author decision (question 3, decided 2026-11-16).
+- [ ] 2.9 Native qualification runner with evidence-contract parity to `scripts/qualify-provider.py`:
+  - build the candidate from `/admin/runtime`;
+  - sweep every concurrency level, endpoint and mode;
+  - cover the four prompt buckets, with exactly 256 output tokens per passing sample;
+  - apply the joint ≥95% thresholds and the ±5% arrival tolerance;
+  - sample memory with the CUDA and Metal samplers, and fail closed on unsupported counters before paid dispatch;
+  - check runtime identity before and after the run;
+  - write the request journal before dispatch.
+- [ ] 2.10 Qualification budget and calibration deployment:
+  - collect the declared terms and calibration rates in the qualification step, or offer *Share without qualification*, and offer the same approval later on the dashboard;
+  - make an approval authorize exactly one run, and lapse it unspent when the share stops, a wizard choice changes or the user cancels the scheduled run;
+  - compute the exact budget with the formula in the requirement (S_c, W, K, R_k, P, F_k), excluding unpaid engine traffic;
+  - require approval, showing the funding risk disclosure and the automatic-remittance statement;
+  - use a paying wallet distinct from the provider wallet;
+  - treat the budget as a hard cap, with no automatic top-up;
+  - follow the exact funding order and *Resume*;
+  - run the calibration deployment loopback-only, unannounced and with a verified policy, on ports distinct from every published-deployment listener, and only while the published deployment is paused with its engine stopped (design.md decision 38).
+- [ ] 2.11 Interruption and failure:
+  - reconcile ambiguous journal entries through request status before a retry;
+  - keep a failed class's evidence and make that class unpublishable;
+  - give each new attempt a new output identity, a new credential and a new budget approval;
+  - preserve calibration state, list it with the liabilities, and force calibration fee remittance only by explicit action.
+- [ ] 2.12 Embedding share path: zero output price and output limit, no speed class, readiness required, and a statement that no generation-speed guarantee applies; first published free; Auto-price unavailable with its reason, and a nonzero input price only by manual pricing, without qualification (design.md decision 44).
+- [ ] 2.13 Free first publication and launch window (design.md decisions 29 and 37; question 1, decided 2026-11-16; book *Author decisions* items 8 and 11):
+  - publish every new share free first, with zero prices and minimum funding and the free allowance (2.28), whatever target or manual price was entered; inherit no earlier share's prices, calibration rates, qualification, budget approval, Auto-price settings or history;
+  - configure a new generation share's model with `serving: null` and zero rates, never with `development`;
+  - implement the free-generation exception of the MODIFIED `inference-commercial-terms` requirement in `ProviderConfig::validate`, with its regression tests, after `specify-inference-commercial-terms` is implemented;
+  - publish only after the daemon's readiness probes pass on the drained published deployment, and show the daemon's reason on failure;
+  - while a share has no serving profile, show no speed class, capacity tier, qualification identity, withdrawal latch or waiver, and label it *Unqualified — no speed guarantee* on the Share page and dashboard;
+  - with Auto-price on, keep the share free in its launch window for at least 24 hours from its first publication and until a review's up rule holds, ignoring the floor, and show the window with each ready-to-charge condition as the catalog reports it;
+  - make *Share again* on a stopped share offer its own accepted terms unchanged, including its pricing mode and Auto-price target, floor and step, a stopped priced share only while it still has a valid qualification, with every publish check and a new disclosure acceptance; a share that left its launch window does not re-enter it.
+- [ ] 2.14 Pricing step:
+  - the Auto-price checkbox, selected by default, with a target and a floor (2.31), or manual pricing (2.34), and the free allowance (2.28);
+  - exact CFX-to-wei conversion;
+  - the paid, free and embedding constraints, including a minimum funding of exactly `"0"` when both rates are zero;
+  - published prices independent of the calibration rates (the interim rule of design.md question 8 is withdrawn);
+  - the fixed fee with exact fee and net-credit amounts at the target's or manual price's minimum funding, or, for a free price, the statement that its openings create no fee;
+  - a statement that new prices produce new offers only.
+- [ ] 2.15 Publish step:
+  - show the exact terms, the pricing mode with its target, floor and step prices or manual price, and the free allowance, and require disclosure acceptance, including automatic remittance, and for a share without a serving profile the *Unqualified* label, no prepayment and no waiver;
+  - in the disclosure, state that reputation reflects only paying users' feedback and free service earns no ratings; that catalogs observe availability, probe the share while it is free and publish a service score (`specify-provider-launch-reputation`) beside and never blended into the payment-gated score, both staying with the provider wallet; the launch window; the automatic qualification, its pause, retryable busy response and availability cost; the promotion and the end of service to earlier free accounts; automatic price changes with Auto-price on; and the free allowance (design.md decisions 37–43);
+  - gate on final reachability, readiness for every share and a valid qualification for a share published again at a nonzero price, gas as 2.3 requires for the share, daemon readiness and the unserved-accounts acknowledgement;
+  - withdraw acceptance when terms change;
+  - publish with `resume`, and confirm it from `/admin/offers`.
+- [ ] 2.16 Share dashboard, through native administration calls:
+  - readiness, funding readiness and chain errors;
+  - the share's mode, **Free** or **Paid**, the pricing mode, the launch window and the free allowance;
+  - the qualification state (none approved, scheduled with its budget and earliest start, paused and running, passed and promoted, promotion failed, failed or stopped) and any deferral reason;
+  - admission state (accepting, draining or paused for qualification), and for a share with a serving profile its speed class and the withdrawal latch at every price, with the statement that a free share's misses count toward it; for a share without one the *Unqualified* label and no latch;
+  - the libp2p path (direct, hole-punched or relayed) and relay;
+  - offers;
+  - accounts and the exact liability total;
+  - request metadata;
+  - fees, with the automatic-remittance thresholds, and earnings;
+  - gas.
+
+  Offer drain, resume, refresh, and *Remit now* with confirmation; the budget approval, *Qualify now*, *Cancel scheduled qualification* and *Stop qualification*; and the Auto-price, manual-pricing and free-allowance controls (2.28, 2.31, 2.34). Show this provider's launch reputation and payment-gated reputation exactly as the provider profile's `catalog_url` reports them (2.35). On a relayed path, give the relayed-grace statement (design.md decision 34) before draining and before a qualification pause, and while the share has no current published offer show it with the signed `expires_at` of the last offer observed in the daemon's published-offer list and, 24 hours later, the latest time the grace can end; re-read the list immediately before a drain the desktop performs. The statement: while the daemon runs, serving relays keep carrying request status, receipts, cancellation and existing accounts until 24 hours after this machine's most recent offer verified by the relay expires; after that, consumers may lose access to them through the relay unless a direct or hole-punched path is established; and a relay restart can end the grace earlier, because milestone 3 keeps a relay's grace evidence in memory only. Question 10 was decided 2026-11-16 (book *Author decisions* item 6); this part is no longer blocked on it. Render all output as plain text. Leave the existing Provider page unchanged.
+- [ ] 2.17 Operator-local admission route on the daemon's loopback administration listener:
+  - authenticate with the administrator token;
+  - take the same slot and, for a share whose model has a serving profile, the same qualified arrival budget at every price (a share without one has none), and apply the same bounds;
+  - refuse rather than queue;
+  - no accounting, and no performance observations.
+
+  Route local chat on a shared model through it, following milestone 1's carve-out: sending without a local load, refusal reasons, Stop through the daemon, and relayed usage. Refuse local use of an installation under qualification or in its qualification pause. Route the local API server's shared-model routes through it once milestone 2 exists.
+- [ ] 2.18 Close, logout and indicator behavior:
+  - closing keeps sharing, scheduled and running qualification, promotions and Auto-price reviews running natively;
+  - refuse logout and profile switches while sharing (pointing to *Stop sharing*) and while qualifying (pointing to *Stop qualification*);
+  - show the sharing state and path in the status bar on every page;
+  - show the sharing state and path in the tray tooltip.
+- [ ] 2.19 Sleep prevention:
+  - use native idle-sleep assertions on each OS: IOKit `PreventUserIdleSystemSleep`; `SetThreadExecutionState` with system-required and continuous; a logind `idle` inhibitor in block mode, never a block-mode `sleep` lock;
+  - ask in the wizard with *Prevent idle system sleep while sharing* preselected (in the qualification step before a budget is approved, and in the publish step), preselected every time including after a decline or revocation (design.md decision 31), and record consent when the user proceeds with it selected;
+  - with consent, hold the assertion automatically whenever a share is active or a qualification run is in progress;
+  - make consent revocable in Settings and on the Share dashboard;
+  - release the assertion on stop, daemon failure, quit and revoked consent;
+  - never block lid-close or user-initiated sleep;
+  - detect wake and show the interval when the provider was unavailable.
+
+  Question 2 was decided 2026-11-16 (book *Author decisions* item 4); this task is no longer blocked on it.
+- [ ] 2.20 Stop sharing:
+  - show the liabilities and offer explicit forced remittance, without forcing one otherwise; state that a scheduled run's approval lapses, and stop a running qualification first (2.24);
+  - on a relayed path, give the relayed-grace statement in the confirmation (and in Quit's) for the drain-and-wait period, and state that once the daemon has stopped the provider is unavailable on every path until this machine shares again; question 10 was decided 2026-11-16 (book *Author decisions* item 6), so this part is no longer blocked on it;
+  - drain, then wait for in-flight requests, allowing *Stop now* after disclosure;
+  - shut down gracefully, including the Windows console-control delivery;
+  - report the share as stopped only after the child exits;
+  - preserve all state, including the pricing mode, Auto-price settings and step and the review history, and release sleep prevention;
+  - report failures without claiming the share stopped.
+- [ ] 2.21 Quit:
+  - list the shares and qualification runs in the confirmation;
+  - stop qualification runs and shares before `logout`, then destroy the window;
+  - abort on a stop failure;
+  - minimize on a close request while shares and runs are stopping;
+  - prevent interceptable application quit requests (such as Cmd+Q) while sharing or qualifying, and open the confirmation instead;
+  - never block operating-system shutdown or session end.
+- [ ] 2.22 Pinning and competing loads:
+  - pin the model and runtime while sharing or qualifying, refusing eject, delete, replace and move;
+  - show share status in the My models list of milestone 1's `desktop-model-acquisition`;
+  - before deleting a model behind a stopped share with liabilities, show those liabilities;
+  - refuse any local load during qualification, including a load of the installation under qualification;
+  - require a per-load acknowledgement for a load on overlapping devices while sharing, which on unified memory is any load, worded for a share with or without a serving profile.
+- [ ] 2.23 Add the `#/share` route and Share navigation item (after Local server or My models, before Network, with `aria-current` and the window title), the share-status label in the chat view, calibration labels in account views, and browser-preview errors. Limit new capability entries to the share commands, adding no plugin permission.
+- [ ] 2.24 *Stop qualification* and *Cancel scheduled qualification*:
+  - before a run starts, cancel it and lapse the approval without spending;
+  - stop new dispatch;
+  - wait for in-flight paid requests up to their deadline or until the user chooses *Stop now*;
+  - keep the journal, ledgers, keys and account mapping;
+  - stop the calibration daemon gracefully;
+  - never emit a qualified ModelSpec or reuse the output identity;
+  - unless the share is being stopped, end the published deployment's pause so the share serves free again (2.29);
+  - report failure if the daemon does not exit.
+- [ ] 2.25 Calibration-only consumer context:
+  - limited to the calibration endpoint, with no catalog or DHT;
+  - the paying wallet's journal under its recorded base;
+  - when the loaded consumer wallet pays, running under the loaded consumer's coordination rather than as a second instance on the same state;
+  - another paying wallet on a base dedicated to qualification payments;
+  - the loaded profile's `development` setting and origin validation unchanged.
+- [ ] 2.26 *Unqualified — no speed guarantee* on consumer surfaces (design.md decision 30):
+  - derive it only from a signed generation model (`chat` or `completions`) with `serving: null`, whatever its prices;
+  - show it in place of a serving profile in `ServingProfile.svelte` and on the Marketplace offer card, the terms inspection, the opening acceptance, the Playground's account selection, and the Usage and Account views, and, once milestone 1 is implemented, on Chat network entries and threads;
+  - show no speed class, capacity tier, admitted load, measured hardware or provenance for such a model, and state that no performance remedy or waiver applies;
+  - keep the no-generation-speed-guarantee statement for embedding-only models;
+  - leave the CLI's machine-readable output unchanged.
+- 2.27 Withdrawn by the book's replacement *Author decisions* items 8–11 (2026-11-16; design.md decisions 35 and 37–42): *Charge for this model* no longer exists. Every new share is first published free (2.13), qualification runs automatically while the share is published (2.32) and is promoted in place (2.33), and prices change by repricing in place (2.30) under Auto-price (2.31) or manual pricing (2.34). Its rule that free traffic, timings, uptime or launch reputation are never used as qualification evidence moves to 2.32.
+- [ ] 2.28 Free allowance (design.md decision 40): preset 20,000 tokens and 86,400 seconds; accept changes only within `specify-p2p-provider-transport`'s `free_allowance` bounds, refusing rather than clamping; write it into the configuration for a free price and none for a nonzero one; show it in the terms, disclosure and dashboard; publish a change as a new revision through 2.30, leaving opened accounts unchanged; state that a lifetime keeps running while the share is paused, drained or stopped.
+- [ ] 2.29 Add a `chiral_daemon` qualification pause, with a regression test, as an operator-only action on the loopback administration listener (design.md decision 38):
+  - withdraw offers as a drain does;
+  - answer new inference requests and openings with HTTP 503 `qualification_in_progress` and a `Retry-After` header holding an integer number of seconds from 1 to 3,600 (the estimated remaining pause, rounded up and clamped), admitting and charging nothing and leaving every allowance unchanged;
+  - let in-flight requests finish within their deadlines, report not ready with the reason, then stop the managed engine;
+  - keep the identity, libp2p reachability, relay reservations, ledger, maintenance and fee remittance running, and keep serving request status, receipts, cancellation, account inspection and the crediting of funding acknowledged before the pause;
+  - end the pause by launching the engine again with the unchanged configuration and resuming admission and offers only after the readiness probes pass;
+  - never restart a failed engine automatically.
+- [ ] 2.30 Add a `chiral_daemon` repricing action, with regression tests, as an operator-only action on the loopback administration listener (design.md decision 42): apply new token rates, minimum funding and free allowance to a running model without draining or restarting the engine; validate them as configuration validation would (refusing a nonzero price for an unprofiled generation model, a free price with a nonzero minimum or without an allowance, a priced price with an allowance, and a nonzero embedding output rate) and change nothing on refusal; record them durably; publish a higher revision at once and stop publishing the old values; leave accepted agreements, balances, signed quotes and credentials unchanged; refuse while paused, draining, promoting or not ready. The desktop writes the same values into the generated configuration and confirms the revision from `/admin/offers`.
+- [ ] 2.31 Auto-price (design.md decision 41):
+  - the checkbox, selected by default, unavailable with its reason without a catalog; available for an embedding share, whose up rule uses `specify-provider-launch-reputation`'s embedding readiness and no qualification, and whose steps keep a zero output rate;
+  - the target and floor, the five exact step prices with floor(target × s / 100) rates, the target's minimum funding at nonzero steps and `"0"` at step 0, and refusal of a target whose 25% step has both rates zero;
+  - a scheduler that reviews every 6 hours from the first publication, never sooner than 6 hours after the previous review across restarts (recorded durably), and runs a review deferred by a run, promotion, drain, repricing or not-ready state once it ends;
+  - a pure decision function for down, up and hold, with down taking precedence, the floor, leaving step 0 to the larger of 25% and the floor, the launch window's 24-hour minimum and a valid-qualification check;
+  - inputs read natively, only from the provider profile's `catalog_url`, for the provider's wallet and peer ID, from `specify-provider-launch-reputation`'s API (service score, 14-day availability, ready-to-charge result and conditions, readiness at the end of the latest free period, observer status, computation time) and the payment-gated reputation (score, total and 14-day eligible vote counts); every unavailable input holding the review with its reason, never replaced;
+  - publication of each change through 2.30, and no budget approval, run or spending;
+  - target and floor changes at the next review; unchecking keeps the price; checking again maps to the highest step not above the current price at the next review;
+  - the dashboard display of the step prices, current step, launch window, next review, last decision with its inputs and reason, and a protected, secret-free local history keeping every review from the last 30 days and at least the last 100, discarding older ones (at most 121), with the statement that the figures are one catalog's signal, not a gate.
+- [ ] 2.32 Automatic qualification (design.md decision 38):
+  - schedule an approved run with a monotonic clock: no start in the first hour after first publication; then the first moment with no request admitted for 15 minutes and none in flight; a fallback at 12 hours; *Qualify now* after confirmation;
+  - offer approval, scheduling and *Qualify now* only for a share whose model carries no serving profile, never re-qualifying a profiled model in place, including after a performance-withdrawal latch;
+  - defer while draining, not ready, failing reachability, repricing, or underfunded against the budget plus gas, showing the reason;
+  - run it through 2.29's pause, then the unchanged calibration run (2.9–2.11, 2.25), then 2.33 after a pass, or 2.29's pause end after a failure or stop, and offer another run with a new approval;
+  - show an estimated duration and the availability statement (72 − D minutes of the first 24 hours), and claim no maintenance exemption;
+  - stop the run, without automatic restart, if either daemon fails;
+  - never use free traffic, timings, uptime or launch reputation as qualification evidence, or to shorten or skip a run.
+- [ ] 2.33 Promotion in place (design.md decision 39): while paused, stop the published daemon gracefully; regenerate its configuration with the qualified ModelSpec and nothing else changed; start it drained with the same wallet, DHT identity file, peer ID, ledger and revision counter; require native revalidation, readiness and the final reachability check; resume and confirm from `/admin/offers`; keep the serving profile at every later price; keep serving the free accounts opened under unprofiled offers within their allowance under the pre-promotion free-agreement exception, without performance accounting or a latch count, and count and show those still open; implement that exception in the gateway's execution-compatibility check, refusing changed settings and the reverse direction; on failure, keep it drained and offer retry or restoring the unqualified free configuration, never automatically.
+- [ ] 2.34 Manual pricing (design.md decision 42): confirmed price changes on the dashboard published through 2.30; a nonzero generation price refused without a valid qualification, offering the budget approval or *Qualify now*; an embedding input price without qualification; no refusal based on the launch reputation, but the incomplete-reputation statement while the catalog does not report the provider ready.
+- [ ] 2.35 Launch reputation on the dashboard (design.md decision 43): read natively only from the provider profile's `catalog_url` and show, exactly as reported with the catalog origin and computation time, the service score, 14-day availability, probe count, success rate and age, any *Billing mismatch* flag, **Billing unchecked** when the catalog reports the check unchecked (not a mismatch and not an unmet criterion), the sharing date, each ready-to-charge condition and the payment-gated score with its vote counts, labeled as that catalog's observation and never blended into the payment-gated score; never compute, estimate, sample or probe; say so when the catalog reports nothing or is unreachable.
+## 3. Verify
+
+- [ ] 3.1 Frontend unit tests:
+  - wizard gating and invalidation;
+  - the Share route, placement, `aria-current` and window title;
+  - exact pricing, the fee example values, zero minimum funding for free prices, and published prices independent of the calibration rates;
+  - budget arithmetic, including the requirement's fixed-input scenario (`519718`, `514572`, total `1034290`, fees `5170`);
+  - disclosure gating and withdrawal on change, including automatic remittance and the unserved-accounts acknowledgement;
+  - logout refusal while sharing and while qualifying;
+  - quit ordering, abort on failure, and minimize during the stop phase;
+  - tray tooltip and status-bar sharing state;
+  - the relayed-grace statement, counted to 24 hours after the expiry of this machine's most recent offer verified by the relay, on drain and before a qualification pause, on the dashboard without a current offer (with the `expires_at` of the last observed offer and the latest time the grace can end), and in the *Stop sharing* and Quit confirmations, and its absence on direct and hole-punched paths;
+  - every new share first published free with the free allowance, with nothing inherited from an earlier share, and *Share again* on a stopped share keeping its terms and Auto-price state;
+  - the launch window: at least 24 hours from the first publication even when the catalog already reports the wallet ready, the floor ignored during it, its ready-to-charge conditions shown as reported, and no window in manual pricing;
+  - the free allowance: defaults, out-of-bounds refusal without clamping, changes as new revisions leaving opened accounts unchanged;
+  - qualification scheduling with a fake clock: the one-hour warm-up, the 15-minute quiet moment, the 12-hour fallback, *Qualify now*, *Cancel scheduled qualification*, deferral reasons, approval lapse on stop or change, and the estimated duration with the 72 − D minute statement;
+  - the Auto-price decision table: exact step prices, refused targets, up, down and hold, down precedence, the floor, leaving step 0, the launch-window minimum, the qualification check for generation shares and none for embedding shares, every unavailable-input hold, the payment-gated condition from the score, total count or 14-day count, 6-hour spacing across restarts, deferred reviews, target and floor changes, unchecking and checking again;
+  - manual pricing: confirmed changes, refusal of a nonzero generation price without a valid qualification, an embedding input price without one, and the incomplete-reputation statement;
+  - the dashboard's **Free** or **Paid** mode, pricing mode, Auto-price state and history, qualification state, the latch statement for a qualified free share, the count of pre-promotion free accounts still served after promotion, **Billing unchecked**, and the launch reputation shown only as the provider profile's catalog reports it, with no figure when it reports none or is unreachable;
+  - the publish disclosure's ratings and launch-reputation statements, and its launch-window, automatic-qualification, promotion, Auto-price and free-allowance statements;
+  - the reachability step: libp2p only, no HTTPS or other HTTP endpoint field, the pointer to `chiral_daemon` and the provider guide, and the step unavailable before milestone 3 with no check, budget request or publication;
+  - the publish terms showing libp2p with the deployment's peer ID and no endpoint;
+  - the stream-server limits shown for every share;
+  - browser-preview errors;
+  - *Share without qualification*, the read-only zero prices of a free first publication, the refusal of nonzero prices without a valid qualification, the free publish terms and disclosure, and the gas gate applied to a free share;
+  - the *Unqualified — no speed guarantee* label on every consumer surface of 2.26, and the embedding statement for embedding-only offers;
+  - the sleep-consent option preselected every time the wizard asks, including after a decline or revocation, and a revocation staying in effect until consent is given again.
+- [ ] 3.2 Rust tests:
+  - provider profile fields, including the nullable `catalog_url` and refusal of a catalog for another network, unknown-field refusal and the 1–32 relay bound (an empty list refused);
+  - recorded `data_dir` bases and the conflicting-load refusal;
+  - daemon configuration: loopback binds, distinct ports, a non-loopback DHT listener for the published deployment and its reachability check, a `null` `public_endpoint` and a complete `libp2p_serving` block for every share that milestone 3's validation accepts, producing schema v2 offers with `transports` `["libp2p"]` and a `null` `endpoint`, protected tokens, no secrets in argv or the environment, a minimal environment, a verified signed policy for every desktop-managed daemon, and every calibration listener on literal loopback;
+  - the desktop and the daemon resolving the same policy authority, with and without the `CHIRAL_POLICY_PUBLIC_KEY` override;
+  - only the bundled daemon is executed, and a version mismatch is refused;
+  - refusal on an occupied port or held lock;
+  - the start-drained option publishes no offer before `resume`;
+  - reachability-check mode starts no engine, publishes no offer, sends no transaction and holds the lock;
+  - drain withdraws offers, and automatic remittance continues while draining;
+  - a graceful stop preserves state, and a restart reuses the peer ID;
+  - no automatic restart;
+  - operator-local admission: slot and arrival-budget occupancy, refusal, no ledger, fee or performance changes, unreachable on the public listener, and refused during qualification;
+  - competing-load refusal (any local load during qualification, the installation under qualification included) and acknowledgement;
+  - the calibration consumer context and the unchanged loaded-profile origin rules;
+  - sleep-assertion lifecycle (acquired automatically with consent, never without it), and the Linux inhibitor's `idle`-only lock;
+  - the free-generation configuration exception: accepted with zero rates, rejected with a nonzero rate, rejected beside a qualified model, no offer or admission before readiness, and no `development` flag for a free share;
+  - local admission of a share without a serving profile takes only a slot, and of a promoted free share also the arrival budget;
+  - the qualification pause (2.29): offers withdrawn, HTTP 503 `qualification_in_progress` with an integer `Retry-After` from 1 to 3,600 seconds and nothing charged, in-flight requests finished, engine stopped before calibration starts and never loaded twice, identity, reservations and remittance kept, and the pause ended by relaunching the engine and resuming after readiness;
+  - calibration listeners on ports distinct from the paused published deployment's;
+  - repricing (2.30): no drain or engine restart, a higher revision at once, durable values, in-flight requests and signed quotes unchanged, every invalid combination refused with nothing changed, and refusal while paused, draining, promoting or not ready;
+  - Auto-price against a catalog test double and 2.30, and nothing published when the catalog is unreachable;
+  - promotion (2.33): a restart with the qualified ModelSpec and the same wallet, DHT identity file, peer ID, ledger and revision counter, nothing else changed, revalidation, readiness and the final reachability check before resume, accounts opened under unprofiled free offers still served afterwards within their allowance at zero cost without performance accounting, and refused once the allowance is used or the lifetime passes, and a failure left drained with retry and restore offered, never automatically.
+- [ ] 3.3 Qualification parity:
+  - the native and Python runners agree on recorded measurements;
+  - paid requests per agreement never exceed the budgeted count;
+  - native revalidation accepts native evidence;
+  - the journal is made durable before dispatch;
+  - interruption and *Stop qualification* reconcile before a retry;
+  - a failed or stopped run produces no qualified ModelSpec;
+  - the budget cap holds, with no automatic top-up.
+- [ ] 3.4 Capability check: no shell, process, filesystem or power-management plugin permission, and window permissions unchanged.
+- [ ] 3.5 Run `npm run check`, `npm test`, `npm run build` and `cargo test --manifest-path src-tauri/Cargo.toml`, then re-run strict OpenSpec validation.
+- [ ] 3.6 Native smoke tests (release gate 7) on macOS Apple Silicon (Metal), Linux (CUDA) and Windows (CUDA):
+  - closing keeps a share serving;
+  - sleep with and without consent, and user-initiated and lid-close sleep still working while prevention is held (on Linux, an unprivileged `systemctl suspend`);
+  - a free share published after readiness and labeled *Unqualified — no speed guarantee* for an independent consumer;
+  - a new share's launch window end to end: published free and unqualified, qualified automatically in its first quiet hour on qualifying hardware within an approved budget while consumers get the retryable busy response, promoted in place under the same provider wallet and peer ID, and raised to its first nonzero step only after 24 hours and the catalog's ready-to-charge result, against an implemented milestone 5 catalog; and a stopped run followed by the share serving free again;
+  - Auto-price stepping down on a falling service score, and holding while the catalog is unreachable;
+  - quitting with an active share, from the Quit control, the tray and Cmd+Q or the platform's application quit;
+  - stopping a share that has outstanding liabilities;
+  - stopping a qualification run with requests in flight;
+  - a calibration deployment that another machine cannot reach during qualification;
+  - draining a relayed share while a consumer still reads request status and a receipt through a serving relay within the grace period;
+  - abrupt termination and leftover-daemon detection;
+  - operating-system shutdown while sharing is not blocked.
+
+  Every scenario that shares needs milestone 3 implemented. Record any platform not exercised as open.
+- [ ] 3.7 Release-gate evidence, not fabricated:
+  - an actual paid qualification on target hardware within an approved budget;
+  - after milestone 3, a libp2p share used end to end by an independent consumer across that milestone's NAT matrix, including a relayed path through an authorized serving relay;
+  - the engine-confinement release gate (book *My models*), blocked on `specify-desktop-local-models` open question 3; sharing is not presented as available while it is open;
+  - milestone 5, the catalog's launch reputation (`specify-provider-launch-reputation`), implemented before launch windows or Auto-price are presented as available (book *Status and milestones*; design.md decision 43). Every new share starts in a launch window by default, so sharing is not presented as available until then. This is a release dependency, not an archive-order dependency.

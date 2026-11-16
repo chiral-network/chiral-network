@@ -1,0 +1,358 @@
+## 1. Specify the provider launch reputation
+
+- [x] 1.1 Read the governing book sections, as listed in design.md *Scope and authority*: commit `fe473508` plus the uncommitted 2026-11-16 edit, including:
+  - the provider observation section (then *Provider track record (target design)*, now *Launch reputation: service score and track record (target design)*);
+  - *Author decisions*;
+  - *Status and milestones* item (5);
+  - the A.4 *Offer card* line;
+  - the discovery, catalog-precedence, readiness, HTTP-origin, peer-to-peer transport and payment-gated reputation sections;
+  - the relay boundaries in `CLAUDE.md`.
+
+  Compare them with `relay_server.rs`, `dht.rs`, `offer_registry.rs`, `rating_api.rs`, `rating_storage.rs`, `reputation.rs`, `app.rs` readiness, `consumer.rs` inspection and feedback, `Marketplace.svelte`, `Usage.svelte` and the relay ingress in `scripts/provision-provider.py`. Confirm that nothing observes or stores provider availability today.
+- [x] 1.2 Specify the availability capability (then `provider-track-record`), with fixed values and their justification for sampling, deadline, resource bounds, window, retention and storage. Keep it consistent with the pending `specify-p2p-provider-transport` (M3) and `specify-desktop-share-online` (M4) drafts without editing them. Validate strictly.
+- [x] 1.3 Apply the then-current *Author decisions* items 8 and 9 (free by default; free service earns no ratings; a track record instead): free and paid providers observed alike; free sessions still cannot vote; the record beside, never blended into, Elo. Check items 1, 2, 6 and 7. Record the M3 and M4 dependencies and open questions. Revalidate. *(Items 8 and 9 were later replaced; see 1.5.)*
+- [x] 1.4 Revise after the 2026-11-16 review (22 findings). Re-read the book (on-disk SHA-256 `054ce747…`) and the M3 and M4 drafts as of 11:06–11:07.
+  - **Applied:**
+    - pacing never yields unknown; a dedicated observer node and budget; a fixed per-sample plan; verified-address exemption with a 16-identity cap; a skipped class decided before contact; local refusal degrades the whole observer (findings 1, 5, 9 and 15);
+    - classification from verification alone (2);
+    - a memoryless schedule with a cap of 24 starts per hour, and a rotating, unpublished observer key (3);
+    - the wallet aggregate as the headline (4, option (a));
+    - explicit filtered dials and no Kademlia lookups before M3 (6, option (b));
+    - mismatch continues, verified addresses first, DHT and resolver health checks, degraded until the first pass (7);
+    - real circuits through the catalog's relay, M3 circuit classification and relay coverage arithmetic (8);
+    - observer-healthy time, restart scheduling, monotonic clocks and clock-jump handling (10);
+    - coverage and eviction reporting, and rows refused rather than erased (11);
+    - the refusal table, `evicted` and per-reason card lines (12);
+    - "Reputation: see inspection" with open question 2 made blocking (13, option (b));
+    - the upgrade-drain limitation (14, part 2);
+    - batching (16), canonical identifiers (17), the cannot-vote definition (18), start persistence (19) and wallet rows (20);
+    - the updated hash (21);
+    - the source-map task and the scoped-path scenario (22).
+  - **Rejected or adapted:**
+    - 1: an untracked reason `destination_limit` replaced by the verified-address cap; fair queuing replaced by plan-time budgets;
+    - 7: SERVFAIL as observer-side unknown, because a provider controls its authoritative DNS;
+    - 8: a simulated local admission check replaced by a real circuit; keeping connections open, rejected in favour of recorded thin coverage and task 3.12;
+    - 9: neither a slot calendar nor a larger bound, since waits are counted and never change a class;
+    - 10: the restart formula adapted to a schedule with no spacing;
+    - 13: per-card Elo reads, because of the shared verification slots;
+    - 14: part 1 is stale, since M4 records milestone 5 in its tasks.
+
+  Revalidate.
+- [x] 1.5 Rework for the author's 2026-11-16 *Author decisions* items 8–11 (launch window and Auto-price, launch reputation, free allowance, defaults), which replace the earlier items 8 and 9. Read the book at working-copy SHA-256 `8ee7fd8a114a8aefc7261a5716e2e80f10e051347f575cff645acf742e53e81c` (commit `fe473508` plus the uncommitted edit): *Author decisions* 1–11; *Share online* steps 4 and 6; *Launch reputation: service score and track record (target design)*; *Wire change*; A.4 *Offer card*; *Status and milestones* (4) and (5); and the Part I *Share online* bullet. Read the M1, M3 and M4 drafts as they were being revised (M3's `free_allowance` `{tokens, lifetime_secs}`), and `contracts.rs`, `inference_gateway.rs`, `inference_backend.rs`, `protocol.rs` and `provision-model.py` for free openings, busy codes, limits and model IDs.
+  - **Change renamed** from `specify-provider-track-record` to `specify-provider-launch-reputation`; **capability renamed** from `provider-track-record` to `provider-launch-reputation`, kept as one capability (design.md Decision 23).
+  - **Requirements renamed:**
+    - *Provider track records are observed only by a catalog operator's service* → *Launch reputation is observed only by a catalog operator's service*;
+    - *Samples follow a memoryless schedule with a deadline* → *Availability samples follow a memoryless schedule with a deadline*;
+    - *Observer degradation makes samples unknown, never unavailable* → *Observer degradation makes samples and probes unknown, never unavailable or failed*;
+    - *Track-record results are computed exactly from retained samples* → *Availability results are computed exactly from retained samples*;
+    - *Track-record storage is durable, network-scoped, bounded and retention-limited* → *Launch-reputation storage is durable, network-scoped, bounded and retention-limited*;
+    - *The catalog serves track records through a bounded read-only API* → *The catalog serves launch reputation through a bounded read-only API*;
+    - *Track records never enter payment-gated reputation, and free service still cannot vote* → *Launch reputation never enters payment-gated reputation, and free service still cannot vote*;
+    - *Native provider inspection reports the track record separately* → *Native provider inspection reports the launch reputation separately*;
+    - *The Marketplace shows the track record beside, never blended into, the Elo score* → *The Marketplace shows the launch reputation beside, never blended into, the Elo score*;
+    - *Observation learns no more than a consumer and handles no consumer data* → *Observation learns no more than a consumer and handles no other consumer's data*;
+    - *A provider can raise its availability only by being reachable and ready* → *A provider can improve its launch reputation only by actually serving*.
+  - **Requirements kept by name (contents extended):** *Tracked identities come only from verified discovery and are bounded*; *Observer resource bounds never decide a sample's class from provider behaviour*; *A sample is available only when the provider's own manifest and readiness verify*; *HTTPS observation follows the outbound-origin rules*; *libp2p observation follows the peer-to-peer transport rules*; *Provider readiness names the serving identity*; *The observer cannot be used to reach private hosts or amplify traffic*. None removed.
+  - **Requirements added:** *Probes run only while the provider's current verified offer is free*; *Probe accounts use fresh, unlinkable identities and stay within the free allowance*; *Probes follow a memoryless schedule with bounded rate and concurrency*; *Probe requests use a fixed public corpus and fixed kinds*; *A probe succeeds only when the provider serves it correctly*; *Billing honesty is checked against the declared tokenizer*; *Probe results, the service score and the launch criteria are computed exactly*; *The reputation snapshot reports recent paid votes*.
+  - **Other renames:** configuration object `track_record` → `launch_reputation` (adding `tokenizer_runtime`); routes `/api/track-records/:wallet/:peer_id` and `/api/track-records/query` → `/api/launch-reputation/:wallet/:peer_id` and `/api/launch-reputation/query`; errors `track_record_busy` and `track_record_unavailable` → `launch_reputation_busy` and `launch_reputation_unavailable`; `/api/health` member `track_record` → `launch_reputation`; native `provider_info` member `track_record` → `launch_reputation`; native operation `track_records` → `launch_reputations`; card text "Track record unavailable" → "Launch reputation unavailable"; inspection tile "Track record" → "Launch reputation". Sample count and coverage lines moved from the card to inspection ("Low coverage" stays on the card).
+  - Design decisions 1–22 kept at their numbers and reworded where the track-record framing or the drain upgrade no longer applies. Decisions 23–36 added. Open questions 1 (resolved by the book) and 3 (superseded) marked in place; 2 and 4 kept open; 5 and 6 added. Task 2.12 superseded in place; tasks 2.13–2.18 and 3.15–3.20 added.
+  - **Adversarial review (2026-11-16), no requirement renamed or removed:** probe concurrency raised from 32 to 64 and at most one waiting draw per identity; a busy refusal of an inference request now defers that endpoint, kind and prompt to the identity's next probes (*A probe succeeds only when the provider serves it correctly*), so busy refusals cannot select which kinds are counted; M4's qualification-pause response named as HTTP 503 `qualification_in_progress`; `free_allowance_exhausted` and `free_allowance_expired` refusals classified; the limit kind's unknown-prompt margin raised by 1,024 tokens; `launch_criteria_met_at_end` defined on the window basis immediately before the period ends; deferred probe requests added to the store. Scenarios added: *Refusing hard kinds as busy does not raise probe success* and *Allowance refusals*.
+
+  Validate with `openspec validate specify-provider-launch-reputation --strict --no-interactive`.
+- [x] 1.6 Cross-check with M1–M4 against the book at working-copy SHA-256 `8ee7fd8a114a8aefc7261a5716e2e80f10e051347f575cff645acf742e53e81c`, *Author decisions* items 1–11. The proposal now cites that hash. Task 2.18's coordination notes now record M4's actual choices: Auto-price reads the provider profile's `catalog_url`, and the qualification pause answers HTTP 503 `qualification_in_progress`, reports not ready and counts as unavailable. No requirement changed. Revalidate.
+- [x] 1.7 Apply the author's 2026-11-16 follow-up (book working-copy SHA-256 `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933`; *Wire change*, *Share online* step 4, *Launch reputation*). The design, proposal and spec cite that hash.
+  - C: the charging probe basis's walk back over free periods to 100 counted probes is now the book's rule; open question 6(b) decided; wording that called it an interpretation updated.
+  - D: unchecked billing is shown as "Billing unchecked", is not a mismatch and does not block readiness; no matched-check minimum; open question 5 decided; inspection string renamed from "Billing not checked"; scenarios added.
+  - G (implementation decision the author may revisit): an embeddings-only share's Auto-price readiness is the same `launch_criteria` without qualification, over embeddings probes and input-token billing checks; open question 6(c) decided; scenarios added; M4 open question 16 points here.
+  - Open questions 2 and 4 stay open. Revalidate.
+
+## 2. Implement
+
+- [ ] 2.1 Provider readiness identity (`src-tauri/src/app.rs`):
+  - `GET /readyz` adds `network`, `provider_wallet`, `deployment_id` and `peer_id` from the running configuration and persisted DHT identity;
+  - status rule unchanged, no other members, `/healthz` unchanged;
+  - served by the one public router, so the libp2p stream inherits it after M3.
+
+  Deploy this to providers before any catalog enables the observer.
+- [ ] 2.2 Launch-reputation store (new module):
+  - SQLite under the network-scoped data directory, bound to the complete network identity, refusing another network, failing closed on corrupt or unreadable files and never resetting itself;
+  - tables for:
+    - at most 1,024 identity rows with tracking status and pricing state;
+    - hourly UTC rows inside the 336-hour window with sample starts and four classes, probe starts and six classes, three billing outcomes and nine latency buckets;
+    - at most 16 eviction intervals per identity;
+    - at most 16,384 wallet rows with `sharing_since`, the most recent offer time, an ever-available flag, the current free-period start, `latest_probe_at` and the billing mismatch flag with evidence;
+    - at most 16 free-period summaries per wallet;
+    - the observer-healthy-time counter;
+  - deletion and refusal orders exactly as specified, never deleting a row that has counted samples or probes in the window to make room, and never evicting a flagged wallet;
+  - starts committed before the first attempt, and everything else committed in one transaction per health check;
+  - no addresses, endpoints, bodies, keys, credentials, account identifiers, generated content, consumer data or read records.
+- [ ] 2.3 Observer node and DHT support (`src-tauri/src/dht.rs` and a new module):
+  - a dedicated libp2p node with:
+    - a CSPRNG key that is not persisted and is rotated at least every 24 hours;
+    - limits of 64 pending outgoing and 128 established connections, and no inbound connections before M3;
+    - identify on the network-scoped protocol with no listen addresses, ignoring received listen addresses;
+    - a manifest client, ping, and no Kademlia, relay server or manifest server;
+  - read access to the catalog DHT's known addresses for a peer, filtered by `public_ip` (or development loopback) with DNS hosts dropped;
+  - addresses the catalog DHT dialed and authenticated, offered as verified candidates;
+  - explicit dials of planned addresses without behaviour address extension, requests only on established authenticated connections, and no request-response auto-dial;
+  - a targeted manifest fetch for one peer on the current manifest protocol: from offset 0 following `next`, at most 8 pages, a four-second per-page timeout, stopping at the first page with a qualifying offer, or for a non-free identity at the first qualifying free offer or the manifest's end, or reading to the end when a complete read is required;
+  - a Noise peer-ID check before any request byte, with mismatched connections closed;
+  - every connection opened for a sample closed at its end;
+  - the DHT health query and pings of reference peers from the observer node;
+  - no Kademlia lookup started by a sample or probe before M3;
+  - verification results from discovery, including whether each complete manifest held a free offer, exposed to the observer, so that identity, wallet and pricing-state updates do not depend on registry room. Sample- and probe-verified offers may be inserted into the registry but never withdraw anything.
+- [ ] 2.4 Availability observer (new module):
+  - strict `launch_reputation` configuration: `reference_peers` 1–8; `reference_origins` 1–4 named by DNS hostnames; and `tokenizer_runtime` verified as the pinned runtime identity; unknown members and invalid values refuse start;
+  - identity admission from verified offers only, with the 512 and 8 bounds, dormant-only eviction in observer-healthy time, the in-memory refusal table, `inactive` after 336 healthy hours and history continuity;
+  - a persisted observer-healthy-time counter;
+  - the availability scheduler (CSPRNG; first draws 0–300 s; exponential 300 s mean; at most 24 per identity per UTC hour on the count; one per identity at a time; no external triggers or catch-up; monotonic clock);
+  - resource bounds: 64 in progress with waits counted; fixed per-sample plans; in-memory verified addresses with the 16-identity cap; 12 unverified attempts per 60 s per destination; six unverified destinations per identity per hour; skipped decided before contact;
+  - a 30 s deadline with the inner deadlines;
+  - a 30 s health monitor (DHT query, reference ping, chain identity, reference origin, clock agreement, no local dial refusal by the observer or a probe node), degraded until the first pass, with the sample and probe finalization rules;
+  - the classification matrix from verification alone;
+  - HTTPS readiness through a per-origin pinned client, at most two addresses, no proxies or redirects, a 16 KiB bound, no credentials, one request per origin per 60 s with outcome reuse (also by probes), and identity-member matching;
+  - logs with identity, class and reason codes only, no addresses unless documented diagnostic logging is enabled, and never keys, credentials or generated content.
+- [ ] 2.5 `src-tauri/src/bin/relay_server.rs`, catalog routes and operator tooling:
+  - start the observer node, probe runner, billing checker and store when configured, and refuse start on a store or tokenizer-runtime failure;
+  - `GET /api/launch-reputation/:wallet/:peer_id` and `POST /api/launch-reputation/query`, with canonical identifiers, 1–64 distinct identities, a 16 KiB body, unknown fields rejected and the exact record shape;
+  - `not_discovered` responses, which carry the wallet section;
+  - errors 400, 413, 429 `launch_reputation_busy` (16 read slots) and 503 `launch_reputation_unavailable`;
+  - reads that never trigger samples, probes, tokenizer fetches or outbound traffic;
+  - the `/api/health` `launch_reputation` summary, including the billing self-test state;
+  - in `scripts/provision-provider.py`, add `/api/launch-reputation` and `/api/launch-reputation/*` to the relay ingress allowlist and accept the `launch_reputation` object.
+- [ ] 2.6 libp2p observation (blocked on the implementation of `specify-p2p-provider-transport`):
+  - readiness `GET /readyz` over `/chiral/inference/http/1` with M3's stream-client rules and a 16 KiB bound, after HTTPS when both are declared;
+  - relayed paths: one per sample or probe, with third-party relay tokens (4, refilled at one per 120 s, shared by samples and probes, kept across key rotation);
+  - circuits through the catalog's own relay requested like any consumer's, with that relay exempting only the observer's and current probe identities' per-source limits;
+  - M3 circuit classification and circuit-budget check: a manifest may use a coordination-sized circuit, readiness and probe requests never do, and the hole-punch upgrade is attempted first;
+  - inbound hole-punch connections only for samples and probes in progress;
+  - relay refusals classified as unavailable for samples and unreached for probes;
+  - the move to `/chiral/inference/manifest/2` when M3 retires `/1`;
+  - sampling and probing of libp2p-only providers.
+- [ ] 2.7 Native consumer (`src-tauri/src/consumer.rs`, `src-tauri/src/desktop.rs`, `src/lib/native.ts`):
+  - a `provider_info` `launch_reputation` member from the configured `catalog_url` regardless of DHT precedence, with a 10 s deadline, a 32 KiB bound and distinct unavailable reasons;
+  - record validation: identity fields and constants (including the 600 s probe mean and the corpus hash form); enumerated values; sample and probe count bounds (8,064 and 4,032 per peer, `identities ×` per wallet); billing and latency sums; at most 16 ordered free periods; figures, coverage, expected samples, probe success, probe basis, service score and launch criteria recomputed; the flag's 14-day end; no future timestamps;
+  - a readiness identity-match field (`match`, `mismatch`, `unreported`), with a mismatch shown as not ready;
+  - a `launch_reputations` operation for 1–64 canonical identities, with one batch request, a 10 s deadline and a 512 KiB bound;
+  - feedback refused before contacting the catalog when the quote's funding is zero or both of its token rates are zero;
+  - CLI JSON output inherits the member.
+- [ ] 2.8 Marketplace (`src/pages/Marketplace.svelte`):
+  - card lines from the wallet section, labeled with the catalog host, truncated and never rounded up: *Launching — free*; the service score or "No service score yet"; availability with the "since *date*" form or "No availability samples yet"; "*P* probes · latest *age* ago" or "*P* probes while free · latest *age* ago"; "Billing mismatch until *date*"; "Sharing since *date*"; "Low coverage"; "No track record yet"; "Launch reputation unavailable";
+  - a peer status line for each untracked reason;
+  - "Reputation: see inspection" beside the launch reputation;
+  - deduplicated chunks of 64, at most two in flight, per-chunk failure, at most one 429 retry, and superseded results discarded;
+  - a separate inspection Launch reputation tile beside the Reputation tile, with every element and statement the requirement lists, including "Billing unchecked";
+  - the statement that free service earns no ratings, for offers with both rates zero;
+  - no blending, reordering or filtering; nothing fabricated in a browser preview; status shown in text, not only color.
+
+  The card's reputation line ships only after open question 2 is answered; the other card lines and the inspection tile do not wait.
+- [ ] 2.9 Usage & API keys (`src/pages/Usage.svelte`): for an account whose quote has zero funding or both token rates zero, replace the feedback form with the statement that free service earns no ratings and that the catalog's launch reputation is shown instead.
+- [ ] 2.10 Operator documentation for relay operators:
+  - the `launch_reputation` object;
+  - how to choose reference peers and DNS-named reference origins: independent of tracked providers, at least two recommended, short DNS TTLs for the resolver check;
+  - the dedicated observer node, its rotating key, and the per-account probe identities;
+  - installing the pinned runtime for `tokenizer_runtime` with `scripts/provision-runtime.py`, the OS confinement it needs, and outbound HTTPS to Hugging Face;
+  - what the observer contacts and stores, the probe load it puts on free providers, and the trust it places in Hugging Face for metadata prefixes;
+  - the relay-only coverage arithmetic;
+  - that enabling the observer on a live catalog needs its own authorization, cutover and monitoring.
+- [ ] 2.11 After implementation, give the author proposed wording for edits that this change does not make: the `CLAUDE.md` relay boundary, where `relay_server` would also observe providers' manifests and readiness and, as a free consumer with its own accounts and fixed corpus prompts, probe free offers, while never proxying or carrying anyone else's prompts or inference; and the book's source-map row for the new modules.
+- [ ] 2.12 *(Superseded by 1.5 and design.md open question 3.)* ~~Coordinate with the M4 owner so that M4's *Charge for this model* confirmation says that the drain and qualification period counts as unavailable samples.~~ The book no longer has a drain upgrade. Coordination with M4 is task 2.18.
+- [ ] 2.13 Pricing state and free periods (observer and store; probes blocked on M3): `free` from any verification finding a qualifying free offer with a `free_allowance`; `charging` only from a complete read with qualifying offers and none free; no change from any other outcome; wallet `free_now`, free-period start and end; `launch_criteria_met_at_end` computed at each end; at most 16 completed summaries per wallet.
+- [ ] 2.14 Probe identities and accounts (new module; blocked on M3 for the free allowance):
+  - a secp256k1 wallet key and a libp2p key per account from the OS CSPRNG, in memory only, erased on discard, never persisted, logged or reused across accounts, offers, identities or providers;
+  - owner proofs signed only after reconstructing the exact challenge payload; no transaction, no feedback;
+  - free proposal with `funding_wei` `"0"`, quote verification (signature, zero rates and funding, identical allowance), opening with the owner proof, credential held in memory;
+  - the shipped native consumer's headers only;
+  - account limits: 12 probes, `min(7200, floor(lifetime_secs / 2))` seconds, requests only when recorded usage plus worst case fits `tokens`, retirement at `floor(tokens / 2)`, and discard when the offer changes or the observer restarts.
+- [ ] 2.15 Probe runner (new module; blocked on M3):
+  - the versioned probe corpus file (64 prompts of 16–128 UTF-8 bytes, no special-token-like text, including non-ASCII) and its SHA-256;
+  - the probe scheduler (CSPRNG; first draws 0–600 s; exponential 600 s mean; at most 12 per identity per UTC hour on the count; one per identity at a time and at most one waiting draw per identity; 64 in progress with waits counted; starts committed before attempts; the persisted deferred probe request after a busy inference refusal);
+  - verified-only plans with skips; per-probe libp2p nodes with at most two established connections;
+  - the complete manifest read and random free-offer choice, with ineligible probes unrecorded;
+  - endpoint choice (`completions`, else `chat`, else `embeddings`) and the four generation kinds with their weights, parameters and fallbacks;
+  - classification into succeeded, failed, busy (`provider_saturated`, `model_saturated`, `rate_limit`, and M4's qualification-pause response), unreached, unknown and skipped, with no retries;
+  - the 60 s deadline with inner deadlines, the 8 MiB response bound, and latency buckets;
+  - generated content discarded after structural checks.
+- [ ] 2.16 Billing checker (new module; offline parts not blocked):
+  - the `model.id` parser for `<namespace>/<repository>/<path>.gguf` and 40-hex `tokenizer_revision`;
+  - the 32 MiB range fetch under M1's Hugging Face client rules (allowlisted redirects, pinned public addresses, no proxies, no token);
+  - a bounded GGUF reader; template selection by normalized SHA-256;
+  - the prefix cache (64 entries, 1 GiB), the six-hour failure memory, and fetch limits of one in flight and 12 per hour;
+  - the confined pinned-runtime tokenizer process (no network, minimal environment, no relay keys or data, 10 s deadline, at most two);
+  - golden counts recorded from the pinned runtime for fixed public GGUF artifacts at pinned commits, and the startup self-test;
+  - outcomes and reasons; the flag with its evidence, extension and expiry.
+- [ ] 2.17 Results and the reputation snapshot:
+  - probe counts, `probe_success_14d`, `latest_probe_at`, billing counts, latency buckets, `free_now`, `free_since` and `free_periods`;
+  - the probe basis with the book's walk-back to 100 counted probes, `service_score_bps`, the active flag, and `launch_criteria` with its ordered `unmet` codes, with no matched-check minimum and the embeddings-only readiness without qualification;
+  - in `rating_api.rs` and `rating_storage.rs`, the additive `votes_14d`, counted from the same eligible revalidated rows by stored `issued_at`, leaving Elo, `vote_count`, admission and revalidation unchanged.
+- [ ] 2.18 Coordinate with the M3 and M4 owners without editing their changes:
+  - M3: probes rely on `free_allowance` `{tokens, lifetime_secs}` in v2 offers and quotes; on free proposals and openings without payment; on the contract, inference, cancel and status routes on `/chiral/inference/http/1`; and on allowance enforcement counting input and output tokens. The offer card's "a free offer's allowance" line belongs to the offer's owner.
+  - M4: Auto-price reads `launch_criteria`, `free_periods[0].launch_criteria_met_at_end`, `service_score_bps` and the wallet's `availability_14d` from the provider profile's `catalog_url` (M4 decision 41), and `elo` with `votes_14d` from `/api/ratings/:wallet`, and checks qualification itself, except for embeddings-only shares, whose readiness is `launch_criteria.met` alone (M4 open question 16).
+  - M4's qualification pause answers HTTP 503 `qualification_in_progress` with `Retry-After`, withdraws its offers and reports not ready, and counts as unavailable (Decision 36). This change classifies that response as busy; keep the classification in step if M4 changes the response.
+  - M4 refers to `specify-provider-launch-reputation` by change name and keeps this change's implementation and qualification, including 3.12 and 3.20, as its release dependency (milestone 5); keep the fields M4 reads stable, or tell its owner.
+
+## 3. Verify
+
+- [ ] 3.1 Availability scheduler tests with controlled clocks and a seeded test RNG behind the CSPRNG interface:
+  - first-draw bounds and the exponential mean;
+  - no spacing floor;
+  - the hourly cap, decided on the count and kept across a restart from committed starts;
+  - starts committed before dials;
+  - no catch-up or burst after a restart.
+- [ ] 3.2 Resource-bound tests:
+  - never more than 64 samples in progress, with waits counted and the delay distribution recorded for 512 identities hanging to 30 s;
+  - plan caps;
+  - verified exemption and its 16-identity cap;
+  - the unverified sliding window and the per-identity destination cap;
+  - third-party relay tokens shared by samples and probes;
+  - skipped before contact;
+  - an offline provider with 40 hanging Sybils on its own address recorded unavailable;
+  - 512 unreachable identities leaving the catalog swarm unaffected;
+  - connections closed at the end;
+  - a local dial refusal by the observer or a probe node degrading the observer.
+- [ ] 3.3 Availability classification matrix against controlled providers, as listed in design.md *Verification plan*, including:
+  - free `serving: null` offers counted like paid ones;
+  - `funding_ready: false` still available;
+  - a full registry still available;
+  - the borrowed-origin case unavailable;
+  - provider SERVFAIL unavailable while the observer is healthy;
+  - a mismatch followed by a good address available;
+  - nothing withdrawn;
+  - a charging identity's later-page free offer detected.
+- [ ] 3.4 Observer health tests:
+  - each check failing alone makes concurrent samples and probes unknown, including good outcomes;
+  - degraded until the first pass;
+  - finalization rules, including a probe spanning an unhealthy middle check;
+  - a clock jump discards spanning work;
+  - mass provider failure with healthy references stays provider-side;
+  - unfinalized work discarded at restart.
+- [ ] 3.5 HTTPS safety and amplification tests:
+  - the DNS answer matrix (private, metadata, more than 32, empty);
+  - at most two attempts per readiness request;
+  - redirects not followed;
+  - proxies ignored;
+  - the bounds;
+  - no credentials on readiness;
+  - one readiness request per origin per 60 s across 50 identities, with outcome reuse by samples and probes;
+  - at most 12 unverified attempts in any 60 s to one address across 500 identities, with no probe connection there;
+  - at most three attempts per sample and six destinations per hour for an identity advertising eight victim addresses;
+  - reads with deny-all egress make no connection, lookup, probe or fetch.
+- [ ] 3.6 Identity, availability-result and storage tests:
+  - admission only from the offer's own peer, independent of registry room;
+  - bounds and eviction order in healthy time, the refusal table, `evicted` and `inactive`;
+  - a 30-day observer outage evicting nobody;
+  - exact basis points and `null` figures;
+  - wallet aggregation across peers;
+  - expected samples, coverage and evicted seconds;
+  - window edges;
+  - `sharing_since` from the catalog clock, kept past 14 days and reset after 180;
+  - identity-row refusal at 1,024 with counted history;
+  - wallet-row creation and Sybil-resistant eviction, excluding flagged wallets;
+  - a store of another network at the scoped path, or a corrupt store, refuses start unchanged;
+  - no addresses, keys, credentials, account IDs or generated text in a canary scan of the store.
+- [ ] 3.7 libp2p tests before M3, which are not blocked:
+  - egress capture shows no non-public or DNS-host dial and no sample- or probe-started Kademlia lookup;
+  - the observer peer ID differs from the catalog's and rotates;
+  - a peer-ID mismatch writes nothing and the sample continues;
+  - poisoned addresses do not displace a verified address;
+  - response-named addresses are not dialed.
+- [ ] 3.8 libp2p tests (blocked on the implementation of `specify-p2p-provider-transport`):
+  - readiness and probes over the stream;
+  - a circuit through the catalog's relay refused for the destination's quota gives unavailable and unreached;
+  - no readiness stream or probe request on a coordination-sized circuit or a circuit failing the budget check;
+  - the hole-punch upgrade;
+  - relay pacing;
+  - a self-operated relay refusing gives unavailable;
+  - `/2` only;
+  - a desktop free share keeping its wallet figures across Auto-price revisions.
+- [ ] 3.9 API tests:
+  - GET and batch shapes, order, distinctness and bounds;
+  - canonical identifiers;
+  - `not_discovered`, including the wallet section of a known wallet;
+  - 400, 413, 429 independent of feedback slots, and 503;
+  - the `/api/health` summary, including the self-test state;
+  - the generated ingress exposes the routes.
+- [ ] 3.10 Reputation regression:
+  - free-quote feedback rejected by the catalog, including from probe accounts;
+  - positive funding with both rates zero refused natively;
+  - snapshot fields other than `votes_14d`, and Elo, identical with and without launch-reputation data;
+  - no rating code path reads the launch-reputation store.
+- [ ] 3.11 Native and UI tests:
+  - `provider_info` success and each unavailable reason;
+  - each validation rule, including the 8,064 and 4,032 bounds and the recomputed score, basis and criteria;
+  - DHT-discovered offers reading the configured catalog;
+  - readiness identity states;
+  - `launch_reputations` bounds;
+  - Marketplace strings for every state (9,738 shows 97.3, 9,876 shows 98.7%), including *Launching — free*, both probe-line forms, *Billing mismatch*, "Billing unchecked", "No track record yet", low coverage, the peer reasons and "Reputation: see inspection";
+  - chunking and per-chunk failure;
+  - the separate tile with every statement and no combined score;
+  - free and paid availability identical;
+  - the browser preview shows nothing;
+  - accessibility;
+  - the Usage cannot-vote statement.
+- [ ] 3.12 Relay-only coverage qualification (milestone 5; blocked on the implementation of `specify-p2p-provider-transport`):
+  - measure `coverage_bps` and counted probes per 24 hours for relay-only desktop shares through project relays and through the observing catalog's own relay, at realistic identity counts;
+  - record the results in design.md;
+  - resolve open question 4 from them.
+
+  Launch windows and Auto-price are not presented as available while most desktop shares would have coverage below 5,000 bps or fewer than 100 counted probes in their first 24 hours.
+- [ ] 3.13 Isolated multi-provider integration (release gate 5), with:
+  - an HTTPS provider that is up, then offline, drained, not ready, and borrowing an origin;
+  - a provider that rotates its peer ID;
+  - a Sybil set on a provider's own address;
+  - a full registry;
+  - an observer network cut and a chain outage.
+
+  Check figures, unknown and skipped handling, coverage, `sharing_since`, bounds and API output end to end. Never point this at a shared or live deployment.
+- [ ] 3.14 Run `npm run check`, `npm test`, `npm run build` and `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets`, and a native desktop smoke test of the Marketplace states against a private catalog. Record results in design.md. Do not present launch reputation, launch windows or Auto-price (book milestone 5) as available until 3.1–3.20 pass.
+- [ ] 3.15 Pricing-state and eligibility tests:
+  - `free` from any read finding a free offer;
+  - `charging` only from a complete read;
+  - offline, drained and paused providers keep their state;
+  - wallet free periods across several identities;
+  - a probe that finds the provider charging sends nothing and records nothing;
+  - a step down to free restarts probes;
+  - offers without a free allowance never probed.
+- [ ] 3.16 Probe identity, account and schedule tests:
+  - distinct wallets and peer IDs per account across two providers over a day;
+  - canary keys and credentials absent from the store, logs, routes and process memory after discard;
+  - quote verification, including a differing allowance;
+  - the 12-probe, time and half-allowance limits;
+  - recorded usage including unknown-usage worst cases;
+  - no request beyond the allowance against 1,000-token and 20,000-token allowances;
+  - no signed transaction or feedback;
+  - restart discards accounts;
+  - first draws within 0–600 s, the 600 s mean, 12 per hour across a restart, one per identity, discarded draws while one waits, 64 in progress with waits counted, the 60 s deadline, and verified-only plans with skips; a provider refusing cancellation and limit kinds as busy gets the deferred request on every later probe and no further counted probes; the `free_allowance_exhausted` and `free_allowance_expired` classifications.
+- [ ] 3.17 Probe classification matrix against a controllable provider:
+  - streaming, non-streaming, cancellation, limit and embeddings successes;
+  - missing or inconsistent usage, `completion_tokens` above the maximum, malformed chunks and a missing `[DONE]` failed;
+  - a cancel ignored or a status never terminal failed;
+  - a limit request accepted failed;
+  - each busy code and M4's qualification-pause response busy and never retried;
+  - `rate_limit_exceeded` and opening failures failed;
+  - unreachable or not ready unreached;
+  - latency buckets recorded;
+  - generated content never stored or logged.
+- [ ] 3.18 Billing honesty tests (release gate for the observer host):
+  - the model ID parser;
+  - the range fetch with the redirect allowlist, private-answer refusal, no proxies, no token and the 32 MiB bound;
+  - `tokenizer_too_large`, and the bounded reader against oversized declared counts;
+  - template selection and `template_unavailable`;
+  - the cache, the failure memory and 12 fetches per hour under 1,000 distinct repositories;
+  - the tokenizer process denied network and data-directory access by OS confinement on each supported relay host OS, and killed at 10 s;
+  - the self-test blocking flags;
+  - matched and mismatched counts for completions, chat and embeddings against real pinned-runtime providers on the golden models;
+  - flag creation, extension, expiry, evidence and survival across peer changes.
+- [ ] 3.19 Score, criteria and `votes_14d` tests:
+  - probe success, the window and walk-back bases (including the three-probe free period example), the service score, and each launch criterion with its `unmet` code and order, including all-`unchecked` billing meeting the criteria and an embeddings-only wallet;
+  - `launch_criteria_met_at_end` at each free-period end;
+  - free periods capped at 16 and kept 180 days;
+  - `votes_14d` counting revised votes by their latest `issued_at`, never above `vote_count`, and failing with the snapshot.
+- [ ] 3.20 Launch-window integration (milestone 5; blocked on M3 and M4 implementations). In an isolated environment, run:
+  - a free desktop share with automatic qualification and Auto-price on;
+  - a provider that overstates prompt tokens;
+  - a provider that ignores cancellation;
+  - a provider that goes offline in its window;
+  - a step down to free.
+
+  Check `launch_criteria`, `launch_criteria_met_at_end`, the service score, availability and `votes_14d` as M4 reads them, end to end. Never point this at a shared or live deployment.
