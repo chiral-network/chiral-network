@@ -21,11 +21,13 @@
   import { initVersionStore, stopVersionStore } from '$lib/stores/versionStore';
   import { applyColorTheme } from '$lib/services/colorThemeService';
   import { navItems, type PageKey } from '$lib/navigation';
+  import { handleCloseRequest, quitApplication } from '$lib/windowLifecycle';
   const pages: Record<PageKey, typeof Marketplace> = { marketplace: Marketplace, playground: Playground, provider: Provider, usage: Usage, wallet: Wallet, account: Account, network: Network, settings: Settings, diagnostics: Diagnostics };
   type Page = PageKey;
   function currentRoute(): Page { const name = window.location.hash.replace(/^#\//, ''); return Object.hasOwn(pages, name) ? name as Page : 'marketplace'; }
-  let page = $state<Page>(currentRoute()), signingOut = $state(false), closeDialog = $state<HTMLDialogElement>();
-  let darkSystem = $state(false), allowClose = false, sidebarCollapsed = $state(false);
+  let page = $state<Page>(currentRoute()), signingOut = $state(false), quitDialog = $state<HTMLDialogElement>();
+  // Closing the window minimizes it (book A.1.10); only a confirmed Quit ends the process.
+  let darkSystem = $state(false), quitting = false, closeHintShown = false, sidebarCollapsed = $state(false);
   const CurrentPage = $derived(pages[page]);
   const pageLabel = $derived(navItems.find(item => item.key === page)?.label ?? 'Marketplace');
   $effect(() => {
@@ -39,12 +41,13 @@
     catch (e) { toasts.show(errorText(e), 'error'); }
     finally { signingOut = false; }
   }
-  async function close() {
-    signingOut = true;
+  function requestQuit() { quitDialog?.showModal(); }
+  async function quit() {
+    signingOut = true; quitting = true;
     try {
-      await command('logout'); clearSession(); allowClose = true;
-      const { getCurrentWindow } = await import('@tauri-apps/api/window'); await getCurrentWindow().destroy();
-    } catch (e) { allowClose = false; toasts.show(errorText(e), 'error'); }
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await quitApplication(getCurrentWindow(), async () => { await command('logout'); clearSession(); });
+    } catch (e) { quitting = false; toasts.show(errorText(e), 'error'); }
     finally { signingOut = false; }
   }
   onMount(() => {
@@ -56,7 +59,12 @@
     if (nativeAvailable()) {
       initVersionStore();
       void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
-        const stop = await getCurrentWindow().onCloseRequested(event => { if (!allowClose) { event.preventDefault(); closeDialog?.showModal(); } });
+        const win = getCurrentWindow();
+        const stop = await win.onCloseRequested(async event => {
+          const result = await handleCloseRequest(event, win, quitting);
+          if (result.outcome === 'failed') toasts.show(`Could not minimize the window (${errorText(result.error)}). Chiral is still running; use Quit to exit.`, 'error');
+          else if (result.outcome === 'minimized' && !closeHintShown) { closeHintShown = true; toasts.show('Chiral is still running in the taskbar. Use Quit to exit.', 'info', 8000); }
+        });
         if (disposed) stop(); else unlisten = stop;
       }).catch(e => toasts.show(errorText(e), 'error'));
     }
@@ -67,9 +75,9 @@
 <a href="#main" class="skip-link" onclick={event => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
 
 {#if $settings.navStyle === 'sidebar'}
-  <Sidebar {page} bind:collapsed={sidebarCollapsed} {signingOut} onLogout={logout} />
+  <Sidebar {page} bind:collapsed={sidebarCollapsed} {signingOut} onLogout={logout} onQuit={nativeAvailable() ? requestQuit : undefined} />
 {:else}
-  <Navbar {page} {signingOut} onLogout={logout} />
+  <Navbar {page} {signingOut} onLogout={logout} onQuit={nativeAvailable() ? requestQuit : undefined} />
 {/if}
 
 <main id="main" tabindex="-1" class="focus:outline-none focus-visible:ring-0 transition-[margin] duration-200 {$settings.navStyle === 'sidebar' ? (sidebarCollapsed ? 'md:ml-16' : 'md:ml-52') : ''}">
@@ -89,16 +97,19 @@
   {#key `${page}:${$sessionEpoch}`}<CurrentPage />{/key}
 </main>
 
-<dialog bind:this={closeDialog} aria-labelledby="close-title" class="w-full max-w-md rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 p-6 shadow-2xl">
+<dialog bind:this={quitDialog} aria-labelledby="quit-title" class="w-full max-w-md rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 p-6 shadow-2xl">
   <div class="flex items-center gap-3 mb-3">
     <div class="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-lg"><AlertTriangle class="w-5 h-5 text-amber-600 dark:text-amber-400" /></div>
-    <h2 id="close-title" class="text-lg font-semibold text-gray-900 dark:text-white">Close Chiral?</h2>
+    <h2 id="quit-title" class="text-lg font-semibold text-gray-900 dark:text-white">Quit Chiral?</h2>
   </div>
-  <p class="text-sm text-gray-600 dark:text-gray-400 mb-5 sm:ml-[52px]">Active inference streams will be cancelled. Generated tokens can still be charged. Pending funding remains in the native journal for recovery; closing does not refund provider balances.</p>
+  <div class="text-sm text-gray-600 dark:text-gray-400 mb-5 sm:ml-[52px] space-y-2">
+    <p>Active inference streams will be cancelled. Generated tokens can still be charged. Pending funding remains in the native journal for recovery; quitting does not refund provider balances.</p>
+    <p>To keep Chiral running in the background, close the window instead — it stays in the taskbar.</p>
+  </div>
   <div class="flex flex-wrap gap-3 justify-end">
-    <button type="button" class="btn-secondary" disabled={signingOut} onclick={() => closeDialog?.close()}>Keep open</button>
-    <button type="button" class="btn-danger" disabled={signingOut} onclick={close}>
-      {#if signingOut}<Loader2 class="w-4 h-4 animate-spin" />{/if}Cancel requests and close
+    <button type="button" class="btn-secondary" disabled={signingOut} onclick={() => quitDialog?.close()}>Keep running</button>
+    <button type="button" class="btn-danger" disabled={signingOut} onclick={quit}>
+      {#if signingOut}<Loader2 class="w-4 h-4 animate-spin" />{/if}Cancel requests and quit
     </button>
   </div>
 </dialog>

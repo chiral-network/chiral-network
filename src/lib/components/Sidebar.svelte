@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { LogOut, Menu, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-svelte';
+  import { LogOut, Menu, X, ChevronLeft, ChevronRight, Loader2, Power } from 'lucide-svelte';
   import { session } from '$lib/stores';
   import { navItems, type PageKey } from '$lib/navigation';
   import { shortAddress } from '$lib/components/ui/tones';
   import ConnectionPill from './ConnectionPill.svelte';
 
-  let { page, collapsed = $bindable(false), signingOut = false, onLogout }: { page: PageKey; collapsed?: boolean; signingOut?: boolean; onLogout: () => void } = $props();
+  // onQuit is provided only in the native runtime (book A.1.10: closing the window minimizes; Quit exits).
+  let { page, collapsed = $bindable(false), signingOut = false, onLogout, onQuit = undefined }: { page: PageKey; collapsed?: boolean; signingOut?: boolean; onLogout: () => void; onQuit?: () => void } = $props();
 
   let mobileOpen = $state(false);
   const COLLAPSED_KEY = 'chiral-sidebar-collapsed';
@@ -52,6 +53,13 @@
         <button type="button" onclick={() => { mobileOpen = false; onLogout(); }} disabled={signingOut}
           class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm">
           <LogOut class="w-4 h-4" /><span class="font-medium">{signingOut ? 'Closing session…' : 'Log out'}</span>
+        </button>
+      {/if}
+      {#if onQuit}
+        {#if !$session.configured}<hr class="border-gray-200 dark:border-gray-700" />{/if}
+        <button type="button" onclick={() => { mobileOpen = false; onQuit(); }} disabled={signingOut}
+          class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 rounded-lg transition text-sm">
+          <Power class="w-4 h-4" /><span class="font-medium">Quit Chiral</span>
         </button>
       {/if}
     </div>
@@ -103,6 +111,13 @@
         class="flex items-center gap-3 w-full py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm disabled:opacity-50 {collapsed ? 'justify-center px-0' : 'px-3'}">
         {#if signingOut}<Loader2 class="w-4 h-4 shrink-0 animate-spin" />{:else}<LogOut class="w-4 h-4 shrink-0" />{/if}
         {#if collapsed}<span class="sr-only">Log out</span>{:else}<span class="font-medium whitespace-nowrap">{signingOut ? 'Closing…' : 'Log out'}</span>{/if}
+      </button>
+    {/if}
+    {#if onQuit}
+      <button type="button" onclick={onQuit} disabled={signingOut} title={collapsed ? 'Quit Chiral' : 'Quit Chiral (closing the window keeps it running)'}
+        class="flex items-center gap-3 w-full py-2 text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 rounded-lg transition text-sm disabled:opacity-50 {collapsed ? 'justify-center px-0' : 'px-3'}">
+        <Power class="w-4 h-4 shrink-0" />
+        {#if collapsed}<span class="sr-only">Quit Chiral</span>{:else}<span class="font-medium whitespace-nowrap">Quit</span>{/if}
       </button>
     {/if}
   </div>

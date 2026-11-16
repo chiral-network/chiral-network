@@ -1,7 +1,9 @@
 <script lang="ts">
   import { session } from '$lib/stores';
   import { nativeAvailable } from '$lib/native';
-  let { compact = false }: { compact?: boolean } = $props();
+  // `responsive` shows the text label only from 1440px (crowded top bar); a
+  // screen-reader label stays available below that.
+  let { compact = false, responsive = false }: { compact?: boolean; responsive?: boolean } = $props();
   const native = nativeAvailable();
   const state = $derived(!native ? 'preview' : $session.configured ? 'configured' : 'unconfigured');
   const view = $derived({
@@ -13,5 +15,7 @@
 
 <a href={state === 'configured' ? '#/network' : '#/settings'} class="flex items-center gap-1.5 px-2 py-1 rounded-full no-underline {view.box}" title={view.title}>
   <span class="w-2 h-2 rounded-full shrink-0 {view.dot}"></span>
-  {#if compact}<span class="sr-only">{view.label}</span>{:else}<span class="text-xs font-medium whitespace-nowrap {view.text}">{view.label}</span>{/if}
+  {#if compact}<span class="sr-only">{view.label}</span>
+  {:else if responsive}<span class="hidden min-[1440px]:inline text-xs font-medium whitespace-nowrap {view.text}">{view.label}</span><span class="sr-only min-[1440px]:hidden">{view.label}</span>
+  {:else}<span class="text-xs font-medium whitespace-nowrap {view.text}">{view.label}</span>{/if}
 </a>

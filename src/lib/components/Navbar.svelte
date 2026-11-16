@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { LogOut, Menu, X, ChevronDown, Wallet, Loader2 } from 'lucide-svelte';
+  import { LogOut, Menu, X, ChevronDown, Wallet, Loader2, Power } from 'lucide-svelte';
   import { session } from '$lib/stores';
   import { navItems, MAX_VISIBLE, type PageKey } from '$lib/navigation';
   import { shortAddress } from '$lib/components/ui/tones';
   import ConnectionPill from './ConnectionPill.svelte';
 
-  let { page, signingOut = false, onLogout }: { page: PageKey; signingOut?: boolean; onLogout: () => void } = $props();
+  // onQuit is provided only in the native runtime (book A.1.10: closing the window minimizes; Quit exits).
+  let { page, signingOut = false, onLogout, onQuit = undefined }: { page: PageKey; signingOut?: boolean; onLogout: () => void; onQuit?: () => void } = $props();
 
   let mobileMenuOpen = $state(false);
   let moreMenuOpen = $state(false);
@@ -90,10 +91,16 @@
           <button type="button" onclick={onLogout} disabled={signingOut} title="Close the native session"
             class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm disabled:opacity-50">
             {#if signingOut}<Loader2 class="w-4 h-4 animate-spin" />{:else}<LogOut class="w-4 h-4" />{/if}
-            <span class="hidden lg:inline">{signingOut ? 'Closing session…' : 'Log out'}</span>
+            <span class="hidden min-[1440px]:inline">{signingOut ? 'Closing session…' : 'Log out'}</span><span class="sr-only min-[1440px]:hidden">Log out</span>
           </button>
         {/if}
-        <ConnectionPill />
+        {#if onQuit}
+          <button type="button" onclick={onQuit} disabled={signingOut} title="Quit Chiral (closing the window keeps it running)" aria-label="Quit Chiral"
+            class="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 rounded-lg transition text-sm disabled:opacity-50">
+            <Power class="w-4 h-4" /><span class="hidden 2xl:inline">Quit</span>
+          </button>
+        {/if}
+        <ConnectionPill responsive />
         <button type="button" onclick={() => mobileMenuOpen = !mobileMenuOpen} aria-expanded={mobileMenuOpen} aria-label="Toggle navigation menu"
           class="md:hidden p-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
           {#if mobileMenuOpen}<X class="w-5 h-5" />{:else}<Menu class="w-5 h-5" />{/if}
@@ -117,6 +124,13 @@
           <button type="button" onclick={() => { closeMenus(); onLogout(); }} disabled={signingOut}
             class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm">
             <LogOut class="w-4 h-4" /><span class="font-medium">{signingOut ? 'Closing session…' : 'Log out'}</span>
+          </button>
+        {/if}
+        {#if onQuit}
+          {#if !$session.configured}<hr class="border-gray-200 dark:border-gray-700" />{/if}
+          <button type="button" onclick={() => { closeMenus(); onQuit(); }} disabled={signingOut}
+            class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 rounded-lg transition text-sm">
+            <Power class="w-4 h-4" /><span class="font-medium">Quit Chiral</span>
           </button>
         {/if}
       </div>

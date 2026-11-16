@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Local main webview event subscription and confirmed window shutdown only; no shell, filesystem or remote-page permissions.",
+  "description": "Local main webview event subscription, close-to-taskbar minimize and confirmed quit only; no shell, filesystem or remote-page permissions.",
   "windows": ["main"],
   "permissions": [
     "allow-consumer-command",
@@ -10,6 +10,7 @@
     "allow-get-version-status",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:window:allow-minimize",
     "core:window:allow-destroy"
   ]
 }
