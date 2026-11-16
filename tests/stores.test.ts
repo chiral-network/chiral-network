@@ -4,8 +4,8 @@ import { clearSession, normalizeSettings, session, sessionEpoch } from '$lib/sto
 
 describe('inference preferences', () => {
   it('retains supported appearance and notification choices', () => {
-    expect(normalizeSettings({ theme: 'dark', colorTheme: 'purple', reducedMotion: true, notifications: { inference: false } })).toEqual({
-      theme: 'dark', colorTheme: 'purple', reducedMotion: true,
+    expect(normalizeSettings({ theme: 'dark', colorTheme: 'purple', navStyle: 'sidebar', reducedMotion: true, notifications: { inference: false } })).toEqual({
+      theme: 'dark', colorTheme: 'purple', navStyle: 'sidebar', reducedMotion: true,
       notifications: { inference: false, funding: true, networkStatus: true },
     });
   });
@@ -15,6 +15,10 @@ describe('inference preferences', () => {
     expect(settings).not.toHaveProperty('autoStartMining');
     expect(settings).not.toHaveProperty('downloadDirectory');
     expect(settings.theme).toBe('system');
+  });
+  it('defaults to the top navigation bar and rejects unknown layouts', () => {
+    expect(normalizeSettings({}).navStyle).toBe('navbar');
+    expect(normalizeSettings({ navStyle: 'floating' }).navStyle).toBe('navbar');
   });
   it('normalizes absent and malformed preference roots', () => {
     expect(normalizeSettings(null)).toEqual(normalizeSettings('bad'));

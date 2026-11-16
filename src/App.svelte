@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { AlertTriangle, Loader2 } from 'lucide-svelte';
   import Marketplace from './pages/Marketplace.svelte';
   import Playground from './pages/Playground.svelte';
   import Provider from './pages/Provider.svelte';
@@ -11,18 +12,22 @@
   import Diagnostics from './pages/Diagnostics.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import UpdateGate from '$lib/components/UpdateGate.svelte';
+  import Navbar from '$lib/components/Navbar.svelte';
+  import Sidebar from '$lib/components/Sidebar.svelte';
+  import Callout from '$lib/components/ui/Callout.svelte';
   import { settings, session, sessionEpoch, clearSession } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { command, errorText, nativeAvailable } from '$lib/native';
   import { initVersionStore, stopVersionStore } from '$lib/stores/versionStore';
   import { applyColorTheme } from '$lib/services/colorThemeService';
-  const pages = { marketplace: Marketplace, playground: Playground, provider: Provider, usage: Usage, wallet: Wallet, account: Account, network: Network, settings: Settings, diagnostics: Diagnostics };
-  type Page = keyof typeof pages;
-  const labels: Record<Page, string> = { marketplace: 'Marketplace', playground: 'Playground', provider: 'Provider', usage: 'Usage & API keys', wallet: 'Wallet', account: 'Account', network: 'Network', settings: 'Settings', diagnostics: 'Diagnostics' };
+  import { navItems, type PageKey } from '$lib/navigation';
+  const pages: Record<PageKey, typeof Marketplace> = { marketplace: Marketplace, playground: Playground, provider: Provider, usage: Usage, wallet: Wallet, account: Account, network: Network, settings: Settings, diagnostics: Diagnostics };
+  type Page = PageKey;
   function currentRoute(): Page { const name = window.location.hash.replace(/^#\//, ''); return Object.hasOwn(pages, name) ? name as Page : 'marketplace'; }
   let page = $state<Page>(currentRoute()), signingOut = $state(false), closeDialog = $state<HTMLDialogElement>();
-  let darkSystem = $state(false), allowClose = false;
+  let darkSystem = $state(false), allowClose = false, sidebarCollapsed = $state(false);
   const CurrentPage = $derived(pages[page]);
+  const pageLabel = $derived(navItems.find(item => item.key === page)?.label ?? 'Marketplace');
   $effect(() => {
     document.documentElement.classList.toggle('dark', $settings.theme === 'dark' || ($settings.theme === 'system' && darkSystem));
     document.documentElement.classList.toggle('reduce-motion', $settings.reducedMotion);
@@ -45,7 +50,7 @@
   onMount(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)'); darkSystem = media.matches;
     const changeTheme = () => darkSystem = media.matches;
-    const navigate = () => { page = currentRoute(); document.getElementById('main')?.focus(); };
+    const navigate = () => { page = currentRoute(); window.scrollTo({ top: 0 }); document.getElementById('main')?.focus({ preventScroll: true }); };
     media.addEventListener('change', changeTheme); window.addEventListener('hashchange', navigate);
     let disposed = false, unlisten: (() => void) | undefined;
     if (nativeAvailable()) {
@@ -58,14 +63,44 @@
     return () => { disposed = true; unlisten?.(); stopVersionStore(); media.removeEventListener('change', changeTheme); window.removeEventListener('hashchange', navigate); };
   });
 </script>
-<svelte:head><title>Chiral — LLM inference testnet</title><meta name="description" content="Verified model discovery and provider-specific prepaid inference." /></svelte:head>
+<svelte:head><title>{pageLabel} | Chiral Network</title><meta name="description" content="Verified model discovery and provider-specific prepaid inference." /></svelte:head>
 <a href="#main" class="skip-link" onclick={event => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
-<header><a class="brand" href="#/marketplace">Chiral <span class="badge">TESTNET</span></a><span class="identity">{$session.address ? $session.address.slice(0, 10) + '…' : 'Native wallet not loaded'}</span>{#if $session.configured}<button disabled={signingOut} onclick={logout}>{signingOut ? 'Closing session…' : 'Log out'}</button>{/if}</header>
-<div class="shell"><nav aria-label="Main navigation">{#each Object.keys(pages) as name}<a href={`#/${name}`} aria-current={page === name ? 'page' : undefined}>{labels[name as Page]}</a>{/each}</nav>
-<main id="main" tabindex="-1">
-  {#if !nativeAvailable()}<aside class="warning" role="status"><strong>Browser preview — native functionality unavailable.</strong> Install the desktop app or use the CLI/SDK. This preview does not simulate wallets, providers, payments, credentials, or inference.</aside>{:else if !$session.configured}<aside class="warning">Load your explicit consumer profile in <a href="#/settings">Settings</a>. No network or provider is selected automatically.</aside>{/if}
+
+{#if $settings.navStyle === 'sidebar'}
+  <Sidebar {page} bind:collapsed={sidebarCollapsed} {signingOut} onLogout={logout} />
+{:else}
+  <Navbar {page} {signingOut} onLogout={logout} />
+{/if}
+
+<main id="main" tabindex="-1" class="focus:outline-none focus-visible:ring-0 transition-[margin] duration-200 {$settings.navStyle === 'sidebar' ? (sidebarCollapsed ? 'md:ml-16' : 'md:ml-52') : ''}">
+  {#if !nativeAvailable() || !$session.configured}
+    <div class="max-w-[1400px] mx-auto px-4 sm:px-6 pt-4 sm:pt-6 -mb-2 sm:-mb-4">
+      {#if !nativeAvailable()}
+        <Callout kind="warning" role="status" title="Browser preview — native functionality unavailable.">
+          Install the desktop app or use the CLI/SDK. This preview does not simulate wallets, providers, payments, credentials, or inference.
+        </Callout>
+      {:else}
+        <Callout kind="warning" title="No network selected yet.">
+          Load your explicit consumer profile in <a class="link" href="#/settings">Settings</a>. No network or provider is selected automatically.
+        </Callout>
+      {/if}
+    </div>
+  {/if}
   {#key `${page}:${$sessionEpoch}`}<CurrentPage />{/key}
-</main></div>
-<dialog bind:this={closeDialog} aria-labelledby="close-title"><h2 id="close-title">Close Chiral?</h2><p>Active inference streams will be cancelled. Generated tokens can still be charged. Pending funding remains in the native journal for recovery; closing does not refund provider balances.</p><div class="row"><button disabled={signingOut} onclick={() => closeDialog?.close()}>Keep open</button><button disabled={signingOut} onclick={close}>Cancel requests and close</button></div></dialog>
+</main>
+
+<dialog bind:this={closeDialog} aria-labelledby="close-title" class="w-full max-w-md rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 p-6 shadow-2xl">
+  <div class="flex items-center gap-3 mb-3">
+    <div class="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-lg"><AlertTriangle class="w-5 h-5 text-amber-600 dark:text-amber-400" /></div>
+    <h2 id="close-title" class="text-lg font-semibold text-gray-900 dark:text-white">Close Chiral?</h2>
+  </div>
+  <p class="text-sm text-gray-600 dark:text-gray-400 mb-5 sm:ml-[52px]">Active inference streams will be cancelled. Generated tokens can still be charged. Pending funding remains in the native journal for recovery; closing does not refund provider balances.</p>
+  <div class="flex flex-wrap gap-3 justify-end">
+    <button type="button" class="btn-secondary" disabled={signingOut} onclick={() => closeDialog?.close()}>Keep open</button>
+    <button type="button" class="btn-danger" disabled={signingOut} onclick={close}>
+      {#if signingOut}<Loader2 class="w-4 h-4 animate-spin" />{/if}Cancel requests and close
+    </button>
+  </div>
+</dialog>
 <UpdateGate />
 {#each $toasts as toast, index (toast.id)}<Toast {...toast} {index} onClose={() => toasts.remove(toast.id)} />{/each}

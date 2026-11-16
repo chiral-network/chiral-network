@@ -2,15 +2,17 @@ import { writable } from 'svelte/store';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ColorTheme = 'blue' | 'purple' | 'green' | 'red' | 'orange';
+export type NavStyle = 'navbar' | 'sidebar';
 export interface NotificationSettings { inference: boolean; funding: boolean; networkStatus: boolean }
 export interface AppSettings {
   theme: ThemeMode;
   colorTheme: ColorTheme;
+  navStyle: NavStyle;
   reducedMotion: boolean;
   notifications: NotificationSettings;
 }
 const defaults: AppSettings = {
-  theme: 'system', colorTheme: 'blue', reducedMotion: false,
+  theme: 'system', colorTheme: 'blue', navStyle: 'navbar', reducedMotion: false,
   notifications: { inference: true, funding: true, networkStatus: true },
 };
 export function normalizeSettings(value: unknown): AppSettings {
@@ -18,6 +20,7 @@ export function normalizeSettings(value: unknown): AppSettings {
   return {
     theme: ['light', 'dark', 'system'].includes(raw.theme ?? '') ? raw.theme! : defaults.theme,
     colorTheme: ['blue', 'purple', 'green', 'red', 'orange'].includes(raw.colorTheme ?? '') ? raw.colorTheme! : defaults.colorTheme,
+    navStyle: raw.navStyle === 'sidebar' ? 'sidebar' : defaults.navStyle,
     reducedMotion: raw.reducedMotion === true,
     notifications: {
       inference: raw.notifications?.inference !== false,

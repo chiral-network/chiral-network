@@ -18,9 +18,12 @@
     --color-primary-950: 23 37 84;
   }
 
-  body {
-    @apply text-gray-900 dark:text-gray-100;
-  }
+  html { @apply antialiased; }
+  body { @apply m-0 min-h-screen bg-gray-50 dark:bg-gray-900 font-sans text-gray-900 dark:text-gray-100 transition-colors; }
+  :focus-visible { @apply outline-none ring-2 ring-primary-500 ring-offset-2 ring-offset-white dark:ring-offset-gray-900; }
+  summary { @apply cursor-pointer; }
+  code { @apply font-mono text-[0.85em] px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-700; }
+  dialog::backdrop { background: rgb(0 0 0 / .5); }
 }
 
 @layer utilities {
@@ -29,52 +32,60 @@
   }
 }
 
-@layer base {
-  body { @apply m-0 bg-gray-50 dark:bg-gray-950; font-family: system-ui, sans-serif; }
-  h1 { @apply text-3xl font-semibold mb-4; }
-  h2 { @apply text-xl font-semibold mb-3; }
-  h3 { @apply font-semibold mb-2; }
-  p { @apply my-3 leading-relaxed; }
-  a { @apply text-primary-700 dark:text-primary-300 underline underline-offset-2; }
-  button { @apply rounded-lg bg-primary-700 text-white px-4 py-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed; }
-  button:hover:not(:disabled) { @apply bg-primary-800; }
-  :focus-visible { @apply outline outline-2 outline-offset-4 outline-primary-500; }
-  label { @apply block my-3 text-sm font-medium; }
-  input:not([type=checkbox]), select, textarea { @apply block w-full mt-1 rounded-lg border border-gray-400 bg-white dark:bg-gray-900 px-3 py-2 text-gray-900 dark:text-gray-100; }
-  input[type=checkbox] { @apply mr-2 h-4 w-4; }
-  form { @apply my-4; }
-  dl { @apply grid grid-cols-2 gap-x-4 gap-y-2 my-4; }
-  dt { @apply text-gray-600 dark:text-gray-400; }
-  dd { @apply break-words; }
-  summary { @apply cursor-pointer font-medium; }
-  dialog { @apply max-w-lg rounded-xl border border-gray-400 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-6; }
-  dialog::backdrop { background: rgb(0 0 0 / .65); }
-}
+/* Shared idiom carried over from the pre-inference desktop UI:
+   1400px page shell, space-y-4 rhythm, rounded-2xl white cards with
+   icon-pill headers, primary-600 actions, 11px uppercase stat labels. */
 @layer components {
-  header { @apply flex flex-wrap items-center gap-4 border-b border-gray-200 dark:border-gray-800 p-4; }
-  .brand { @apply no-underline text-2xl font-bold; }
-  .badge { @apply ml-2 rounded bg-amber-100 text-amber-900 px-2 py-1 text-xs align-middle; }
-  .identity { @apply flex-1 text-right text-sm font-mono; }
-  .shell { @apply mx-auto max-w-screen-2xl md:flex; }
-  nav { @apply flex flex-wrap gap-1 p-4 md:w-56 md:flex-col md:shrink-0; }
-  nav a { @apply no-underline rounded-lg px-3 py-2 text-gray-700 dark:text-gray-200; }
-  nav a[aria-current=page] { @apply bg-primary-100 dark:bg-primary-900 font-semibold; }
-  main { @apply min-w-0 flex-1 p-4 md:p-8; }
-  .panel { @apply my-5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-5; }
-  .row { @apply flex flex-wrap items-end gap-3 my-3; }
-  .row label { @apply flex-1 min-w-48 my-0; }
-  .grid { @apply grid-cols-1 lg:grid-cols-2 gap-4; }
-  .warning { @apply my-4 rounded-lg border border-amber-400 bg-amber-50 dark:bg-amber-950/40 p-4 text-amber-950 dark:text-amber-100; }
-  .error { @apply my-4 rounded-lg border border-red-400 bg-red-50 dark:bg-red-950/40 p-4 text-red-900 dark:text-red-100 whitespace-pre-wrap break-words; }
-  .success { @apply my-4 rounded-lg border border-green-500 p-4 text-green-800 dark:text-green-200; }
-  .empty { @apply my-6 text-gray-600 dark:text-gray-400; }
-  .mono { @apply font-mono text-sm break-all; }
-  .data { @apply my-3 whitespace-pre-wrap break-all text-xs overflow-auto max-h-[36rem]; }
-  .model-output { @apply whitespace-pre-wrap break-words font-sans leading-relaxed; }
-  .secret { @apply mt-4 border-2 border-amber-500 rounded-lg p-4; }
-  .check { @apply flex items-start; }
-  .skip-link { @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:bg-white focus:p-3; }
+  .page { @apply max-w-[1400px] mx-auto p-4 sm:p-6 space-y-4; }
+  .page-title { @apply text-2xl font-bold text-gray-900 dark:text-white; }
+  .page-subtitle { @apply text-sm text-gray-500 dark:text-gray-400 mt-0.5; }
+
+  .card { @apply bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700; }
+  .card-title { @apply text-base font-semibold text-gray-900 dark:text-white; }
+  .card-subtitle { @apply text-sm text-gray-500 dark:text-gray-400; }
+  .subpanel { @apply rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40; }
+
+  .btn { @apply inline-flex items-center justify-center gap-2 px-4 py-2 border border-transparent rounded-lg text-sm font-medium whitespace-nowrap transition-colors disabled:opacity-50 disabled:cursor-not-allowed; }
+  .btn-primary { @apply btn bg-primary-600 text-white enabled:hover:bg-primary-700; }
+  .btn-secondary { @apply btn border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 enabled:hover:bg-gray-50 dark:enabled:hover:bg-gray-700; }
+  .btn-danger { @apply btn bg-red-600 text-white enabled:hover:bg-red-700; }
+  .btn-ghost { @apply btn text-gray-600 dark:text-gray-300 enabled:hover:bg-gray-100 dark:enabled:hover:bg-gray-700; }
+  .btn-sm { @apply px-3 py-1.5 text-xs; }
+  .icon-btn { @apply inline-flex items-center justify-center p-2 rounded-lg text-gray-600 dark:text-gray-300 transition-colors enabled:hover:bg-gray-100 dark:enabled:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed; }
+
+  .field-label { @apply block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5; }
+  .field-hint { @apply text-xs text-gray-500 dark:text-gray-400 mt-1.5 leading-relaxed; }
+  .input { @apply block w-full px-3.5 py-2.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500 focus-visible:ring-offset-0 disabled:opacity-60 disabled:cursor-not-allowed; }
+  .checkbox { @apply h-4 w-4 shrink-0 rounded border-gray-300 dark:border-gray-600 accent-primary-600 cursor-pointer disabled:cursor-not-allowed; }
+  .check-row { @apply flex items-start gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer; }
+
+  .badge { @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap; }
+  .badge-green { @apply badge bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400; }
+  .badge-amber { @apply badge bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400; }
+  .badge-red { @apply badge bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400; }
+  .badge-gray { @apply badge bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300; }
+  .badge-primary { @apply badge bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300; }
+
+  .stat-label { @apply text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400; }
+  .stat-value { @apply text-sm font-semibold text-gray-900 dark:text-white tabular-nums; }
+
+  .kv { @apply grid grid-cols-1 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 sm:gap-y-2 text-sm; }
+  .kv dt { @apply text-gray-500 dark:text-gray-400; }
+  .kv dd { @apply text-gray-900 dark:text-gray-100 break-words min-w-0 mb-1 sm:mb-0; }
+
+  .prose-muted { @apply text-sm text-gray-600 dark:text-gray-400 leading-relaxed; }
+  .link { @apply font-medium text-primary-600 dark:text-primary-400 hover:underline underline-offset-2; }
+  .mono { @apply font-mono text-xs break-all; }
+  .code-block { @apply m-0 bg-gray-900 dark:bg-gray-950 text-gray-100 text-xs font-mono leading-relaxed p-4 overflow-auto max-h-[36rem] whitespace-pre-wrap break-all; }
+  .model-output { @apply m-0 whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-gray-900 dark:text-gray-100; }
+
+  .tab { @apply flex items-center gap-2 px-4 py-2.5 -mb-px border-b-2 text-sm font-medium whitespace-nowrap transition-colors; }
+  .tab-active { @apply tab border-primary-600 text-primary-600 dark:text-primary-400 dark:border-primary-400; }
+  .tab-idle { @apply tab border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600; }
+
+  .skip-link { @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-white focus:p-3 focus:text-primary-700 focus:shadow-lg; }
 }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

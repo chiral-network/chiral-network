@@ -49,7 +49,8 @@
 
   const s = $derived(styles[type]);
 
-  let topOffset = $derived(16 + index * (description ? 88 : 68));
+  // Start below the 56px top navigation bar so toasts never cover it.
+  let topOffset = $derived(68 + index * (description ? 88 : 68));
 
   onMount(() => {
     const start = performance.now();
