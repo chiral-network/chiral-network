@@ -6,7 +6,7 @@ use crate::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path, sync::Arc};
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State};
 use tokio::sync::{watch, Mutex, RwLock};
 
 #[derive(Default)]
@@ -305,10 +305,92 @@ async fn get_version_status(state: State<'_, DesktopState>) -> Result<Value, Str
     )
 }
 
+// ---- System tray (book Appendix A.2; OpenSpec desktop-window-lifecycle) ----
+// Closing the window only minimizes it; the tray offers Show and a confirmed
+// Quit. The tray is native, so the webview needs no tray permission.
+
+/// Event the webview listens for to open its "Quit Chiral?" confirmation.
+const QUIT_REQUEST_EVENT: &str = "chiral://quit-requested";
+const TRAY_SHOW_ID: &str = "tray-show";
+const TRAY_QUIT_ID: &str = "tray-quit";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    Show,
+    RequestQuit,
+}
+
+fn tray_action(menu_id: &str) -> Option<TrayAction> {
+    match menu_id {
+        TRAY_SHOW_ID => Some(TrayAction::Show),
+        TRAY_QUIT_ID => Some(TrayAction::RequestQuit),
+        _ => None,
+    }
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Show always restores the window. Quit restores it too and asks the webview
+/// to open the confirmation; the tray never ends the process by itself.
+fn handle_tray_action(app: &AppHandle, action: TrayAction) {
+    show_main_window(app);
+    if action == TrayAction::RequestQuit {
+        if let Err(error) = app.emit_to("main", QUIT_REQUEST_EVENT, ()) {
+            eprintln!("[TRAY] quit request not delivered to the window: {error}");
+        }
+    }
+}
+
+fn build_tray(app: &tauri::App) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("no application icon is bundled")?;
+    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "Show Chiral", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "Quit Chiral…", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(app, &[&show, &quit]).map_err(|e| e.to_string())?;
+    TrayIconBuilder::with_id("chiral-tray")
+        .icon(icon)
+        .tooltip("Chiral Network")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            if let Some(action) = tray_action(event.id().as_ref()) {
+                handle_tray_action(app, action);
+            }
+        })
+        .build(app)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A missing tray (e.g. no AppIndicator library on a Linux desktop) must not
+/// stop the app: log it and keep running without one.
+fn install_tray(app: &tauri::App) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build_tray(app))) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("[TRAY] system tray unavailable: {error}"),
+        Err(_) => eprintln!("[TRAY] system tray unavailable: tray initialization panicked"),
+    }
+}
+
 pub fn run() {
     crate::version::log_policy_key_status();
     tauri::Builder::default()
         .manage(DesktopState::default())
+        .setup(|app| {
+            install_tray(app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             consumer_command,
             inference_stream,
@@ -322,6 +404,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tray_menu_ids_map_to_show_and_confirmed_quit_only() {
+        assert_eq!(tray_action(TRAY_SHOW_ID), Some(TrayAction::Show));
+        assert_eq!(tray_action(TRAY_QUIT_ID), Some(TrayAction::RequestQuit));
+        for unknown in ["", "quit", "show", "tray-exit", "TRAY-QUIT", "tray-quit "] {
+            assert_eq!(tray_action(unknown), None, "{unknown:?}");
+        }
+        assert_ne!(TRAY_SHOW_ID, TRAY_QUIT_ID);
+        assert_eq!(QUIT_REQUEST_EVENT, "chiral://quit-requested");
+    }
     #[test]
     fn missing_and_invalid_command_fields_are_rejected() {
         assert!(text(&json!({"path":""}), "path").is_err());

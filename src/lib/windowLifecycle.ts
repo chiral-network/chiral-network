@@ -3,6 +3,9 @@
 // taskbar/Dock and keeps Chiral running. Only an explicit, confirmed Quit
 // closes the native session and ends the process.
 
+/** Emitted by the native tray's "Quit Chiral…" item (desktop.rs `QUIT_REQUEST_EVENT`). */
+export const QUIT_REQUEST_EVENT = 'chiral://quit-requested';
+
 export interface CloseRequest { preventDefault(): void }
 export interface MinimizableWindow { minimize(): Promise<void> }
 export interface DestroyableWindow { destroy(): Promise<void> }

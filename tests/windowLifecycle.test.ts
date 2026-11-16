@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { handleCloseRequest, quitApplication } from '$lib/windowLifecycle';
+import { handleCloseRequest, quitApplication, QUIT_REQUEST_EVENT } from '$lib/windowLifecycle';
 
 function closeEvent() {
   let prevented = false;
@@ -54,5 +54,20 @@ describe('window permissions', () => {
     const windowPermissions = capability.permissions.filter(p => p.startsWith('core:window:')).sort();
     expect(windowPermissions).toEqual(['core:window:allow-destroy', 'core:window:allow-minimize']);
     expect(capability.permissions.some(p => /shell|fs:|tray|global-shortcut/.test(p))).toBe(false);
+  });
+});
+
+describe('system tray quit request', () => {
+  it('uses the same event name the native tray emits', () => {
+    const desktop = readFileSync('src-tauri/src/desktop.rs', 'utf8');
+    expect(desktop).toContain(`const QUIT_REQUEST_EVENT: &str = "${QUIT_REQUEST_EVENT}";`);
+    expect(QUIT_REQUEST_EVENT).toBe('chiral://quit-requested');
+  });
+
+  it('builds the tray natively instead of granting the webview a tray permission', () => {
+    const cargo = readFileSync('src-tauri/Cargo.toml', 'utf8');
+    expect(cargo).toMatch(/tauri = \{[^}]*features = \[[^\]]*"tray-icon"/);
+    const capability = readFileSync('src-tauri/capabilities/default.json', 'utf8');
+    expect(capability).not.toMatch(/core:tray/);
   });
 });

@@ -21,7 +21,7 @@
   import { initVersionStore, stopVersionStore } from '$lib/stores/versionStore';
   import { applyColorTheme } from '$lib/services/colorThemeService';
   import { navItems, type PageKey } from '$lib/navigation';
-  import { handleCloseRequest, quitApplication } from '$lib/windowLifecycle';
+  import { handleCloseRequest, quitApplication, QUIT_REQUEST_EVENT } from '$lib/windowLifecycle';
   const pages: Record<PageKey, typeof Marketplace> = { marketplace: Marketplace, playground: Playground, provider: Provider, usage: Usage, wallet: Wallet, account: Account, network: Network, settings: Settings, diagnostics: Diagnostics };
   type Page = PageKey;
   function currentRoute(): Page { const name = window.location.hash.replace(/^#\//, ''); return Object.hasOwn(pages, name) ? name as Page : 'marketplace'; }
@@ -41,7 +41,8 @@
     catch (e) { toasts.show(errorText(e), 'error'); }
     finally { signingOut = false; }
   }
-  function requestQuit() { quitDialog?.showModal(); }
+  // Also opened by the native tray's "Quit Chiral…" item (QUIT_REQUEST_EVENT).
+  function requestQuit() { if (quitDialog && !quitDialog.open) quitDialog.showModal(); }
   async function quit() {
     signingOut = true; quitting = true;
     try {
@@ -55,7 +56,7 @@
     const changeTheme = () => darkSystem = media.matches;
     const navigate = () => { page = currentRoute(); window.scrollTo({ top: 0 }); document.getElementById('main')?.focus({ preventScroll: true }); };
     media.addEventListener('change', changeTheme); window.addEventListener('hashchange', navigate);
-    let disposed = false, unlisten: (() => void) | undefined;
+    let disposed = false, unlisten: (() => void) | undefined, unlistenQuit: (() => void) | undefined;
     if (nativeAvailable()) {
       initVersionStore();
       void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
@@ -63,12 +64,16 @@
         const stop = await win.onCloseRequested(async event => {
           const result = await handleCloseRequest(event, win, quitting);
           if (result.outcome === 'failed') toasts.show(`Could not minimize the window (${errorText(result.error)}). Chiral is still running; use Quit to exit.`, 'error');
-          else if (result.outcome === 'minimized' && !closeHintShown) { closeHintShown = true; toasts.show('Chiral is still running in the taskbar. Use Quit to exit.', 'info', 8000); }
+          else if (result.outcome === 'minimized' && !closeHintShown) { closeHintShown = true; toasts.show('Chiral is still running in the taskbar and system tray. Use Quit to exit.', 'info', 8000); }
         });
         if (disposed) stop(); else unlisten = stop;
       }).catch(e => toasts.show(errorText(e), 'error'));
+      void import('@tauri-apps/api/event').then(async ({ listen }) => {
+        const stop = await listen(QUIT_REQUEST_EVENT, () => requestQuit());
+        if (disposed) stop(); else unlistenQuit = stop;
+      }).catch(e => toasts.show(errorText(e), 'error'));
     }
-    return () => { disposed = true; unlisten?.(); stopVersionStore(); media.removeEventListener('change', changeTheme); window.removeEventListener('hashchange', navigate); };
+    return () => { disposed = true; unlisten?.(); unlistenQuit?.(); stopVersionStore(); media.removeEventListener('change', changeTheme); window.removeEventListener('hashchange', navigate); };
   });
 </script>
 <svelte:head><title>{pageLabel} | Chiral Network</title><meta name="description" content="Verified model discovery and provider-specific prepaid inference." /></svelte:head>
