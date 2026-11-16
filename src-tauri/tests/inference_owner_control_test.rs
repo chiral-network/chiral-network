@@ -494,14 +494,16 @@ impl Fixture {
         winner
     }
 
-    async fn accounting_quote(&mut self, profiled: bool) -> Signed<Quote> {
+    async fn accounting_quote(&mut self, profiled: bool, paid: bool) -> Signed<Quote> {
         use chiral_network::performance;
 
         // Signed synthetic terms, not observed model or hardware qualification.
-        let mut terms = self.paid_quote().await.payload;
-        terms.id = protocol::random_id();
-        terms.nonce = protocol::random_id();
-        terms.funding_wei = "1000".into();
+        let mut terms = if paid { self.paid_quote().await.payload } else { self.quote("0").await.payload };
+        if paid {
+            terms.id = protocol::random_id();
+            terms.nonce = protocol::random_id();
+            terms.funding_wei = "1000".into();
+        }
         if profiled {
             terms.model.serving = Some(protocol::ServingProfile {
                 hf_repo: "test/proposal".into(), tokenizer_repo: "test/tokenizer".into(),
@@ -531,6 +533,10 @@ impl Fixture {
         self.provider.offer = protocol::sign(protocol::OFFER_DOMAIN, offer,
             &self.provider.state.private_key).unwrap();
         self.provider.offer_id = self.provider.state.offers.insert(self.provider.offer.clone()).unwrap();
+        if !paid {
+            // Exercise actual public quote issuance for the free serving terms.
+            return self.quote("0").await;
+        }
         terms.offer_id = self.provider.offer_id.clone();
         let quote = protocol::sign(protocol::QUOTE_DOMAIN, terms,
             &self.provider.state.private_key).unwrap();
@@ -540,7 +546,7 @@ impl Fixture {
 
     async fn accounting_account(&mut self, profiled: bool) -> (Signed<Quote>, OpenResult) {
         // Post-verification payment is a prerequisite, not observed safe-chain credit.
-        let quote = self.accounting_quote(profiled).await;
+        let quote = self.accounting_quote(profiled, true).await;
         let (raw, envelope) = self.signed_payment(
             &protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
         self.acknowledge_fixture(&quote, &raw, &envelope);
@@ -5160,9 +5166,18 @@ enum NativeOpeningSnapshotReply {
 
 #[tokio::test]
 async fn native_opening_snapshots_recover_committed_credit_without_installing_invalid_accounts() {
+    native_opening_snapshot_matrix(true).await;
+}
+
+#[tokio::test]
+async fn native_free_opening_snapshots_recover_without_payment_or_credential_rotation() {
+    native_opening_snapshot_matrix(false).await;
+}
+
+async fn native_opening_snapshot_matrix(paid: bool) {
     let directory = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(&directory.path().join("mutation-plan"), 69_999);
-    let quote = fixture.accounting_quote(true).await;
+    let quote = fixture.accounting_quote(true, paid).await;
     // Mutation paths come from the actual agreed terms; only the account's
     // identifier has a different field name. Responses use real ledger accounts.
     let mut terms = serde_json::to_value(&quote.payload).unwrap();
@@ -5179,7 +5194,7 @@ async fn native_opening_snapshots_recover_committed_credit_without_installing_in
             let control_gate = control_gate.clone();
             scope.spawn(move || {
                 tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
-                    .block_on(native_opening_snapshot_partition(directory, cases, control_gate, worker));
+                    .block_on(native_opening_snapshot_partition(directory, cases, control_gate, worker, paid));
             })
         }).collect::<Vec<_>>();
         for worker in workers { worker.join().unwrap(); }
@@ -5188,12 +5203,12 @@ async fn native_opening_snapshots_recover_committed_credit_without_installing_in
 
 async fn native_opening_snapshot_partition(
     directory: &tempfile::TempDir, cases: Arc<Vec<NativeSnapshotMutation>>,
-    control_gate: Arc<tokio::sync::Mutex<()>>, worker: usize,
+    control_gate: Arc<tokio::sync::Mutex<()>>, worker: usize, paid: bool,
 ) {
     let mut fixture = Fixture::new(&directory.path().join(format!("provider-{worker}")), 68_000 + worker as u64);
     let mut quote = {
         let _control = control_gate.lock().await;
-        fixture.accounting_quote(true).await
+        fixture.accounting_quote(true, paid).await
     };
 
     // Each fault gets a fresh opening, its already-committed replay, and valid
@@ -5203,7 +5218,7 @@ async fn native_opening_snapshot_partition(
             fixture = Fixture::new(&directory.path().join(format!("provider-{index}")), 68_000 + index as u64);
             quote = {
                 let _control = control_gate.lock().await;
-                fixture.accounting_quote(true).await
+                fixture.accounting_quote(true, paid).await
             };
         }
         let mode = match index {
@@ -5213,10 +5228,15 @@ async fn native_opening_snapshot_partition(
         };
         let label = if index < 2 { format!("success control {index}") } else { format!("{:?}", cases[index - 2]) };
         let id = &quote.payload.id;
-        let (raw, envelope) = fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
-        // Restore signed terms, admission acknowledgement and original preparation,
-        // not an account or accepted credit. Actual HTTP opening commits below.
-        let ack = fixture.acknowledge_fixture(&quote, &raw, &envelope);
+        // Paid cases restore admission and original preparation, not accepted credit.
+        // Free cases must create no payment, acknowledgement or journal original.
+        let payment = if paid {
+            let (raw, envelope) = fixture.signed_payment(&protocol::opening_data(&quote.payload).unwrap(), 1000, 0);
+            let ack = fixture.acknowledge_fixture(&quote, &raw, &envelope);
+            Some((raw, envelope, ack))
+        } else { None };
+        let raw = payment.as_ref().map(|(raw, _, _)| raw);
+        let ack = payment.as_ref().map(|(_, _, ack)| ack);
         fixture.unopened(&quote);
         let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5239,20 +5259,43 @@ async fn native_opening_snapshot_partition(
             .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
         let journal_path = scoped.join("wallet-journal/transactions.sqlite3");
         let journal = Connection::open(&journal_path).unwrap();
-        journal.execute(
-            "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,created_at)
-             VALUES(?1,?2,'0',?3,?4,'prepared',?5)",
-            params![quote.payload.consumer_wallet, format!("open:{id}"), envelope.tx_hash, raw,
-                quote.payload.issued_at]).unwrap();
-        let original_payment = || journal.query_row(
-            "SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at) FROM transactions",
-            [], |row| row.get::<_, String>(0)).unwrap();
+        if let Some((raw, envelope, _)) = &payment {
+            journal.execute(
+                "INSERT INTO transactions(sender,operation,nonce,tx_hash,raw,status,created_at)
+                 VALUES(?1,?2,'0',?3,?4,'prepared',?5)",
+                params![quote.payload.consumer_wallet, format!("open:{id}"), envelope.tx_hash, raw,
+                    quote.payload.issued_at]).unwrap();
+        }
+        let original_payment = || {
+            let mut statement = journal.prepare(
+                "SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at) FROM transactions ORDER BY sender,operation").unwrap();
+            let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            rows
+        };
         let original_payment_before = original_payment();
-        let rpc = Arc::new(SafeOpeningRpc { quote: quote.clone(), raw: raw.clone(),
-            hash: envelope.tx_hash.clone(), saved: account_path.clone(), phase: AtomicU64::new(5),
-            timestamp: AtomicU64::new(protocol::now().unwrap()), requests: Mutex::new(Vec::new()) });
-        let provider_rpc = Router::new().route("/", post(safe_opening_rpc)).with_state((rpc.clone(), true));
-        let client_rpc = Router::new().route("/", post(safe_opening_rpc)).with_state((rpc.clone(), false));
+        assert_eq!(original_payment_before.len(), usize::from(paid));
+        let rpc = payment.as_ref().map(|(raw, envelope, _)| Arc::new(SafeOpeningRpc {
+            quote: quote.clone(), raw: raw.clone(), hash: envelope.tx_hash.clone(), saved: account_path.clone(),
+            phase: AtomicU64::new(5), timestamp: AtomicU64::new(protocol::now().unwrap()), requests: Mutex::new(Vec::new()),
+        }));
+        let free_rpc_calls = Arc::new(Mutex::new(Vec::new()));
+        let rpc_app = |provider| {
+            if let Some(rpc) = &rpc {
+                Router::new().route("/", post(safe_opening_rpc)).with_state((rpc.clone(), provider))
+            } else {
+                let observed = free_rpc_calls.clone();
+                Router::new().fallback(move |request: Request| {
+                    let observed = observed.clone();
+                    async move {
+                        observed.lock().unwrap().push((provider, request.method().clone(), request.uri().to_string()));
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                })
+            }
+        };
+        let provider_rpc = rpc_app(true);
+        let client_rpc = rpc_app(false);
         let provider_rpc_server = tokio::spawn(async move { axum::serve(provider_listener, provider_rpc).await.unwrap(); });
         let client_rpc_server = tokio::spawn(async move { axum::serve(client_listener, client_rpc).await.unwrap(); });
 
@@ -5332,11 +5375,23 @@ async fn native_opening_snapshot_partition(
         assert!(pending_value["account"].is_null());
         assert_eq!(pending_value["credentials"], json!([]));
         assert_eq!(pending_value["funding_intent"], serde_json::to_value(&ack).unwrap());
+        if !paid {
+            for field in ["raw_transaction", "tx_hash", "funding_intent", "funding_cancellation", "topup"] {
+                assert!(pending_value[field].is_null(), "free opening created {field}");
+            }
+            assert_eq!(pending_value["funding_broadcast_started"], false);
+            assert_eq!(pending_value["funding_cancellation_requested"], false);
+            assert!(accepted_journal.iter().all(Vec::is_empty));
+        }
         let root: Credential = serde_json::from_value(genuine["credential"].clone()).unwrap();
         let original = genuine["account"].clone();
-        assert_eq!(original["funded_wei"], "1000");
-        assert_eq!(original["fee_wei"], "5");
-        assert_eq!(original["available_wei"], "995");
+        assert_eq!(original["status"], if paid { "active" } else { "free" });
+        assert_eq!(original["funded_wei"], if paid { "1000" } else { "0" });
+        assert_eq!(original["fee_wei"], if paid { "5" } else { "0" });
+        assert_eq!(original["available_wei"], if paid { "995" } else { "0" });
+        if !paid {
+            for field in SNAPSHOT_MONEY { assert_eq!(original[field], "0"); }
+        }
         assert_eq!(original["model"], serde_json::to_value(&quote.payload.model).unwrap());
         assert_eq!(original["price"], serde_json::to_value(&quote.payload.price).unwrap());
         let db = Connection::open(&fixture.provider.ledger_path).unwrap();
@@ -5344,16 +5399,20 @@ async fn native_opening_snapshot_partition(
             .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
         let credited = financial_state();
         assert_eq!((credited[0].len(), credited[1].len(), credited[4].len(), credited[5].len(),
-            credited[7].len(), credited[8].len()), (1, 1, 1, 0, 1, 0));
-        let provider_evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
-            [id], |row| row.get(0)).unwrap();
-        let native_evidence: String = journal.query_row("SELECT evidence FROM transactions WHERE status='accepted'",
-            [], |row| row.get(0)).unwrap();
-        let evidence: Value = serde_json::from_str(&provider_evidence).unwrap();
-        assert_eq!(evidence, serde_json::from_str::<Value>(&native_evidence).unwrap());
-        assert_eq!(evidence["raw_transaction"], raw);
-        assert_eq!(evidence["tx_hash"], envelope.tx_hash);
-        assert_eq!(evidence["block_number"], 8);
+            credited[7].len(), credited[8].len()), if paid { (1, 1, 1, 0, 1, 0) } else { (1, 1, 0, 0, 0, 0) });
+        if let Some((raw, envelope, _)) = &payment {
+            let provider_evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
+                [id], |row| row.get(0)).unwrap();
+            let native_evidence: String = journal.query_row("SELECT evidence FROM transactions WHERE status='accepted'",
+                [], |row| row.get(0)).unwrap();
+            let evidence: Value = serde_json::from_str(&provider_evidence).unwrap();
+            assert_eq!(evidence, serde_json::from_str::<Value>(&native_evidence).unwrap());
+            assert_eq!(evidence["raw_transaction"], *raw);
+            assert_eq!(evidence["tx_hash"], envelope.tx_hash);
+            assert_eq!(evidence["block_number"], 8);
+        } else {
+            assert!(credited[6].is_empty(), "free opening cannot create a funding intent");
+        }
         assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal);
         assert_eq!(original_payment(), original_payment_before);
 
@@ -5429,9 +5488,17 @@ async fn native_opening_snapshot_partition(
         assert_eq!(native_payment_journal_snapshot(&journal), accepted_journal);
         assert_eq!(original_payment(), original_payment_before);
         fixture.credentials_usable(&[&root]);
-        assert!(rpc.requests.lock().unwrap().iter().all(|(_, request)| !matches!(
-            request["method"].as_str(), Some("eth_sendRawTransaction" | "eth_getTransactionCount" | "eth_getBalance"))),
-            "recover the prepared, canonically included original without another payment");
+        if let Some(rpc) = &rpc {
+            assert!(rpc.requests.lock().unwrap().iter().all(|(_, request)| !matches!(
+                request["method"].as_str(), Some("eth_sendRawTransaction" | "eth_getTransactionCount" | "eth_getBalance"))),
+                "recover the prepared, canonically included original without another payment");
+        } else {
+            assert!(free_rpc_calls.lock().unwrap().is_empty(), "free opening/recovery cannot access native or provider RPC");
+            assert!(native_payment_journal_snapshot(&journal).iter().all(Vec::is_empty));
+            let provider_journal = Connection::open(fixture.provider.state.config.network
+                .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+            assert!(native_payment_journal_snapshot(&provider_journal).iter().all(Vec::is_empty));
+        }
         stop.send(()).unwrap();
         server.await.unwrap();
         provider_rpc_server.abort();

@@ -1,0 +1,29 @@
+# Rust verification ledger
+
+## Availability and trust — 2026-11-15
+
+`verus --version` failed with exit 127: command not found. No existing Verus/vstd integration or verification command was found. Setup and proof work are blocked by the report entry **2026-11-15 — Verus is unavailable**; nothing was installed or pinned without a working verifier.
+
+No verified proofs, replaced tests, trusted functions, unchecked assumptions or added dependencies. No test deletion is authorized by this ledger. A future proof must follow the OpenSpec requirement and pass the project's pinned verification command, not merely compile a model of the current behavior.
+
+## Judged snapshot tests
+
+Requirement source: `openspec/changes/specify-inference-account-snapshot/specs/inference-account-snapshot/spec.md` (named account schema, exact usage counters, original-term/conservation binding and post-commit recovery). These judgments concern replacing the entire existing test, including its actual calls and asserted results, under the vstd-only/no-interface-change rules. Mathematical subproperties may still merit proofs; they would not replace tests of unmodeled I/O or third-party behavior.
+
+| Test | Judgment | Reason |
+|---|---|---|
+| `inference_account_snapshot_test::named_account_snapshots_preserve_every_field_and_canonical_bytes` | not replaceable | Executes serde/serde_json decoding and canonical serialization, including reordered objects and nullable nested members. No proof models for those external implementations are present; trusting their results would not authorize deleting this test. |
+| `inference_account_snapshot_test::account_snapshots_reject_positional_arrays_and_nonobjects` | not replaceable | Checks actual raw and pre-parsed serde_json rejection, not just an abstract field predicate. |
+| `inference_account_snapshot_test::account_snapshots_require_all_named_members_and_refuse_additions` | not replaceable | Exercises external JSON parsers and derived/custom deserializers for missing, extra and wrong-type members. |
+| `inference_account_snapshot_test::accounting_usage_rejects_positional_arrays_and_nonobjects` | not replaceable | Requires actual TokenUsage and containing AccountView parser behavior in both raw/value paths. |
+| `inference_account_snapshot_test::accounting_usage_requires_two_exact_unsigned_counters_without_defaults` | not replaceable | Asserts actual JSON integer parsing/canonical bytes, including large counters, exponent/floating-point forms and containing account decoding. A proof about u64 bounds alone would not cover these calls/results. |
+| `inference_account_snapshot_test::account_and_usage_decoders_reject_raw_duplicate_members` | not replaceable | Tests raw duplicate-member handling in serde_json; converting input to an abstract map would erase the property being checked. |
+| `inference_account_snapshot_test::receipts_preserve_named_claims_but_reject_account_and_usage_projections` | not replaceable | Combines actual JSON decoding/canonical bytes with external cryptographic signing/verification. A trusted signature/parser model would not permit test replacement. |
+| `inference_owner_control_test::native_account_refresh_preserves_original_terms_money_and_recovery_state` | not replaceable | Actual native HTTP authorization, SQLite, protected files, exported credentials and reopening; no proof models cover those boundaries. |
+| `inference_owner_control_test::native_signed_snapshots_preserve_terms_balances_and_receipt_watermarks` | not replaceable | Actual HTTP/signatures, provider issuance, durable watermark/files/journal and replay after reopening; retains external and I/O acceptance beyond pure snapshot predicates. |
+| `inference_owner_control_test::native_opening_snapshots_recover_committed_credit_without_installing_invalid_accounts` | not replaceable | Actual router/controlled RPC, SQLite credit, native files, credentials and concurrent isolated runtimes. Post-commit recovery cannot be replaced by a pure balance/identity proof. |
+| `inference_owner_control_test::native_free_opening_snapshots_recover_without_payment_or_credential_rotation` | not replaceable | Executes public quote issuance, real native/provider HTTP opening and replay, SQLite/files, credential issuance and reopening, concurrent runtimes and separate RPC tripwires. The absence of financial side effects/RPC cannot be replaced by a pure balance proof; the paid matrix remains intact. |
+
+## Remaining inventory
+
+This is the first scoped judgment slice, not a claim that all Rust tests were reviewed. Other Rust test functions remain unclassified; extend the inventory from their implementation and OpenSpec requirements in subsequent steps. Do not rejudge a blocked test unless its code or requirement changes. Missing implementation/specification work retains priority over replacing an existing test with a proof.

@@ -101,3 +101,15 @@ Worker action continued (2026-11-15): Completed non-reserving parent 3.4 and own
 Worker action continued (2026-11-15): Completed parent 3.2/4.2 and rate 2.3/2.5/3.1. The actual public proposal route now commits independent provider-wide signing-work allowance before invoking the real signer: 600 attempts per non-regressing effective minute, no refund after signing/insertion/reply failure, durable conservative initialization and fail-closed inconsistent evidence. Seven ledger and three new HTTP regressions plus extended body/control/recovery cases pass; all 479 available tests and available builds/checks pass as recorded in progress. Both exhausted quote budgets preserve existing free/paid accounts, explicit credential management, admitted-hold settlement and authorized request reads. Remaining paid/expiry and broader top-up/settlement acceptance keeps the change and this entry open; no new author decision or deployment is required.
 
 Nonblocking factual update proposed for the author: in **Approved non-reserving quotes**, the final “Implementation gap and required evidence” paragraph still describes the old eight-slot and named-payer rate gates as current. Replace that present-tense description with: “The earlier isolated regression demonstrated the former named-wallet quota exposure. Native proposal issuance now uses provider-wide quote retention, committed-issuance and durable pre-signing-work bounds without named-wallet quote allowances. Remaining paid/expiry recovery acceptance and the full public-release gates are still open; isolated checks are not deployment qualification.” The worker leaves this factual whitepaper update to the author; it does not change the approved design or block remaining implementation acceptance.
+
+## 2026-11-15 — Verus is unavailable
+
+Status: open
+
+`verus --version` fails here with exit 127 (`verus: command not found`). No existing Verus/vstd integration or project verification command was found in the README, CI, Cargo configuration, source, tests, scripts or OpenSpec files. The worker has not installed anything.
+
+Question: Please make Verus available in this environment, or answer explicitly that the worker should keep tests instead of applying the Verus rules.
+
+All Verus setup/proof steps wait for this entry. Once Verus runs, the worker can pin the available version/vstd and add the required README/CI verification command before proving code. File, network, third-party-crate and unmodeled concurrency acceptance remains test-based; those unblocked steps can continue. No test has been deleted or treated as proved, and no unchecked proof assumption has been introduced. Test judgments are recorded in `docs/apas-worker/verus.md`.
+
+The question has not been asked interactively because an unblocked I/O acceptance step remains. No default or implied answer is assumed.
