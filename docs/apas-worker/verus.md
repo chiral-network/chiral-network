@@ -6,7 +6,7 @@
 
 No verified proofs, replaced tests, trusted functions, unchecked assumptions or added dependencies. No test deletion is authorized by this ledger. A future proof must follow the OpenSpec requirement and pass the project's pinned verification command, not merely compile a model of the current behavior.
 
-## Judged snapshot and top-up tests
+## Judged snapshot, lifecycle and top-up tests
 
 Requirement source: `openspec/changes/specify-inference-account-snapshot/specs/inference-account-snapshot/spec.md` (named account schema, exact usage counters, original-term/conservation binding and post-commit recovery). These judgments concern replacing the entire existing test, including its actual calls and asserted results, under the vstd-only/no-interface-change rules. Mathematical subproperties may still merit proofs; they would not replace tests of unmodeled I/O or third-party behavior.
 
@@ -32,6 +32,8 @@ Top-up recovery also follows `openspec/specs/inference-account-topup-request/spe
 | `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_owned_free_opening_limit` | not replaceable | Real authenticated opening-capacity refusal and top-up recovery with protected credentials, prior usage/holds, SQLite snapshots and separate native/provider RPC. |
 | `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_global_free_opening_limit` | not replaceable | Full restored account population, actual capacity refusal, counted row digests, representative bearer reads and native/HTTP settlement after a lost committed reply; external storage/network behavior is essential. |
 | `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_paid_intent_limit` | not replaceable | Independent paid-admission refusal with retained acknowledgement/nonce ownership, genuine native top-up and lost-response recovery under full intent capacity; relies on unmodeled cryptography, HTTP and SQLite. |
+| `inference_owner_control_test::topup_inactive_accounts_refuse_before_rpc_and_again_at_credit` | not replaceable | Exercises real owner authorization, HTTP refusals, SQLite funding-state transitions and credit guards, a network tripwire and reopened bearer reads. Supplied chain observations are prerequisites, not a pure verified model of the storage/network effects. |
+| `inference_owner_control_test::account_snapshots_preserve_lifecycle_reads_without_granting_spend_authority` | not replaceable | Owner/read-bearer HTTP account and signed-receipt reads, native protected-file retention, SQLite lifecycle/reconciliation, reopened admission refusals and RPC tripwire observations. The unfamiliar-status fixture and exact financial/credential/journal assertions depend on unmodeled I/O and third-party parsing/signatures. |
 
 ## Remaining inventory
 

@@ -5782,6 +5782,211 @@ async fn native_topup_snapshot_partition(
 }
 
 #[tokio::test]
+async fn account_snapshots_preserve_lifecycle_reads_without_granting_spend_authority() {
+    use chiral_network::chain_client::{ChainError, PaymentState};
+
+    let directory = tempfile::tempdir().unwrap();
+    for (case, status) in ["free", "active", "settlement_pending", "frozen", "provider_review"].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 74_000 + case as u64);
+        let unrelated = fixture.open_free().await;
+        let (quote, opened) = if status == "free" {
+            let opened = fixture.open_free().await;
+            (fixture.provider.state.ledger.quote(&opened.account.contract_id).unwrap(), opened)
+        } else {
+            fixture.accounting_account(false).await
+        };
+        let id = &quote.payload.id;
+        let root = opened.credential.as_ref().unwrap();
+        let read = fixture.scoped_credential(id, "read");
+        let infer = fixture.scoped_credential(id, "infer");
+        let now = protocol::now().unwrap();
+        let ledger = &fixture.provider.state.ledger;
+        let prior = ledger.reserve(id, &root.id, "lifecycle-known", 1, 1, now, &opened.account.model).unwrap();
+        ledger.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", now).unwrap();
+        let held = ledger.reserve(id, &root.id, "lifecycle-held", 1000, 512, now, &opened.account.model).unwrap();
+        if status == "free" {
+            ledger.reserve(id, &root.id, "lifecycle-free-second-slot", 1, 1, now, &opened.account.model).unwrap();
+            let error = ledger.reserve(id, &root.id, "lifecycle-no-slot", 1, 1, now, &opened.account.model).unwrap_err();
+            assert!(error.starts_with("saturation:"), "{error}");
+        }
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let mut expected = serde_json::to_value(&opened.account).unwrap();
+        expected["usage"] = json!({"prompt_tokens":1,"completion_tokens":1});
+        expected["status"] = json!(status);
+        if status != "free" {
+            expected["spent_wei"] = json!("1");
+            expected["reserved_wei"] = json!("3");
+            expected["available_wei"] = json!("991");
+            let payment = ledger.funding_to_recheck().unwrap().remove(0);
+            match status {
+                "settlement_pending" | "frozen" => {
+                    // Supplied post-verification observations exercise the real ledger
+                    // transition, not live RPC evidence of a regression or orphan.
+                    let observation = if status == "frozen" { PaymentState::Orphaned } else { PaymentState::Pending };
+                    ledger.apply_funding_recheck(&payment.tx_hash, &Ok(observation), now).unwrap();
+                    if status == "frozen" {
+                        expected["fee_wei"] = json!("0");
+                        expected["reserved_wei"] = json!("0");
+                        expected["available_wei"] = json!("0");
+                        expected["reversed_wei"] = json!("1000");
+                        expected["provider_loss_wei"] = json!("1");
+                    }
+                }
+                "provider_review" => {
+                    // A hypothetical future stored status is a compatibility
+                    // prerequisite, not a newly supported lifecycle transition.
+                    assert_eq!(db.execute("UPDATE accounts SET account=json_set(account,'$.status',?2) WHERE id=?1",
+                        params![id, status]).unwrap(), 1);
+                }
+                "active" => {}
+                _ => unreachable!(),
+            }
+            assert_eq!(serde_json::to_value(ledger.account(id).unwrap()).unwrap(), expected);
+            ledger.apply_funding_recheck(&payment.tx_hash,
+                &Err(ChainError::Unavailable("isolated unavailable observation".into())), now).unwrap();
+            assert_eq!(serde_json::to_value(ledger.account(id).unwrap()).unwrap(), expected,
+                "unavailability must not invent or erase a lifecycle transition");
+        }
+        assert_eq!(serde_json::to_value(ledger.account(id).unwrap()).unwrap(), expected);
+        let held_request = ledger.request_view(id, &held.id).unwrap();
+        assert_eq!(held_request.status, if status == "frozen" { "funding_orphan_unknown_usage" } else { "reserved" });
+        assert_eq!(held_request.cost_wei, "0");
+        assert_eq!(held_request.provider_loss_wei, if status == "frozen" { "3" } else { "0" });
+        let requests = serde_json::to_value(ledger.requests(id, None).unwrap()).unwrap();
+
+        // One separate RPC tripwire observes both clients; neither read/status
+        // refusal may prepare a payment, query chain evidence or submit bytes.
+        let rpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
+        let rpc_calls = Arc::new(AtomicU64::new(0));
+        let rpc_app = Router::new().fallback({
+            let rpc_calls = rpc_calls.clone();
+            move || {
+                rpc_calls.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::SERVICE_UNAVAILABLE }
+            }
+        });
+        let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc_app).await.unwrap(); });
+        fixture.app = Router::new();
+        let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+        Arc::get_mut(&mut state.config).unwrap().network.rpc_url = rpc_url;
+        state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+        let native = (status != "free").then(|| restore_native_account(
+            &fixture, &quote, &opened, directory.path().join(format!("native-lifecycle-{case}"))));
+        let native_original = native.as_ref().map(|(config, _, journal, initial)| (
+            native_payment_journal_snapshot(journal),
+            Consumer::new(config.clone()).unwrap().credential_export(id, None).unwrap(),
+            initial.clone(),
+        ));
+        let provider_journal = Connection::open(fixture.provider.state.config.network
+            .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+        let original_provider_journal = native_payment_journal_snapshot(&provider_journal);
+        let financial_state = || ledger_snapshot(&db).into_iter().enumerate()
+            .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
+        let mut expected_provider = financial_state();
+
+        for pass in 0..2 {
+            fixture.app = Router::new();
+            let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+            state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+            state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+            state.accepting.store(false, Ordering::Release);
+            state.funding_ready.store(false, Ordering::Release);
+            state.qualified_models.write().unwrap().clear();
+            fixture.app = contracts::router(fixture.provider.state.clone());
+            assert_eq!(financial_state(), expected_provider);
+            for route in [ReadRoute::Account, ReadRoute::Receipt] {
+                let path = route.path(id);
+                denied(fixture.send("GET", &path, &bearer(&infer), Vec::new()).await, StatusCode::FORBIDDEN);
+                denied(fixture.send("GET", &path, &bearer(unrelated.credential.as_ref().unwrap()), Vec::new()).await,
+                    StatusCode::FORBIDDEN);
+                let proof = fixture.proof(OWNER_KEY, "GET", &path, &[]).await;
+                for headers in [&proof.headers, &bearer(&read)] {
+                    let (code, value) = fixture.send("GET", &path, headers, Vec::new()).await;
+                    assert_eq!(code, StatusCode::OK, "{status}: {value}");
+                    match route {
+                        ReadRoute::Account => {
+                            let account: protocol::AccountView = serde_json::from_value(value).unwrap();
+                            assert_eq!(serde_json::to_value(account).unwrap(), expected);
+                        }
+                        ReadRoute::Receipt => {
+                            let receipt: Signed<UsageReceipt> = serde_json::from_value(value).unwrap();
+                            protocol::verify(RECEIPT_DOMAIN, &receipt, &fixture.provider.state.wallet).unwrap();
+                            assert_eq!(receipt.payload.network, quote.payload.network);
+                            assert_eq!(receipt.payload.provider_wallet, quote.payload.provider_wallet);
+                            assert_eq!(serde_json::to_value(receipt.payload.account).unwrap(), expected);
+                            assert_eq!(serde_json::to_value(receipt.payload.requests).unwrap(), requests);
+                            let sequence = &mut expected_provider[0].iter_mut().find(|row| row[0] == *id).unwrap()[4];
+                            let next = sequence.as_u64().unwrap() + 1;
+                            assert_eq!(receipt.payload.sequence, next);
+                            *sequence = json!(next);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                fixture.consumed(&proof);
+                denied(fixture.send("GET", &path, &proof.headers, Vec::new()).await, StatusCode::UNAUTHORIZED);
+                assert_eq!(financial_state(), expected_provider);
+            }
+
+            if let Some((config, account_path, journal, _)) = &native {
+                let listener = fixture._listeners[0].try_clone().unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let app = fixture.app.clone();
+                let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+                let server = tokio::spawn(async move {
+                    axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); }).await.unwrap();
+                });
+                let consumer = Consumer::new(config.clone()).unwrap();
+                let (original_journal, exported, initial) = native_original.as_ref().unwrap();
+                assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(), expected);
+                let mut saved_expected = initial.clone();
+                saved_expected["account"] = expected.clone();
+                assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(account_path).unwrap()).unwrap(), saved_expected);
+                assert_eq!(serde_json::to_value(&consumer.accounts().unwrap()[0]).unwrap(), expected);
+                if status != "active" {
+                    let before = std::fs::read(account_path).unwrap();
+                    assert_eq!(consumer.topup(id, "1000").await.unwrap_err(),
+                        "account is not active; no topup payment was sent");
+                    assert_eq!(std::fs::read(account_path).unwrap(), before);
+                }
+                assert_eq!(consumer.credential_export(id, None).unwrap(), *exported);
+                assert_eq!(native_payment_journal_snapshot(journal), *original_journal);
+                drop(consumer);
+                let reopened = Consumer::new(config.clone()).unwrap();
+                assert_eq!(serde_json::to_value(&reopened.accounts().unwrap()[0]).unwrap(), expected);
+                assert_eq!(reopened.credential_export(id, None).unwrap(), *exported);
+                stop.send(()).unwrap();
+                server.await.unwrap();
+            }
+            if !matches!(status, "active" | "free") {
+                let error = fixture.provider.state.ledger.reserve(id, &root.id, "lifecycle-refused",
+                    1, 1, now, &opened.account.model).unwrap_err();
+                assert!(error.starts_with("account_frozen:"), "{error}");
+                assert!(fixture.provider.state.ledger.request_view(id, "lifecycle-refused").unwrap_err().starts_with("not_found:"));
+            }
+            if status != "active" {
+                let (raw, _) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+                let body = serde_json::to_vec(&protocol::TopupRequest { raw_transaction: raw }).unwrap();
+                let path = format!("/v1/contracts/{id}/topup");
+                let proof = fixture.proof(OWNER_KEY, "POST", &path, &body).await;
+                let (code, value) = fixture.send("POST", &path, &proof.headers, body).await;
+                assert_eq!(code, StatusCode::CONFLICT, "{status}: {value}");
+                assert_eq!(value["error"]["code"], "account_frozen");
+                fixture.consumed(&proof);
+            }
+            fixture.credentials_usable(&[root, &read, &infer, unrelated.credential.as_ref().unwrap()]);
+            assert_eq!(financial_state(), expected_provider, "{status}, pass {pass}");
+            assert_eq!(native_payment_journal_snapshot(&provider_journal), original_provider_journal);
+            assert_eq!(rpc_calls.load(Ordering::SeqCst), 0, "{status}, pass {pass}");
+        }
+        rpc_server.abort();
+        assert!(rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
 async fn native_account_refresh_preserves_original_terms_money_and_recovery_state() {
     let directory = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::new(&directory.path().join("provider-0"), 66_000);
