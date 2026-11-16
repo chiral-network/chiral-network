@@ -8,6 +8,7 @@ Part I explains the product, architecture and trust assumptions. Part II defines
 
 - [Part I: White paper](#part-i-white-paper): [direction](#direction-precedence-and-status), [product and trust](#product-and-trust-model), [architecture](#architecture-and-responsibilities), [engine choice](#why-llamacpp), [hardware participation](#hardware-participation-and-platform-status).
 - [Part II: Design and implementation](#part-ii-design-and-implementation): [identities and signatures](#protocol-identities-signed-offers-and-canonical-bytes); [discovery](#discovery-freshness-withdrawal-and-live-state); [HTTP boundaries](#http-origins-and-trust-boundaries); [authorization and requests](#consumer-control-credentials-and-request-lifecycle); [reputation](#payment-gated-subjective-reputation); [configuration](#configuration-and-state); [funding](#agreements-and-exact-funding-order); [accounting](#durable-accounting-and-fees); [performance](#performance-accounting-and-withdrawal); [API compatibility](#api-compatibility-and-model-qualification); [provider lifecycle](#native-provider-provisioning-and-operations); [security and recovery](#listener-and-secret-boundaries); [release gates](#release-gates-and-source-map).
+- [Appendix A: Desktop GUI text reference](#appendix-a-desktop-gui-text-reference): [global rules](#a1-global-rules-required), [shell](#a2-application-shell), [design language](#a3-design-language-current-presentation), [components](#a4-shared-components), [pages](#a5-pages), [replacing the GUI](#a6-replacing-or-extending-the-gui).
 
 ## Part I: White paper
 
@@ -638,3 +639,179 @@ Public ingress and hardware rental still need authorization; documenting these g
 Earlier Chiral versions implemented file sharing, Drive, ChiralDrop, CDN/site publication, download payments, and bundled Core-Geth/Ethash mining. A subsequent unimplemented design proposed a general S3/container/inference exchange. Neither is the current destination. The reusable ideas are signed discovery, wallet identity, provider-specific prepayment, and payment-gated feedback; their old payloads, RPC assumptions, fee collection, admission, and lifecycle semantics are **not** compatibility contracts.
 
 The former book's three-resource roadmap, mempool-credit discussion, CHI/zero-gas parameters, first-hit marketplace assumptions, and operational commands have been superseded. Historical design text and implementation details remain available in repository history, not as a second authoritative runbook. The [migration plan](llm-serving-migration-plan.md) retains the rationale, original migration criteria, and current unfulfilled public-release gates.
+
+## Appendix A: Desktop GUI text reference
+
+This appendix is a **text version of the native desktop GUI** (`src/App.svelte`, `src/pages/`, `src/lib/components/`). It lets a future GUI — a redesign, another toolkit, or a different platform shell — reproduce the same product surface without reading Svelte. Two kinds of statement appear:
+
+- **Required** behavior restates contracts defined elsewhere in this book. A replacement GUI must keep it; the linked section is authoritative if the wording differs.
+- **Current presentation** (layout, wording, color, iconography) describes the shipped design. It is guidance: change it deliberately and keep the pages consistent with one another.
+
+The GUI is a thin view over native consumer commands. It never computes money, signs, verifies chain evidence or decides admission itself; every operation below names the native `consumer_command` operation it invokes (see [`desktop.rs`](../src-tauri/src/desktop.rs)).
+
+### A.1 Global rules (required)
+
+1. **Native boundary.** Wallet private keys, provider admin tokens and bearer files never enter webview state, URLs, storage or logs. The GUI passes *file paths* to native commands and receives only public data. The one exception is an API key the user explicitly reveals for SDK use (A.5.4), shown in a masked field and cleared on hide or account change. See [listener and secret boundaries](#listener-and-secret-boundaries).
+2. **No simulation.** Outside the native runtime (browser preview) the GUI shows a preview notice and every native action fails with an explanatory error. It never fabricates wallets, offers, balances, credentials, receipts or model output.
+3. **Explicit network.** No network, RPC, catalog, faucet or provider is selected implicitly. Until a consumer profile is loaded in Settings, network actions are disabled and a banner points to Settings. See [configuration and state](#configuration-and-state).
+4. **Money is exact.** Amounts cross the native boundary as canonical decimal wei strings. User input in CFX converts with at most 18 decimals and exact integer arithmetic; display converts wei to CFX without floating point and without rounding away digits.
+5. **Untrusted output.** Model output, provider metadata and JSON responses render as plain text (escaped), never as HTML, Markdown-to-HTML or executable tool calls.
+6. **Risk disclosure before funding.** Before any opening or top-up the user sees, and must actively accept, that funds are non-refundable, usable only with that provider/endpoint, that the provider sees prompts in plaintext, that signed metadata does not prove execution, the platform fee rate, that gas is extra, and that reorganizations can freeze or reverse credit. See [product and trust model](#product-and-trust-model) and [settlement and recovery risks](#settlement-and-recovery-risks).
+7. **Recovery over retry.** Ambiguous funding or requests are resumed or reconciled, never silently retried. Any pending journaled funding is surfaced and offered as *Resume*; the GUI never prompts for a second payment while one is unresolved. Cancellation is labeled as gas-spending, racy and **not a refund**. See [agreements and exact funding order](#agreements-and-exact-funding-order).
+8. **Session scoping.** Loading a different profile or logging out cancels active streams, clears displayed credentials and remounts the current page so no data from the previous network/session remains visible.
+9. **Accessibility.** Every input has a visible label; status changes use `role="status"`, failures `role="alert"`; navigation exposes `aria-current`; a "Skip to content" link targets the main region; color is never the only signal (status badges carry text); reduced-motion preference is honored.
+
+### A.2 Application shell
+
+```text
++----------------------------------------------------------------------------------------+
+| (logo) Chiral Network [TESTNET] | Marketplace Playground Usage Wallet Provider Settings |
+|                                 | More v  [wallet 0x8f3a…7c8d] [Log out] (● Profile loaded) |
++----------------------------------------------------------------------------------------+
+| ! Banner (only when needed): Browser preview / No network selected yet                   |
+| Page title                                                     [primary page action]   |
+| Page subtitle                                                                           |
+| [stat tile] [stat tile] [stat tile] [stat tile]                                         |
+| +-------------------------------+  +-----------------------------------------------+    |
+| | (icon) Card title             |  | (icon) Card title                             |    |
+| | card subtitle                 |  | ...                                           |    |
+| +-------------------------------+  +-----------------------------------------------+    |
++----------------------------------------------------------------------------------------+
+```
+
+- **Routing:** hash routes `#/marketplace`, `#/playground`, `#/usage`, `#/wallet`, `#/provider`, `#/settings`, `#/account`, `#/network`, `#/diagnostics`; anything else opens Marketplace. Navigating scrolls to top and moves focus to the main region. The window title is `<Page> | Chiral Network`.
+- **Navigation layouts** (user setting, A.5.8). *Top bar* (default): sticky 56 px bar; at ≥1280 px the first six items show icon + label and the rest (Account, Network, Diagnostics) fold into a **More** menu; at 768–1279 px all nine show as icon-only buttons with tooltips; below 768 px a hamburger opens a full-width menu. *Sidebar*: fixed left rail (208 px, collapsible to 64 px icon-only; collapse state is a per-device convenience) with the status pill under the logo and wallet/log-out at the bottom; on phones it becomes a top bar plus overlay menu.
+- **Navigation order and icons:** Marketplace (store), Playground (sparkles), Usage & API keys (key; short label "Usage"), Wallet (wallet), Provider (server), Settings (gear), Account (user circle), Network (globe), Diagnostics (bug). The active item uses the tinted accent pill.
+- **Status pill:** grey "Browser preview" (no native runtime) → links Settings; amber "No profile" (native, no profile) → links Settings; green "Profile loaded" → links Network. It reports local configuration, not chain health.
+- **Wallet chip:** shortened public address (`0x8f3a…7c8d`, full value in tooltip) once a wallet is loaded.
+- **Log out** (only when a profile is loaded): invokes `logout`, clears the session (A.1.8), routes to Settings and shows "Native session closed; active requests cancelled. Wallet files remain on disk."
+- **Close confirmation:** intercepting the window close shows a modal — "Close Chiral?" — stating that active streams are cancelled, generated tokens can still be charged, pending funding stays in the native journal, and closing does not refund balances. Buttons: *Keep open* / *Cancel requests and close* (logs out, then destroys the window).
+- **Version gate:** a *required* update shows a full-screen blocking modal (current vs minimum version, policy message, "Copy download URL" for an HTTPS URL only); a *recommended* update shows a dismissible top banner (dismissal lasts for the app session). See [version policy and upgrades](#version-policy-and-upgrades).
+- **Toasts:** stacked top-right below the navigation bar; success 4 s, info 5 s, warning 6 s, error 8 s; hover pauses; progress bar shows remaining time. Event-driven toasts (`inference`, `funding`, `networkStatus`) respect the Notifications settings; direct feedback to a user action always shows.
+
+### A.3 Design language (current presentation)
+
+| Element | Specification |
+|---|---|
+| Page frame | Max width 1400 px, centered; 16 px padding (24 px ≥640 px); 16 px vertical rhythm between blocks. Light background gray-50, dark gray-900. |
+| Page header | H1 24 px bold; one-line subtitle 14 px muted; primary page action right-aligned. |
+| Card | White (dark: gray-800), 1 px gray-200 border, subtle shadow, rounded; 20–24 px padding. Header = 36 px tinted *icon pill* + 16 px semibold title + 14 px muted subtitle, optional actions at right. |
+| Stat tile | Small card: tinted icon pill, 11 px uppercase tracked label, 14 px semibold tabular value. Used in strips of 2–6 directly under the page header. |
+| Buttons | Primary: accent-600 fill, white text. Secondary: white with gray border. Danger: red-600. Icons lead labels; busy state swaps the icon for a spinner and keeps the button disabled. |
+| Inputs | Full-width, 1 px border, focus ring in accent; monospace for addresses, hashes and file paths; CFX amount fields carry a "CFX" suffix. |
+| Callouts | Bordered tinted boxes with leading icon: warning amber, error red, success green, info accent. Errors preserve line breaks. |
+| Badges | Pill text badges for status: green (active/free/ready/confirmed), amber (pending/draining), red (frozen/orphaned/failed/reversed), gray otherwise. |
+| JSON / raw results | Collapsible card with a "JSON" tag and a dark monospace console. Shown open when it is the primary result, collapsed when summarized by tiles. |
+| Hero card | Accent gradient header used for the wallet balance, account identity, the funding panel and the playground balance. |
+| Theme | Light / dark / system; accent palettes blue (default), purple, green, red, orange applied through CSS variables; Roboto UI font, system monospace. |
+
+### A.4 Shared components
+
+- **Offer card:** model ID; provider wallet (monospace); offer revision badge; endpoint; three tiles — input price / 1k tokens, output price / 1k tokens, context tokens; capability badges (`chat`, `completions`, `embeddings`); model revision, minimum funding, expiry; *serving profile* (compact); chain ID, deployment ID and genesis; button "Inspect provider and funding terms".
+- **Serving profile:** "Provider-qualified target: *N* output tokens/sec per admitted request"; tiles for capacity tier (`higher` reads "48–80 GB+ / local multi-GPU"), admitted load (concurrency and requests/s), engine/version · platform/backend · quantization, location, and measured hardware (device, memory, unified vs dedicated, reserved headroom). The qualification and remedy terms (95% joint attainment of ≤2 s time-to-first-token and decode target, workload envelope, waiver scope) are always reachable — inline, or behind a "Qualification & remedy terms" disclosure in compact contexts. A "Signed qualification provenance" disclosure lists HF repos, revisions, evidence date and SHA-256s, artifact/runtime hashes and execution settings, labeled as provider measurements, not attestations. Profiles without a serving commitment state that no generation-speed guarantee applies. See [performance accounting and withdrawal](#performance-accounting-and-withdrawal).
+- **Raw result panel:** titled collapsible JSON view (A.3); the only place unparsed native responses appear.
+
+### A.5 Pages
+
+Each page lists its purpose, layout, native operations and required states. Every page disables network actions until a profile is loaded (A.1.3) and shows native errors verbatim in an error callout.
+
+#### A.5.1 Marketplace — discover, inspect, fund
+
+```text
+Model marketplace                                   
+[Verified offers] [Models] [Lowest input / 1k] [Lowest output / 1k]
+(search) Discover providers: [ Model filter: All models        ] [Discover providers]
++-- offer card --+  +-- offer card --+          (two columns ≥1280 px)
+==== Prepay <model>  <provider…> · <endpoint>         (1 Quote)(2 Fund)(3 Open) ====
+! Non-refundable, provider-specific prepayment ... (A.1.6)
+Observed readiness: [Health] [Readiness] [Reputation Elo · votes]  > raw response
+1 · Request a signed quote: [ amount CFX ] [Request signed quote]
+2 · Review and fund: quoted funding · contract · quote expiry
+    [x] I accept this provider-specific non-refundable prepayment and residual reorg risk.
+    [Register intent, fund, and open account]
+```
+
+- **Discover** → `discover {model|null}`. Empty states: before search ("Find a model to run"), and no results ("No verified, unexpired offers found…"). Discovery is described as a bounded candidate search, not a directory.
+- **Inspect** → `provider_info {offer}`; shows point-in-time health (`live`), readiness (`ready` only — see [immutable terms versus current availability](#immutable-terms-versus-current-availability)) and testnet reputation (Elo, vote count, or the unavailability reason), stating that readiness is not a guarantee and reputation is experimental and Sybil-weak. The funding amount defaults to the offer's minimum funding.
+- **Quote** → `quote {offer, funding_wei}`; **Fund** (enabled only after the acceptance checkbox) → `fund {offer, quote}`; on success a success callout shows status and available balance with links to Playground and Usage.
+- **Pending funding:** if funding is interrupted, the panel shows the journaled stage from `pending_accounts`, disables new quotes, warns "Do not send another payment" and offers **Resume funding** → `resume {contract_id}`.
+
+#### A.5.2 Playground — try a funded model
+
+```text
+Playground
++-- Session -------------------+  +-- Prompt <model> ------------- (status badge) --+
+| Provider account [ select v ]|  | [ textarea                                    ] |
+| == Available 0.479 CFX ==    |  | [Generate] [Cancel stream]                       |
+| Endpoint [Chat|Completion|Emb]|  +--------------------------------------------------+
+| Max output tokens [ 256 ]    |  +-- Model response (plain text) --------------------+
++------------------------------+  | streamed text ...                                |
+  serving profile (compact)       +--------------------------------------------------+
+                                   Request: req_…  [Reconcile request status and billing]
+                                   > Usage / request accounting
+```
+
+- Accounts → `accounts`; selection → `account {contract_id}`. Endpoint choices are limited to the model's advertised capabilities; max tokens is bounded by the model's maximum output.
+- **Generate** is enabled only for an `active` or `free` account whose model advertises the selected capability. Chat/completions stream through the native `inference_stream` channel with usage included; **Cancel stream** → `inference_cancel`. Embeddings → `infer` (non-streamed, 1–32 non-empty lines, preview of the first eight components).
+- Status badge values: Idle, Connecting, Generating, Completed, Cancelling…, "Cancelled — generated tokens may be billed", and "Failed — inspect request status before retrying" (stream error) or "Failed — inspect Usage before retrying" (dispatch error).
+- Warnings: non-active (frozen/orphaned) accounts cannot spend; zero balance on a priced model points to Usage for a top-up. Output above the display limit cancels the stream and asks the user to inspect usage before retrying.
+- **Reconcile** → `request_status {contract_id, request_id}`. Prompts are not persisted by the GUI.
+
+#### A.5.3 Usage & API keys — balances, credentials, recovery
+
+```text
+Usage & API credentials                                              [Refresh]
+Provider account [ select v ]                              (Account status: active)
+! N journaled funding operations pending — Open Funding & recovery >
+[Available] [Funded] [Spent] [Reserved in flight] [Charges waived] [Input/output tokens]
+ Overview | API keys | Requests | Funding & recovery (N) | Feedback
+```
+
+Loads `accounts` + `pending_accounts`; selecting an account loads `account`, `usage`, `credentials`, `funding` and `local_requests`.
+
+- **Overview:** account card (funded, platform fee, spent, waived, reserved, available, tokens, contract ID; reorg/freeze warning with reversed and provider-loss amounts when applicable; waiver explanation; full serving profile). **Top up** card with A.1.6 warning, CFX amount, acceptance checkbox → `topup {contract_id, amount_wei}`; while unresolved, only **Resume pending funding** → `resume`. **Signed usage receipt** → `receipt` (native-verified).
+- **API keys:** credential metadata (never secrets); credential ID and lifetime (60 s–30 days, default 1 day); **Issue** → `credential_issue`, **Rotate** → `credential_rotate`, **Revoke** → `credential_revoke` (options: expiry, no spend cap, concurrency 1, scopes `infer`+`read`); **Explicitly reveal SDK credential** → `credential_export`, shown in an amber-bordered box with a masked key field, base URL and model, and "Hide credential" (hiding does not revoke). Resume never rotates keys. Python and JavaScript OpenAI-SDK snippets read `CHIRAL_API_KEY`, `CHIRAL_BASE_URL`, `CHIRAL_MODEL` from the environment with retries disabled.
+- **Requests:** request ID → **Read status** (`request_status`) or **Cancel provider request** (`cancel_request`); metered usage and local request keys (including ambiguous dispatches).
+- **Funding & recovery** (available without a selected account): pending journal; **Resume journaled funding** → `resume {contract_id}`; **Inspect wallet recovery history** → `funding_recovery`; a red-bordered disclosure "Cancel an unresolved funding transaction" with the gas/race/not-a-refund warning, optional exact operation ID and acceptance checkbox → `cancel_funding {contract_id, operation_id|null, accept_gas_and_race_risk: true}`; settlement/reorg evidence for the selected account.
+- **Feedback:** score 0–100 and increasing revision → `feedback {contract_id, score, revision}`, described as payment-backed and subjective. See [payment-gated subjective reputation](#payment-gated-subjective-reputation).
+
+#### A.5.4 Wallet — identity, balance, backup
+
+- **No wallet:** two cards — **Generate native wallet** → `wallet_create`; **Import key file** (protected private-key *file path*) → `wallet_import {path}`; note that import does not convert old CHI/CHR balances.
+- **Wallet loaded:** hero card with public address (copy button), verified-network balance in CFX (`balance` → `{address, balance_wei, network}`) and refresh; **Load local transaction journal** → `history`, rendered as a table (transaction, recipient, value, nonce, status badge, created) with the statement that it is the local submitted-transaction journal, not complete chain history, and that pending/rejected/orphaned transactions are not spendable credit.
+- **Back up wallet:** new file path → `wallet_export {path}`; warns the file is owner-only but **not encrypted by Chiral** and must never be uploaded.
+- **eSpace testnet funding:** `network_profile` shows the configured faucet and explorer (public endpoints only); explains that no faucet authority is embedded, that Core and eSpace balances are separate, and that funding an eSpace wallet from Core needs an explicit transfer.
+
+#### A.5.5 Provider — operator dashboard
+
+- Connection card: operator endpoint (default `http://127.0.0.1:9421`, literal loopback; remote providers via SSH tunnel) and **admin-token file path** (the token is read natively and never returned).
+- Action grid → `provider_admin {endpoint, token_file, action}` with `action` ∈ `status` (readiness & status), `offers`, `accounts` (prepaid liabilities), `requests` (request diagnostics), `fees` (fee remittance), `drain`, `resume` (admission), `refresh` (probe & refresh offers), `remit` (run fee outbox). The response renders as a raw result.
+- Required notice: not-ready models must not admit paid requests; drain before changing native configuration; existing prices/revisions remain pinned; the dashboard installs nothing and exposes no shell. See [provider lifecycle and immutable agreements](#provider-lifecycle-and-immutable-agreements).
+
+#### A.5.6 Account
+
+Hero card with the wallet identity and links to Wallet and Marketplace; the statement that provider balances are separate, non-refundable and not wallet funds; **Load local account index** → `accounts`, then tiles (account count, active-or-free count) and one card per account (model, provider, status badge, available CFX, contract ID, link to Usage for live data). Balances are never summed across providers.
+
+#### A.5.7 Network
+
+**Check configured network** → `network_status`; tiles for chain ID, head, safe frontier and finalized heights; settlement-identity card (genesis, acceptance level `safe`, syncing, observation time); the rule that first execution is not spendable credit and funding requires a successful canonical receipt at the safe frontier, with finalized reported separately. See [RPC failures, reorgs, and what “unavailable” means](#rpc-failures-reorgs-and-what-unavailable-means).
+
+#### A.5.8 Settings
+
+Left section menu (Network profile — with a green/amber dot — Appearance, Notifications) and one panel at a time.
+
+- **Network profile:** consumer configuration *file path* → `configure {path}`; on success the session becomes configured, the version policy refreshes and pages remount (A.1.8). Text explains the profile fields (`network.identity`, `rpc_url`, optional bearer/faucet/explorer/policy URLs, `data_dir`, `catalog_url`, DHT) and that nothing is invented.
+- **Appearance:** theme cards (Light / Dark / System), accent swatches, navigation layout cards (Top Bar / Sidebar), reduce-motion switch.
+- **Notifications:** switches for Inference, Funding and Network status, plus All on / All off.
+- Preferences persist locally (`chiral-inference-settings`: theme, accent, navigation layout, reduced motion, notifications) and contain no secrets or legacy runtime fields.
+
+#### A.5.9 Diagnostics
+
+**Collect native diagnostics** → `diagnostics`; tiles for native runtime availability, app version, configured-chain reachability, active streams and wallet-loaded state; raw result; pointers to Usage/Playground for billing and the Provider dashboard for engine and fee state. Diagnostics never contain keys, bearer secrets, prompts or generated text.
+
+### A.6 Replacing or extending the GUI
+
+- Keep A.1 and every required disclosure, acceptance checkbox and recovery path in A.5; a different layout is fine, a missing warning or an extra unconfirmed payment path is not.
+- Add a page by adding a route, a navigation item (label, short label, icon) and a page using the shared header/card/tile/callout vocabulary; call native operations only through the consumer command boundary.
+- Prefer parsed tiles for the few fields users act on, and keep the raw result available for everything else.
+- Verify with `npm run check`, `npm test` and `npm run build`, then exercise the real native desktop; a browser preview is not native verification.
