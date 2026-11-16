@@ -5158,7 +5158,7 @@ fn native_snapshot_mutations(original: &Value) -> Vec<NativeSnapshotMutation> {
 }
 
 #[derive(Clone, Copy)]
-enum NativeOpeningSnapshotReply {
+enum NativeSnapshotReply {
     Original,
     Wide,
     Fault(usize),
@@ -5222,9 +5222,9 @@ async fn native_opening_snapshot_partition(
             };
         }
         let mode = match index {
-            0 => NativeOpeningSnapshotReply::Original,
-            1 => NativeOpeningSnapshotReply::Wide,
-            _ => NativeOpeningSnapshotReply::Fault(index - 2),
+            0 => NativeSnapshotReply::Original,
+            1 => NativeSnapshotReply::Wide,
+            _ => NativeSnapshotReply::Fault(index - 2),
         };
         let label = if index < 2 { format!("success control {index}") } else { format!("{:?}", cases[index - 2]) };
         let id = &quote.payload.id;
@@ -5336,13 +5336,13 @@ async fn native_opening_snapshot_partition(
                     let result: OpenResult = serde_json::from_slice(&body).unwrap();
                     let mode = *reply.lock().unwrap();
                     let wire = match mode {
-                        NativeOpeningSnapshotReply::Original => body,
-                        NativeOpeningSnapshotReply::Wide | NativeOpeningSnapshotReply::Fault(_) => {
+                        NativeSnapshotReply::Original => body,
+                        NativeSnapshotReply::Wide | NativeSnapshotReply::Fault(_) => {
                             let account = serde_json::to_value(&result.account).unwrap();
                             let changed = match mode {
-                                NativeOpeningSnapshotReply::Wide => serde_json::to_vec(&wide_snapshot(&account)).unwrap(),
-                                NativeOpeningSnapshotReply::Fault(case) => snapshot_mutation_bytes(&cases[case], &account),
-                                NativeOpeningSnapshotReply::Original => unreachable!(),
+                                NativeSnapshotReply::Wide => serde_json::to_vec(&wide_snapshot(&account)).unwrap(),
+                                NativeSnapshotReply::Fault(case) => snapshot_mutation_bytes(&cases[case], &account),
+                                NativeSnapshotReply::Original => unreachable!(),
                             };
                             // Preserve raw duplicates and the genuinely issued root.
                             // Only account bytes change, after the provider commits.
@@ -5439,7 +5439,7 @@ async fn native_opening_snapshot_partition(
             assert!(consumer.credential_export(id, None).is_err());
             drop(consumer);
             consumer = Consumer::new(config.clone()).unwrap();
-            *reply.lock().unwrap() = NativeOpeningSnapshotReply::Original;
+            *reply.lock().unwrap() = NativeSnapshotReply::Original;
             assert_eq!(serde_json::to_value(consumer.resume(id).await.unwrap()).unwrap(), original);
             assert_eq!(observations.lock().unwrap().len(), 3);
             let mut recovered = pending_value.clone();
@@ -5505,6 +5505,279 @@ async fn native_opening_snapshot_partition(
         client_rpc_server.abort();
         assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
         assert!(client_rpc_server.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
+async fn native_topup_snapshots_preserve_pending_originals_after_committed_credit() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(&directory.path().join("mutation-plan"), 80_999);
+    let (_, opened) = fixture.accounting_account(true).await;
+    let cases = Arc::new(native_snapshot_mutations(&serde_json::to_value(&opened.account).unwrap()));
+    // Retain the complete matrix with isolated SQLite/runtime ownership, while
+    // serializing control requests rather than increasing shared control-slot load.
+    let control_gate = Arc::new(tokio::sync::Mutex::new(()));
+    std::thread::scope(|scope| {
+        let workers = (0..4).map(|worker| {
+            let directory = &directory;
+            let cases = cases.clone();
+            let control_gate = control_gate.clone();
+            scope.spawn(move || {
+                tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+                    .block_on(native_topup_snapshot_partition(directory, cases, control_gate, worker));
+            })
+        }).collect::<Vec<_>>();
+        for worker in workers { worker.join().unwrap(); }
+    });
+}
+
+async fn native_topup_snapshot_partition(
+    directory: &tempfile::TempDir, cases: Arc<Vec<NativeSnapshotMutation>>,
+    control_gate: Arc<tokio::sync::Mutex<()>>, worker: usize,
+) {
+    for index in (worker..cases.len() + 2).step_by(4) {
+        let mut fixture = Fixture::new(&directory.path().join(format!("provider-{index}")), 80_000 + index as u64);
+        let (quote, mut opened) = {
+            let _control = control_gate.lock().await;
+            fixture.accounting_account(true).await
+        };
+        // Opening history and supplied prior usage are restored prerequisites.
+        // The top-up itself must be created, signed, journaled and submitted natively.
+        let id = &quote.payload.id;
+        let root = opened.credential.as_ref().unwrap();
+        let now = protocol::now().unwrap();
+        let ledger = &fixture.provider.state.ledger;
+        let spent = ledger.reserve(id, &root.id, "before-snapshot-topup", 1, 512, now, &opened.account.model).unwrap();
+        ledger.settle(&spent.id, &protocol::TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", now).unwrap();
+        let held = ledger.reserve(id, &root.id, "held-through-snapshot-topup", 1000, 512, now, &opened.account.model).unwrap();
+        opened.account = ledger.account(id).unwrap();
+        assert_eq!((&opened.account.spent_wei, &opened.account.reserved_wei, &opened.account.available_wei),
+            (&"1".to_owned(), &"3".to_owned(), &"991".to_owned()));
+        let (raw, envelope) = fixture.signed_payment(&protocol::topup_data(id).unwrap(), 1000, 1);
+        let (mut config, account_path, journal, mut initial) = restore_native_account(
+            &fixture, &quote, &opened, directory.path().join(format!("native-{index}")));
+        let client_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        config.network.rpc_url = format!("http://{}", client_listener.local_addr().unwrap());
+        let provider_rpc_url = format!("http://{}", provider_listener.local_addr().unwrap());
+        let journal_path = config.network.scoped_dir(&config.data_dir).join("wallet-journal/transactions.sqlite3");
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let opening_evidence: String = db.query_row("SELECT evidence FROM funding WHERE contract=?1",
+            [id], |row| row.get(0)).unwrap();
+        let client_view = Arc::new(TopupRecoveryRpc {
+            quote: quote.payload.clone(), tx_hash: envelope.tx_hash.clone(), phase: AtomicU64::new(2),
+            timestamp: AtomicU64::new(now), requests: Mutex::new(Vec::new()),
+        });
+        let provider_view = Arc::new(TopupRecoveryRpc {
+            quote: quote.payload.clone(), tx_hash: envelope.tx_hash.clone(), phase: AtomicU64::new(2),
+            timestamp: AtomicU64::new(now), requests: Mutex::new(Vec::new()),
+        });
+        let client_rpc = Arc::new(NativeTopupRpc {
+            view: client_view.clone(), opening: serde_json::from_str(&opening_evidence).unwrap(),
+            raw: raw.clone(), account_path: account_path.clone(), journal_path: journal_path.clone(),
+            submissions: AtomicU64::new(0),
+        });
+        let client_app = Router::new().route("/", post(native_topup_rpc)).with_state(client_rpc.clone());
+        let provider_app = Router::new().route("/", post(topup_recovery_rpc)).with_state(provider_view.clone());
+        let client_server = tokio::spawn(async move { axum::serve(client_listener, client_app).await.unwrap(); });
+        let provider_rpc_server = tokio::spawn(async move { axum::serve(provider_listener, provider_app).await.unwrap(); });
+        let originals = || journal.prepare(
+            "SELECT json_array(sender,operation,nonce,tx_hash,raw,created_at) FROM transactions ORDER BY nonce")
+            .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        let opening_original = originals();
+        assert_eq!(opening_original.len(), 1);
+        let financial_state = || ledger_snapshot(&db).into_iter().enumerate()
+            .filter(|(table, _)| ![9, 10, 11].contains(table)).map(|(_, rows)| rows).collect::<Vec<_>>();
+        let reply = Arc::new(Mutex::new(match index {
+            0 => NativeSnapshotReply::Original,
+            1 => NativeSnapshotReply::Wide,
+            _ => NativeSnapshotReply::Fault(index - 2),
+        }));
+        let label = if index < 2 { format!("success control {index}") } else { format!("{:?}", cases[index - 2]) };
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let listener = fixture._listeners[0].try_clone().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let serve = |app: Router| {
+            let reply = reply.clone();
+            let observations = observations.clone();
+            let cases = cases.clone();
+            let account_path = account_path.clone();
+            let journal_path = journal_path.clone();
+            let gate = control_gate.clone();
+            let path = format!("/v1/contracts/{id}/topup");
+            let expected_request = Arc::new(json!({"raw_transaction":raw}));
+            let app = app.layer(from_fn(move |request: Request, next: Next| {
+                let reply = reply.clone();
+                let observations = observations.clone();
+                let cases = cases.clone();
+                let account_path = account_path.clone();
+                let journal_path = journal_path.clone();
+                let gate = gate.clone();
+                let expected_request = expected_request.clone();
+                let topup = request.method() == axum::http::Method::POST && request.uri().path() == path;
+                async move {
+                    let _control = gate.lock().await;
+                    if !topup { return next.run(request).await; }
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 96 * 1024).await.unwrap();
+                    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), *expected_request);
+                    let pending = std::fs::read(&account_path).unwrap();
+                    let journal = native_payment_journal_snapshot(&Connection::open(journal_path).unwrap());
+                    let response = next.run(Request::from_parts(parts, Body::from(body))).await;
+                    if response.status() != StatusCode::OK { return response; }
+                    let (mut parts, body) = response.into_parts();
+                    let body = to_bytes(body, 96 * 1024).await.unwrap();
+                    let account: protocol::AccountView = serde_json::from_slice(&body).unwrap();
+                    let original = serde_json::to_value(account).unwrap();
+                    let wire = match *reply.lock().unwrap() {
+                        NativeSnapshotReply::Original => body.to_vec(),
+                        NativeSnapshotReply::Wide => serde_json::to_vec(&wide_snapshot(&original)).unwrap(),
+                        NativeSnapshotReply::Fault(case) => snapshot_mutation_bytes(&cases[case], &original),
+                    };
+                    // Count only completed faults on genuine committed HTTP responses.
+                    observations.lock().unwrap().push((pending, journal, original));
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    Response::from_parts(parts, Body::from(wire))
+                }
+            }));
+            let listener = tokio::net::TcpListener::from_std(listener.try_clone().unwrap()).unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).with_graceful_shutdown(async move { stopped.await.unwrap(); }).await.unwrap();
+            });
+            (stop, server)
+        };
+        let mut expected_account = serde_json::to_value(&opened.account).unwrap();
+        expected_account["funded_wei"] = json!("2000");
+        expected_account["fee_wei"] = json!("10");
+        expected_account["available_wei"] = json!("1986");
+        let exported = Consumer::new(config.clone()).unwrap().credential_export(id, None).unwrap();
+        assert_eq!(exported["api_key"], root.bearer);
+        let mut pending_original = None;
+        let mut payment_originals = None;
+        let mut credited = None;
+        for attempt in 0..if index < 2 { 1 } else { 3 } {
+            // Reopen provider and native state, not just a cached response.
+            fixture.app = Router::new();
+            let state = Arc::get_mut(&mut fixture.provider.state).unwrap();
+            Arc::get_mut(&mut state.config).unwrap().network.rpc_url = provider_rpc_url.clone();
+            state.ledger = Arc::new(BillingStore::open(&fixture.provider.ledger_path, &state.config.network.identity).unwrap());
+            state.chain = Arc::new(ChainClient::new(state.config.network.clone(), state.config.data_dir.clone()).unwrap());
+            state.accepting.store(false, Ordering::Release);
+            state.funding_ready.store(false, Ordering::Release);
+            state.qualified_models.write().unwrap().clear();
+            fixture.app = contracts::router(fixture.provider.state.clone());
+            if attempt == 2 { *reply.lock().unwrap() = NativeSnapshotReply::Original; }
+            let (stop, server) = serve(fixture.app.clone());
+            let consumer = Consumer::new(config.clone()).unwrap();
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+            if attempt == 0 {
+                assert_eq!(consumer.receipt(id).await.unwrap().payload.sequence, 1);
+                initial["receipt_sequence"] = json!(1);
+            } else {
+                assert_eq!(std::fs::read(&account_path).unwrap(), *pending_original.as_ref().unwrap());
+            }
+            let before_credit = financial_state();
+            let result = match attempt {
+                0 => consumer.topup(id, "1000").await,
+                1 => consumer.resume(id).await,
+                _ => consumer.fund(&fixture.provider.offer, &quote).await,
+            };
+            let (pending, observed_journal, genuine) = {
+                let observed = observations.lock().unwrap();
+                assert_eq!(observed.len(), attempt + 1, "must reach successful top-up: {label}");
+                observed[attempt].clone()
+            };
+            assert_eq!(genuine, expected_account);
+            let pending_value: Value = serde_json::from_slice(&pending).unwrap();
+            let intent = &pending_value["topup"];
+            uuid::Uuid::parse_str(intent["id"].as_str().unwrap()).unwrap();
+            assert_eq!(intent["amount_wei"], "1000");
+            assert_eq!(intent["raw_transaction"], raw);
+            let mut expected_pending = initial.clone();
+            expected_pending["topup"] = intent.clone();
+            assert_eq!(pending_value, expected_pending);
+            if let Some(previous) = &pending_original { assert_eq!(&pending, previous); }
+            else { pending_original = Some(pending.clone()); }
+            let current_originals = originals();
+            assert_eq!(current_originals.len(), 2);
+            assert_eq!(current_originals[0], opening_original[0]);
+            if let Some(previous) = &payment_originals { assert_eq!(&current_originals, previous); }
+            else { payment_originals = Some(current_originals); }
+            assert_eq!(native_payment_journal_snapshot(&journal), observed_journal);
+            let current = financial_state();
+            if let Some(previous) = &credited { assert_eq!(&current, previous); }
+            else {
+                assert_eq!((current[0].len(), current[1].len(), current[2].len(),
+                    current[4].len(), current[5].len(), current[6].len(), current[7].len(), current[8].len()),
+                    (1, 1, 2, 2, 0, 1, 2, 0));
+                assert!(current[4].contains(&before_credit[4][0]));
+                assert!(current[7].contains(&before_credit[7][0]));
+                let mut expected = before_credit;
+                expected[0][0][3] = expected_account.clone();
+                expected[4] = current[4].clone();
+                expected[7] = current[7].clone();
+                assert_eq!(current, expected, "only one top-up's account/funding/fee effects may commit");
+                credited = Some(current);
+            }
+            let provider_evidence: String = db.query_row("SELECT evidence FROM funding WHERE tx_hash=?1",
+                [&envelope.tx_hash], |row| row.get(0)).unwrap();
+            let payment = VerifiedPayment {
+                network: quote.payload.network.clone(), tx_hash: envelope.tx_hash.clone(),
+                from: envelope.from.clone(), to: envelope.to.clone(), value_wei: "1000".into(),
+                data: envelope.data.clone(), block_hash: format!("0x{:064x}", 8),
+                block_number: 8, raw_transaction: raw.clone(),
+            };
+            assert_eq!(serde_json::from_str::<Value>(&provider_evidence).unwrap(), serde_json::to_value(&payment).unwrap());
+            let (status, evidence): (String, Option<String>) = journal.query_row(
+                "SELECT status,evidence FROM transactions WHERE tx_hash=?1", [&envelope.tx_hash],
+                |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            if attempt == 0 {
+                assert_eq!(status, "submitted");
+                assert!(evidence.is_none());
+            } else {
+                assert_eq!(status, "accepted");
+                assert_eq!(serde_json::from_str::<Value>(&evidence.unwrap()).unwrap(), serde_json::to_value(&payment).unwrap());
+            }
+            assert_eq!(client_rpc.submissions.load(Ordering::Acquire), 1);
+            assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+            fixture.credentials_usable(&[root]);
+            assert_eq!(fixture.provider.state.ledger.request_view(id, &held.id).unwrap().status, "reserved");
+            if index >= 2 && attempt < 2 {
+                result.expect_err(&label);
+                assert_eq!(std::fs::read(&account_path).unwrap(), pending, "{label}");
+                assert_eq!(serde_json::to_value(&consumer.accounts().unwrap()[0]).unwrap(), initial["account"]);
+            } else {
+                let accepted = if index == 1 { wide_snapshot(&expected_account) } else { expected_account.clone() };
+                assert_eq!(serde_json::to_value(result.unwrap()).unwrap(), accepted);
+                let mut expected = initial.clone();
+                expected["account"] = accepted;
+                assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
+                drop(consumer);
+                let consumer = Consumer::new(config.clone()).unwrap();
+                let rpc_counts = [client_view.requests.lock().unwrap().len(), provider_view.requests.lock().unwrap().len()];
+                assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+                assert_eq!(serde_json::to_value(consumer.account(id).await.unwrap()).unwrap(), expected_account);
+                expected["account"] = expected_account.clone();
+                assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&account_path).unwrap()).unwrap(), expected);
+                assert_eq!(consumer.credential_export(id, None).unwrap(), exported);
+                assert_eq!(observations.lock().unwrap().len(), attempt + 1);
+                assert_eq!([client_view.requests.lock().unwrap().len(), provider_view.requests.lock().unwrap().len()], rpc_counts);
+                assert_eq!(native_payment_journal_snapshot(&journal), observed_journal);
+                assert_eq!(financial_state(), *credited.as_ref().unwrap());
+            }
+            stop.send(()).unwrap();
+            server.await.unwrap();
+        }
+        let provider_journal = Connection::open(fixture.provider.state.config.network
+            .scoped_dir(&fixture.provider.state.config.data_dir).join("wallet-journal/transactions.sqlite3")).unwrap();
+        assert!(native_payment_journal_snapshot(&provider_journal).iter().all(Vec::is_empty));
+        assert_eq!(client_rpc.submissions.load(Ordering::Acquire), 1);
+        client_server.abort();
+        provider_rpc_server.abort();
+        assert!(client_server.await.unwrap_err().is_cancelled());
+        assert!(provider_rpc_server.await.unwrap_err().is_cancelled());
     }
 }
 

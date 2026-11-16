@@ -6,9 +6,11 @@
 
 No verified proofs, replaced tests, trusted functions, unchecked assumptions or added dependencies. No test deletion is authorized by this ledger. A future proof must follow the OpenSpec requirement and pass the project's pinned verification command, not merely compile a model of the current behavior.
 
-## Judged snapshot tests
+## Judged snapshot and top-up tests
 
 Requirement source: `openspec/changes/specify-inference-account-snapshot/specs/inference-account-snapshot/spec.md` (named account schema, exact usage counters, original-term/conservation binding and post-commit recovery). These judgments concern replacing the entire existing test, including its actual calls and asserted results, under the vstd-only/no-interface-change rules. Mathematical subproperties may still merit proofs; they would not replace tests of unmodeled I/O or third-party behavior.
+
+Top-up recovery also follows `openspec/specs/inference-account-topup-request/spec.md`: exact original ownership, independent safe credit, retained spend/holds/credentials, admission-independent recovery and at-most-once funding/fees. The additional judgments below cover actual HTTP/SQLite/native execution, not a pure model of those operations.
 
 | Test | Judgment | Reason |
 |---|---|---|
@@ -23,7 +25,14 @@ Requirement source: `openspec/changes/specify-inference-account-snapshot/specs/i
 | `inference_owner_control_test::native_signed_snapshots_preserve_terms_balances_and_receipt_watermarks` | not replaceable | Actual HTTP/signatures, provider issuance, durable watermark/files/journal and replay after reopening; retains external and I/O acceptance beyond pure snapshot predicates. |
 | `inference_owner_control_test::native_opening_snapshots_recover_committed_credit_without_installing_invalid_accounts` | not replaceable | Actual router/controlled RPC, SQLite credit, native files, credentials and concurrent isolated runtimes. Post-commit recovery cannot be replaced by a pure balance/identity proof. |
 | `inference_owner_control_test::native_free_opening_snapshots_recover_without_payment_or_credential_rotation` | not replaceable | Executes public quote issuance, real native/provider HTTP opening and replay, SQLite/files, credential issuance and reopening, concurrent runtimes and separate RPC tripwires. The absence of financial side effects/RPC cannot be replaced by a pure balance proof; the paid matrix remains intact. |
+| `inference_owner_control_test::native_topup_snapshots_preserve_pending_originals_after_committed_credit` | not replaceable | Native signing/submission, independent RPC verification, real provider credit, raw JSON faults, SQLite/files and reopened HTTP recovery. Preserving actual original evidence, exported credentials and prior holds is not covered by an abstract balance proof. |
+| `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_full_quote_storage` | not replaceable | Genuine public storage refusal, native payment/journal lifecycle, independent RPC, committed-response disconnection and reopened settlement with complete stored-history comparisons. |
+| `inference_owner_control_test::native_topup_rejects_invalid_amounts_and_recovers_at_full_quote_work` | not replaceable | In addition to the shared HTTP/SQLite recovery path, checks actual local amount parsing, preparation failure, protected bytes and absence of RPC/financial side effects; no model covers these calls/results. |
+| `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_full_quote_issuance` | not replaceable | Exercises persisted issuance exhaustion, owner authorization, native original preparation and genuine remote credit/recovery without rewriting quota or financial records. |
+| `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_owned_free_opening_limit` | not replaceable | Real authenticated opening-capacity refusal and top-up recovery with protected credentials, prior usage/holds, SQLite snapshots and separate native/provider RPC. |
+| `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_global_free_opening_limit` | not replaceable | Full restored account population, actual capacity refusal, counted row digests, representative bearer reads and native/HTTP settlement after a lost committed reply; external storage/network behavior is essential. |
+| `inference_owner_control_test::native_topup_recovers_lost_credit_response_at_paid_intent_limit` | not replaceable | Independent paid-admission refusal with retained acknowledgement/nonce ownership, genuine native top-up and lost-response recovery under full intent capacity; relies on unmodeled cryptography, HTTP and SQLite. |
 
 ## Remaining inventory
 
-This is the first scoped judgment slice, not a claim that all Rust tests were reviewed. Other Rust test functions remain unclassified; extend the inventory from their implementation and OpenSpec requirements in subsequent steps. Do not rejudge a blocked test unless its code or requirement changes. Missing implementation/specification work retains priority over replacing an existing test with a proof.
+This is a scoped inventory, not a claim that all Rust tests were reviewed. Other Rust test functions remain unclassified; extend the inventory from their implementation and OpenSpec requirements in subsequent steps. Do not rejudge a blocked test unless its code or requirement changes. Missing implementation/specification work retains priority over replacing an existing test with a proof.

@@ -72,7 +72,7 @@ The containing account/usage shape matrix retains the original valid signature a
 
 Every fault preserves native saved bytes, the nonzero accepted receipt watermark, exported credential and original transaction/cancellation journal through native reopening. Provider financial rows remain unchanged except for the genuine receipt issuer sequence; authentication/rate/clock bookkeeping is excluded. A later genuine receipt accepts the resulting sequence gap. Replaying that accepted statement after reopening is refused without advancing the native watermark even though the provider has issued another sequence; a subsequent genuine receipt remains usable. Successful-read assertions permit retaining the previous cached account or adopting the validated snapshot, while preserving all other original evidence.
 
-Tasks 2.3.2.1 and 3.1.2.1 are complete. This signed-receipt slice uses restored paid/profile/payment prerequisites and controlled response faults, not observed native opening, top-up, engine execution or live-chain credit. Paid-opening evidence follows below; free opening/replay, top-up, lifecycle/client precision and persistence work remain open. The existing renewed-request-evidence regression is retained without changing its assertions.
+Tasks 2.3.2.1 and 3.1.2.1 are complete. This signed-receipt slice uses restored paid/profile/payment prerequisites and controlled response faults, not observed native opening, top-up, engine execution or live-chain credit. Opening and top-up evidence follows below; lifecycle/client precision and persistence work remain open. The existing renewed-request-evidence regression is retained without changing its assertions.
 
 ## Native paid opening/replay acceptance — 2026-11-15
 
@@ -84,7 +84,7 @@ Original and wide named success controls install the issued credential. The wide
 
 The serial layout exceeded its check deadline while continuing to complete cases. Four independent current-thread runtime partitions now retain every case/assertion and keep each SQLite connection on its owning thread. A test-only gate serializes their provider control requests, including quote setup, so partitioning adds no control-slot pressure to the shared suite. Each case uses at most seven owner challenges; no production limit, rate budget, accepted timestamp or financial state is reset. Temporary tracing was removed.
 
-Tasks 2.3.2.2, 3.1.2.2 and the paid-opening portion 3.2.1 are complete. The shared quote prerequisite was extracted from the existing accounting fixture without weakening its account/receipt assertions; free-opening evidence is below. Top-up snapshots/post-commit recovery, lifecycle reads, client/export precision and corrupt/unsupported persistence remain open.
+Tasks 2.3.2.2, 3.1.2.2 and the paid-opening portion 3.2.1 are complete. The shared quote prerequisite was extracted from the existing accounting fixture without weakening its account/receipt assertions; free-opening and top-up evidence is below. Lifecycle reads, client/export precision and corrupt/unsupported persistence remain open.
 
 ## Native free opening/replay acceptance — 2026-11-15
 
@@ -94,14 +94,26 @@ Actual owner-authorized public opening creates the free account and its root bef
 
 Genuine and wide named controls install the actual issued root. The wide response is a mathematical accounting claim, not payment evidence: the real free ledger retains zero money and no funding, funding attempts, intents or fee obligations/batches. Native and provider RPC listeners are separate request-recording tripwires; neither is called. Both wallet journals remain empty across creation, refusal, recovery and credential issuance. Raw duplicates remain raw, and completed-response observations exclude unrelated auth/rate failures. The existing isolated partitions and control gate retain all cases without resetting rate budgets, modifying accepted timestamps or changing production limits.
 
-Tasks 2.3.2.3, 3.1.2.3 and 3.2.2 are complete; top-up acceptance remains in 2.3.2.4, 3.1.2.4 and 3.2.3. This is HTTP, SQLite, protected-file and external-crate integration coverage, not a Verus proof or live-chain/runtime qualification.
+Tasks 2.3.2.3, 3.1.2.3 and 3.2.2 are complete. This is HTTP, SQLite, protected-file and external-crate integration coverage, not a Verus proof or live-chain/runtime qualification.
+
+## Native top-up snapshot recovery — 2026-11-15
+
+`native_topup_snapshots_preserve_pending_originals_after_committed_credit` applies the complete shared original-term/money/account/usage fault plan to successful top-up responses, with genuine and wide named controls. Each case has isolated state and retains a real receipt watermark, prior settled usage/spend, a live reservation and its exported credential. The shared reply selector now serves opening and top-up tests without changing existing opening assertions.
+
+Original paid opening, acknowledged payment, signed synthetic serving metadata and supplied prior usage are disclosed prerequisites. The top-up is not preloaded: native code creates its intent, signs and journals the original, and submits it exactly once to the controlled native RPC. Independent provider RPC observations precede actual owner-authorized HTTP credit. Only then does middleware change the account bytes, preserving raw duplicate-member faults. Completed-response observations distinguish snapshot refusal from authorization, rate, RPC or fault-construction failure.
+
+The test requires exact pending native bytes and unchanged cached account, receipt watermark and credential after invalid first and replayed replies. It reopens the actual provider ledger/chain/router and native consumer between fresh `topup`, faulty `resume` and corrected `fund` recovery, with serving/new-funding readiness closed. The legitimate native journal transition from submitted to accepted evidence is checked separately from immutable sender/operation/nonce/raw identity; it is not an extra payment or permission to clear the pending intent.
+
+Only the top-up's gross funding, funding fee, available credit and corresponding funding/fee rows may change. Prior funding/fees, requests, held/spent amounts, credential authority and original agreement remain intact. Corrected recovery clears only the confirmed pending operation and installs its valid account without duplicate credit or rotation. A later native reopening and authorized account refresh use no RPC or additional top-up. Wide response-only totals are accounting claims, not additional ledger funding.
+
+The focused matrix passed all cases in four isolated current-thread partitions with one control-request gate. Each case stays within the unchanged challenge allowance; no accepted timestamp, budget or production limit is reset. Tasks 2.3.2.4, 3.1.2.4 and 3.2.3, and parents 2.3/3.1/3.2, are complete. This is I/O/external-crate acceptance, not a Verus proof, live payment, actual engine usage, hardware qualification or power-loss evidence.
 
 ## Source and retained acceptance map
 
 | Boundary | Inspected implementation or retained evidence | Required work |
 |---|---|---|
 | Payload and leaf | `protocol.rs::AccountView` and `TokenUsage` now use the direct object visitor with closed members; seven `inference_account_snapshot_test.rs` regressions pass | Tasks 2.1–2.2 complete; actual containing native replies and durable recovery remain below |
-| Native account installation | `consumer.rs::account_matches`, `resume_inner`, `topup`, `accept_topup`, `refresh_account`, `receipt`; matching precedes credential/account installation | Native GET, signed receipts and paid/free opening/replay term/money/shape/state preservation pass; paid/free post-commit original-operation recovery passes in 3.2.1–3.2.2. Top-up matrices/recovery remain |
+| Native account installation | `consumer.rs::account_matches`, `resume_inner`, `topup`, `accept_topup`, `refresh_account`, `receipt`; matching precedes credential/account installation | GET, signed receipts, paid/free opening/replay and top-up term/money/shape/state preservation pass; original-operation post-commit recovery passes in 3.2.1–3.2.3. Lifecycle/client precision and persisted-record acceptance remain separate |
 | Producer and local records | `billing_store.rs::open_account`, `account`, `receipt`, `get_account`, `save_account`; genuine account construction and signed snapshots | Verify unchanged serialized/stored schema-3 records through strict decoding; no money migration |
 | Funding meanings/status | `credit_funding`, `balance_funding`, `transition_funding` preserve gross funding, current reversals/loss compensation, retained fee liability and pending/frozen status | Preserve these observable meanings; do not claim full reorg/fee lifecycle qualification from snapshot tests |
 | Original versus renewed evidence | `native_receipts_preserve_renewed_evidence_through_settlement_and_reopening` passes actual native/HTTP receipts with original account terms and renewed request identities, including waiver/recovery and hostile response refusals | Reuse request-accounting 3.2.1; this is not qualification attestation or complete receipt schema acceptance |
