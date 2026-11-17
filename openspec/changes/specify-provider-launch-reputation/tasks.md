@@ -65,6 +65,14 @@
   - D: unchecked billing is shown as "Billing unchecked", is not a mismatch and does not block readiness; no matched-check minimum; open question 5 decided; inspection string renamed from "Billing not checked"; scenarios added.
   - G (implementation decision the author may revisit): an embeddings-only share's Auto-price readiness is the same `launch_criteria` without qualification, over embeddings probes and input-token billing checks; open question 6(c) decided; scenarios added; M4 open question 16 points here.
   - Open questions 2 and 4 stay open. Revalidate.
+- [x] 1.8 Apply the 2026-11-17 corrections against the book's *Launch reputation*, A.4 and *Share online* steps 4 and 6:
+  - availability sampled at a fixed 300-second period from a phase drawn once per identity from the OS CSPRNG and stored in its row, replacing the memoryless schedule and its 24-per-hour cap; samples counted at their scheduled times; 12 per UTC hour by construction; the native sample bound is now 4,032 per peer; the record constant is renamed `sample_interval_seconds`; requirement renamed to *Availability samples follow a fixed-period schedule with a deadline*; design Decision 6 and the verification plan revised;
+  - "At least 24 hours observed" measured from `first_counted_at`, the exact stored scheduled time of the wallet's earliest counted sample in the window, with a boundary scenario for a first sample late in an hour;
+  - *Launching — free* only for a wallet that is free now and has never charged (`ever_charged`), otherwise "Free — launch criteria not yet met" or "Free", with scenarios for a step back down to free and a free share with Auto-price off;
+  - a wallet tombstone after 180 days keeps `sharing_since` with `history_expired`, inside the 16,384 wallet rows, deleted 730 days after the last verified offer;
+  - the embeddings-only readiness route (1.7 G) superseded: embeddings-only wallets are observed and probed but never reported as ready to charge; open question 6(c) and Decision 32 marked in place.
+  - cross-check with M4 (same day): an embeddings-only offer never reads *Launching — free*, since M4 gives an embedding share no launch window; scenario added; Decision 35 notes that a free offer's missing serving profile hides qualification from the card;
+  - Revalidate.
 
 ## 2. Implement
 
@@ -77,12 +85,13 @@
 - [ ] 2.2 Launch-reputation store (new module):
   - SQLite under the network-scoped data directory, bound to the complete network identity, refusing another network, failing closed on corrupt or unreadable files and never resetting itself;
   - tables for:
-    - at most 1,024 identity rows with tracking status and pricing state;
-    - hourly UTC rows inside the 336-hour window with sample starts and four classes, probe starts and six classes, three billing outcomes and nine latency buckets;
+    - at most 1,024 identity rows with tracking status, pricing state, the sampling phase and the latest committed scheduled time;
+    - hourly UTC rows inside the 336-hour window, keyed by scheduled time for samples, with sample starts and four classes, the earliest counted scheduled time, probe starts and six classes, three billing outcomes and nine latency buckets;
     - at most 16 eviction intervals per identity;
-    - at most 16,384 wallet rows with `sharing_since`, the most recent offer time, an ever-available flag, the current free-period start, `latest_probe_at` and the billing mismatch flag with evidence;
+    - at most 16,384 wallet rows, live or tombstones, with `sharing_since`, the most recent offer time, ever-available and ever-charged flags, the history-expired marker, the current free-period start, `latest_probe_at` and the billing mismatch flag with evidence;
     - at most 16 free-period summaries per wallet;
     - the observer-healthy-time counter;
+  - tombstones after 180 days without a verified offer, restored with the original `sharing_since` and deleted after 730 days;
   - deletion and refusal orders exactly as specified, never deleting a row that has counted samples or probes in the window to make room, and never evicting a flagged wallet;
   - starts committed before the first attempt, and everything else committed in one transaction per health check;
   - no addresses, endpoints, bodies, keys, credentials, account identifiers, generated content, consumer data or read records.
@@ -105,7 +114,7 @@
   - strict `launch_reputation` configuration: `reference_peers` 1–8; `reference_origins` 1–4 named by DNS hostnames; and `tokenizer_runtime` verified as the pinned runtime identity; unknown members and invalid values refuse start;
   - identity admission from verified offers only, with the 512 and 8 bounds, dormant-only eviction in observer-healthy time, the in-memory refusal table, `inactive` after 336 healthy hours and history continuity;
   - a persisted observer-healthy-time counter;
-  - the availability scheduler (CSPRNG; first draws 0–300 s; exponential 300 s mean; at most 24 per identity per UTC hour on the count; one per identity at a time; no external triggers or catch-up; monotonic clock);
+  - the availability scheduler (a 0–299 s phase drawn once per identity row from the CSPRNG and stored; samples at the phase plus multiples of 300 s, counted at their scheduled times, 12 per UTC hour; no scheduled time sampled twice; mapping onto the monotonic clock at start and after a clock discrepancy; a sample not started by the next scheduled time degrading the observer; no external triggers or catch-up);
   - resource bounds: 64 in progress with waits counted; fixed per-sample plans; in-memory verified addresses with the 16-identity cap; 12 unverified attempts per 60 s per destination; six unverified destinations per identity per hour; skipped decided before contact;
   - a 30 s deadline with the inner deadlines;
   - a 30 s health monitor (DHT query, reference ping, chain identity, reference origin, clock agreement, no local dial refusal by the observer or a probe node), degraded until the first pass, with the sample and probe finalization rules;
@@ -131,13 +140,13 @@
   - sampling and probing of libp2p-only providers.
 - [ ] 2.7 Native consumer (`src-tauri/src/consumer.rs`, `src-tauri/src/desktop.rs`, `src/lib/native.ts`):
   - a `provider_info` `launch_reputation` member from the configured `catalog_url` regardless of DHT precedence, with a 10 s deadline, a 32 KiB bound and distinct unavailable reasons;
-  - record validation: identity fields and constants (including the 600 s probe mean and the corpus hash form); enumerated values; sample and probe count bounds (8,064 and 4,032 per peer, `identities ×` per wallet); billing and latency sums; at most 16 ordered free periods; figures, coverage, expected samples, probe success, probe basis, service score and launch criteria recomputed; the flag's 14-day end; no future timestamps;
+  - record validation: identity fields and constants (including the 600 s probe mean and the corpus hash form); enumerated values; `sample_interval_seconds`; sample and probe count bounds (4,032 each per peer, `identities ×` per wallet); billing and latency sums; at most 16 ordered free periods; figures, coverage, expected samples, probe success, probe basis, service score and launch criteria recomputed; the flag's 14-day end; no future timestamps;
   - a readiness identity-match field (`match`, `mismatch`, `unreported`), with a mismatch shown as not ready;
   - a `launch_reputations` operation for 1–64 canonical identities, with one batch request, a 10 s deadline and a 512 KiB bound;
   - feedback refused before contacting the catalog when the quote's funding is zero or both of its token rates are zero;
   - CLI JSON output inherits the member.
 - [ ] 2.8 Marketplace (`src/pages/Marketplace.svelte`):
-  - card lines from the wallet section, labeled with the catalog host, truncated and never rounded up: *Launching — free*; the service score or "No service score yet"; availability with the "since *date*" form or "No availability samples yet"; "*P* probes · latest *age* ago" or "*P* probes while free · latest *age* ago"; "Billing mismatch until *date*"; "Sharing since *date*"; "Low coverage"; "No track record yet"; "Launch reputation unavailable";
+  - card lines from the wallet section, labeled with the catalog host, truncated and never rounded up: *Launching — free* only for a wallet free now that has never charged and only on an offer that advertises `completions` or `chat` (never an embeddings-only offer), otherwise "Free — launch criteria not yet met" or "Free"; "(earlier history expired)" after "Sharing since"; the service score or "No service score yet"; availability with the "since *date*" form or "No availability samples yet"; "*P* probes · latest *age* ago" or "*P* probes while free · latest *age* ago"; "Billing mismatch until *date*"; "Sharing since *date*"; "Low coverage"; "No track record yet"; "Launch reputation unavailable";
   - a peer status line for each untracked reason;
   - "Reputation: see inspection" beside the launch reputation;
   - deduplicated chunks of 64, at most two in flight, per-chunk failure, at most one 429 retry, and superseded results discarded;
@@ -183,20 +192,20 @@
   - outcomes and reasons; the flag with its evidence, extension and expiry.
 - [ ] 2.17 Results and the reputation snapshot:
   - probe counts, `probe_success_14d`, `latest_probe_at`, billing counts, latency buckets, `free_now`, `free_since` and `free_periods`;
-  - the probe basis with the book's walk-back to 100 counted probes, `service_score_bps`, the active flag, and `launch_criteria` with its ordered `unmet` codes, with no matched-check minimum and the embeddings-only readiness without qualification;
+  - the probe basis with the book's walk-back to 100 counted probes, `service_score_bps`, the active flag, and `launch_criteria` with its ordered `unmet` codes, with no matched-check minimum and `observed_under_24h` from `first_counted_at`; embeddings-only wallets never reported as ready to charge; `ever_charged` and `history_expired`;
   - in `rating_api.rs` and `rating_storage.rs`, the additive `votes_14d`, counted from the same eligible revalidated rows by stored `issued_at`, leaving Elo, `vote_count`, admission and revalidation unchanged.
 - [ ] 2.18 Coordinate with the M3 and M4 owners without editing their changes:
   - M3: probes rely on `free_allowance` `{tokens, lifetime_secs}` in v2 offers and quotes; on free proposals and openings without payment; on the contract, inference, cancel and status routes on `/chiral/inference/http/1`; and on allowance enforcement counting input and output tokens. The offer card's "a free offer's allowance" line belongs to the offer's owner.
-  - M4: Auto-price reads `launch_criteria`, `free_periods[0].launch_criteria_met_at_end`, `service_score_bps` and the wallet's `availability_14d` from the provider profile's `catalog_url` (M4 decision 41), and `elo` with `votes_14d` from `/api/ratings/:wallet`, and checks qualification itself, except for embeddings-only shares, whose readiness is `launch_criteria.met` alone (M4 open question 16).
+  - M4: Auto-price reads `launch_criteria`, `free_periods[0].launch_criteria_met_at_end`, `service_score_bps` and the wallet's `availability_14d` from the provider profile's `catalog_url` (M4 decision 41), and `elo` with `votes_14d` from `/api/ratings/:wallet`, and checks qualification itself. Tell the M4 owner that the embeddings-only readiness without qualification (M4 open question 16) is superseded: an embeddings-only share is never ready to charge, because the book's ready to charge requires a valid qualification. M4 applied this on 2026-11-17 (M4 tasks 1.11, decision 44 and open question 16 re-decided): Auto-price is unavailable for embedding shares.
   - M4's qualification pause answers HTTP 503 `qualification_in_progress` with `Retry-After`, withdraws its offers and reports not ready, and counts as unavailable (Decision 36). This change classifies that response as busy; keep the classification in step if M4 changes the response.
   - M4 refers to `specify-provider-launch-reputation` by change name and keeps this change's implementation and qualification, including 3.12 and 3.20, as its release dependency (milestone 5); keep the fields M4 reads stable, or tell its owner.
 
 ## 3. Verify
 
 - [ ] 3.1 Availability scheduler tests with controlled clocks and a seeded test RNG behind the CSPRNG interface:
-  - first-draw bounds and the exponential mean;
-  - no spacing floor;
-  - the hourly cap, decided on the count and kept across a restart from committed starts;
+  - phases within 0–299 s, drawn once per identity row and kept across restarts and re-admission;
+  - samples exactly at the phase plus multiples of 300 s, 12 per UTC hour, counted at their scheduled times when they wait;
+  - no scheduled time sampled twice after a wall-clock step back, from the stored latest committed scheduled time;
   - starts committed before dials;
   - no catch-up or burst after a restart.
 - [ ] 3.2 Resource-bound tests:
@@ -245,7 +254,8 @@
   - wallet aggregation across peers;
   - expected samples, coverage and evicted seconds;
   - window edges;
-  - `sharing_since` from the catalog clock, kept past 14 days and reset after 180;
+  - `sharing_since` from the catalog clock, kept past 14 days and through the 180-day tombstone with `history_expired`, and reset only after the 730-day tombstone expiry;
+  - `first_counted_at` and the observed-24-hours boundary for a first sample late in an hour;
   - identity-row refusal at 1,024 with counted history;
   - wallet-row creation and Sybil-resistant eviction, excluding flagged wallets;
   - a store of another network at the scoped path, or a corrupt store, refuses start unchanged;
@@ -279,11 +289,11 @@
   - no rating code path reads the launch-reputation store.
 - [ ] 3.11 Native and UI tests:
   - `provider_info` success and each unavailable reason;
-  - each validation rule, including the 8,064 and 4,032 bounds and the recomputed score, basis and criteria;
+  - each validation rule, including the 4,032 sample and probe bounds, `first_counted_at` within its hour, and the recomputed score, basis and criteria;
   - DHT-discovered offers reading the configured catalog;
   - readiness identity states;
   - `launch_reputations` bounds;
-  - Marketplace strings for every state (9,738 shows 97.3, 9,876 shows 98.7%), including *Launching — free*, both probe-line forms, *Billing mismatch*, "Billing unchecked", "No track record yet", low coverage, the peer reasons and "Reputation: see inspection";
+  - Marketplace strings for every state (9,738 shows 97.3, 9,876 shows 98.7%), including *Launching — free* only for a never-charged free wallet, never for an embeddings-only offer, "Free — launch criteria not yet met" after a step back down to free, "Free" for a free share with Auto-price off, "(earlier history expired)", both probe-line forms, *Billing mismatch*, "Billing unchecked", "No track record yet", low coverage, the peer reasons and "Reputation: see inspection";
   - chunking and per-chunk failure;
   - the separate tile with every statement and no combined score;
   - free and paid availability identical;
@@ -344,7 +354,7 @@
   - matched and mismatched counts for completions, chat and embeddings against real pinned-runtime providers on the golden models;
   - flag creation, extension, expiry, evidence and survival across peer changes.
 - [ ] 3.19 Score, criteria and `votes_14d` tests:
-  - probe success, the window and walk-back bases (including the three-probe free period example), the service score, and each launch criterion with its `unmet` code and order, including all-`unchecked` billing meeting the criteria and an embeddings-only wallet;
+  - probe success, the window and walk-back bases (including the three-probe free period example), the service score, and each launch criterion with its `unmet` code and order, including all-`unchecked` billing meeting the criteria and an embeddings-only wallet whose met criteria are never reported as ready to charge;
   - `launch_criteria_met_at_end` at each free-period end;
   - free periods capped at 16 and kept 180 days;
   - `votes_14d` counting revised votes by their latest `issued_at`, never above `vote_count`, and failing with the snapshot.

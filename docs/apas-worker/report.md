@@ -166,3 +166,14 @@ Why: the whitepaper names only per-provider quotas as the bound, so the eviction
 Two related assumptions in the same change, for your awareness (answer only to change them):
 - A missing, unreadable, corrupt or insecure evidence store fails closed. The relay then grants serving-grade limits only up to a destination's current offer expiry, with no grace. It reports the condition, never invents or reconstructs records, and never overwrites a damaged store. A missing store is treated like a first start and replaced by an empty one.
 - To report the store's condition and evictions, `relay_server` gains a loopback-only, bearer-authenticated administration status, like `chiral_daemon`'s operator listener. This is a new operator surface with its own protected bearer file; the public relay routes are unchanged.
+
+## 2026-11-17 — Launch reputation: predictable sampling and the "Launching — free" label
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Launch reputation: service score and track record* (availability bullet, currently line 405) and A.4 *Offer card* (line 867).
+
+1. **Fixed interval.** The whitepaper samples availability "at a fixed interval". `specify-provider-launch-reputation` now does exactly that: every 300 s, with a random phase drawn once per identity. A provider that recognizes the observer can therefore predict sample times and be reachable only around them. Proposed wording: replace "at a fixed interval" with "at random times averaging a fixed interval, so a provider cannot predict them". The earlier draft used that schedule (exponential intervals with a 300 s mean).
+2. **"Launching — free".** A.4 shows *Launching — free* "during its launch window". The launch window is a desktop concept (Auto-price on, first free period, not yet ready to charge), and the catalog cannot see Auto-price. The spec therefore shows the label for a generation provider that is free now and has never completed a charged period. A share with Auto-price off, or one whose qualification has not passed, can read *Launching — free* without being in a launch window. Proposed wording for A.4: "*Launching — free* while the provider is free and has never charged".
+
+Neither blocks the specs. Answer to choose the wording; without an answer the specs keep the whitepaper's current text.

@@ -92,36 +92,44 @@ A tracked identity that has had no available sample and no verified offer for 33
 - **WHEN** the relay stays stopped for 30 days and then restarts
 - **THEN** no identity is evicted as dormant or untracked as `inactive` because of the outage
 
-### Requirement: Availability samples follow a memoryless schedule with a deadline
+### Requirement: Availability samples follow a fixed-period schedule with a deadline
 
-The observer SHALL draw, for each tracked identity, a sequence of availability sample times from the operating system's cryptographically secure random source. The first drawn time SHALL be uniformly random between 0 and 300 seconds after the identity's admission, or after the observer starts for an identity that was already tracked. Each later drawn time SHALL follow the previous drawn time by an exponentially distributed interval with a mean of 300 seconds. There SHALL be no minimum spacing between samples. No request, provider action or response SHALL trigger, advance or postpone a drawn time.
+The observer SHALL sample each tracked identity at a fixed interval of 300 seconds. An identity's *phase* SHALL be an integer from 0 to 299 seconds, drawn uniformly from the operating system's cryptographically secure random source when the identity's row is created, stored in that row, and never redrawn, changed or chosen in any other way while the row exists. The identity's *scheduled times* SHALL be the wall-clock instants, in UNIX seconds, equal to its phase plus a whole multiple of 300; each UTC hour therefore holds exactly 12 of them. A sample's *time* SHALL be its scheduled time, and its UTC hour SHALL be the hour of its scheduled time. No request, provider action or response SHALL trigger, advance, postpone or skip a scheduled time.
 
-An identity SHALL have at most 24 sample starts per UTC hour. A drawn time that would be the 25th start of its identity in its UTC hour SHALL be discarded and not replaced; that decision depends only on the count. A drawn time reached while the same identity's previous sample is still in progress SHALL wait until that sample ends. Each sample's start SHALL be committed to the store, as a start in its UTC hour, before the sample's first outbound attempt. Several starts MAY be committed in one transaction, provided each is committed before that sample's first attempt.
+The observer SHALL take at most one sample per scheduled time, so an identity has at most 12 samples per UTC hour. Each identity row SHALL store the latest scheduled time whose sample start was committed, and a scheduled time not later than it SHALL NOT be sampled. Each sample's start SHALL be committed to the store, with its scheduled time, before the sample's first outbound attempt. Several starts MAY be committed in one transaction, provided each is committed before that sample's first attempt. The first scheduled time sampled after an identity's admission, or after the observer starts, SHALL be the first one after that moment.
 
-After a restart, nothing SHALL be recorded for the time the observer was stopped, and missed draws SHALL NOT be caught up. The persisted start counts SHALL keep the hourly cap across the restart.
+After a restart, nothing SHALL be recorded for the time the observer was stopped, and missed scheduled times SHALL NOT be caught up.
 
-Drawn times, waits and deadlines SHALL use the monotonic clock. The wall clock SHALL be used only for UTC-hour labels and for the recorded times that results report (`sharing_since`, `identity_since`, `untracked_since`, `observed_at`, `computed_at` and the probe, free-period and flag times).
+A sample that waits for a slot under *Observer resource bounds never decide a sample's class from provider behaviour* SHALL still be counted at its scheduled time. With at most 512 tracked identities, 64 sample slots and the 30-second deadline, every sample starts within 210 seconds of its scheduled time and ends before its identity's next scheduled time. A sample that has not started by its identity's next scheduled time SHALL still be taken, and SHALL degrade the observer as *Observer degradation makes samples and probes unknown, never unavailable or failed* states.
+
+The observer SHALL map scheduled times onto the monotonic clock when it starts and again after each health check that detects a clock discrepancy. Waits and deadlines SHALL use the monotonic clock. The wall clock SHALL be used only for scheduled times and that mapping, for UTC-hour labels, and for the recorded times that results report (`sharing_since`, `identity_since`, `untracked_since`, `first_counted_at`, `observed_at`, `computed_at` and the probe, free-period and flag times).
 
 Each sample SHALL complete within 30 seconds of its actual start, including every connection attempt, every manifest page and the readiness request. A sample still incomplete at that deadline SHALL be ended and classified as if its pending step had failed. Within a sample, these deadlines SHALL apply: the existing ten-second connect deadline per connection attempt, the four-second manifest RPC timeout per page, the five-second DNS deadline and a ten-second readiness response deadline.
 
-#### Scenario: Sample times are unpredictable
+#### Scenario: Sample times follow the identity's fixed phase
 
-- **GIVEN** an identity whose sample has just started at time `t`
-- **WHEN** its next sample is drawn
-- **THEN** the interval from the previous drawn time is exponentially distributed with a mean of 300 seconds, so the next start may come at any time after `t` that the hourly cap permits
-- **AND** a request from the provider, a consumer or a catalog reader does not change it
+- **GIVEN** an identity whose stored phase is 123 seconds
+- **WHEN** it is sampled through one UTC hour
+- **THEN** its samples are scheduled at 2 minutes 3 seconds past the hour and every 300 seconds after, 12 in the hour
+- **AND** a request from the provider, a consumer or a catalog reader does not change any scheduled time
 
-#### Scenario: The hourly cap survives a restart
+#### Scenario: The phase is drawn once per identity
 
-- **GIVEN** an identity with 24 committed sample starts in the current UTC hour
-- **WHEN** the relay restarts within that hour
-- **THEN** that identity's next sample starts no earlier than the next UTC hour
+- **GIVEN** a tracked identity whose stored phase is 123 seconds
+- **WHEN** the relay restarts, or the identity is evicted and later re-admitted while its row exists
+- **THEN** its samples continue at 123 seconds plus multiples of 300 seconds, and no new phase is drawn
+
+#### Scenario: A scheduled time is sampled once
+
+- **GIVEN** an identity whose sample for scheduled time `t` was committed
+- **WHEN** the relay restarts with a wall clock set back so that `t` lies ahead again
+- **THEN** no second sample is taken at `t`, and the identity has at most 12 samples in that UTC hour
 
 #### Scenario: A restart causes no burst
 
 - **GIVEN** 512 tracked identities and a relay that was stopped for one hour
 - **WHEN** the relay restarts
-- **THEN** each identity's first sample is drawn uniformly within 300 seconds of the start
+- **THEN** each identity's first sample is at its first scheduled time after the restart
 - **AND** no sample is recorded for the hour the relay was stopped
 
 #### Scenario: A hung provider cannot hold a sample slot
@@ -134,7 +142,7 @@ Each sample SHALL complete within 30 seconds of its actual start, including ever
 
 The observer's libp2p node SHALL have its own connection limits: at most 64 pending outgoing and 128 established connections. The observer, including its probe identities, SHALL NOT open, hold or count against the catalog DHT swarm's pending, established, incoming or per-peer connections, its relay reservations and circuits, or its discovery dials. The observer node SHALL accept no inbound connection, except the hole-punch connection of a sample in progress once `p2p-provider-transport` is implemented. Every connection and circuit that the observer opens for a sample SHALL be closed when the sample ends.
 
-At most 64 samples SHALL be in progress. A sample whose drawn time arrives while 64 are in progress SHALL wait, in order of drawn time, and SHALL be taken when a slot frees. Its deadline SHALL start when it starts, and waiting SHALL NOT make it unknown, skipped or unavailable.
+At most 64 samples SHALL be in progress. A sample whose scheduled time arrives while 64 are in progress SHALL wait, in order of scheduled time, and SHALL be taken when a slot frees. Its deadline SHALL start when it starts, and waiting SHALL NOT make it unknown, skipped or unavailable.
 
 When a sample starts, before contacting anything, the observer SHALL fix the sample's attempt plan. The plan SHALL NOT grow afterwards, and SHALL contain:
 
@@ -167,7 +175,7 @@ No bound in this requirement SHALL make a sample unknown. When the observer's ow
 #### Scenario: A backlog is waited out and counted
 
 - **GIVEN** 64 samples in progress
-- **WHEN** another identity's drawn time arrives
+- **WHEN** another identity's scheduled time arrives
 - **THEN** that sample waits, is taken when a slot frees, and is classified by its own outcome
 
 #### Scenario: A budget-limited plan is skipped before contact
@@ -262,7 +270,7 @@ Every 30 seconds the observer SHALL run a health check. It SHALL be **healthy** 
 - the catalog's chain identity check succeeds; this is the same check its `/api/ready` route performs;
 - at least one configured reference origin's hostname resolves within five seconds, through the resolver path the observer uses for provider origins, and that origin returns an HTTP response of any status to `GET /` through the outbound HTTPS client;
 - since the previous check, the wall clock has advanced by the monotonic time elapsed, give or take 60 seconds;
-- since the previous check, neither the observer's own node nor any probe identity's node has refused one of its dials because of a local limit or an exhausted local resource.
+- since the previous check, neither the observer's own node nor any probe identity's node has refused one of its dials because of a local limit or an exhausted local resource, and no availability sample has failed to start before its identity's next scheduled time.
 
 The observer SHALL be degraded from its start until a health check passes.
 
@@ -725,7 +733,7 @@ An `unchecked` outcome SHALL NOT be treated or displayed as a mismatch. A billin
 
 ### Requirement: Availability results are computed exactly from retained samples
 
-The catalog SHALL count each identity's availability samples by class (`available`, `unavailable`, `unknown`, `skipped`) in the UTC hour of each sample's start. The window SHALL be the current UTC hour and the 335 UTC hours before it (336 hours in total). The catalog SHALL compute results using integer arithmetic only, with `computed_at` being the catalog's wall-clock time when the record is computed.
+The catalog SHALL count each identity's availability samples by class (`available`, `unavailable`, `unknown`, `skipped`) in the UTC hour of each sample's scheduled time. The window SHALL be the current UTC hour and the 335 UTC hours before it (336 hours in total). The catalog SHALL compute results using integer arithmetic only, with `computed_at` being the catalog's wall-clock time when the record is computed.
 
 For one identity, the **peer section** SHALL contain:
 
@@ -734,6 +742,7 @@ For one identity, the **peer section** SHALL contain:
 - `samples`: the identity's four class counts in the window;
 - `availability_14d`: `floor(10000 × available / (available + unavailable))`, in basis points, or `null` when `available + unavailable` is zero;
 - `counted_since`: the start of the oldest UTC hour in the window that holds an available or unavailable sample, or `null` when there is none;
+- `first_counted_at`: the scheduled time of the earliest available or unavailable sample in the window, exactly as stored with that sample's hourly row and not rounded to the hour, or `null` when there is none;
 - `expected_samples`: `floor(S / 300)`. `S` is the number of seconds from `counted_since` to `computed_at`, or to `untracked_since` while the identity is untracked with reason `inactive`. It is zero when `counted_since` is `null`;
 - `coverage_bps`: `min(10000, floor(10000 × (available + unavailable) / expected_samples))`, or `null` when `expected_samples` is zero;
 - `evicted_seconds`: the seconds between `counted_since` and `computed_at` during which the identity was evicted;
@@ -745,10 +754,11 @@ For the identity's wallet, the **wallet section** SHALL aggregate every identity
 - `samples`: the sums of their counts;
 - `availability_14d` and `coverage_bps`: computed from those sums by the same formulas;
 - `counted_since`: the oldest of their `counted_since`;
+- `first_counted_at`: the earliest of their `first_counted_at`;
 - `expected_samples`: the sum of their `expected_samples`;
 - `observed_at`: the latest of their `observed_at`.
 
-The record SHALL also contain `sharing_since`: the catalog's own wall-clock time, in UNIX seconds, at which it first verified an offer from that wallet in its network under the identity rules, never an offer's `issued_at` or any other provider-supplied time. It SHALL be `null` when the catalog holds no such time.
+The record SHALL also contain `sharing_since`: the catalog's own wall-clock time, in UNIX seconds, at which it first verified an offer from that wallet in its network under the identity rules, never an offer's `issued_at` or any other provider-supplied time. It SHALL be `null` when the catalog holds no such time. It SHALL be kept through the wallet's tombstone under *Launch-reputation storage is durable, network-scoped, bounded and retention-limited*, so that absence alone does not restart it. The record SHALL also contain `history_expired`: `true` when the wallet's row was reduced to a tombstone and later restored, so that `sharing_since` predates history the catalog no longer holds, and otherwise `false`.
 
 The wallet section SHALL be the headline. A provider SHALL NOT leave its wallet's figure by changing its peer ID. The catalog SHALL NOT substitute zero, one hundred percent, a neutral value or any estimate for a missing figure. Availability SHALL NOT be weighted, smoothed, combined with payment-gated reputation or adjusted by the offer's prices.
 
@@ -756,7 +766,7 @@ The wallet section SHALL be the headline. A provider SHALL NOT leave its wallet'
 
 - **GIVEN** an identity whose samples in the window are all unknown or skipped
 - **WHEN** its record is computed
-- **THEN** `availability_14d`, `counted_since` and `coverage_bps` are `null`, `expected_samples` is zero, and the counts show only unknown and skipped samples
+- **THEN** `availability_14d`, `counted_since`, `first_counted_at` and `coverage_bps` are `null`, `expected_samples` is zero, and the counts show only unknown and skipped samples
 
 #### Scenario: Exact basis points
 
@@ -790,6 +800,7 @@ The **wallet section** SHALL add:
 - `probes`, `billing_checks` and `first_token_ms_buckets` (nine counts): the sums over the wallet's identity rows in the window;
 - `probe_success_14d` from those sums by the same formula, and `latest_probe_at`, the latest of the identities' values, kept beyond the window for as long as the wallet row exists;
 - `free_now` and `free_since`, the start of the current free period, or `null`;
+- `ever_charged`: `true` when the catalog has recorded pricing state `charging` for any identity of the wallet while it held the wallet's row or tombstone, and otherwise `false`. While `free_now` is `true`, `true` means the wallet has completed a charged period;
 - `free_periods`: the wallet's completed free periods, newest first, at most 16, each with `started_at`, `ended_at`, its probe class counts and `launch_criteria_met_at_end`. That last member is the value of `launch_criteria.met` computed at `ended_at` from the wallet's state immediately before the period ended, that is, with `probe_basis` `window` and the window's counted probes;
 - `probe_basis`, `probe_count` and `probe_success_bps`:
   - when `free_now` is `true`: `probe_basis` is `window`, with the window's counted probes and `probe_success_14d`;
@@ -798,7 +809,7 @@ The **wallet section** SHALL add:
 - `service_score_bps`: `floor(availability_14d × probe_success_bps / 10000)` using the wallet's `availability_14d`, or `null` when either is `null`. The *service score* shown to people is this value divided by 100;
 - `billing_mismatch`: the active flag with its `flagged_at`, `until` and evidence, or `null` when no flag is active at `computed_at`;
 - `launch_criteria`: `{met, unmet}`, where `unmet` lists, in this order, each failed criterion and `met` is `true` exactly when `unmet` is empty:
-  - `observed_under_24h`: the wallet's `counted_since` is `null` or less than 86,400 seconds before `computed_at`;
+  - `observed_under_24h`: the wallet's `first_counted_at` is `null` or less than 86,400 seconds before `computed_at`. This SHALL use the exact stored time of the wallet's earliest counted sample in the window, never `counted_since` or any other time rounded to the hour;
   - `probes_under_100`: `probe_count` is `null` or below 100;
   - `availability_below_95`: the wallet's `availability_14d` is `null` or below 9,500;
   - `probe_success_below_98`: `probe_success_bps` is `null` or below 9,800;
@@ -808,7 +819,7 @@ When `probe_basis` is `free_periods`, the walk from the newest free period until
 
 Billing outcomes that are `unchecked` SHALL NOT fail any launch criterion. The launch criteria SHALL NOT require any minimum number or share of `matched` outcomes or of checked probes; only an active billing mismatch flag fails the billing criterion.
 
-The book's *ready to charge* SHALL be read as `launch_criteria.met` together with a valid qualification. For a wallet whose offers advertise only `embeddings`, the same `launch_criteria` SHALL apply, computed over its embeddings probes and their input-token billing outcomes, and the readiness that the provider's automatic pricing reads SHALL be `launch_criteria.met` alone, without a qualification term, because embeddings cannot qualify a generation serving profile. The record SHALL NOT add a separate member for this case. The catalog SHALL NOT assess qualification: the provider's own automatic pricing checks its qualification evidence, and consumers check the signed offer's serving profile. No record member SHALL claim that a provider is qualified or ready to charge.
+The book's *ready to charge* SHALL be read as `launch_criteria.met` together with a valid qualification. For a wallet whose offers advertise only `embeddings`, `launch_criteria` SHALL be computed by the same rules over its embeddings probes and their input-token billing outcomes, and SHALL be reported only as those criteria. Such a wallet SHALL NOT be described or treated as ready to charge on the strength of `launch_criteria.met`, because the book's *ready to charge* requires a valid qualification, which an embeddings offer cannot hold; the record SHALL NOT provide any route by which an embeddings-only wallet's automatic pricing raises its price. The record SHALL NOT add a separate member for this case. The catalog SHALL NOT assess qualification: the provider's own automatic pricing checks its qualification evidence, and consumers check the signed offer's serving profile. No record member SHALL claim that a provider is qualified or ready to charge.
 
 The catalog SHALL NOT substitute a value for a missing figure, SHALL NOT weight or smooth probe success, and SHALL NOT combine any of these values with payment-gated reputation. Unknown, unreached, busy and skipped probes SHALL appear in their counts and SHALL NOT enter probe success.
 
@@ -820,7 +831,7 @@ The catalog SHALL NOT substitute a value for a missing figure, SHALL NOT weight 
 
 #### Scenario: Launch criteria met
 
-- **GIVEN** a free wallet whose `counted_since` is 30 hours before `computed_at`, with `availability_14d` 9,700, 140 counted probes with `probe_success_bps` 9,857 and no active billing mismatch flag
+- **GIVEN** a free wallet whose `first_counted_at` is 30 hours before `computed_at`, with `availability_14d` 9,700, 140 counted probes with `probe_success_bps` 9,857 and no active billing mismatch flag
 - **WHEN** its record is computed
 - **THEN** `launch_criteria` is `{"met": true, "unmet": []}`
 
@@ -829,6 +840,13 @@ The catalog SHALL NOT substitute a value for a missing figure, SHALL NOT weight 
 - **GIVEN** a free wallet observed for 20 hours with 80 counted probes, all succeeded, and `availability_14d` 10,000
 - **WHEN** its record is computed
 - **THEN** `launch_criteria.unmet` is `["observed_under_24h", "probes_under_100"]`
+
+#### Scenario: Observation that starts late in an hour
+
+- **GIVEN** a free wallet that meets every other criterion and whose earliest counted sample in the window was scheduled at 2026-11-16T10:58:20Z, so its `counted_since` is 2026-11-16T10:00:00Z and its `first_counted_at` is 2026-11-16T10:58:20Z
+- **WHEN** its record is computed at 2026-11-17T10:30:00Z
+- **THEN** `launch_criteria.unmet` is `["observed_under_24h"]`, although `counted_since` is more than 24 hours before `computed_at`
+- **AND** when its record is computed at 2026-11-17T10:58:20Z, `launch_criteria` is `{"met": true, "unmet": []}`
 
 #### Scenario: Charging uses the latest free periods
 
@@ -849,12 +867,12 @@ The catalog SHALL NOT substitute a value for a missing figure, SHALL NOT weight 
 - **WHEN** its record is computed
 - **THEN** `launch_criteria` is `{"met": true, "unmet": []}`
 
-#### Scenario: An embeddings share's launch criteria
+#### Scenario: An embeddings share is never ready to charge
 
 - **GIVEN** a free wallet whose offers advertise only `embeddings`, observed for 30 hours, with `availability_14d` 9,700 and 120 counted embeddings probes of which 119 succeeded, whose billing outcomes are input-token checks with none `mismatched`
 - **WHEN** its record is computed
 - **THEN** `probe_success_bps` is 9,916 and `launch_criteria` is `{"met": true, "unmet": []}`
-- **AND** that value alone is the readiness the provider's automatic pricing reads, with no qualification term
+- **AND** no record member reports the wallet as ready to charge, and `launch_criteria.met` is not a readiness that lets its automatic pricing raise its price, because an embeddings offer cannot hold a valid qualification
 
 #### Scenario: No probes is no score
 
@@ -868,10 +886,10 @@ The catalog SHALL keep launch reputation in a durable SQLite store under its net
 
 The store SHALL hold at most:
 
-- 1,024 identity rows, tracked and retained, each with its tracking status, pricing state and at most one deferred probe request (endpoint, kind and corpus prompt index);
-- hourly rows only for hours inside the window, each holding the identity's sample start and class counts, probe start and class counts, billing outcome counts and time-to-first-content bucket counts;
+- 1,024 identity rows, tracked and retained, each with its tracking status, pricing state, sampling phase, latest committed scheduled time and at most one deferred probe request (endpoint, kind and corpus prompt index);
+- hourly rows only for hours inside the window, each holding the identity's sample start and class counts, the scheduled time of its earliest available or unavailable sample, probe start and class counts, billing outcome counts and time-to-first-content bucket counts;
 - 16 eviction intervals per identity, only for intervals that overlap the window;
-- 16,384 wallet rows, each holding `sharing_since`, the time of the wallet's most recent verified offer, whether any identity of the wallet has ever had an available sample, the current free period's start, `latest_probe_at`, and the billing mismatch flag with its evidence;
+- 16,384 wallet rows, live or tombstones, each holding `sharing_since`, the time of the wallet's most recent verified offer, whether any identity of the wallet has ever had an available sample, whether any has ever been `charging`, the history-expired marker, the current free period's start, `latest_probe_at`, and the billing mismatch flag with its evidence;
 - 16 completed free-period summaries per wallet;
 - the observer-healthy-time counter.
 
@@ -882,12 +900,13 @@ Retention SHALL be:
 - hourly rows older than the window SHALL be deleted at least once an hour, and eviction intervals that end before the window SHALL be deleted with them;
 - an identity row SHALL be deleted when it is not tracked and has no hourly row in the window;
 - when a new identity row would exceed 1,024, the catalog SHALL delete an untracked identity row that has no available, unavailable, succeeded or failed count in the window, the one with the oldest most recent sample first. When there is none, the new row SHALL NOT be created and the identity SHALL be refused with reason `capacity`. A row with such counts in the window SHALL NOT be deleted to make room;
-- a wallet row, with its free-period summaries and flag, SHALL be kept for 180 days after the wallet's most recent verified offer and then deleted; when a 17th free-period summary is added, the oldest SHALL be deleted;
-- when a new wallet row would exceed 16,384, the catalog SHALL delete, among wallets with no tracked identity that have never had an available sample and have no active billing mismatch flag, the row with the oldest most recent verified offer. When there is none, the new wallet row SHALL NOT be created, and that wallet's `sharing_since` SHALL stay `null` until a row can be created.
+- a wallet row, with its free-period summaries and flag, SHALL be kept for 180 days after the wallet's most recent verified offer. It SHALL then be reduced to a *tombstone* that holds only the wallet, its `sharing_since`, the time of its most recent verified offer, its ever-available and ever-charged flags and a set history-expired marker; its free-period summaries, current free-period start, `latest_probe_at` and flag SHALL be deleted. A tombstone SHALL occupy one of the 16,384 wallet rows and SHALL be deleted 730 days after the wallet's most recent verified offer. A verified offer from a tombstoned wallet SHALL restore a live row with the stored `sharing_since`, flags and history-expired marker, and the marker SHALL stay set for as long as the row or its tombstone exists;
+- when a 17th free-period summary is added, the oldest SHALL be deleted;
+- when a new wallet row would exceed 16,384, the catalog SHALL delete, among live rows and tombstones of wallets with no tracked identity that have never had an available sample and have no active billing mismatch flag, the row with the oldest most recent verified offer. When there is none, the new wallet row SHALL NOT be created, and that wallet's `sharing_since` SHALL stay `null` until a row can be created.
 
 Each sample's and probe's start SHALL be committed before its first outbound attempt. Finalized classes, billing outcomes, flags, pricing-state changes, free-period changes and the observer-healthy-time counter SHALL be written in one transaction per health check.
 
-The store SHALL contain only these data: network identities, wallets and peer IDs; tracking status, pricing state, deferred probe requests, reasons and their times, and eviction intervals; the hourly counts above; finalization, last-available and last-probe times, and observer-healthy-time values; `sharing_since`, most-recent-offer times and ever-available flags; free-period summaries; and billing mismatch flags with their evidence. It SHALL NOT contain IP addresses, multiaddresses, endpoints, offer bodies, readiness bodies, observer or probe identity keys, probe account credentials, quote or account identifiers, generated content, consumer identities, request data beyond the flag's evidence, or records of who read a record.
+The store SHALL contain only these data: network identities, wallets and peer IDs; tracking status, pricing state, sampling phases, latest committed scheduled times, deferred probe requests, reasons and their times, and eviction intervals; the hourly counts and earliest counted scheduled times above; finalization, last-available and last-probe times, and observer-healthy-time values; `sharing_since`, most-recent-offer times, ever-available and ever-charged flags and history-expired markers; free-period summaries; and billing mismatch flags with their evidence. It SHALL NOT contain IP addresses, multiaddresses, endpoints, offer bodies, readiness bodies, observer or probe identity keys, probe account credentials, quote or account identifiers, generated content, consumer identities, request data beyond the flag's evidence, or records of who read a record.
 
 The tokenizer prefix cache SHALL be kept outside the store under the catalog's data directory, within the bounds of *Billing honesty is checked against the declared tokenizer*, and MAY be deleted at any time without affecting any record.
 
@@ -922,11 +941,18 @@ The tokenizer prefix cache SHALL be kept outside the store under the catalog's d
 - **WHEN** its record is computed
 - **THEN** its `free_periods` still reports that period, and `probe_basis` is `free_periods`
 
-#### Scenario: `sharing_since` resets after 180 days of absence
+#### Scenario: `sharing_since` survives 180 days of absence
 
-- **GIVEN** a wallet whose most recent verified offer was 181 days ago
+- **GIVEN** a wallet first verified on 2026-01-10 whose most recent verified offer was 181 days ago, so its row is a tombstone
 - **WHEN** it publishes a qualifying offer again
-- **THEN** its `sharing_since` is the time of this new verification, and its earlier free periods are no longer reported
+- **THEN** its `sharing_since` is still 2026-01-10 and `history_expired` is `true`
+- **AND** its earlier free periods, `latest_probe_at` and billing mismatch flag are no longer reported
+
+#### Scenario: A tombstone expires
+
+- **GIVEN** a wallet whose most recent verified offer was 731 days ago
+- **WHEN** it publishes a qualifying offer again
+- **THEN** its tombstone has been deleted, its `sharing_since` is the time of this new verification and `history_expired` is `false`
 
 #### Scenario: No secrets or content in the store
 
@@ -950,16 +976,16 @@ A record SHALL be exactly:
   experimental_testnet: true,
   observer_status, computed_at,
   window_hours: 336,
-  mean_sample_interval_seconds: 300,
+  sample_interval_seconds: 300,
   mean_probe_interval_seconds: 600,
   probe_corpus_sha256, tokenizer_runtime,
-  sharing_since,
+  sharing_since, history_expired,
   wallet: {
     identities,
     samples: {available, unavailable, unknown, skipped},
     expected_samples, coverage_bps,
-    availability_14d, counted_since, observed_at,
-    free_now, free_since,
+    availability_14d, counted_since, first_counted_at, observed_at,
+    free_now, free_since, ever_charged,
     probes: {succeeded, failed, busy, unreached, unknown, skipped},
     probe_success_14d, latest_probe_at,
     billing_checks: {matched, mismatched, unchecked},
@@ -982,7 +1008,7 @@ A record SHALL be exactly:
     tracked, untracked_reason, untracked_since, identity_since,
     samples: {available, unavailable, unknown, skipped},
     expected_samples, coverage_bps, evicted_seconds,
-    availability_14d, counted_since, observed_at,
+    availability_14d, counted_since, first_counted_at, observed_at,
     pricing, pricing_since,
     probes: {succeeded, failed, busy, unreached, unknown, skipped},
     probe_success_14d, latest_probe_at
@@ -990,7 +1016,7 @@ A record SHALL be exactly:
 }
 ```
 
-`untracked_reason` SHALL be `null` when `tracked` is `true`, and otherwise one of `not_discovered`, `capacity`, `wallet_limit`, `evicted` or `inactive`. `observer_status` SHALL be `healthy` or `degraded`. `pricing` SHALL be `unknown`, `free` or `charging`. `probe_basis` SHALL be `window`, `free_periods` or `null`. `tokenizer_runtime` SHALL name the pinned runtime identity used for billing checks. A well-formed request for an identity the catalog holds no data about SHALL return HTTP 200 with `tracked: false`, `untracked_reason` `not_discovered`, zero counts and `null` figures in the peer section. Its wallet section and `sharing_since` SHALL still report what the catalog holds for that wallet. It SHALL never be an error that a client could display as zero availability or a zero score.
+`untracked_reason` SHALL be `null` when `tracked` is `true`, and otherwise one of `not_discovered`, `capacity`, `wallet_limit`, `evicted` or `inactive`. `observer_status` SHALL be `healthy` or `degraded`. `pricing` SHALL be `unknown`, `free` or `charging`. `probe_basis` SHALL be `window`, `free_periods` or `null`. `tokenizer_runtime` SHALL name the pinned runtime identity used for billing checks. A well-formed request for an identity the catalog holds no data about SHALL return HTTP 200 with `tracked: false`, `untracked_reason` `not_discovered`, zero counts and `null` figures in the peer section. Its wallet section, `sharing_since` and `history_expired` SHALL still report what the catalog holds for that wallet. It SHALL never be an error that a client could display as zero availability or a zero score.
 
 Errors SHALL be:
 
@@ -1093,10 +1119,10 @@ An unavailable record SHALL NOT be replaced by a zero, a neutral value, the repu
 The native consumer SHALL accept a record only when all of the following hold:
 
 - its `network` equals the loaded profile's identity, and its `provider_wallet` and `peer_id` equal the inspected offer's;
-- `experimental_testnet` is `true`, `window_hours` is 336, `mean_sample_interval_seconds` is 300, `mean_probe_interval_seconds` is 600, and `probe_corpus_sha256` is 64 lowercase hexadecimal characters;
-- `untracked_reason` is consistent with `tracked`, and every enumerated member holds one of its allowed values;
-- every count is a non-negative integer; the peer section's sample counts sum to at most 8,064 and its probe counts to at most 4,032; `identities` is at most 1,024; the wallet section's sample counts sum to at most `identities × 8,064` and its probe counts to at most `identities × 4,032`; `billing_checks` and `first_token_ms_buckets` each sum to at most the wallet's succeeded probes; and `free_periods` has at most 16 entries, newest first, each with `ended_at` not before `started_at`;
-- in each section, `availability_14d` and `counted_since` are `null` exactly when `available + unavailable` is zero; `availability_14d`, `coverage_bps` and `probe_success_14d` equal the values recomputed from that section's counts and `expected_samples`; and the peer section's `expected_samples` equals the value recomputed from its `counted_since`, `computed_at`, `untracked_reason` and `untracked_since`;
+- `experimental_testnet` is `true`, `window_hours` is 336, `sample_interval_seconds` is 300, `mean_probe_interval_seconds` is 600, and `probe_corpus_sha256` is 64 lowercase hexadecimal characters;
+- `untracked_reason` is consistent with `tracked`, every enumerated member holds one of its allowed values, `history_expired` and `ever_charged` are booleans, and `history_expired` is `false` when `sharing_since` is `null`;
+- every count is a non-negative integer; the peer section's sample counts sum to at most 4,032 and its probe counts to at most 4,032; `identities` is at most 1,024; the wallet section's sample counts sum to at most `identities × 4,032` and its probe counts to at most `identities × 4,032`; `billing_checks` and `first_token_ms_buckets` each sum to at most the wallet's succeeded probes; and `free_periods` has at most 16 entries, newest first, each with `ended_at` not before `started_at`;
+- in each section, `availability_14d`, `counted_since` and `first_counted_at` are `null` exactly when `available + unavailable` is zero, and `first_counted_at` otherwise lies within the UTC hour that begins at `counted_since`; `availability_14d`, `coverage_bps` and `probe_success_14d` equal the values recomputed from that section's counts and `expected_samples`; and the peer section's `expected_samples` equals the value recomputed from its `counted_since`, `computed_at`, `untracked_reason` and `untracked_since`;
 - `probe_basis`, `probe_count`, `probe_success_bps`, `service_score_bps` and `launch_criteria` equal the values recomputed from the record's own members;
 - `billing_mismatch` is `null` or has `until` equal to `flagged_at` plus 1,209,600 and later than `computed_at`;
 - no timestamp is more than 30 seconds in the future.
@@ -1121,6 +1147,11 @@ A native `launch_reputations` operation SHALL accept 1–64 distinct identities,
 - **WHEN** a catalog returns a record whose `service_score_bps` differs from the value recomputed from its availability and probe members
 - **THEN** the native consumer reports an invalid response and shows no figure from it
 
+#### Scenario: Impossible sample count
+
+- **WHEN** a catalog returns a peer section whose sample counts sum to 4,033
+- **THEN** the native consumer reports an invalid response
+
 #### Scenario: Impossible probe count
 
 - **WHEN** a catalog returns a peer section whose probe counts sum to 4,033
@@ -1135,12 +1166,13 @@ A native `launch_reputations` operation SHALL accept 1–64 distinct identities,
 
 Each Marketplace offer card SHALL show the provider's launch reputation from the native `launch_reputations` operation, labeled as observed by the configured catalog and naming the catalog by its host. Percentages and scores SHALL be truncated to one decimal place, never rounded up, and dates and ages SHALL come from the record's catalog times. The lines SHALL use the wallet section:
 
-- "Launching — free" when the offer's rates and minimum funding are zero, `free_now` is `true` and `launch_criteria.met` is `false`;
+- "Launching — free" only when the offer's rates and minimum funding are zero, the offer advertises `completions` or `chat`, `free_now` is `true`, `ever_charged` is `false` and `launch_criteria.met` is `false`; an offer that advertises only `embeddings` has no launch window, because it can never be ready to charge, and SHALL NOT read "Launching — free";
+- otherwise, for an offer whose rates and minimum funding are zero, "Free — launch criteria not yet met" when `free_now` is `true` and `launch_criteria.met` is `false`, and "Free" in every other case;
 - "Service score *S* (*catalog*-observed)", where *S* is `service_score_bps` divided by 100, or "No service score yet" when it is `null` and `sharing_since` is not;
 - "*N*% available over 14 days (*catalog*-observed)", where *N* is `availability_14d` divided by 100. When `counted_since` is later than the start of the window, it SHALL instead read "*N*% available since *date of counted_since* (*catalog*-observed)". With `sharing_since` but no figure it SHALL read "No availability samples yet";
 - "*P* probes · latest *age* ago" when `probe_basis` is `window`, or "*P* probes while free · latest *age* ago" when it is `free_periods`, where *P* is `probe_count` and *age* comes from `latest_probe_at`;
 - "Billing mismatch until *date*" while `billing_mismatch` is not `null`;
-- "Sharing since *date*";
+- "Sharing since *date*", followed by "(earlier history expired)" when `history_expired` is `true`;
 - "Low coverage" when the wallet's `coverage_bps` is below 5,000;
 - "No track record yet", alone, when the record has neither `sharing_since` nor any counted sample or probe;
 - "Launch reputation unavailable" with the native reason, on that card only, when the record is unavailable.
@@ -1159,7 +1191,7 @@ The Marketplace SHALL deduplicate the identities of the offers shown. It SHALL r
 
 The inspection panel SHALL show a Launch reputation tile beside, and separate from, the Health, Readiness and Reputation tiles. The tile SHALL show:
 
-- `sharing_since`, `free_now` with `free_since`, and the peer's pricing state;
+- `sharing_since` with `history_expired`, `free_now` with `free_since`, `ever_charged`, and the peer's pricing state;
 - for the wallet section and for the peer section, the availability figure, the available, unavailable, unknown and skipped sample counts, the expected samples and the coverage; unknown SHALL be labeled as excluded because the observer was degraded, and skipped as excluded because of the observer's own budgets;
 - the probe counts by class, with busy, unreached, unknown and skipped labeled as excluded and why; `probe_success_14d`; the probe basis with `probe_count` and `probe_success_bps`; and `latest_probe_at`;
 - the service score, and `launch_criteria` with each unmet criterion in words;
@@ -1175,7 +1207,8 @@ The panel SHALL state that:
 - probes run only while the provider is free, use the catalog's own free accounts, and do not prove which model ran;
 - the billing check compares reported prompt tokens with the declared tokenizer only;
 - a provider can recognize the observer by its network address and treat it differently, and quality during a free period may not persist after the provider charges;
-- the launch criteria do not include qualification, which the offer's serving profile shows;
+- availability samples are taken at a fixed 300-second interval from a phase the catalog drew, so a provider that recognizes the observer can predict them, while probes come at random times;
+- the launch criteria do not include qualification, which the offer's serving profile shows, and an offer that advertises only embeddings cannot hold a qualification and so is never ready to charge;
 - low coverage means the observer took fewer samples than its schedule intends.
 
 For an offer whose input and output rates are both zero, the panel SHALL also state that free service earns no ratings and that reputation reflects paying users' feedback only.
@@ -1184,7 +1217,7 @@ The Marketplace SHALL NOT combine the launch reputation with the Elo score. It S
 
 #### Scenario: A launching free provider
 
-- **GIVEN** a free offer whose record, from catalog `catalog.example`, has `free_now` `true`, `launch_criteria.met` `false`, `availability_14d` 9,876 with `counted_since` 18 hours ago, 72 counted window probes of which 71 succeeded with the latest 9 minutes ago, so `probe_success_bps` 9,861 and `service_score_bps` 9,738, and `sharing_since` 2026-11-15
+- **GIVEN** a free offer whose record, from catalog `catalog.example`, has `free_now` `true`, `ever_charged` `false`, `launch_criteria.met` `false`, `availability_14d` 9,876 with `counted_since` 18 hours ago, 72 counted window probes of which 71 succeeded with the latest 9 minutes ago, so `probe_success_bps` 9,861 and `service_score_bps` 9,738, and `sharing_since` 2026-11-15
 - **WHEN** its card is shown
 - **THEN** it reads "Launching — free", "Service score 97.3 (catalog.example-observed)", "98.7% available since 2026-11-15 (catalog.example-observed)", "72 probes · latest 9 min ago" and "Sharing since 2026-11-15"
 - **AND** it shows "Reputation: see inspection"
@@ -1194,6 +1227,25 @@ The Marketplace SHALL NOT combine the launch reputation with the Elo score. It S
 - **GIVEN** a priced offer whose record has `probe_basis` `free_periods`, `probe_count` 153 with `probe_success_bps` 9,019, a full window of availability at 9,950 and `service_score_bps` 8,973
 - **WHEN** its card is shown
 - **THEN** it reads "Service score 89.7", "99.5% available over 14 days" and "153 probes while free · latest *age* ago", with no "Launching — free" line
+
+#### Scenario: A provider that stepped back down to free
+
+- **GIVEN** a free offer whose record has `free_now` `true`, `ever_charged` `true` because the wallet charged before its current free period, and `launch_criteria.met` `false`
+- **WHEN** its card is shown
+- **THEN** it reads "Free — launch criteria not yet met" and has no "Launching — free" line
+
+#### Scenario: A free share with Auto-price off
+
+- **GIVEN** a free offer whose wallet has shared for free for 40 days and never charged, so its record has `free_now` `true` and `ever_charged` `false`, and whose `launch_criteria.met` is `true`
+- **WHEN** its card is shown
+- **THEN** it reads "Free" and has no "Launching — free" line
+- **AND** the line depends only on the record, because the catalog cannot see whether Auto-price is on
+
+#### Scenario: A free embeddings-only offer is not launching
+
+- **GIVEN** a free offer that advertises only `embeddings`, whose record has `free_now` `true`, `ever_charged` `false` and `launch_criteria.met` `false`
+- **WHEN** its card is shown
+- **THEN** it reads "Free — launch criteria not yet met" and has no "Launching — free" line
 
 #### Scenario: Billing mismatch
 
@@ -1249,11 +1301,11 @@ Launch-reputation reads SHALL NOT require consumer identification, and the catal
 
 ### Requirement: A provider can improve its launch reputation only by actually serving
 
-The only way a provider's samples SHALL become available is by its being reachable, serving a qualifying offer from its own authenticated manifest and reporting ready with its own identity, at sample times it cannot choose or predict. The only way its probes SHALL succeed is by its correctly serving real free requests from accounts it cannot link to the observer through their wallets or peer IDs, at probe times it cannot choose or predict. No signed statement, provider timestamp, readiness value for another identity, catalog request or consumer action SHALL add an available sample or succeeded probe, or remove an unavailable sample, failed probe or billing mismatch flag.
+The only way a provider's samples SHALL become available is by its being reachable, serving a qualifying offer from its own authenticated manifest and reporting ready with its own identity, at sample times it cannot choose, which follow a phase the observer draws. The only way its probes SHALL succeed is by its correctly serving real free requests from accounts it cannot link to the observer through their wallets or peer IDs, at probe times it cannot choose or predict. No signed statement, provider timestamp, readiness value for another identity, catalog request or consumer action SHALL add an available sample or succeeded probe, or remove an unavailable sample, failed probe or billing mismatch flag.
 
 A relay that the provider uses refusing or cutting the observer's circuit SHALL count against the provider, because consumers depend on the same path. The observer's own budgets SHALL decide skipping only from the observer's state when a plan is fixed, and SHALL never apply to an identity's verified addresses. The effects of observer budgets and degradation SHALL appear only as unknown or skipped counts and lower coverage, never as available samples or succeeded probes. A busy response SHALL NOT be retried, SHALL appear in its own count, and SHALL defer its request as *A probe succeeds only when the provider serves it correctly* requires, so that refusing selected kinds cannot raise probe success. Ending a free period with a short run of good probes SHALL NOT replace an earlier free period's results while fewer than 100 counted probes separate them.
 
-A provider SHALL be able to abandon its history only by changing its wallet, which starts a new `sharing_since`, new figures and no billing mismatch flag. A new peer ID SHALL start a new peer section but SHALL leave the wallet's `sharing_since`, figures, free periods, billing mismatch flag and payment-gated reputation unchanged. Both kinds of change SHALL remain visible in the record and SHALL NOT be hidden or merged by the catalog.
+A provider SHALL be able to abandon its history only by changing its wallet, which starts a new `sharing_since`, new figures and no billing mismatch flag. Absence SHALL NOT restart a wallet's `sharing_since` while its row or tombstone exists. A new peer ID SHALL start a new peer section but SHALL leave the wallet's `sharing_since`, figures, free periods, billing mismatch flag and payment-gated reputation unchanged. Both kinds of change SHALL remain visible in the record and SHALL NOT be hidden or merged by the catalog.
 
 #### Scenario: Reporting ready from a borrowed origin does not help
 

@@ -282,7 +282,7 @@ The book's *Author decisions* items 1–11 were decided by the author on 2026-11
 
 - E: native consumers (desktop Chat, Playground, CLI) treat a provider's 503 `qualification_in_progress` as retryable and not admitted: no charge, never retried automatically as a paid request, shown as "Provider is qualifying — try again later". M3 owns the classification and message; M4 keeps the provider side. The server returns that code with that message (Decision 22).
 - F: the server passes `Retry-After` (integer seconds 1–3600, otherwise dropped) only on its 503 `qualification_in_progress` response (Decision 22; requirement *Network routes forward through the native consumer path with the credential held natively*).
-- G: embedding-share readiness for Auto-price is M5's and M4's; it does not affect this change.
+- G: embedding-share readiness for Auto-price is M5's and M4's; it does not affect this change. *(Revised 2026-11-17 by M4 and M5: an embedding share is never ready to charge, because the book's ready to charge requires "a valid qualification", and Auto-price is unavailable for it. This change is still unaffected.)*
 - H: M3's allowance bounds (tokens 1,000–10,000,000; lifetime 3,600–2,592,000 s) and its 402 codes `free_allowance_expired` and `free_allowance_exhausted`, expired reported first when both apply, are accepted. The server maps whichever code the provider returns and enforces no bound itself.
 
 The author's 2026-11-16 chat decisions A–D (book SHA-256 `32f447d9…`: keeping pre-promotion free accounts served, the account cap counting only live accounts, the probe walk-back, and "Billing unchecked") belong to M3, M4 and M5 and change no requirement here; a free account served after promotion still maps its 402 refusals exactly.
