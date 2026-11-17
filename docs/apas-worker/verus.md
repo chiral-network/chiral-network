@@ -38,3 +38,11 @@ Top-up recovery also follows `openspec/specs/inference-account-topup-request/spe
 ## Remaining inventory
 
 This is a scoped inventory, not a claim that all Rust tests were reviewed. Other Rust test functions remain unclassified; extend the inventory from their implementation and OpenSpec requirements in subsequent steps. Do not rejudge a blocked test unless its code or requirement changes. Missing implementation/specification work retains priority over replacing an existing test with a proof.
+
+## Judged 2026-11-17 — opening-cancellation scope regressions
+
+Requirement source: `openspec/changes/specify-funding-settlement/specs/inference-funding-settlement/spec.md` (requirements 4 and 16).
+
+- `consumer::tests::opening_cancellation_on_a_saved_account_still_refreshes_without_reusing_the_opening` — **not replaceable**: it drives the async native consumer against a local HTTP provider and scripted JSON-RPC, with protected files and the wallet journal; Verus models none of these.
+- `consumer::tests::opening_cancellation_on_a_saved_account_keeps_pending_topup_recovery` — **not replaceable**, for the same reasons.
+

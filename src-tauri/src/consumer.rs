@@ -1069,19 +1069,23 @@ impl Consumer {
     }
     async fn resume_inner(&self, id: &str) -> Result<AccountView, String> {
         let mut saved = self.load_account(id)?;
-        if saved.funding_cancellation_requested
+        // An explicit opening cancellation blocks only that opening's payment
+        // (`open:<id>`): no rebroadcast of, or new payment for, it. A saved
+        // account still refreshes, and a pending top-up still recovers its
+        // exact original bytes (inference-funding-settlement, requirements 4/16).
+        let opening_cancelled = saved.funding_cancellation_requested
             && saved
                 .funding_cancellation
                 .as_ref()
                 .map(|result| result.status.as_str())
-                != Some("original_accepted")
-        {
+                != Some("original_accepted");
+        if opening_cancelled && saved.account.is_none() {
             return Err("funding recovery was requested; use explicit cancel-funding to reconcile/resubmit its replacement, not resume the original".into());
         }
         if saved.topup.is_some() {
             return self.resume_topup(&mut saved).await;
         }
-        if saved.quote.payload.funding_wei != "0" {
+        if saved.quote.payload.funding_wei != "0" && !opening_cancelled {
             let operation = format!("open:{id}");
             let original = self
                 .chain
@@ -3161,6 +3165,106 @@ mod tests {
         assert!(consumer.load_account(id).unwrap().account.is_some());
         assert!(consumer.credential_export(id, None).is_ok());
         assert_eq!(state.submissions.lock().unwrap().len(), 2);
+        task.abort();
+    }
+    #[tokio::test]
+    async fn opening_cancellation_on_a_saved_account_still_refreshes_without_reusing_the_opening() {
+        // inference-funding-settlement requirements 4 and 16 (task 2.7): the
+        // cancellation gate covers only the cancelled `open:<id>` payment.
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let original = state.submissions.lock().unwrap()[0].clone();
+        settle_fixture(&state, &original, true);
+        consumer.funding_recovery(id).await.unwrap();
+        *state.receipt.lock().unwrap() = Value::Null;
+        *state.canonical_payment_hash.lock().unwrap() = format!("0x{}", "88".repeat(32));
+        state.nonce.store(0, Ordering::SeqCst);
+        assert_eq!(
+            consumer
+                .cancel_funding(id, Some(&format!("open:{id}")))
+                .await
+                .unwrap()["status"],
+            "cancellation_pending"
+        );
+        let after_cancellation = state.submissions.lock().unwrap().clone();
+        assert_eq!(after_cancellation.len(), 2);
+        let before = consumer.load_account(id).unwrap();
+        let resumed = consumer.resume(id).await.unwrap();
+        assert_eq!(resumed.contract_id, *id);
+        let refunded = consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        assert_eq!(refunded.contract_id, *id);
+        // Neither the cancelled opening nor any new payment was prepared or sent.
+        assert_eq!(*state.submissions.lock().unwrap(), after_cancellation);
+        let after = consumer.load_account(id).unwrap();
+        assert!(after.account.is_some());
+        assert!(after.funding_cancellation_requested);
+        assert_eq!(after.raw_transaction, before.raw_transaction);
+        assert_eq!(after.tx_hash, before.tx_hash);
+        assert_eq!(
+            consumer.funding_recovery(id).await.unwrap()["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(consumer.credential_export(id, None).is_ok());
+        task.abort();
+    }
+    #[tokio::test]
+    async fn opening_cancellation_on_a_saved_account_keeps_pending_topup_recovery() {
+        // Task 2.7: a pending top-up still recovers its exact original bytes
+        // after an explicit cancellation of the account's opening.
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let opening = state.submissions.lock().unwrap()[0].clone();
+        settle_fixture(&state, &opening, true);
+        consumer.funding_recovery(id).await.unwrap();
+        state.open_pending.store(true, Ordering::SeqCst);
+        assert!(consumer.topup(id, "50").await.is_err());
+        let topup = consumer
+            .load_account(id)
+            .unwrap()
+            .topup
+            .and_then(|intent| intent.raw_transaction)
+            .expect("pending top-up keeps its original bytes");
+        assert_ne!(topup, opening);
+        *state.receipt.lock().unwrap() = Value::Null;
+        *state.canonical_payment_hash.lock().unwrap() = format!("0x{}", "88".repeat(32));
+        state.nonce.store(0, Ordering::SeqCst);
+        assert_eq!(
+            consumer
+                .cancel_funding(id, Some(&format!("open:{id}")))
+                .await
+                .unwrap()["status"],
+            "cancellation_pending"
+        );
+        let after_cancellation = state.submissions.lock().unwrap().clone();
+        let replacement = after_cancellation.last().unwrap().clone();
+        state.open_pending.store(false, Ordering::SeqCst);
+        let result = consumer.resume(id).await;
+        if let Err(error) = &result {
+            assert!(
+                !error.contains("funding recovery was requested"),
+                "opening cancellation must not gate top-up recovery: {error}"
+            );
+        }
+        let submissions = state.submissions.lock().unwrap().clone();
+        for raw in &submissions[after_cancellation.len()..] {
+            assert_eq!(raw, &topup, "only the top-up's exact original may be (re)sent");
+        }
+        assert!(!submissions[after_cancellation.len()..].contains(&opening));
+        assert!(!submissions[after_cancellation.len()..].contains(&replacement));
+        let after = consumer.load_account(id).unwrap();
+        assert!(after.account.is_some());
+        if let Some(intent) = &after.topup {
+            assert_eq!(intent.raw_transaction.as_ref(), Some(&topup));
+        }
         task.abort();
     }
     #[tokio::test]

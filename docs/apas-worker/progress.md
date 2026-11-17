@@ -1,5 +1,10 @@
 # APAS progress
 
+## 2026-11-17 (sixth round) — Code: opening cancellation no longer blocks account refresh or top-up recovery
+
+- In step at `aa8342c3`; whitepaper unchanged; no new answers.
+- Code step (`specify-funding-settlement` task 2.7, requirements 4 and 16): `Consumer::resume_inner` used to refuse every `resume`/`fund` after an explicit opening cancellation, even on a saved account, which stranded a pending top-up. Now only an unopened cancelled opening is refused. A saved account skips the cancelled opening's payment step, still recovers a pending top-up's exact original bytes and refreshes. Two regressions fail without the change and pass with it.
+
 ## 2026-11-17 (fifth round) — Funding settlement specified
 
 - In step at `763ea347`; whitepaper unchanged; no new answers.
@@ -50,7 +55,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; its code tasks 2.1–2.3 and 2.5–2.7 can proceed, 2.4 waits for the report question.)
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.7 is done, code tasks 2.1–2.3, 2.5 and 2.6 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
