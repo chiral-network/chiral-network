@@ -259,7 +259,10 @@ class NativeProvisioningTests(unittest.TestCase):
                     provision.main()
                 config = json.loads((destination / 'provider.json').read_text())
                 served = config['models'][0]
-                self.assertEqual(served['runtime'], dict(settings, runtime_dir=str(runtime_root), artifact_dir=str(model_root)))
+                # provision-provider.py records canonical (symlink-resolved) model/runtime paths;
+                # on macOS the temporary directory itself sits behind the /var -> /private/var symlink.
+                self.assertEqual(served['runtime'], dict(settings, runtime_dir=str(runtime_root.resolve(strict=True)),
+                                                         artifact_dir=str(model_root.resolve(strict=True))))
                 self.assertEqual(served['engine_url'], 'http://127.0.0.1:8000')
                 self.assertEqual(served['engine_api_key_file'], str(destination / 'secrets/engine.token'))
                 self.assertEqual(config['admin_bind'], '127.0.0.1:9421')
