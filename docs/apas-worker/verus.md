@@ -53,3 +53,12 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 - `billing_store::tests::refused_recheck_is_quarantined_without_stalling_other_payments` — **not replaceable**: its property lives in SQLite transactions and an on-disk ledger reopened across connections, which Verus does not model.
 - `billing_store::tests::rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states` (extended) — **not replaceable**: async maintenance against a scripted JSON-RPC server, an HTTP gateway and a fixture SQLite trigger.
 
+
+## Judged 2026-11-17 — won-original recovery regressions
+
+Requirement source: `openspec/changes/specify-funding-settlement/specs/inference-funding-settlement/spec.md` (requirements 16 and 17).
+
+- `consumer::tests::won_opening_original_is_settled_by_resume_without_cancellation_authority` — **not replaceable**: it drives the async native consumer through restarts against a local HTTP provider and a scripted JSON-RPC chain with reorgs, with protected files and the wallet journal; Verus models none of these.
+- `consumer::tests::won_opening_original_without_a_journaled_replacement_is_settled_and_never_rebroadcast` — **not replaceable**, for the same reasons.
+- `consumer::tests::won_topup_original_after_cleared_intent_is_credited_once_by_resume` — **not replaceable**, for the same reasons.
+- `consumer::tests::won_topup_original_recorded_by_funding_recovery_is_credited_once_by_resume` — **not replaceable**, for the same reasons.
