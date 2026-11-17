@@ -150,3 +150,19 @@ Ambiguity: the whitepaper does not say whether the per-consumer cap (eight accou
 
 Answer only if you want the other reading (deleted ended free accounts keep counting against the wallet's eight), which would need a compact per-wallet tombstone count.
 
+
+## 2026-11-17 — Relay grace and the relay's bounded evidence store
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Relays carry ciphertext, under explicit limits* (currently line 305): the 24-hour grace "is bounded by the same per-provider quotas", and *Author decisions* item 6.
+
+What the specs now do: `specify-p2p-provider-transport` keeps each relay's offer evidence (the most recent qualifying offer it verified per destination) in a protected durable store, so a relay restart no longer ends a grace period. The store is bounded by an operator-configured maximum (at least the relay's reservation maximum). When it is full, the relay evicts the record with the earliest grace end. That destination then gets only coordination-sized circuits until it publishes again, and relay administration status reports the eviction. Any finite relay must bound this per-destination state, so a relay flooded with distinct publishing peers can end some grace periods early. The provider-facing disclosures say so.
+
+Proposed wording (append to the grace sentence): "A relay keeps this evidence durably, so a restart does not end the grace, but in a bounded store: a relay whose evidence store is full may end the grace of the destination whose grace would end soonest, and reports it."
+
+Why: the whitepaper names only per-provider quotas as the bound, so the eviction case is a resource limit it does not mention. The alternative of never evicting would refuse serving-grade circuits to newly published providers while the store is full. That trades one provider's grace for another's service and is not clearly better. Answer if you prefer that alternative, or a different bound. Until then the worker keeps the disclosed eviction.
+
+Two related assumptions in the same change, for your awareness (answer only to change them):
+- A missing, unreadable, corrupt or insecure evidence store fails closed. The relay then grants serving-grade limits only up to a destination's current offer expiry, with no grace. It reports the condition, never invents or reconstructs records, and never overwrites a damaged store. A missing store is treated like a first start and replaced by an empty one.
+- To report the store's condition and evictions, `relay_server` gains a loopback-only, bearer-authenticated administration status, like `chiral_daemon`'s operator listener. This is a new operator surface with its own protected bearer file; the public relay routes are unchanged.
