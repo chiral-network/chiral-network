@@ -6,6 +6,7 @@
 - [x] 1.4 Check the book's 2026-11-16 *Author decisions* items 5–7 (working-copy SHA-256 `3afcdb876c5422686259b0782ae2b4b3a5f0de968e7ecd60806b91523dfe743a`) against this change: record each in design.md *Open questions*; note under Decision 14 that saved v1 accounts stay reachable over the transport the native consumer selects; keep network routes to HTTPS providers; change no requirement. Revalidate.
 - [x] 1.5 Apply the book's *Author decisions* items 1–11 (`fe473508` plus the uncommitted 2026-11-16 edit, working-copy SHA-256 `8ee7fd8a114a8aefc7261a5716e2e80f10e051347f575cff645acf742e53e81c`), whose items 8–11 replace the earlier items 8 and 9. Cite that text in design.md *Scope and authority* and the proposal. Record items 8–11 in design.md *Open questions*. Add Decision 22 and, to *Network routes forward through the native consumer path with the credential held natively*, the exact mappings of M3's HTTP 402 `free_allowance_exhausted` and `free_allowance_expired` and M4's HTTP 503 `qualification_in_progress`, with the scenarios *A used-up free allowance is reported, not retried*, *An expired free allowance* and *A provider paused for qualification*. Add "paused for qualification" to the 503 `share_unavailable` admission reasons of *Local routes are free, private and never touch the network*. No requirement was renamed or removed. Revalidate.
 - [x] 1.6 Apply the 2026-11-16 decisions recorded in the book (working-copy SHA-256 `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933`) and the implementation decisions E, F and H: pass `Retry-After` (1–3600 integer seconds, otherwise dropped) only on 503 `qualification_in_progress` and add it to the response-header list; map that code with the native consumer's fixed message "Provider is qualifying — try again later"; add the scenarios *An out-of-range Retry-After is dropped* and *Retry-After is not passed on other refusals*; record E–H and the author decisions A–D in design.md *Open questions*. No requirement was renamed or removed. Revalidate.
+- [x] 1.7 Align with book A.1.8 (scoped by A.7) after the 2026-11-17 APAS comparison: network routes are scoped to network identity and consumer wallet, another session's routes are hidden on the Local server page, network-route log entries are removed on logout or a profile change, and the design quotes *Use the network* exactly.
 
 ## 2. Implement
 
@@ -61,7 +62,7 @@
   - stream termination with an error event and no `[DONE]`, and upstream cancellation on client disconnect;
   - no resend on any path;
   - `route_unavailable`, `account_not_spendable` and `no_credential` responses;
-  - cancellation on `logout` and `configure`, and refusal of routes recorded for a different network identity.
+  - cancellation on `logout` and `configure`, and refusal of routes recorded for a different network identity or consumer wallet; record both on each network route; hide another session's network routes on the Local server page (count only) and remove network-route log entries on `logout` and `configure` (A.1.8).
 - [ ] 2.7 Implement `GET /v1/requests/:id` and `POST /v1/requests/:id/cancel`:
   - resolve `:id` only against server-recorded network requests under the loaded identity, by provider request ID or request key;
   - 400 `invalid_request_id`, 503 `route_unavailable` with no profile, 404 `not_found` with no provider contact, and 409 `ambiguous_request_id`;
@@ -146,7 +147,7 @@
   - a shared model's route is admitted by the daemon and never reaches an engine directly, both for a qualified share and for a free share published with no serving profile;
   - it is refused with 429 `rate_limit` and the saturation reason when every slot is held, and with 503 `share_unavailable` when admission is draining or paused for qualification or the model is not ready, without queuing;
   - while its installation is under a qualification run, a route is refused with 503 `share_unavailable` and the being-qualified message, not `model_not_loaded`, without dispatch.
-- [ ] 3.7 Session tests: `logout` and `configure` cancel network-routed requests while local routes continue; a route for another network identity returns `route_unavailable` without any provider contact.
+- [ ] 3.7 Session tests: `logout` and `configure` cancel network-routed requests while local routes continue; a route for another network identity returns `route_unavailable` without any provider contact. Also: after logout and a profile for another wallet on the same network, that wallet's routes return `route_unavailable`, the page shows only the hidden-route count and no account, credential, request-key or provider-request ID from the previous session, network log entries are gone, and loading the original profile restores the routes and their persisted request keys.
 - [ ] 3.8 Interoperability:
   - stock OpenAI Python and Node SDKs with retries disabled against local and network routes, streaming and non-streaming, including request status and cancel;
   - a real-browser test confirms that a page on another origin, and a page reached through a DNS-rebinding hostname, cannot use the server.

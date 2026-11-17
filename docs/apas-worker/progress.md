@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-17 (fourth round) — M2 session scoping; the comparison's contradictions are all fixed
+
+- In step at `a40d35ea`; whitepaper unchanged; no new answers.
+- Spec step:
+  - `specify-desktop-local-api-server`: network routes are scoped to network identity and consumer wallet. Another session's routes are hidden on the Local server page (count only, not deleted), and network-route log entries are removed on logout or a profile change (book A.1.8, scoped by A.7). The design now quotes *Use the network* exactly.
+  - `specify-desktop-local-models`: its proposal now says five milestones.
+  - Both validate strictly; no code changed.
+- Every spec-contradicts-whitepaper finding from the 2026-11-17 comparison is now resolved in the specs. What remains is missing specification, then implementation.
+
 ## 2026-11-17 (third round) — M4/M5 aligned with the whitepaper
 
 - In step at `0a8e8cf0`; whitepaper unchanged; no new answers.
@@ -25,19 +34,16 @@
 
 ## Next steps, in order
 
-Remaining verified spec contradiction:
-1. M2 `specify-desktop-local-api-server`: network routes and network log entries must follow the loaded session (A.1.8, A.7). Record the wallet with each, and hide them after logout or a profile change. Also: the M1 proposal says "four milestones" (five), and the M2 design misquotes A.1.6's "keeping every existing disclosure and adding the transport-path … disclosure".
-
 Missing specifications (spec before code):
 
-2. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-3. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch), fee remittance (obligation states, aggregation thresholds, remittance gas) and funding settlement/reorg (`canonical-successful-receipt-at-espace-safe-v1`, orphan freeze/reversal/loss, cancel-funding) have no SHALL requirements.
-4. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch), fee remittance (obligation states, aggregation thresholds, remittance gas) and funding settlement/reorg (`canonical-successful-receipt-at-espace-safe-v1`, orphan freeze/reversal/loss, cancel-funding) have no SHALL requirements.
+3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
 
-5. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
-6. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+4. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
+5. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 

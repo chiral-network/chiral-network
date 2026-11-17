@@ -627,7 +627,9 @@ Every request-key, no-automatic-retry, recovery, header, error, redirect and bou
 
 ### Requirement: Network routes follow the native session and network scope
 
-Network routes SHALL resolve only under a loaded consumer profile with an identical `NetworkIdentity`. Logging out, or loading a different profile, SHALL cancel the server's in-flight network-routed requests in the same way as other active streams. Afterwards, routes recorded for a different identity SHALL return 503 `route_unavailable` until a profile with the matching identity is loaded. The server SHALL NOT forward them to an account, credential or provider of another network. Local routes SHALL keep working across logout and profile changes.
+Network routes SHALL resolve only under a loaded consumer profile with an identical `NetworkIdentity` and the same consumer wallet. Each network route SHALL record, when it is created, the complete `NetworkIdentity` and the consumer wallet address of the session that owns its account. Logging out, or loading a different profile, SHALL cancel the server's in-flight network-routed requests in the same way as other active streams. Afterwards, routes recorded for a different identity or a different wallet SHALL return 503 `route_unavailable` until a profile with the matching identity and wallet is loaded. The server SHALL NOT forward them to an account, credential or provider of another network or another wallet.
+
+Session scoping (book A.1.8, scoped to network sessions by A.7) SHALL also govern what the Local server page shows. While no profile is loaded, or the loaded session's identity or wallet differs from a network route's, the page SHALL NOT display that route's name, account ID, credential ID, spend cap, expiry or provider. It SHALL show only how many network routes are hidden because they belong to another session, without deleting them, and they SHALL reappear when their session is loaded again. On logout or a profile change, the server SHALL remove every network-route entry from the request log, so that no account ID, request key or provider request ID from the previous session remains visible. Persisted request keys under each account SHALL NOT be deleted by this. Local routes and local-route log entries SHALL keep working and remain visible across logout and profile changes.
 
 #### Scenario: Logout cancels network requests and keeps local routes
 
@@ -635,6 +637,14 @@ Network routes SHALL resolve only under a loaded consumer profile with an identi
 - **WHEN** the user logs out
 - **THEN** the network-routed request is cancelled and later requests naming that route return 503 `route_unavailable`
 - **AND** the local-routed request continues and the local route keeps accepting requests
+
+#### Scenario: Another session's network routes and log entries are not shown
+
+- **GIVEN** a network route and a network-route log entry recorded under wallet `A`, and a local route with its own log entry
+- **WHEN** the user logs out and then loads a profile for wallet `B` on the same network
+- **THEN** the Local server page shows the local route and its log entry, and only a count of one hidden network route, with no account ID, credential ID, spend cap, request key or provider request ID from wallet `A`'s session
+- **AND** a request naming that route returns 503 `route_unavailable` without contacting any provider
+- **AND** after wallet `A`'s profile is loaded again, the route is shown and dispatchable, its account's persisted request keys are still listed, and the removed log entry does not return
 
 ### Requirement: The local API server is never advertised and is unrelated to provider listeners
 
@@ -658,7 +668,7 @@ Its address SHALL NOT be used as an offer `endpoint` or provider listener. It SH
 
 ### Requirement: The local API request log records metadata only
 
-The server SHALL keep an in-memory request log for the current desktop session, holding at most the 1,000 most recent entries. The oldest entry SHALL be evicted first. The log SHALL be cleared on user request and when the process ends.
+The server SHALL keep an in-memory request log for the current desktop session, holding at most the 1,000 most recent entries. The oldest entry SHALL be evicted first. The log SHALL be cleared on user request and when the process ends, and its network-route entries SHALL be removed on logout or a profile change, as *Network routes follow the native session and network scope* specifies.
 
 An entry SHALL contain only:
 

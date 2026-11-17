@@ -4,7 +4,7 @@ The authority is `docs/chiral-book.md` as committed in `fe473508` (file SHA-256 
 
 - **Part I, Direction, precedence, and status** (*Adopted target design*). The local-first desktop is a target. Current contracts govern until each change is specified, implemented and qualified, so this change specifies behavior and does not claim it.
 - **Part I, Product and trust model; Architecture and responsibilities** (*Desktop app (target)* row: "serves a loopback OpenAI-compatible API … Keys and credentials stay native"). Provider risk disclosures carry over unchanged to network routes.
-- **Part I, Desktop product: a local client that can share.** *Use the network* is offered "from the same chat and local API surface … with every disclosure unchanged." Local use never sends prompts off the machine.
+- **Part I, Desktop product: a local client that can share.** *Use the network* is offered "from the same chat and local API surface", "keeping every existing disclosure and adding the transport-path and relay-metadata disclosure of the peer-to-peer transport." Milestone 3's pre-funding path disclosure supplies that addition. Local use never sends prompts off the machine.
 - **Part II, HTTP origins and trust boundaries.** The outbound public-HTTPS origin rules, `safe_http_client` DNS pinning, no proxies or redirects, the loopback-only administration listener, and the private engine.
 - **Part II, Signed offer schema.** The `serving` bullet: absence is not a speed or capacity claim, and a free generation share (both token prices and minimum funding zero) may publish with `serving: null` after readiness probes, unbadged.
 - **Part II, Peer-to-peer provider transport (target design).**
