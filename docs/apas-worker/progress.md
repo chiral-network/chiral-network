@@ -1,5 +1,18 @@
 # APAS progress
 
+## 2026-11-17 (fifth round) — Funding settlement specified
+
+- In step at `763ea347`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-funding-settlement` (capability `inference-funding-settlement`, 19 requirements, 65 scenarios). It covers the whitepaper's safe-frontier credit policy, monitoring and reorg/orphan freeze, reversal and loss, restoration, outages, the balance identity, `cancel-funding`, funding recovery, displaced re-inclusion and nonce-journal ownership. Checked tasks cite tests that were re-run and pass; synthetic fixtures are not live-chain evidence.
+- Code differences recorded as unchecked tasks 2.1–2.7:
+  - desktop and CLI registration-risk disclosure wording;
+  - Usage top-up reorganization disclosure;
+  - contradictory evidence treated as rejection;
+  - one failing recheck stalls monitoring;
+  - recovering a won original only through cancellation;
+  - a contract-wide opening-cancellation gate.
+- Report: three author questions (top-ups to frozen accounts, contradictory evidence vs existing credit, CLI reorganization disclosure).
+
 ## 2026-11-17 (fourth round) — M2 session scoping; the comparison's contradictions are all fixed
 
 - In step at `a40d35ea`; whitepaper unchanged; no new answers.
@@ -37,7 +50,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch), fee remittance (obligation states, aggregation thresholds, remittance gas) and funding settlement/reorg (`canonical-successful-receipt-at-espace-safe-v1`, orphan freeze/reversal/loss, cancel-funding) have no SHALL requirements.
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; its code tasks 2.1–2.3 and 2.5–2.7 can proceed, 2.4 waits for the report question.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:

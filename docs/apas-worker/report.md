@@ -177,3 +177,15 @@ Where: `docs/chiral-book.md`, *Launch reputation: service score and track record
 2. **"Launching — free".** A.4 shows *Launching — free* "during its launch window". The launch window is a desktop concept (Auto-price on, first free period, not yet ready to charge), and the catalog cannot see Auto-price. The spec therefore shows the label for a generation provider that is free now and has never completed a charged period. A share with Auto-price off, or one whose qualification has not passed, can read *Launching — free* without being in a launch window. Proposed wording for A.4: "*Launching — free* while the provider is free and has never charged".
 
 Neither blocks the specs. Answer to choose the wording; without an answer the specs keep the whitepaper's current text.
+
+## 2026-11-17 — Funding settlement: three questions from the new specification
+
+Status: open
+
+Context: the new change `specify-funding-settlement` specifies the whitepaper's settlement and recovery contract (*Agreements and exact funding order*, *Settlement and recovery risks*, *Durable accounting and fees*). Three points need the author:
+
+1. **Top-ups to an account frozen by an orphan.** Suppose a top-up payment executed before its account became `frozen`, and the opening's orphan is permanent. The top-up contract then refuses settlement, and the provider keeps on-chain funds that can never be credited. That conflicts with line 495 ("Settlement of an existing top-up remains available…") and with recovery that does not abandon accepted balances. Should such a top-up be credited despite the freeze, held until the opening is restored, or recorded as provider loss? The spec currently leaves the existing refusal in place and records the case as a question.
+2. **Contradictory chain evidence and existing credit.** Line 514 groups a missing receipt with "unavailable/contradictory evidence", and lines 252 and 630 say existing settled credit can remain usable during chain/RPC unavailability ("proven chain rejection is different"). The spec reads this as: an RPC that fails its identity check, or a receipt that contradicts the signed transaction, closes new admission and new credit but keeps already-accepted credit spendable. The code instead moves accepted credit to `settlement_pending` (no spending) and maps the case to a payment rejection; this is recorded as code-difference task 2.4. Confirm the spec's reading, or say that contradictory evidence should withhold spending.
+3. **CLI reorganization disclosure.** A.1.6 requires the desktop to show, and the user to accept, that reorganizations can freeze or reverse credit before any opening or top-up. The book states no CLI equivalent, and the CLI `fund`/`topup` commands do not show it. Should the CLI carry the same disclosure and acceptance?
+
+None blocks the specification; questions 1 and 2 block the matching code tasks.
