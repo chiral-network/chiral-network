@@ -3,6 +3,7 @@
 - [x] 1.1 Read the author's changed whitepaper and complete report answer; compare current proposal, rate, intent and account admission paths without editing the whitepaper.
 - [x] 1.2 Write the replacement proposal-admission deltas and design: no named-wallet quote budgets, non-reserving terms, bounded pre-signing work, authenticated atomic paid/free admission and durable accepted-original recovery.
 - [x] 1.3 Strictly validate this change and record available project checks; distinguish specification completion from production mitigation. Strict validation passed after preserving unchanged scenario identities and explicitly replacing superseded wallet-cap requirements. The available Rust/frontend/Python checks passed 434 tests; they exercise the existing implementation, not this proposed cutover.
+- [x] 1.4 Move the finished proposal-admission deltas to `adopt-provider-wide-quote-retention` and archive them, so the main spec stops requiring the superseded named-wallet gates while tasks 3.3 and 4.3 remain open here. This change keeps *Public quotes do not reserve opening capacity* and *Authenticated paid admission preserves accepted commitments*.
 
 ## 2. Reconcile downstream specifications before implementation
 

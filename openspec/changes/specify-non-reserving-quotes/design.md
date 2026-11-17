@@ -46,7 +46,7 @@ The provider still receives signed payment bytes and can technically broadcast t
 2. Before implementation, retarget `specify-proposal-rate-budgets` to ledger-only committed issuance and reconcile its design/tasks with the independent work limiter. Update `specify-opening-funding-intent` and any commercial bounded-proposal wording to distinguish retained quote storage from paid/free opening capacity. Do not silently keep an active task requiring the old wallet ceiling.
 3. Apply native changes and migrate each affected contract test together once independently committable. Preserve useful rollback, conservation, expiry and nonce/recovery assertions; change the superseded numerical/attribution contract rather than deleting tests to obtain a pass.
 4. Retire obsolete named-wallet quote-rate bookkeeping without touching wallet identity in signed terms, challenge policy, account authorization, balances, fees, credentials or accepted commitments. Preserve the retained global committed-rate evidence and its separate clock fixes.
-5. Complete acceptance, strict validation and available project checks, then archive without `--skip-specs`. Coordinate the ledger-rate delta so each requirement is integrated once; never archive the old wallet requirement first as an intermediate cutover.
+5. Complete acceptance, strict validation and available project checks, then archive without `--skip-specs`. (2026-11-17: the finished deltas were integrated through `adopt-provider-wide-quote-retention`; only the paid-admission and non-reservation requirements remain here.) Coordinate the ledger-rate delta so each requirement is integrated once; never archive the old wallet requirement first as an intermediate cutover.
 
 ## Acceptance and limits
 

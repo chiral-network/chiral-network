@@ -102,6 +102,8 @@ Worker action continued (2026-11-15): Completed parent 3.2/4.2 and rate 2.3/2.5/
 
 Nonblocking factual update proposed for the author: in **Approved non-reserving quotes**, the final “Implementation gap and required evidence” paragraph still describes the old eight-slot and named-payer rate gates as current. Replace that present-tense description with: “The earlier isolated regression demonstrated the former named-wallet quota exposure. Native proposal issuance now uses provider-wide quote retention, committed-issuance and durable pre-signing-work bounds without named-wallet quote allowances. Remaining paid/expiry recovery acceptance and the full public-release gates are still open; isolated checks are not deployment qualification.” The worker leaves this factual whitepaper update to the author; it does not change the approved design or block remaining implementation acceptance.
 
+Worker action continued (2026-11-17): A systematic spec-versus-whitepaper comparison found that the archived main spec `inference-proposal-admission` still required the superseded named-wallet gates (eight pending proposals per named wallet, per-payer rate atomicity and named-payer quota attribution), contradicting **Approved non-reserving quotes** and the already-migrated code. The finished, implemented and tested deltas moved unchanged from `specify-non-reserving-quotes` into `adopt-provider-wide-quote-retention`, which was archived normally; the main spec now has provider-wide unaccepted-quote retention, atomic storage admission and the pre-signing work bound, and its Purpose no longer describes named-payer attribution. `specify-non-reserving-quotes` keeps *Public quotes do not reserve opening capacity* and *Authenticated paid admission preserves accepted commitments*, whose acceptance (tasks 3.3, 4.3) is still open, so this entry stays open. No code or whitepaper change; no new author decision is needed.
+
 ## 2026-11-15 — Verus is unavailable
 
 Status: open
@@ -113,3 +115,38 @@ Question: Please make Verus available in this environment, or answer explicitly 
 All Verus setup/proof steps wait for this entry. Once Verus runs, the worker can pin the available version/vstd and add the required README/CI verification command before proving code. File, network, third-party-crate and unmodeled concurrency acceptance remains test-based; those unblocked steps can continue. No test has been deleted or treated as proved, and no unchecked proof assumption has been introduced. Test judgments are recorded in `docs/apas-worker/verus.md`.
 
 The question has not been asked interactively because an unblocked I/O acceptance step remains. No default or implied answer is assumed.
+
+## 2026-11-17 — Where does the Hugging Face token live for engine confinement?
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Desktop local-client workflow (target design)* → *My models* (currently line 711) and *Storage layout* (line 743).
+
+What it says now: *My models* says an exploited engine "could read the wallet key, provider signing key, local bearer and Hugging Face token under `network/` and `local-server/`", and makes "OS confinement that denies the engine those directories" a release-gate item. *Storage layout* lists `local-server/` as "(bearer and settings)" and `network/` as the shared `data_dir`, wallet journal, provider ledger and DHT identity files; it gives the Hugging Face token no location, and *Discover and download models* says only that it is "stored as a protected native file".
+
+Why it matters: milestone 1 (`specify-desktop-local-models`) lets the user choose the token file's path, so the token may sit outside the confined directories and the release gate as worded would not protect it.
+
+Question: should the token have a fixed protected location inside the confined set (for example `<app data>/local-server/hf-token`, or a `secrets/` directory added to *Storage layout*), or should the gate be restated as "deny the engine every secret file", wherever it lives? Either wording is fine for the specs; only the author can choose. Until then the milestone-1 drafts keep the user-chosen path and the confinement task stays blocked.
+
+## 2026-11-17 — Agreement-immutability text should name the free-share exception
+
+Status: open
+
+Where: `docs/chiral-book.md` lines 256 (*Immutable terms versus current availability*: "For existing accounts the sole supported evidence substitution is a strictly newer qualification measurement…"), 575 (*Approved evidence-only renewal*: "Changed terms require a distinct agreement, not silent migration") and 640 (*Provider lifecycle and immutable agreements*: "Evidence-only renewal is the narrowly defined exception above, not a general migration facility").
+
+What changed: *Share online* step 4 (target design, author decision 2026-11-16) adds a second exception: after a launch-window qualification passes, the share "keeps serving the free accounts opened before it under their allowance — same model and settings, no speed promise", although a serving profile was added.
+
+Proposed wording (append to each of the three sentences): "In the target design, *Share online* step 4 adds one more narrow exception: free agreements opened before a share's launch-window qualification stay servable, under their allowance and with no speed promise, after the same deployment gains its qualified profile."
+
+Why: the three passages call evidence-only renewal the sole exception; the milestone-4 draft (`specify-desktop-share-online`, MODIFIED *Existing agreements permit only evidence-only renewal of identical terms*) follows step 4 and cites it. This is a wording proposal; it does not block the specs. The worker does not edit the whitepaper.
+
+## 2026-11-17 — Assumption: deleting an ended free account frees its wallet's slot
+
+Status: open
+
+Where: `docs/chiral-book.md` *Wire change* (line 319): an ended free account "no longer counts toward the provider's ledger-wide account cap (the per-consumer cap still counts it) and is deleted 30 days after it ended".
+
+Ambiguity: the whitepaper does not say whether the per-consumer cap (eight accounts per wallet) still counts an ended free account after it has been deleted. The milestone-3 draft (`specify-p2p-provider-transport`, MODIFIED *Authenticated opening admission preserves original acceptance*) counts only accounts that still exist, so 30 days after deletion a wallet regains that slot. The worker keeps that reading, because a deleted record is gone and a tombstone counter would be new retained state the whitepaper does not ask for.
+
+Answer only if you want the other reading (deleted ended free accounts keep counting against the wallet's eight), which would need a compact per-wallet tombstone count.
+
