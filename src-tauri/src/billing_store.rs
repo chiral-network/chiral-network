@@ -18,6 +18,9 @@ pub const FEE_MIN_REMIT_WEI: u128 = 1_000_000_000_000_000;
 pub const FEE_MAX_AGE_SECS: u64 = 86_400;
 const MAX_PENDING: i64 = 10_000;
 const MAX_CREDENTIALS: i64 = 64;
+/// `metadata` key prefix marking a credited payment whose chain recheck the
+/// ledger refused to apply; see `BillingStore::quarantine_funding_recheck`.
+const FUNDING_RECHECK_REFUSED: &str = "funding-recheck-refused:";
 const CREDENTIAL_TTL_MAX: u64 = 90 * 86_400;
 
 pub struct BillingStore {
@@ -1345,6 +1348,56 @@ impl BillingStore {
                 Ok(())
             }),
         }
+    }
+    /// A chain observation the ledger refused to apply (for example refreshed
+    /// inclusion that would change immutable funding evidence) is quarantined
+    /// durably: its `checked` time advances so the bounded oldest-first scan
+    /// still reaches every other credited payment, and the refusal is kept in
+    /// `metadata` so maintenance stays fail-closed for new funding and offers
+    /// until a later actual chain observation for that payment applies
+    /// (inference-funding-settlement requirement 9). Funding state, credit and
+    /// evidence are left exactly as they were.
+    pub fn quarantine_funding_recheck(&self, hash: &str, now: u64) -> Result<(), String> {
+        self.transaction(|tx| {
+            if tx
+                .execute(
+                    "UPDATE funding SET checked=?2 WHERE tx_hash=?1",
+                    params![hash, now],
+                )
+                .map_err(sql)?
+                == 0
+            {
+                return Err("not_found: funding not found".into());
+            }
+            tx.execute(
+                "INSERT INTO metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![format!("{FUNDING_RECHECK_REFUSED}{hash}"), now.to_string()],
+            )
+            .map_err(sql)?;
+            Ok(())
+        })
+    }
+    /// Quarantined payments, oldest-checked first, so maintenance revisits them
+    /// on every pass instead of waiting for their turn in the bounded scan.
+    pub fn quarantined_funding_rechecks(&self) -> Result<Vec<VerifiedPayment>, String> {
+        let db = self.db.lock().map_err(|_| "ledger lock poisoned")?;
+        rows(
+            &db,
+            "SELECT f.evidence FROM funding f JOIN metadata m ON m.key=?1||f.tx_hash ORDER BY f.checked ASC,f.rowid ASC",
+            [FUNDING_RECHECK_REFUSED],
+        )
+    }
+    /// Releases a quarantine once an actual chain observation for the payment
+    /// has been applied by the ledger.
+    pub fn clear_funding_recheck_quarantine(&self, hash: &str) -> Result<(), String> {
+        self.transaction(|tx| {
+            tx.execute(
+                "DELETE FROM metadata WHERE key=?1",
+                [format!("{FUNDING_RECHECK_REFUSED}{hash}")],
+            )
+            .map_err(sql)?;
+            Ok(())
+        })
     }
     #[cfg(test)]
     fn mark_funding_state(&self, hash: &str, state: &str, now: u64) -> Result<(), String> {

@@ -1870,9 +1870,100 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
     assert_eq!(restored.funded_wei, "1000");
     assert_eq!(restored.spent_wei, "2");
     assert_eq!(restored.available_wei, "993");
+
+    // A recheck the ledger refuses to apply must not abort maintenance
+    // (inference-funding-settlement requirement 9, task 2.5). A fixture-only
+    // trigger refuses this payment's status transition.
+    let tx_hash: String = ledger
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT tx_hash FROM funding", [], |row| row.get(0))
+        .unwrap();
+    ledger
+        .db
+        .lock()
+        .unwrap()
+        .execute_batch(&format!(
+            "CREATE TRIGGER refuse_status BEFORE UPDATE OF status ON funding WHEN NEW.tx_hash='{tx_hash}' BEGIN SELECT RAISE(FAIL,'fixture refusal'); END;"
+        ))
+        .unwrap();
+    fixture.orphan.store(true, Ordering::Release);
+    state.funding_ready.store(true, Ordering::Release);
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    assert_eq!(report.funding_rechecks_quarantined, 1);
+    assert!(report
+        .funding_error
+        .as_deref()
+        .unwrap()
+        .contains("held for operator review"));
+    assert!(!state.funding_ready.load(Ordering::Acquire));
+    let held = ledger.account(&q.payload.id).unwrap();
+    assert_eq!(held.status, "active");
+    assert_eq!(held.reversed_wei, "0");
+    assert_eq!(held.available_wei, "993");
+    // Fail-closed persists while the refusal does, on every later pass.
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    assert_eq!(report.funding_rechecks_quarantined, 1);
+    assert!(report.funding_error.is_some());
+    ledger
+        .db
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER refuse_status;")
+        .unwrap();
+    fixture.orphan.store(false, Ordering::Release);
+    for _ in 0..2 {
+        contracts::reconcile(state.clone()).await.unwrap();
+    }
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    assert_eq!(report.funding_rechecks_quarantined, 0);
+    assert!(report.funding_error.is_none());
+    assert!(ledger.quarantined_funding_rechecks().unwrap().is_empty());
+    assert_eq!(ledger.account(&q.payload.id).unwrap().status, "active");
     gateway_task.abort();
     engine_task.abort();
     rpc_task.abort();
+}
+
+#[test]
+fn refused_recheck_is_quarantined_without_stalling_other_payments() {
+    // inference-funding-settlement requirement 9 (task 2.5).
+    use crate::chain_client::PaymentState;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite3");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (q1, p1, _) = paid(&store);
+    let q2 = quote(1000, false);
+    store.store_quote(&q2, 100).unwrap();
+    let p2 = payment(&q2.payload, true, 1000, 2);
+    register(&store, &q2, &p2, 100);
+    store.open_account(&q2, Some(&p2), 101).unwrap();
+    assert_eq!(store.funding_to_recheck().unwrap()[0].tx_hash, p1.tx_hash);
+    let before = encode(&store.account(&q1.payload.id).unwrap()).unwrap();
+    let mut substituted = p1.clone();
+    substituted.value_wei = "2000".into();
+    assert!(store
+        .apply_funding_recheck(&p1.tx_hash, &Ok(PaymentState::Accepted(substituted)), 110)
+        .is_err());
+    store.quarantine_funding_recheck(&p1.tx_hash, 110).unwrap();
+    // Credit and evidence are untouched, and the scan now reaches the other payment first.
+    assert_eq!(encode(&store.account(&q1.payload.id).unwrap()).unwrap(), before);
+    assert_eq!(store.funding_to_recheck().unwrap()[0].tx_hash, p2.tx_hash);
+    assert_eq!(store.quarantined_funding_rechecks().unwrap(), vec![p1.clone()]);
+    drop(store);
+    // The quarantine survives reopening the ledger.
+    let store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(store.quarantined_funding_rechecks().unwrap(), vec![p1.clone()]);
+    store
+        .apply_funding_recheck(&p1.tx_hash, &Ok(PaymentState::Accepted(p1.clone())), 111)
+        .unwrap();
+    store.clear_funding_recheck_quarantine(&p1.tx_hash).unwrap();
+    assert!(store.quarantined_funding_rechecks().unwrap().is_empty());
+    assert_eq!(encode(&store.account(&q1.payload.id).unwrap()).unwrap(), before);
+    assert!(store
+        .quarantine_funding_recheck(&format!("0x{}", "00".repeat(32)), 112)
+        .is_err());
 }
 
 #[test]

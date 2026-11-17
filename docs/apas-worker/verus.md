@@ -46,3 +46,10 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 - `consumer::tests::opening_cancellation_on_a_saved_account_still_refreshes_without_reusing_the_opening` — **not replaceable**: it drives the async native consumer against a local HTTP provider and scripted JSON-RPC, with protected files and the wallet journal; Verus models none of these.
 - `consumer::tests::opening_cancellation_on_a_saved_account_keeps_pending_topup_recovery` — **not replaceable**, for the same reasons.
 
+## Judged 2026-11-17 — funding-recheck quarantine regressions
+
+Requirement source: `openspec/changes/specify-funding-settlement/specs/inference-funding-settlement/spec.md` (requirement 9).
+
+- `billing_store::tests::refused_recheck_is_quarantined_without_stalling_other_payments` — **not replaceable**: its property lives in SQLite transactions and an on-disk ledger reopened across connections, which Verus does not model.
+- `billing_store::tests::rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states` (extended) — **not replaceable**: async maintenance against a scripted JSON-RPC server, an HTTP gateway and a fixture SQLite trigger.
+

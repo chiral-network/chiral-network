@@ -584,6 +584,9 @@ pub struct MaintenanceReport {
     pub funding_error: Option<String>,
     pub fee_error: Option<String>,
     pub funding_rejected: bool,
+    /// Credited payments whose chain recheck the ledger refused to apply; while
+    /// any remain, new funding admission and offer publication stay closed.
+    pub funding_rechecks_quarantined: usize,
 }
 fn chain_failure(failure: &ChainError) -> &'static str {
     match failure {
@@ -601,11 +604,31 @@ pub async fn reconcile(state: Arc<ProviderState>) -> Result<MaintenanceReport, S
     let _guard = MAINTENANCE.lock().await;
     let now = protocol::now()?;
     let mut report = MaintenanceReport::default();
+    // Quarantined payments are revisited first on every pass; the bounded
+    // oldest-checked scan then continues with the remaining credited payments.
+    let mut payments = state.ledger.quarantined_funding_rechecks()?;
     for payment in state.ledger.funding_to_recheck()? {
+        if !payments.iter().any(|seen| seen.tx_hash == payment.tx_hash) {
+            payments.push(payment);
+        }
+    }
+    for payment in payments {
         let observation = state.chain.recheck_payment(&payment).await;
-        state
+        // One payment whose observation the ledger refuses must not stall
+        // monitoring of every later payment (inference-funding-settlement
+        // requirement 9): quarantine it durably and keep going.
+        match state
             .ledger
-            .apply_funding_recheck(&payment.tx_hash, &observation, now)?;
+            .apply_funding_recheck(&payment.tx_hash, &observation, now)
+        {
+            Ok(()) if observation.is_ok() => state
+                .ledger
+                .clear_funding_recheck_quarantine(&payment.tx_hash)?,
+            Ok(()) => {}
+            Err(_) => state
+                .ledger
+                .quarantine_funding_recheck(&payment.tx_hash, now)?,
+        }
         if let Err(failure) = observation {
             state.funding_ready.store(false, Ordering::Release);
             if matches!(failure, ChainError::Rejected(_)) {
@@ -614,6 +637,15 @@ pub async fn reconcile(state: Arc<ProviderState>) -> Result<MaintenanceReport, S
             report.funding_rejected |= matches!(failure, ChainError::Rejected(_));
             report.funding_error = Some(format!("Funding recheck: {}", chain_failure(&failure)));
         }
+    }
+    report.funding_rechecks_quarantined = state.ledger.quarantined_funding_rechecks()?.len();
+    if report.funding_rechecks_quarantined > 0 {
+        // Existing settled credit keeps serving; only new funding and offers close.
+        state.funding_ready.store(false, Ordering::Release);
+        report.funding_error.get_or_insert_with(|| {
+            "Funding recheck: ledger refused a chain observation; payment held for operator review"
+                .to_string()
+        });
     }
     // A fee submission failure is operator debt, never evidence against consumer credit.
     report.fee_error = reconcile_fees(&state, now).await.err();

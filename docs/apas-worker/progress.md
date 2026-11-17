@@ -1,5 +1,10 @@
 # APAS progress
 
+## 2026-11-17 (seventh round) — Code: one refused funding recheck no longer stalls monitoring
+
+- In step at `de5eb44e`; whitepaper unchanged; no new answers.
+- Code step (`specify-funding-settlement` task 2.5, requirement 9): `contracts::reconcile` used to abort the whole pass on a ledger refusal without advancing that row, so one payment blocked every later recheck and maintenance stopped accepting. A refused row is now quarantined durably and its `checked` time advanced. Quarantined rows are revisited first; while any remain, new funding and offers stay closed under a fixed category, while existing credit keeps serving. The quarantine is released when an actual chain observation applies. A ledger regression and the extended reconcile integration test both fail without the change.
+
 ## 2026-11-17 (sixth round) — Code: opening cancellation no longer blocks account refresh or top-up recovery
 
 - In step at `aa8342c3`; whitepaper unchanged; no new answers.
@@ -55,7 +60,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.7 is done, code tasks 2.1–2.3, 2.5 and 2.6 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.5 and 2.7 are done, code tasks 2.1–2.3 and 2.6 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
