@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-17 (ninth round) — Code: a top-up cancellation request is durable before the attempt
+
+- In step at `3ea39335`; whitepaper unchanged; no new answers.
+- Code step (`specify-funding-settlement` task 2.8, requirement 16): `cancel_funding` now saves the top-up's cancellation request together with its validated original bytes before it calls `cancel_payment_once`, as it already did for an opening. Previously, an attempt that failed before journaling a replacement (for example, unaffordable cancellation gas) left the original broadcastable by `resume`, `fund` or `topup` while its nonce was current. From then on those paths never call `send_payment_once` for that operation. They run the read-only reconcile instead: a won original is credited once from its exact bytes, and a resolution without a win clears the intent. An unresolved request still refreshes the account and returns an error that names `funding-recovery` and the explicit retry. `funding-recovery` records a no-replacement win, and the pending view shows `topup_cancellation_requested`. Two regressions fail without the change. The adversarial review found no defect after four extra probes (nonce not current, every settle path after a win, a reorg displacing a recorded win, and a stale win followed by a replacement).
+- Known limits, not spec differences: an older binary ignores the new `TopupIntent` field, so a downgrade loses the protection. A no-replacement top-up that resolved `original_failed` at safe is no longer tracked if a deeper reorg later executes it, which matches the existing `cancel_funding` behaviour; explicit `cancel-funding --operation-id` still recovers it.
+
 ## 2026-11-17 (eighth round) — Code: a won original is settled by resume without cancellation authority
 
 - In step at `7a8eb7ac`; whitepaper unchanged; no new answers.
@@ -66,7 +72,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.5, 2.6 and 2.7 are done, code tasks 2.1–2.3 and 2.8 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.5–2.8 are done, code tasks 2.1–2.3 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:

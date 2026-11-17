@@ -62,3 +62,10 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 - `consumer::tests::won_opening_original_without_a_journaled_replacement_is_settled_and_never_rebroadcast` — **not replaceable**, for the same reasons.
 - `consumer::tests::won_topup_original_after_cleared_intent_is_credited_once_by_resume` — **not replaceable**, for the same reasons.
 - `consumer::tests::won_topup_original_recorded_by_funding_recovery_is_credited_once_by_resume` — **not replaceable**, for the same reasons.
+
+## Judged 2026-11-17 — durable top-up cancellation request regressions
+
+Requirement source: `openspec/changes/specify-funding-settlement/specs/inference-funding-settlement/spec.md` (requirement 16).
+
+- `consumer::tests::failed_topup_cancellation_attempt_keeps_the_request_and_never_rebroadcasts_the_original` — **not replaceable**: it drives the async native consumer through a failed cancellation attempt, restarts and an explicit retry, against a local HTTP provider and a scripted JSON-RPC chain, with protected files and the wallet journal; Verus models none of these.
+- `consumer::tests::won_topup_original_after_a_failed_cancellation_attempt_is_credited_once_by_resume` — **not replaceable**, for the same reasons.

@@ -127,6 +127,18 @@ fn journal_entry<'a>(history: &'a Value, operation_id: &str) -> Result<Option<&'
         .iter()
         .find(|entry| entry["operation_id"].as_str() == Some(operation_id)))
 }
+/// A reconciled journal entry's cancellation outcome, reported as `cancel_payment_once`
+/// reports it. Without a journaled replacement the outcome is the original itself, and
+/// `None` while that original is unresolved.
+fn reconciled_outcome(entry: &Value) -> Option<&str> {
+    entry["cancellation"]["status"]
+        .as_str()
+        .or(match entry["status"].as_str() {
+            Some("accepted") => Some("original_accepted"),
+            Some("failed") => Some("original_failed"),
+            _ => None,
+        })
+}
 fn mark_topup_credited(saved: &mut SavedAccount, operation_id: &str, original_tx_hash: &str) {
     match saved
         .won_topups
@@ -146,6 +158,19 @@ struct TopupIntent {
     id: String,
     amount_wei: String,
     raw_transaction: Option<String>,
+    /// Saved by `cancel_funding` before its cancellation attempt, so the request survives
+    /// an attempt that fails before journaling a replacement. From then on no path
+    /// broadcasts this operation's original or prepares another payment for it; `resume`
+    /// only settles its reconciled outcome (inference-funding-settlement requirement 16).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    cancellation_requested: bool,
+}
+/// How a pending top-up whose cancellation was requested resolved.
+enum CancelledTopup {
+    /// Its original won and was credited once.
+    Credited(AccountView),
+    /// It resolved without credit (this status), and its intent was cleared.
+    Resolved(String),
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -395,7 +420,9 @@ fn funding_stage(saved: &SavedAccount) -> &str {
             .unwrap_or("cancellation_requested");
     }
     if let Some(topup) = &saved.topup {
-        return if topup.raw_transaction.is_some() {
+        return if topup.cancellation_requested {
+            "topup_cancellation_requested"
+        } else if topup.raw_transaction.is_some() {
             "topup_settlement_pending"
         } else {
             "topup_preparation_pending"
@@ -1063,6 +1090,10 @@ impl Consumer {
                     )
                     .map_err(|e| e.to_string())?;
                 intent.raw_transaction = Some(raw.clone());
+                // Durable before the attempt, as for an opening: an attempt that fails
+                // before journaling a replacement must not let resume, fund or topup
+                // broadcast this original again (requirement 16).
+                intent.cancellation_requested = true;
                 self.save_account(&saved)?;
             }
         } else {
@@ -1157,8 +1188,8 @@ impl Consumer {
     /// Durably record what a reconciliation observed for this agreement's explicitly
     /// cancelled operations: the opening's latest outcome, and each top-up original that
     /// won (`original_accepted`). Never signs, broadcasts or contacts the provider. Callers
-    /// pass a `history` read after a fresh reconciliation whenever an unopened opening has a
-    /// requested cancellation, because that outcome gates resume.
+    /// pass a `history` read after a fresh reconciliation whenever an unopened opening or a
+    /// pending top-up has a requested cancellation, because that outcome gates resume.
     fn record_cancellation_outcomes(
         &self,
         saved: &mut SavedAccount,
@@ -1207,6 +1238,47 @@ impl Consumer {
                 }
             }
         }
+        // Likewise for a pending top-up whose cancellation request journaled no
+        // replacement: record a won original for resume to settle, and withdraw an
+        // uncredited recorded win that a reorg displaced.
+        if let Some(intent) = saved
+            .topup
+            .as_ref()
+            .filter(|intent| intent.cancellation_requested)
+        {
+            let operation = format!("topup:{}:{}", saved.quote.payload.id, intent.id);
+            let entry = journal_entry(history, &operation)?.filter(|entry| {
+                entry["cancellation"].is_null()
+                    && entry["raw_transaction"].as_str() == intent.raw_transaction.as_deref()
+            });
+            if let Some(entry) = entry {
+                let recorded = saved
+                    .won_topups
+                    .iter()
+                    .position(|won| won.operation_id == operation);
+                match (
+                    reconciled_outcome(entry) == Some("original_accepted"),
+                    recorded,
+                ) {
+                    (true, None) => {
+                        saved.won_topups.push(WonTopup {
+                            original_tx_hash: entry["tx_hash"]
+                                .as_str()
+                                .ok_or("invalid wallet operation")?
+                                .into(),
+                            operation_id: operation,
+                            credited: false,
+                        });
+                        changed = true;
+                    }
+                    (false, Some(index)) if !saved.won_topups[index].credited => {
+                        saved.won_topups.remove(index);
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
         for operation in &cancelled {
             if operation.operation_id == opening {
                 // An inconsistent saved original is refused by resume itself; never adopt it.
@@ -1247,7 +1319,8 @@ impl Consumer {
     }
     /// Reconcile this agreement's explicitly cancelled operations only while one of them can
     /// still need settlement: an unopened opening (including one whose cancellation request
-    /// journaled no replacement), or a top-up not yet credited. This is the read-only
+    /// journaled no replacement), a pending top-up whose cancellation was requested (with or
+    /// without a journaled replacement), or a top-up not yet credited. This is the read-only
     /// reconciliation of `funding-recovery`; it never calls `cancel_payment_once`, so it can
     /// neither sign nor resubmit a replacement nor broadcast an original.
     async fn reconcile_cancelled_operations(
@@ -1257,9 +1330,13 @@ impl Consumer {
         let id = saved.quote.payload.id.clone();
         let opening = format!("open:{id}");
         let mut history = self.history().await?;
-        let unsettled = (saved.account.is_none()
-            && saved.funding_cancellation_requested
-            && journal_entry(&history, &opening)?.is_some())
+        let unsettled = saved
+            .topup
+            .as_ref()
+            .is_some_and(|intent| intent.cancellation_requested)
+            || (saved.account.is_none()
+                && saved.funding_cancellation_requested
+                && journal_entry(&history, &opening)?.is_some())
             || cancelled_operations(&id, &history)?
                 .iter()
                 .any(|operation| {
@@ -1502,6 +1579,18 @@ impl Consumer {
             }
         }
         match &saved.topup {
+            // Never broadcast an original whose cancellation was requested, nor pay again
+            // for that operation: only settle its reconciled outcome (requirement 16).
+            Some(pending) if pending.cancellation_requested => {
+                if pending.amount_wei != amount_wei {
+                    return Err("a topup whose cancellation was requested is pending; run resume to settle it (nothing is broadcast for it) before a different topup".into());
+                }
+                self.reconcile_cancelled_operations(&mut saved).await?;
+                return match self.settle_cancelled_topup(&mut saved).await? {
+                    CancelledTopup::Credited(account) => Ok(account),
+                    CancelledTopup::Resolved(status) => Err(format!("the pending topup's cancellation resolved ({status}) without crediting its original; no payment was sent. Run topup again to send a new payment")),
+                };
+            }
             Some(pending) if pending.amount_wei != amount_wei => {
                 return Err("a different topup is pending; resume its original amount first".into())
             }
@@ -1511,6 +1600,7 @@ impl Consumer {
                     id: uuid::Uuid::new_v4().to_string(),
                     amount_wei: amount_wei.into(),
                     raw_transaction: None,
+                    cancellation_requested: false,
                 });
                 self.save_account(&saved)?;
             }
@@ -1533,6 +1623,15 @@ impl Consumer {
             {
                 return Err("original topup journal entry is missing or inconsistent; refusing to sign a replacement".into());
             }
+        }
+        // A requested cancellation blocks this operation's original: never enter
+        // `send_payment_once` for it, even when the attempt journaled no replacement
+        // (requirement 16). `resume_inner` has just reconciled it.
+        if intent.cancellation_requested {
+            return match self.settle_cancelled_topup(saved).await? {
+                CancelledTopup::Credited(account) => Ok(account),
+                CancelledTopup::Resolved(_) => self.refresh_account(saved).await,
+            };
         }
         let tx = self
             .chain
@@ -1574,6 +1673,68 @@ impl Consumer {
         saved.topup = None;
         self.save_account(saved)?;
         Ok(account)
+    }
+    /// Settle a pending top-up whose cancellation was requested, from the wallet journal as
+    /// last reconciled: callers reconcile first (`reconcile_cancelled_operations`). Never
+    /// calls `send_payment_once`, `prepare_payment_once` or `cancel_payment_once`, so it can
+    /// neither broadcast the original nor sign or submit a replacement. A won original is
+    /// credited once from its exact journaled bytes. An outcome without credit clears the
+    /// intent and keeps the journal history. An unresolved request still refreshes the saved
+    /// account and is reported as an error, like any other unresolved top-up.
+    async fn settle_cancelled_topup(
+        &self,
+        saved: &mut SavedAccount,
+    ) -> Result<CancelledTopup, String> {
+        let id = saved.quote.payload.id.clone();
+        let intent = saved.topup.as_ref().ok_or("missing topup intent")?;
+        let operation = format!("topup:{id}:{}", intent.id);
+        let amount = intent.amount_wei.clone();
+        let raw = intent
+            .raw_transaction
+            .clone()
+            .ok_or("cancelled topup has no original signed payment; refusing recovery")?;
+        let history = self.history().await?;
+        let entry = journal_entry(&history, &operation)?
+            .filter(|entry| entry["raw_transaction"].as_str() == Some(raw.as_str()))
+            .ok_or("original topup journal entry is missing or inconsistent; refusing recovery")?;
+        let status = reconciled_outcome(entry)
+            .unwrap_or("cancellation_requested")
+            .to_string();
+        match status.as_str() {
+            "original_accepted" => {
+                let q = &saved.quote.payload;
+                let tx = self
+                    .chain
+                    .validate_payment_envelope(
+                        &raw,
+                        &q.consumer_wallet,
+                        &q.provider_wallet,
+                        &amount,
+                        &protocol::topup_data(&id)?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                if entry["tx_hash"].as_str() != Some(tx.tx_hash.as_str()) {
+                    return Err("won topup journal entry is inconsistent; refusing recovery".into());
+                }
+                let account = self.accept_topup(saved, raw).await?;
+                mark_topup_credited(saved, &operation, &tx.tx_hash);
+                saved.topup = None;
+                self.save_account(saved)?;
+                Ok(CancelledTopup::Credited(account))
+            }
+            "original_failed" | "cancelled" | "cancellation_failed" => {
+                saved.topup = None;
+                self.save_account(saved)?;
+                Ok(CancelledTopup::Resolved(status))
+            }
+            _ => {
+                let refresh = match self.refresh_account(saved).await {
+                    Ok(_) => String::new(),
+                    Err(error) => format!(" The account refresh also failed: {error}"),
+                };
+                Err(format!("cancellation was requested for pending topup {operation} ({status}); resume, fund and topup never broadcast its original or sign another payment for it. If the original payment wins, resume credits it automatically; run funding-recovery {id} to see the outcome, or retry cancel-funding to resubmit the cancellation. Do not send this topup again.{refresh}"))
+            }
+        }
     }
     async fn accept_topup(
         &self,
@@ -2547,6 +2708,8 @@ mod tests {
         nonce: std::sync::atomic::AtomicU64,
         credentials: std::sync::Mutex<Vec<(Credential, crate::billing_store::CredentialView)>>,
         credited_topups: std::sync::Mutex<std::collections::HashMap<String, u128>>,
+        /// The wallet balance `eth_getBalance` reports; zero makes cancellation gas unaffordable.
+        balance: std::sync::Mutex<u128>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -2581,7 +2744,7 @@ mod tests {
                 "0x{:x}",
                 state.nonce.load(std::sync::atomic::Ordering::SeqCst)
             )),
-            "eth_getBalance" => json!(format!("0x{:x}", u128::MAX)),
+            "eth_getBalance" => json!(format!("0x{:x}", *state.balance.lock().unwrap())),
             "eth_gasPrice" => json!("0x1"),
             "eth_getTransactionReceipt" => {
                 let receipt = state.receipt.lock().unwrap();
@@ -2990,6 +3153,7 @@ mod tests {
             nonce: std::sync::atomic::AtomicU64::new(0),
             credentials: std::sync::Mutex::new(Vec::new()),
             credited_topups: std::sync::Mutex::new(std::collections::HashMap::new()),
+            balance: std::sync::Mutex::new(u128::MAX),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -3879,6 +4043,219 @@ mod tests {
             task.abort();
         }
     }
+    /// Task 2.8 setup: an open account's top-up original is broadcast but not yet credited,
+    /// then its explicit cancellation attempt fails before journaling a replacement, because
+    /// the wallet cannot afford the cancellation gas. The original's nonce is still current,
+    /// so `send_payment_once` would rebroadcast it. Returns the opening and top-up original
+    /// bytes and the top-up operation ID; the provider now credits any top-up it is sent.
+    async fn failed_topup_cancellation_attempt(
+        consumer: &Consumer,
+        saved: &SavedAccount,
+        state: &FundingFixture,
+    ) -> (String, String, String) {
+        use std::sync::atomic::Ordering;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let opening = state.submissions.lock().unwrap()[0].clone();
+        settle_fixture(state, &opening, true);
+        retain_fixture_receipt(state, &opening);
+        state.open_pending.store(true, Ordering::SeqCst);
+        let error = consumer.topup(id, "50").await.unwrap_err();
+        assert!(error.contains("funding_pending"), "{error}");
+        let original = state.submissions.lock().unwrap()[1].clone();
+        *state.balance.lock().unwrap() = 0;
+        let error = consumer.cancel_funding(id, None).await.unwrap_err();
+        assert!(
+            error.contains("insufficient balance for explicit cancellation gas"),
+            "{error}"
+        );
+        *state.balance.lock().unwrap() = u128::MAX;
+        let requested = consumer.load_account(id).unwrap();
+        let intent = requested
+            .topup
+            .as_ref()
+            .expect("the top-up intent stays pending");
+        assert!(
+            intent.cancellation_requested,
+            "the request is durable before the attempt"
+        );
+        assert_eq!(intent.raw_transaction.as_ref(), Some(&original));
+        let operation = format!("topup:{id}:{}", intent.id);
+        let journal = consumer.history().await.unwrap();
+        let entry = journal_entry(&journal, &operation).unwrap().unwrap();
+        assert!(
+            entry["cancellation"].is_null(),
+            "no replacement was journaled"
+        );
+        assert_eq!(
+            *state.submissions.lock().unwrap(),
+            [opening.clone(), original.clone()]
+        );
+        state.open_pending.store(false, Ordering::SeqCst);
+        (opening, original, operation)
+    }
+    #[tokio::test]
+    async fn failed_topup_cancellation_attempt_keeps_the_request_and_never_rebroadcasts_the_original(
+    ) {
+        // Task 2.8, requirement 16. The top-up's cancellation attempt fails before journaling
+        // a replacement. resume, topup and fund, also after a restart, never broadcast the
+        // original or pay again for that operation. An explicit cancel-funding retry still
+        // submits the one replacement, and once it wins, resume clears the intent without
+        // credit and refreshes the account.
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = saved.quote.payload.id.clone();
+        let (opening, original, operation) =
+            failed_topup_cancellation_attempt(&consumer, &saved, &state).await;
+        let attempted = [opening.clone(), original.clone()];
+        let topups = event_count(&state, "topup");
+        let resumed = consumer.resume(&id).await;
+        assert_eq!(
+            *state.submissions.lock().unwrap(),
+            attempted,
+            "resume must not rebroadcast the original"
+        );
+        let refusal = resumed.unwrap_err();
+        assert!(
+            refusal.contains("cancellation was requested")
+                && refusal.contains("(cancellation_requested)"),
+            "{refusal}"
+        );
+        for amount in ["50", "60"] {
+            let refusal = consumer.topup(&id, amount).await.unwrap_err();
+            assert!(refusal.contains("cancellation was requested"), "{refusal}");
+        }
+        let refusal = consumer.fund(&saved.offer, &saved.quote).await.unwrap_err();
+        assert!(refusal.contains("cancellation was requested"), "{refusal}");
+        assert_eq!(*state.submissions.lock().unwrap(), attempted);
+        assert_eq!(event_count(&state, "topup"), topups);
+        assert!(state.credited_topups.lock().unwrap().is_empty());
+        assert_eq!(
+            consumer.pending_accounts().unwrap()["pending"][0]["funding_stage"],
+            "topup_cancellation_requested"
+        );
+        // The request survives a restart.
+        let config = consumer.config.clone();
+        drop(consumer);
+        let consumer = Consumer::new(config).unwrap();
+        assert!(
+            consumer
+                .load_account(&id)
+                .unwrap()
+                .topup
+                .expect("the top-up intent stays pending")
+                .cancellation_requested
+        );
+        assert!(consumer.resume(&id).await.is_err());
+        assert_eq!(*state.submissions.lock().unwrap(), attempted);
+        // The explicit cancellation retry for the same operation still works.
+        let retried = consumer.cancel_funding(&id, None).await.unwrap();
+        assert_eq!(retried["status"], "cancellation_pending");
+        assert_eq!(retried["operation_id"], operation.as_str());
+        let replacement = state.submissions.lock().unwrap()[2].clone();
+        assert!(!attempted.contains(&replacement));
+        let refusal = consumer.resume(&id).await.unwrap_err();
+        assert!(refusal.contains("(cancellation_pending)"), "{refusal}");
+        assert_eq!(state.submissions.lock().unwrap().len(), 3);
+        // The replacement wins: resume clears the intent, credits nothing and refreshes.
+        settle_fixture(&state, &replacement, true);
+        assert_eq!(consumer.resume(&id).await.unwrap().available_wei, "100");
+        let after = consumer.load_account(&id).unwrap();
+        assert!(after.topup.is_none());
+        assert!(after.won_topups.is_empty());
+        assert_eq!(event_count(&state, "topup"), topups);
+        assert!(state.credited_topups.lock().unwrap().is_empty());
+        assert_eq!(
+            *state.submissions.lock().unwrap(),
+            [opening, original, replacement]
+        );
+        let recovery = consumer.funding_recovery(&id).await.unwrap();
+        let entry = recovery["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["operation_id"] == operation.as_str())
+            .unwrap()
+            .clone();
+        assert_eq!(entry["cancellation"]["status"], "cancelled");
+        task.abort();
+    }
+    #[tokio::test]
+    async fn won_topup_original_after_a_failed_cancellation_attempt_is_credited_once_by_resume() {
+        // Task 2.8 with task 2.6. After the failed attempt, resume neither broadcasts nor
+        // credits the unresolved original. Once the original (broadcast before the request)
+        // is accepted at safe, plain resume, with or without a prior funding-recovery and
+        // restart, credits it exactly once from its journaled bytes with no replacement ever
+        // signed or submitted, and a second resume does not post it again.
+        for inspect_first in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let id = saved.quote.payload.id.clone();
+            let (opening, original, operation) =
+                failed_topup_cancellation_attempt(&consumer, &saved, &state).await;
+            let attempted = [opening.clone(), original.clone()];
+            let topups = event_count(&state, "topup");
+            let resumed = consumer.resume(&id).await;
+            assert_eq!(
+                *state.submissions.lock().unwrap(),
+                attempted,
+                "resume must not rebroadcast the original"
+            );
+            assert_eq!(event_count(&state, "topup"), topups);
+            let refusal = resumed.unwrap_err();
+            assert!(refusal.contains("(cancellation_requested)"), "{refusal}");
+            settle_fixture(&state, &original, true);
+            let consumer = if inspect_first {
+                let recovery = consumer.funding_recovery(&id).await.unwrap();
+                let entry = recovery["operations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["operation_id"] == operation.as_str())
+                    .unwrap()
+                    .clone();
+                assert_eq!(entry["status"], "accepted");
+                assert!(entry["cancellation"].is_null());
+                let recorded = consumer.load_account(&id).unwrap();
+                assert_eq!(recorded.won_topups.len(), 1);
+                assert_eq!(recorded.won_topups[0].operation_id, operation);
+                assert!(!recorded.won_topups[0].credited);
+                assert!(recorded.topup.unwrap().cancellation_requested);
+                // Inspection records the outcome but never credits or submits anything.
+                assert!(state.credited_topups.lock().unwrap().is_empty());
+                let config = consumer.config.clone();
+                drop(consumer);
+                Consumer::new(config).unwrap()
+            } else {
+                consumer
+            };
+            let account = consumer.resume(&id).await.unwrap();
+            assert_eq!(account.available_wei, "150");
+            assert_eq!(event_count(&state, "topup"), topups + 1);
+            assert_eq!(
+                *state.credited_topups.lock().unwrap(),
+                std::collections::HashMap::from([(original.clone(), 50u128)])
+            );
+            let after = consumer.load_account(&id).unwrap();
+            assert!(after.topup.is_none());
+            assert_eq!(after.won_topups.len(), 1);
+            assert_eq!(after.won_topups[0].operation_id, operation);
+            assert!(after.won_topups[0].credited);
+            // A second resume never posts the original again.
+            consumer.resume(&id).await.unwrap();
+            assert_eq!(event_count(&state, "topup"), topups + 1);
+            assert_eq!(state.credited_topups.lock().unwrap().len(), 1);
+            // Nothing was rebroadcast, and no replacement was signed or submitted.
+            assert_eq!(*state.submissions.lock().unwrap(), attempted);
+            let journal = consumer.history().await.unwrap();
+            assert_eq!(journal["transactions"].as_array().unwrap().len(), 2);
+            assert!(
+                journal_entry(&journal, &operation).unwrap().unwrap()["cancellation"].is_null()
+            );
+            task.abort();
+        }
+    }
     #[tokio::test]
     async fn missing_malformed_or_mismatched_ack_never_broadcasts() {
         use std::sync::atomic::Ordering;
@@ -4243,6 +4620,7 @@ mod tests {
             id: "existing-topup".into(),
             amount_wei: "50".into(),
             raw_transaction: None,
+            cancellation_requested: false,
         });
         consumer.save_account(&saved).unwrap();
         assert!(consumer.pending_accounts().unwrap()["pending"][0]["tx_hash"].is_null());
@@ -4324,6 +4702,7 @@ mod tests {
             id: "missing".into(),
             amount_wei: "50".into(),
             raw_transaction: Some("0x00".into()),
+            cancellation_requested: false,
         });
         consumer.save_account(&saved).unwrap();
         assert!(consumer
