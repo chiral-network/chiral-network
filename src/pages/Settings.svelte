@@ -7,15 +7,18 @@
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
   import { shortAddress } from '$lib/components/ui/tones';
-  let configPath = $state(''), busy = $state(false), error = $state(''), notice = $state('');
+  import { toasts } from '$lib/toastStore';
+  let configPath = $state(''), busy = $state(false), error = $state('');
   async function configure() {
-    busy = true; error = ''; notice = '';
+    busy = true; error = '';
     try {
       const result = await command<{ address: string | null }>('configure', { path: configPath });
       session.set({ address: result.address, configured: true });
       await refreshVersionStatus();
       sessionEpoch.update(value => value + 1);
-      notice = 'Native configuration loaded. Endpoints and chain identity come only from this explicit profile.';
+      // The session change remounts this page, so the confirmation lives in the app-level
+      // notification stack (role="status" for success), not in this instance's state.
+      toasts.show('Native configuration loaded. Endpoints and chain identity come only from this explicit profile.', 'success');
     } catch (e) { error = errorText(e); } finally { busy = false; }
   }
   // ---- presentation only ----
@@ -53,7 +56,7 @@
           <button type="button" onclick={() => active = s.id} aria-current={active === s.id ? 'true' : undefined}
             class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors text-left whitespace-nowrap shrink-0 {active === s.id ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/60'}">
             <s.icon class="w-4 h-4 shrink-0" />{s.label}
-            {#if s.id === 'profile'}<span class="ml-auto w-2 h-2 rounded-full {$session.configured ? 'bg-green-500' : 'bg-amber-500'}" title={$session.configured ? 'Profile loaded' : 'No profile loaded'}></span>{/if}
+            {#if s.id === 'profile'}<span class="ml-auto w-2 h-2 rounded-full {$session.configured ? 'bg-green-500' : 'bg-amber-500'}" title={$session.configured ? 'Profile loaded' : 'No profile loaded'} aria-hidden="true"></span><span class="sr-only">{$session.configured ? 'Profile loaded' : 'No profile loaded'}</span>{/if}
           </button>
         {/each}
       </nav>
@@ -84,7 +87,6 @@
             </button>
           </form>
           {#if error}<Callout kind="error" role="alert">{error}</Callout>{/if}
-          {#if notice}<Callout kind="success" role="status">{notice}</Callout>{/if}
           <p class="text-xs text-gray-500 dark:text-gray-400 flex items-start gap-2"><Info class="w-3.5 h-3.5 mt-0.5 shrink-0" />Switching profiles cancels active streams and clears displayed credentials. Wallets, transaction journals, contracts, and bearer files remain scoped by the configured network. No public testnet profile or funding source is invented.</p>
         </section>
 

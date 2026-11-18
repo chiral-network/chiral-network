@@ -1,5 +1,15 @@
 # APAS progress
 
+## 2026-11-18 (thirtieth round) — Code: the Settings profile state is stated in text and a load is announced
+
+- In step at `b5a6a5f4`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-pages` tasks 2.3 and 2.4, requirement 13).
+  - The Settings *Network profile* entry showed the profile state only as a coloured dot with a tooltip. It now carries visually hidden text.
+  - A successful profile load set a page-local notice that the session remount discarded, so it was never shown. The confirmation is now an app-level success notification (`role="status"`) that survives the remount.
+  - New `tests/settings.test.ts`, including the first test that mounts the real `App` shell (Tauri window and event modules stubbed): both tests fail on the previous page. Screenshot checked.
+- Every code difference in `specify-desktop-gui-pages` is now fixed; its acceptance tasks 3.x and native verification 4.1 remain.
+- Checks: svelte-check 0/0, 61 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-ninth round) — Code: credential lifetime enforced and the revealed key copyable while masked
 
 - In step at `128b3db6`; whitepaper unchanged; no new answers.
@@ -251,15 +261,14 @@
 
 ## Next steps, in order
 
-Code differences, then missing specifications (spec before code):
+Missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-pages`: 2.3 (profile indicator text) and 2.4 (profile-load announcement); 2.1 and 2.2 are done. Confirm each with screenshots.
-2. No further missing specification is known. The version gate (A.2) has no capability yet (design observation 9 of `specify-desktop-gui-pages`); consider specifying it with the version-policy section.
+1. No further missing specification is known. The version gate (A.2) has no capability yet (design observation 9 of `specify-desktop-gui-pages`); consider specifying it with the version-policy section.
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
-4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
