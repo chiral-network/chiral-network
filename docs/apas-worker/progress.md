@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (twenty-fifth round) — Code: canonical wei display and an honest stream-cancel boundary
+
+- In step at `c2392ec7`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` tasks 2.9 and 2.7, requirements 5 and 3), done together because both are `src/lib/native.ts` helpers.
+  - `formatCfx` used to display any digit string ("00", "01", 2^128) as an amount. A new `isCanonicalWei` accepts only canonical wei up to 2^128 − 1, and `formatCfx` and the Marketplace lowest-price filter use it.
+  - `cancelStream` threw a raw TypeError outside the native runtime; it now refuses with an explanation, like `command` and `stream`.
+  - The two extended `tests/native.test.ts` cases fail on the previous helpers.
+- Checks: svelte-check 0/0, 46 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-fourth round) — Code: request failures point to recovery and cancellation is labelled possibly billed
 
 - In step at `77914a4b`; whitepaper unchanged; no new answers.
@@ -205,7 +214,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3 and 2.10–2.12 are done.
+1. Code differences in `specify-desktop-gui-global-rules`: accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3, 2.7 and 2.9–2.12 are done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

@@ -123,3 +123,4 @@ Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (require
 - The two new tests in `tests/fundingDisclosure.test.ts` are TypeScript tests of a rendered Svelte page; Verus does not apply.
 - `tests/profileGate.test.ts` (task 2.2, requirement 4) — TypeScript tests of rendered Svelte pages; Verus does not apply.
 - `tests/requestRecovery.test.ts` (tasks 2.10 and 2.11, requirement 8) — TypeScript tests of rendered Svelte pages; Verus does not apply.
+- `tests/native.test.ts` cases added by tasks 2.7 and 2.9 (requirements 3 and 5) — TypeScript; Verus does not apply. The Rust side of exact wei parsing is already covered by `inference-wire-foundation` tests.

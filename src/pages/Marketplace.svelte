@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { Search, Store, Bot, Coins, ArrowDownToLine, ArrowUpFromLine, Loader2, ArrowRight, CircleDollarSign, Activity, HeartPulse, Star, FileSignature, ShieldCheck, Sparkles, KeyRound, RotateCcw, Globe, Check } from 'lucide-svelte';
-  import { command, errorText, formatCfx, parseCfx, type Offer, type Signed, type Quote, type Account } from '$lib/native';
+  import { command, errorText, formatCfx, isCanonicalWei, parseCfx, type Offer, type Signed, type Quote, type Account } from '$lib/native';
   import { session } from '$lib/stores';
   import { stageLabel, unresolvedPayments, type PendingFunding } from '$lib/funding';
   import { toasts } from '$lib/toastStore';
@@ -81,7 +81,7 @@
 
   // ---- presentation helpers (read-only) ----
   function lowest(field: 'input_wei_per_1k' | 'output_wei_per_1k'): string {
-    const values = offers.map(o => o.payload.price[field]).filter(v => /^\d+$/.test(v)).map(v => BigInt(v));
+    const values = offers.map(o => o.payload.price[field]).filter(isCanonicalWei).map(v => BigInt(v));
     if (!values.length) return '—';
     return `${formatCfx(values.reduce((a, b) => (b < a ? b : a)).toString())} CFX`;
   }

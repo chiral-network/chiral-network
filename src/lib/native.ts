@@ -31,13 +31,19 @@ export async function stream(contractId: string, request: Record<string, unknown
   return invoke<string>('inference_stream', { contractId, request, onEvent: onEventChannel, kind });
 }
 export async function cancelStream(streamId: string) {
+  if (!nativeAvailable()) throw new Error('Cancelling a stream requires the native desktop application.');
   return invoke<void>('inference_cancel', { streamId });
 }
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === 'string' ? error : 'Operation failed. Inspect native diagnostics for details.';
 }
+const MAX_WEI = (1n << 128n) - 1n;
+/** Canonical decimal wei (no sign, no leading zero, at most 2^128 - 1), as the wire requires. */
+export function isCanonicalWei(wei: string): boolean {
+  return /^(0|[1-9]\d*)$/.test(wei) && BigInt(wei) <= MAX_WEI;
+}
 export function formatCfx(wei: string): string {
-  if (!/^\d+$/.test(wei)) return 'unavailable';
+  if (!isCanonicalWei(wei)) return 'unavailable';
   const value = BigInt(wei), unit = 10n ** 18n;
   const fractional = (value % unit).toString().padStart(18, '0').replace(/0+$/, '');
   return `${value / unit}${fractional ? '.' + fractional : ''}`;
@@ -46,7 +52,7 @@ export function parseCfx(amount: string): string {
   if (!/^(0|[1-9]\d*)(\.\d{1,18})?$/.test(amount)) throw new Error('Enter a non-negative CFX amount with at most 18 decimal places.');
   const [whole, fraction = ''] = amount.split('.');
   const value = BigInt(whole) * 10n ** 18n + BigInt(fraction.padEnd(18, '0'));
-  if (value > (1n << 128n) - 1n) throw new Error('Amount exceeds the supported range.');
+  if (value > MAX_WEI) throw new Error('Amount exceeds the supported range.');
   return value.toString();
 }
 // Render only text deltas. Tool calls and generated markup are never executed.
