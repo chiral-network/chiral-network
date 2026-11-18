@@ -21,6 +21,11 @@ const MAX_CREDENTIALS: i64 = 64;
 /// `metadata` key prefix marking a credited payment whose chain recheck the
 /// ledger refused to apply; see `BillingStore::quarantine_funding_recheck`.
 const FUNDING_RECHECK_REFUSED: &str = "funding-recheck-refused:";
+/// `metadata` key prefix holding the time a confirmed fee batch was last
+/// rechecked; see `BillingStore::mark_fee_batch_checked`.
+const FEE_BATCH_CHECKED: &str = "fee-batch-checked:";
+/// Pending fee obligations read per chunk while sealing one platform wallet.
+const FEE_SEAL_CHUNK: i64 = 1_000;
 const CREDENTIAL_TTL_MAX: u64 = 90 * 86_400;
 
 pub struct BillingStore {
@@ -1458,33 +1463,39 @@ impl BillingStore {
             save_account(tx,&account)
         })
     }
-    /// Pending obligations are grouped by recipient and sealed into an immutable
-    /// batch before chain submission. No per-funding best-effort transfer exists.
+    /// Pending obligations are grouped by platform wallet and sealed into
+    /// immutable batches before chain submission. No per-funding best-effort
+    /// transfer exists.
+    ///
+    /// Each wallet's pending total (exact, checked) and oldest acceptance time
+    /// are evaluated over every pending obligation of that wallet, never a
+    /// bounded subset. A wallet that meets either inclusive threshold, or every
+    /// wallet when `force` is set, has every one of its pending obligations
+    /// sealed in this transaction (inference-fee-remittance requirements 4 and
+    /// 6). A wallet splits into several batches only where one more member
+    /// would overflow a `u128` transfer value; there is no per-obligation work
+    /// bound. Rows are streamed in bounded chunks, so memory stays bounded by
+    /// the number of wallets, not obligations. Submission work per pass stays
+    /// bounded: at most 100 unconfirmed batches are returned.
     pub fn prepare_fee_batches(&self, now: u64, force: bool) -> Result<Vec<FeeBatch>, String> {
         self.transaction(|tx| {
-            let mut statement = tx.prepare("SELECT tx_hash,platform,amount,created FROM fee_obligations WHERE status='pending' AND batch IS NULL ORDER BY created,tx_hash LIMIT 1000").map_err(sql)?;
-            let mapped = statement.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,u64>(3)?))).map_err(sql)?;
-            let mut groups: std::collections::BTreeMap<String,Vec<(u128,u64,Vec<String>)>> = std::collections::BTreeMap::new();
-            for row in mapped {
-                let (hash,wallet,amount,created) = row.map_err(sql)?;
-                let amount = money(&amount)?;
-                let segments = groups.entry(wallet).or_default();
-                if segments.last().map_or(true,|entry|entry.0.checked_add(amount).is_none()) {
-                    segments.push((0,created,Vec::new()));
+            // Decide for every wallet over all of its pending obligations before
+            // sealing any of them.
+            let mut wallets: std::collections::BTreeMap<String, (U256, u64)> =
+                std::collections::BTreeMap::new();
+            {
+                let mut statement = tx.prepare("SELECT platform,amount,created FROM fee_obligations WHERE status='pending' AND batch IS NULL").map_err(sql)?;
+                let mapped = statement.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?))).map_err(sql)?;
+                for row in mapped {
+                    let (wallet,amount,created) = row.map_err(sql)?;
+                    let entry = wallets.entry(wallet).or_insert((U256::zero(),created));
+                    entry.0 = entry.0.checked_add(U256::from(money(&amount)?)).ok_or("fee aggregate overflow")?;
+                    entry.1 = entry.1.min(created);
                 }
-                let entry = segments.last_mut().ok_or("fee aggregation segment missing")?;
-                entry.0 = add(entry.0,amount)?;
-                entry.1 = entry.1.min(created);
-                entry.2.push(hash);
             }
-            drop(statement);
-            for (wallet,segments) in groups {
-                for (amount,oldest,hashes) in segments {
-                    if amount == 0 || (!force && amount < FEE_MIN_REMIT_WEI && now.saturating_sub(oldest) < FEE_MAX_AGE_SECS) { continue; }
-                    let batch = FeeBatch{id:protocol::random_id(),platform_wallet:wallet.clone(),amount_wei:amount.to_string(),status:"prepared".into(),tx_hash:None,raw_transaction:None,evidence:None,created_at:now};
-                    tx.execute("INSERT INTO fee_batches(id,status,record) VALUES(?1,'prepared',?2)",params![batch.id,encode(&batch)?]).map_err(sql)?;
-                    for hash in hashes { tx.execute("UPDATE fee_obligations SET batch=?2,status='batched' WHERE tx_hash=?1",params![hash,batch.id]).map_err(sql)?; }
-                }
+            for (wallet,(total,oldest)) in wallets {
+                if total.is_zero() || (!force && total < U256::from(FEE_MIN_REMIT_WEI) && now.saturating_sub(oldest) < FEE_MAX_AGE_SECS) { continue; }
+                seal_fee_wallet(tx,&wallet,total,now)?;
             }
             rows(tx,"SELECT record FROM fee_batches WHERE status!='accepted' ORDER BY rowid LIMIT 100",[])
         })
@@ -1497,22 +1508,49 @@ impl BillingStore {
             [],
         )
     }
+    /// At most 100 confirmed batches, least recently rechecked first: batches
+    /// never rechecked come first, then the oldest time recorded by
+    /// `mark_fee_batch_checked`, ties in sealing order. Because the order depends
+    /// on when each batch was last checked, not on when the pass starts, every
+    /// confirmed batch is rechecked within a bounded number of passes however far
+    /// apart they start (inference-fee-remittance requirement 9). A recorded time
+    /// later than `now` (the clock moved backwards) is not evidence of a recent
+    /// recheck, so it sorts as never checked instead of starving the others.
     pub fn fee_batches_to_recheck(&self, now: u64) -> Result<Vec<FeeBatch>, String> {
-        // Rotate the bounded window deterministically instead of starving old
-        // accepted batches behind a constantly growing newest-first page.
         let db = self.db.lock().map_err(|_| "ledger lock poisoned")?;
-        let count: u64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM fee_batches WHERE status='accepted'",
-                [],
-                |r| r.get(0),
+        rows(
+            &db,
+            "SELECT b.record FROM fee_batches b LEFT JOIN metadata m ON m.key=?1||b.id
+             WHERE b.status='accepted'
+             ORDER BY CASE WHEN m.value IS NULL OR CAST(m.value AS INTEGER)>?2 THEN -1 ELSE CAST(m.value AS INTEGER) END,b.rowid
+             LIMIT 100",
+            params![FEE_BATCH_CHECKED, now],
+        )
+    }
+    /// Records that maintenance rechecked a confirmed batch at `now`, whatever
+    /// the outcome (accepted again, pending, orphaned, an unavailable RPC or a
+    /// ledger refusal), so the oldest-checked scan moves on to the other batches.
+    /// The time is kept in `metadata` beside the batch; the immutable sealed
+    /// batch record is never rewritten for it, and the ledger schema is unchanged.
+    pub fn mark_fee_batch_checked(&self, id: &str, now: u64) -> Result<(), String> {
+        self.transaction(|tx| {
+            let known: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM fee_batches WHERE id=?1)",
+                    [id],
+                    |r| r.get(0),
+                )
+                .map_err(sql)?;
+            if !known {
+                return Err("not_found: fee batch not found".into());
+            }
+            tx.execute(
+                "INSERT INTO metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![format!("{FEE_BATCH_CHECKED}{id}"), now.to_string()],
             )
             .map_err(sql)?;
-        if count == 0 {
-            return Ok(Vec::new());
-        }
-        let offset = ((now / 30) % ((count + 99) / 100)) * 100;
-        rows(&db,"SELECT record FROM fee_batches WHERE status='accepted' ORDER BY rowid LIMIT 100 OFFSET ?1",[offset])
+            Ok(())
+        })
     }
     pub fn update_fee_batch(&self, batch: &FeeBatch) -> Result<(), String> {
         if !matches!(
@@ -1623,6 +1661,67 @@ impl BillingStore {
             json!({"amounts_wei":totals,"minimum_remittance_wei":FEE_MIN_REMIT_WEI.to_string(),"maximum_age_secs":FEE_MAX_AGE_SECS,"aggregation":"per-platform-wallet; floor50bps-per-funding; amount-threshold-or-age; gas-paid-by-provider","collection":"provider-remitted-not-trustless"}),
         )
     }
+}
+
+/// Seals every pending obligation of one platform wallet, oldest first, into
+/// batches that each pay at most `u128::MAX` wei; a new batch starts only where
+/// one more member would overflow that value. Rows are read in bounded keyset
+/// chunks in `fee_pending` index order, and each chunk is read completely before
+/// its rows are updated. The sealed members must sum exactly to `total`, the
+/// pending amount on which the caller decided, or the transaction fails.
+fn seal_fee_wallet(tx: &Transaction<'_>, wallet: &str, total: U256, now: u64) -> Result<(), String> {
+    let mut statement = tx.prepare("SELECT tx_hash,amount,created FROM fee_obligations WHERE status='pending' AND batch IS NULL AND platform=?1 AND (created,tx_hash)>(?2,?3) ORDER BY created,tx_hash LIMIT ?4").map_err(sql)?;
+    let mut cursor: (i64, String) = (-1, String::new());
+    let mut open: Option<(String, u128)> = None;
+    let mut sealed = U256::zero();
+    loop {
+        let chunk = statement
+            .query_map(params![wallet, cursor.0, cursor.1, FEE_SEAL_CHUNK], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+            })
+            .map_err(sql)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sql)?;
+        let Some((hash, _, created)) = chunk.last() else { break };
+        cursor = (*created, hash.clone());
+        for (hash, amount, _) in chunk {
+            let amount = money(&amount)?;
+            if let Some((id, sum)) = open.take_if(|(_, sum)| sum.checked_add(amount).is_none()) {
+                insert_fee_batch(tx, id, wallet, sum, now)?;
+            }
+            let (id, sum) = open.get_or_insert_with(|| (protocol::random_id(), 0));
+            *sum = add(*sum, amount)?;
+            if tx.execute("UPDATE fee_obligations SET batch=?2,status='batched' WHERE tx_hash=?1 AND status='pending' AND batch IS NULL",params![hash,id.as_str()]).map_err(sql)? != 1 {
+                return Err("ledger invariant: fee obligation changed while sealing".into());
+            }
+            sealed = sealed.checked_add(U256::from(amount)).ok_or("fee aggregate overflow")?;
+        }
+    }
+    if let Some((id, sum)) = open {
+        insert_fee_batch(tx, id, wallet, sum, now)?;
+    }
+    if sealed != total {
+        return Err("ledger invariant: sealed fees differ from the pending total".into());
+    }
+    Ok(())
+}
+fn insert_fee_batch(tx: &Transaction<'_>, id: String, wallet: &str, amount: u128, now: u64) -> Result<(), String> {
+    let batch = FeeBatch {
+        id,
+        platform_wallet: wallet.into(),
+        amount_wei: amount.to_string(),
+        status: "prepared".into(),
+        tx_hash: None,
+        raw_transaction: None,
+        evidence: None,
+        created_at: now,
+    };
+    tx.execute(
+        "INSERT INTO fee_batches(id,status,record) VALUES(?1,'prepared',?2)",
+        params![batch.id, encode(&batch)?],
+    )
+    .map_err(sql)?;
+    Ok(())
 }
 
 fn raw_hash(raw: &str) -> Result<String, String> {

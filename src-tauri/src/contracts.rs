@@ -653,40 +653,23 @@ pub async fn reconcile(state: Arc<ProviderState>) -> Result<MaintenanceReport, S
 }
 async fn reconcile_fees(state: &ProviderState, now: u64) -> Result<(), String> {
     let mut failure = None;
-    for mut batch in state
+    for batch in state
         .ledger
         .fee_batches_to_recheck(now)
         .map_err(|_| "Fee outbox scan failed")?
     {
-        if let Some(evidence) = &batch.evidence {
-            match state.chain.recheck_payment(evidence).await {
-                Ok(PaymentState::Accepted(evidence)) => {
-                    batch.evidence = Some(evidence);
-                    state
-                        .ledger
-                        .update_fee_batch(&batch)
-                        .map_err(|_| "Fee inclusion refresh failed")?;
-                }
-                Ok(PaymentState::Pending) => {
-                    batch.status = "submitted".into();
-                    state
-                        .ledger
-                        .update_fee_batch(&batch)
-                        .map_err(|_| "Fee outbox update failed")?;
-                }
-                Ok(PaymentState::Orphaned) => {
-                    batch.status = "orphaned".into();
-                    state
-                        .ledger
-                        .update_fee_batch(&batch)
-                        .map_err(|_| "Fee outbox update failed")?;
-                }
-                Err(error) => {
-                    failure = Some(format!("Fee evidence recheck: {}", chain_failure(&error)));
-                }
-            }
-        } else {
-            return Err("Accepted fee batch is missing canonical evidence".into());
+        let id = batch.id.clone();
+        let outcome = recheck_fee_batch(state, batch).await;
+        // Every outcome, including an unavailable RPC and a ledger fault, moves
+        // this batch behind the others in the oldest-checked scan, so one
+        // failing batch never starves monitoring of the rest
+        // (inference-fee-remittance requirement 9).
+        state
+            .ledger
+            .mark_fee_batch_checked(&id, now)
+            .map_err(|_| "Fee recheck time could not be persisted")?;
+        if let Some(error) = outcome? {
+            failure = Some(error);
         }
     }
     if let Err(error) = remit_inner(state, false, now).await {
@@ -696,6 +679,48 @@ async fn reconcile_fees(state: &ProviderState, now: u64) -> Result<(), String> {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+/// Rechecks one confirmed batch. `Ok(Some(_))` is a fixed-category chain
+/// failure that leaves the batch unchanged; `Err(_)` is a ledger fault.
+async fn recheck_fee_batch(
+    state: &ProviderState,
+    mut batch: billing_store::FeeBatch,
+) -> Result<Option<String>, String> {
+    let evidence = batch
+        .evidence
+        .clone()
+        .ok_or("Accepted fee batch is missing canonical evidence")?;
+    match state.chain.recheck_payment(&evidence).await {
+        Ok(PaymentState::Accepted(evidence)) => {
+            batch.evidence = Some(evidence);
+            state
+                .ledger
+                .update_fee_batch(&batch)
+                .map_err(|_| "Fee inclusion refresh failed")?;
+        }
+        Ok(PaymentState::Pending) => {
+            batch.status = "submitted".into();
+            state
+                .ledger
+                .update_fee_batch(&batch)
+                .map_err(|_| "Fee outbox update failed")?;
+        }
+        Ok(PaymentState::Orphaned) => {
+            batch.status = "orphaned".into();
+            state
+                .ledger
+                .update_fee_batch(&batch)
+                .map_err(|_| "Fee outbox update failed")?;
+        }
+        Err(error) => {
+            return Ok(Some(format!(
+                "Fee evidence recheck: {}",
+                chain_failure(&error)
+            )))
+        }
+    }
+    Ok(None)
 }
 
 pub async fn remit_fees(state: Arc<ProviderState>, force: bool) -> Result<(), String> {

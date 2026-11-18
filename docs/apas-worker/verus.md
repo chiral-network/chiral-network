@@ -94,3 +94,10 @@ Requirement source: `openspec/changes/specify-generation-performance/specs/infer
 - `performance::tests::zero_ttft_is_no_evidence_of_attainment` — **replaceable in principle**: `performance::outcome` is pure. A Verus proof could show that `ttft_us == Some(0)` is never attained. It waits for the Verus report entry; the test stays.
 - `performance::evidence_tests::zero_ttft_samples_do_not_attain` and `performance::evidence_tests::samples_outside_every_prompt_boundary_are_rejected` — **not replaceable as written**: they read evidence files through `validate_evidence`, which parses JSON from disk and hashes it. The inner `passes` predicate and the boundary predicate are pure and could be proved separately once Verus is available.
 - `scripts/test_qualify_provider.py` `ttft_us` 0 case — Python; Verus does not apply.
+
+## Judged 2026-11-17 — fee aggregation and recheck regressions
+
+Requirement source: `openspec/changes/specify-fee-remittance/specs/inference-fee-remittance/spec.md` (requirements 4, 5, 6 and 9).
+
+- `billing_store::tests::amount_threshold_is_evaluated_and_sealed_over_every_pending_obligation`, `explicit_remittance_seals_every_pending_obligation_but_never_a_cancelled_one`, `a_wallet_splits_into_several_batches_only_at_u128_overflow`, `every_confirmed_fee_batch_is_rechecked_whatever_the_pass_timing` and `confirmed_fee_batches_are_rechecked_least_recently_checked_first` — **not replaceable**: their properties live in SQLite queries, transactions and ordering over an on-disk ledger, which Verus does not model. The u128 split rule is pure arithmetic and could be proved separately once Verus is available.
+- `billing_store::tests::fee_recheck_time_advances_after_unavailable_and_faulted_outcomes` — **not replaceable**: async maintenance against a scripted JSON-RPC outage fixture and a SQLite ledger.

@@ -1,5 +1,13 @@
 # APAS progress
 
+## 2026-11-17 (eighteenth round) — Code: every confirmed remittance is rechecked, and aggregation sees every obligation
+
+- In step at `421e103e`; whitepaper unchanged; no new answers.
+- Code step (`specify-fee-remittance` tasks 2.4 and 2.3, requirements 4, 5, 6 and 9), done together because both are bounded fee queries in `billing_store.rs` that skipped rows.
+  - 2.4: confirmed batches used to be rechecked on a page chosen from `now / 30`. With more than 100 batches and passes 60 s apart, some were never rechecked, so their reorg went undetected. Rechecks are now least-recently checked first, using a `fee-batch-checked:<id>` time in the ledger's `metadata` table (no schema change, sealed records untouched). `reconcile_fees` advances it after every outcome, including an outage or a ledger fault.
+  - 2.3: aggregation used to read only the 1,000 oldest pending obligations across all wallets. It now totals every pending obligation of each wallet with checked arithmetic, and seals a qualifying (or forced) wallet completely in 1,000-row chunks within one transaction, splitting only at u128 overflow.
+  - Five regressions, plus an ordering test the review added, fail without the change. The review measured the sealing transaction at 37 ms for 10,000 pending obligations and 0.88 s for 100,000 in a release build. The thresholds bound the pending count in practice.
+
 ## 2026-11-17 (seventeenth round) — Fee remittance specified
 
 - In step at `5d97430f`; whitepaper unchanged; no new answers.
@@ -144,7 +152,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-fee-remittance`: tasks 2.4 (recheck paging misses batches), 2.3 (1,000-obligation aggregation window), then 2.1 and 2.2 (operator view states and batch evidence). These rank above the missing spec below.
+1. Code differences in `specify-fee-remittance`: tasks 2.1 and 2.2 (operator view states and batch evidence); 2.3 and 2.4 are done. These rank above the missing spec below.
    (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
 2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 

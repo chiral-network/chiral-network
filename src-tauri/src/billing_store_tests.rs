@@ -1374,6 +1374,431 @@ fn fee_obligation_cannot_be_marked_paid_without_matching_chain_evidence() {
     );
 }
 
+/// A free account that owns fixture-only funding rows for fee obligations.
+fn fee_fixture_account(store: &BillingStore) -> Quote {
+    let q = quote(0, true);
+    store.store_quote(&q, 100).unwrap();
+    store.open_account(&q, None, 101).unwrap();
+    q.payload
+}
+/// Fixture-only: records `count` credited payments on `q`'s account, each owing
+/// a pending `amount`-wei fee obligation to `platform`, accepted at `created`.
+/// The ledger API credits one payment per signed agreement; these rows are
+/// inserted directly so aggregation can be exercised beyond 1,000 obligations.
+fn pending_fee_obligations(
+    store: &BillingStore,
+    q: &Quote,
+    platform: &str,
+    amount: u128,
+    created: u64,
+    count: usize,
+    label: &str,
+) {
+    let mut db = store.db.lock().unwrap();
+    let tx = db.transaction().unwrap();
+    for index in 0..count {
+        let hash = protocol::hash_hex(format!("{label}:{index}").as_bytes());
+        let mut evidence = payment(q, false, amount.saturating_mul(200), 0);
+        evidence.tx_hash = hash.clone();
+        let funding = FundingView {
+            tx_hash: hash.clone(),
+            contract_id: q.id.clone(),
+            status: "accepted".into(),
+            value_wei: Some(evidence.value_wei.clone()),
+            fee_wei: Some(amount.to_string()),
+            created_at: created,
+        };
+        tx.execute(
+            "INSERT INTO funding(tx_hash,contract,record,evidence,status,checked) VALUES(?1,?2,?3,?4,'accepted',?5)",
+            params![hash, q.id, encode(&funding).unwrap(), encode(&evidence).unwrap(), created],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO fee_obligations(tx_hash,platform,amount,created,status) VALUES(?1,?2,?3,?4,'pending')",
+            params![hash, platform, amount.to_string(), created],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+fn fee_obligations_with_status(store: &BillingStore, status: &str) -> u64 {
+    store
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM fee_obligations WHERE status=?1",
+            [status],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+/// Confirms `batch` with a real provider-signed remittance of its exact terms.
+fn confirm_fee_batch(store: &BillingStore, mut batch: FeeBatch, nonce: u64) -> FeeBatch {
+    let data = batch.payment_data().unwrap();
+    let signed = crate::chain_client::sign_transaction(
+        PROVIDER_KEY,
+        network().chain_id,
+        nonce,
+        &batch.platform_wallet,
+        money(&batch.amount_wei).unwrap(),
+        &data,
+        1,
+        native_fixture_gas(&data),
+    )
+    .unwrap();
+    batch.tx_hash = Some(signed.tx_hash.clone());
+    batch.raw_transaction = Some(signed.raw_transaction.clone());
+    batch.status = "accepted".into();
+    batch.evidence = Some(VerifiedPayment {
+        network: network(),
+        tx_hash: signed.tx_hash,
+        from: crate::wallet::address_from_private_key(PROVIDER_KEY).unwrap(),
+        to: batch.platform_wallet.clone(),
+        value_wei: batch.amount_wei.clone(),
+        data,
+        block_hash: format!("0x{}", "55".repeat(32)),
+        block_number: 100,
+        raw_transaction: signed.raw_transaction,
+    });
+    store.update_fee_batch(&batch).unwrap();
+    batch
+}
+
+#[test]
+fn amount_threshold_is_evaluated_and_sealed_over_every_pending_obligation() {
+    // inference-fee-remittance requirement 4 (task 2.3). The 1,000 oldest of
+    // these obligations owe 900,000,000,000,000 wei, below 10^15, but the
+    // wallet owes 1,080,000,000,000,000 wei over all 1,200 of them.
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    let now = 10_000;
+    let wallet = format!("0x{}", "aa".repeat(20));
+    let other = format!("0x{}", "bb".repeat(20));
+    pending_fee_obligations(&store, &q, &wallet, 900_000_000_000, now - 3_600, 1_200, "many");
+    // Another wallet below both thresholds is neither sealed nor combined.
+    pending_fee_obligations(&store, &q, &other, 999_999_999_999_999, now - 3_600, 1, "other");
+    let batches = store.prepare_fee_batches(now, false).unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].platform_wallet, wallet);
+    assert_eq!(batches[0].amount_wei, "1080000000000000");
+    let members: u64 = store
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM fee_obligations WHERE batch=?1 AND status='batched' AND platform=?2",
+            params![batches[0].id, wallet],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(members, 1_200);
+    assert_eq!(fee_obligations_with_status(&store, "pending"), 1);
+    let pending: String = store
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT platform FROM fee_obligations WHERE status='pending'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(pending, other);
+    // A later pass seals nothing new and offers the same immutable batch.
+    let again = store.prepare_fee_batches(now + 30, false).unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].id, batches[0].id);
+    assert_eq!(again[0].amount_wei, "1080000000000000");
+}
+
+#[test]
+fn explicit_remittance_seals_every_pending_obligation_but_never_a_cancelled_one() {
+    // inference-fee-remittance requirement 6 (task 2.3): `fees/remit` leaves no
+    // obligation pending, whatever the count, amount or age.
+    let store = memory();
+    let (paid_quote, paid_payment, _) = paid(&store);
+    // Funding proven orphaned before sealing cancels its pending obligation.
+    store
+        .mark_funding_state(&paid_payment.tx_hash, "orphaned", 102)
+        .unwrap();
+    assert_eq!(fee_obligations_with_status(&store, "cancelled"), 1);
+    let wallet = paid_quote.payload.platform_wallet.clone();
+    let other = format!("0x{}", "bb".repeat(20));
+    let q = fee_fixture_account(&store);
+    pending_fee_obligations(&store, &q, &wallet, 5, 200, 1_001, "forced");
+    pending_fee_obligations(&store, &q, &other, 9, 200, 2, "other");
+    let batches = store.prepare_fee_batches(300, true).unwrap();
+    assert_eq!(fee_obligations_with_status(&store, "pending"), 0);
+    assert_eq!(fee_obligations_with_status(&store, "batched"), 1_003);
+    let amounts: std::collections::BTreeMap<_, _> = batches
+        .iter()
+        .map(|batch| (batch.platform_wallet.clone(), batch.amount_wei.clone()))
+        .collect();
+    assert_eq!(batches.len(), 2);
+    assert_eq!(amounts[&wallet], "5005");
+    assert_eq!(amounts[&other], "18");
+    let (status, batch): (String, Option<String>) = store
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT status,batch FROM fee_obligations WHERE tx_hash=?1",
+            [&paid_payment.tx_hash],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "cancelled");
+    assert!(batch.is_none());
+}
+
+#[test]
+fn a_wallet_splits_into_several_batches_only_at_u128_overflow() {
+    // inference-fee-remittance requirements 4 and 5 (task 2.3).
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    let wallet = format!("0x{}", "cc".repeat(20));
+    let half = 1u128 << 127;
+    pending_fee_obligations(&store, &q, &wallet, half, 200, 1, "first");
+    pending_fee_obligations(&store, &q, &wallet, half - 1, 201, 1, "second");
+    pending_fee_obligations(&store, &q, &wallet, half, 202, 1, "third");
+    let batches = store.prepare_fee_batches(300, false).unwrap();
+    // The two oldest exactly fill one transfer value; only the third overflows.
+    assert_eq!(
+        batches.iter().map(|batch| batch.amount_wei.clone()).collect::<Vec<_>>(),
+        vec![u128::MAX.to_string(), half.to_string()]
+    );
+    assert_eq!(fee_obligations_with_status(&store, "pending"), 0);
+    let first: u64 = store
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM fee_obligations WHERE batch=?1",
+            [&batches[0].id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(first, 2);
+}
+
+#[test]
+fn every_confirmed_fee_batch_is_rechecked_whatever_the_pass_timing() {
+    // inference-fee-remittance requirement 9 (task 2.4): passes 60 seconds
+    // apart used to read the same page of 100, never the other 50.
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    for index in 0..150u64 {
+        pending_fee_obligations(&store, &q, &q.platform_wallet, 5, 100, 1, &format!("confirmed-{index}"));
+        let batch = store.prepare_fee_batches(200, true).unwrap().remove(0);
+        confirm_fee_batch(&store, batch, index);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for now in [0, 60, 120, 180] {
+        let page = store.fee_batches_to_recheck(now).unwrap();
+        assert_eq!(page.len(), 100);
+        for batch in page {
+            assert_eq!(batch.status, "accepted");
+            store.mark_fee_batch_checked(&batch.id, now).unwrap();
+            seen.insert(batch.id);
+        }
+    }
+    assert_eq!(seen.len(), 150);
+    // A clock that moved backwards does not starve batches checked "later".
+    let mut regressed = std::collections::BTreeSet::new();
+    for now in [90, 100] {
+        for batch in store.fee_batches_to_recheck(now).unwrap() {
+            store.mark_fee_batch_checked(&batch.id, now).unwrap();
+            regressed.insert(batch.id);
+        }
+    }
+    assert_eq!(regressed.len(), 150);
+    assert!(store
+        .mark_fee_batch_checked(&protocol::random_id(), 200)
+        .unwrap_err()
+        .starts_with("not_found:"));
+}
+
+#[test]
+fn confirmed_fee_batches_are_rechecked_least_recently_checked_first() {
+    // inference-fee-remittance requirement 9 (task 2.4): never-checked batches
+    // come first in sealing order, then check times in numeric order (9 before
+    // 10, which a text comparison would reverse).
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    let ids: Vec<String> = (0..4u64)
+        .map(|index| {
+            pending_fee_obligations(&store, &q, &q.platform_wallet, 5, 100, 1, &format!("ordered-{index}"));
+            let batch = store.prepare_fee_batches(200, true).unwrap().remove(0);
+            confirm_fee_batch(&store, batch, index).id
+        })
+        .collect();
+    store.mark_fee_batch_checked(&ids[0], 10).unwrap();
+    store.mark_fee_batch_checked(&ids[1], 9).unwrap();
+    let order = |now| {
+        store
+            .fee_batches_to_recheck(now)
+            .unwrap()
+            .into_iter()
+            .map(|batch| batch.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(20), [&ids[2], &ids[3], &ids[1], &ids[0]].map(String::clone));
+    // A check time later than `now` (the clock moved backwards) sorts as never
+    // checked, in sealing order among the never-checked batches.
+    assert_eq!(order(9), [&ids[0], &ids[2], &ids[3], &ids[1]].map(String::clone));
+}
+
+#[tokio::test]
+async fn fee_recheck_time_advances_after_unavailable_and_faulted_outcomes() {
+    // inference-fee-remittance requirement 9 (task 2.4): maintenance advances a
+    // confirmed batch's check time after every outcome, so a batch whose
+    // recheck keeps failing never starves monitoring of the others.
+    use crate::{
+        app::ProviderState,
+        chain_client::ChainClient,
+        contracts,
+        network::NetworkConfig,
+        offer_registry::OfferRegistry,
+        provider_config::{DhtConfig, ProviderConfig},
+    };
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = Arc::new(ContinuityRpc {
+        outage: AtomicBool::new(true),
+        orphan: AtomicBool::new(false),
+        frontier: AtomicU64::new(10),
+        nonce: AtomicU64::new(0),
+        owner_balance: std::sync::Mutex::new(u128::MAX),
+        receipt: std::sync::Mutex::new(serde_json::Value::Null),
+        observed_at: protocol::now().unwrap(),
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let network_config = NetworkConfig {
+        identity: network(),
+        rpc_url: format!("http://{}", listener.local_addr().unwrap()),
+        rpc_bearer_file: None,
+        faucet_url: None,
+        explorer_url: None,
+        policy_url: None,
+    };
+    let rpc = axum::Router::new()
+        .route("/", axum::routing::post(continuity_rpc))
+        .with_state(fixture.clone());
+    let rpc_task = tokio::spawn(async move {
+        axum::serve(listener, rpc).await.unwrap();
+    });
+    let ledger = Arc::new(memory());
+    let q = fee_fixture_account(&ledger);
+    let mut ids = Vec::new();
+    for index in 0..2u64 {
+        pending_fee_obligations(&ledger, &q, &q.platform_wallet, 5, 100, 1, &format!("monitored-{index}"));
+        let batch = ledger.prepare_fee_batches(200, true).unwrap().remove(0);
+        ids.push(confirm_fee_batch(&ledger, batch, index).id);
+    }
+    let (faulted, healthy) = (ids[0].clone(), ids[1].clone());
+    // Fixture-only ledger fault: the older confirmed batch loses its evidence.
+    let original: String = ledger
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT record FROM fee_batches WHERE id=?1", [&faulted], |r| r.get(0))
+        .unwrap();
+    ledger
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE fee_batches SET record=json_set(record,'$.evidence',json('null')) WHERE id=?1",
+            [&faulted],
+        )
+        .unwrap();
+    let config = ProviderConfig {
+        network: network_config.clone(),
+        data_dir: dir.path().into(),
+        signing_key_file: dir.path().join("key"),
+        admin_token_file: dir.path().join("admin"),
+        public_endpoint: "http://127.0.0.1:9419".into(),
+        public_bind: "127.0.0.1:9419".parse().unwrap(),
+        admin_bind: "127.0.0.1:9421".parse().unwrap(),
+        platform_wallet: q.platform_wallet.clone(),
+        fee_bps: 50,
+        min_funding_wei: "1000".into(),
+        models: vec![],
+        dht: DhtConfig {
+            listen: "/ip4/127.0.0.1/tcp/0".into(),
+            bootstrap: vec![],
+            identity_file: dir.path().join("dht"),
+        },
+        development: true,
+    };
+    let state = Arc::new(ProviderState {
+        model_slots: ProviderState::slots(&config),
+        managed_engines: Default::default(),
+        config: Arc::new(config),
+        chain: Arc::new(ChainClient::new(network_config, dir.path().into()).unwrap()),
+        ledger: ledger.clone(),
+        private_key: Arc::new(PROVIDER_KEY.into()),
+        wallet: q.provider_wallet.clone(),
+        offers: Arc::new(OfferRegistry::new(network(), true)),
+        accepting: AtomicBool::new(true),
+        funding_ready: AtomicBool::new(true),
+        qualified_models: std::sync::RwLock::new(Default::default()),
+    });
+    let checked = |id: &str| -> Option<u64> {
+        ledger
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key=?1",
+                [format!("{FEE_BATCH_CHECKED}{id}")],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap()
+    };
+    let fault = Some("Accepted fee batch is missing canonical evidence");
+
+    // Pass 1 ends at the faulted batch, but still records its check.
+    let before = protocol::now().unwrap();
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    let after = protocol::now().unwrap();
+    assert_eq!(report.fee_error.as_deref(), fault);
+    assert!(checked(&faulted).is_some_and(|time| (before..=after).contains(&time)));
+    assert_eq!(checked(&healthy), None);
+
+    // Pass 2 reaches the never-checked batch first; its unavailable recheck is
+    // recorded and changes nothing else.
+    let before = protocol::now().unwrap();
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    let after = protocol::now().unwrap();
+    assert_eq!(report.fee_error.as_deref(), fault);
+    assert!(checked(&healthy).is_some_and(|time| (before..=after).contains(&time)));
+    assert!(checked(&faulted).is_some_and(|time| (before..=after).contains(&time)));
+
+    // With the fault repaired, every batch's unavailable recheck is recorded.
+    ledger
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE fee_batches SET record=?2 WHERE id=?1",
+            params![faulted, original],
+        )
+        .unwrap();
+    let before = protocol::now().unwrap();
+    let report = contracts::reconcile(state.clone()).await.unwrap();
+    let after = protocol::now().unwrap();
+    assert!(report.fee_error.unwrap().contains("unavailable"));
+    for id in [&faulted, &healthy] {
+        assert!(checked(id).is_some_and(|time| (before..=after).contains(&time)));
+    }
+    let batches = ledger.fee_batches().unwrap();
+    assert_eq!(batches.len(), 2);
+    for batch in batches {
+        assert_eq!(batch.status, "accepted");
+        assert_eq!(batch.evidence.unwrap().block_number, 100);
+    }
+    rpc_task.abort();
+}
+
 #[test]
 fn embedding_batches_have_a_separate_bounded_aggregate_token_limit() {
     let store = memory();
