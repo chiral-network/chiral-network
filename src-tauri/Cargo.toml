@@ -39,6 +39,13 @@ path = "src/bin/chiral_policy_sign.rs"
 name = "chiral_rpc_gateway"
 path = "src/bin/chiral_rpc_gateway.rs"
 
+# A full copy of this test binary stands in for `llama-server`; libtest would reject the
+# launcher's arguments, so the test has its own `main`.
+[[test]]
+name = "daemon_engine_process_test"
+path = "tests/daemon_engine_process_test.rs"
+harness = false
+
 [build-dependencies]
 ed25519-dalek = "2.0"
 hex = "0.4"

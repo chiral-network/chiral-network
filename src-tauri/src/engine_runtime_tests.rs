@@ -263,3 +263,81 @@ async fn dropping_runtime_does_not_strand_the_native_child() {
     while unsafe { libc::kill(pid, 0) } == 0 && tokio::time::Instant::now() < deadline { tokio::time::sleep(Duration::from_millis(20)).await; }
     assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
 }
+
+/// Errors `ManagedEngine::start` can return with the CPU fixture once the port check has
+/// passed: its `llama-server` is only the first 4,096 bytes of this test binary.
+fn failed_after_port_check(error: &str) -> bool {
+    error != OCCUPIED_ENGINE_PORT
+        && ["cannot start pinned native llama-server", "managed engine exited before readiness", "managed engine startup timed out"].contains(&error)
+}
+
+/// Another process's listener: an IPv6 one is `IPV6_V6ONLY`, so that it occupies only its family.
+/// With `reuseaddr` it has `SO_REUSEADDR`, as `std::net::TcpListener` sets on Unix (task 2.2).
+async fn foreign_listener(address: std::net::SocketAddr, reuseaddr: bool) -> tokio::net::TcpListener {
+    let socket = if address.is_ipv4() { tokio::net::TcpSocket::new_v4() } else { tokio::net::TcpSocket::new_v6() }.unwrap();
+    socket.set_reuseaddr(reuseaddr).unwrap();
+    #[cfg(unix)]
+    if address.is_ipv6() {
+        use std::os::fd::AsRawFd;
+        let on: libc::c_int = 1;
+        assert_eq!(unsafe { libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, (&on as *const libc::c_int).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t) }, 0);
+    }
+    socket.bind(address).unwrap();
+    socket.listen(8).unwrap()
+}
+
+async fn assert_still_accepts(listener: &tokio::net::TcpListener, endpoint: std::net::SocketAddr) {
+    let client = tokio::net::TcpStream::connect(endpoint).await.unwrap();
+    let (_accepted, peer) = tokio::time::timeout(Duration::from_secs(5), listener.accept()).await.unwrap().unwrap();
+    assert_eq!(peer, client.local_addr().unwrap());
+}
+
+#[tokio::test]
+async fn a_listener_on_the_engine_address_or_its_wildcard_is_refused_before_spawn() {
+    let (_directory, mut config) = fixture();
+    let mut cases = vec![("127.0.0.1:0", "127.0.0.1"), ("0.0.0.0:0", "127.0.0.1")];
+    // Where IPv6 loopback exists, the same holds for `[::1]` beside `[::1]` and `[::]`.
+    if std::net::TcpListener::bind("[::1]:0").is_ok() { cases.extend([("[::1]:0", "[::1]"), ("[::]:0", "[::1]")]); }
+    // On Windows `SO_REUSEADDR` lets a socket share a port another one holds; not that case.
+    let options: &[bool] = if cfg!(windows) { &[false] } else { &[false, true] };
+    for (bound, host) in cases {
+        for &reuseaddr in options {
+            let listener = foreign_listener(bound.parse().unwrap(), reuseaddr).await;
+            let port = listener.local_addr().unwrap().port();
+            config.engine_url = format!("http://{host}:{port}");
+            let error = ManagedEngine::start(&config).await.err().unwrap();
+            assert_eq!(error, OCCUPIED_ENGINE_PORT, "{bound} (SO_REUSEADDR {reuseaddr}) occupies {}", config.engine_url);
+            // Not adopted, signalled or disturbed: the other process still accepts connections.
+            assert_still_accepts(&listener, format!("{host}:{port}").parse().unwrap()).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_port_holding_only_time_wait_connections_passes_the_port_check() {
+    use std::io::Read as _;
+    let (_directory, mut config) = fixture();
+    // `127.0.0.1`, and `[::1]` where IPv6 loopback exists (its probe is `IPV6_V6ONLY`).
+    let mut hosts = vec!["127.0.0.1:0"];
+    if std::net::TcpListener::bind("[::1]:0").is_ok() { hosts.push("[::1]:0"); }
+    for host in hosts {
+        let listener = std::net::TcpListener::bind(host).unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let mut client = std::net::TcpStream::connect(endpoint).unwrap();
+        let (accepted, _) = listener.accept().unwrap();
+        // The listening side closes first, so its end of the connection waits in TIME_WAIT on
+        // the endpoint, as a stopped engine's keep-alive connections do.
+        drop(accepted);
+        assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
+        drop(client);
+        drop(listener);
+        std::thread::sleep(Duration::from_millis(200));
+        // The port is not free of sockets: a bind without `SO_REUSEADDR` is refused (measured
+        // on macOS, design decision 5), so dropping the option would refuse a prompt restart.
+        #[cfg(target_os = "macos")]
+        assert!(if endpoint.is_ipv4() { tokio::net::TcpSocket::new_v4() } else { tokio::net::TcpSocket::new_v6() }.unwrap().bind(endpoint).is_err(), "no TIME_WAIT connection was left on {endpoint}");
+        config.engine_url = format!("http://{endpoint}");
+        let error = ManagedEngine::start(&config).await.err().unwrap();
+        assert!(failed_after_port_check(&error), "{endpoint}: {error}");
+    }
+}

@@ -168,3 +168,11 @@ Requirement sources: `openspec/changes/specify-chain-rpc-gateway/specs/chain-rpc
 - `src-tauri/tests/chain_rpc_gateway_test.rs` (3 tests) — **not replaceable**: they spawn the gateway binary and use HTTP and protected files.
 - `inference_offer_origin_test::single_label_remote_hostnames_are_rejected_including_root_dot_spellings` — **replaceable in principle** for the label-count predicate, which is pure; URL parsing would need an external specification. It waits for Verus.
 - `scripts/test_provider_preflight.py`, `scripts/test_provision_provider.py` — Python; Verus does not apply.
+
+## Judged 2026-11-18 — managed engine launch regressions
+
+Requirement source: `openspec/changes/specify-managed-engine-launch/specs/managed-engine-runtime/spec.md` (requirements 4, 6 and 11).
+
+- `app::tests::an_engine_key_that_repeats_another_credential_is_refused_before_anything_starts` — **replaceable in principle** for the normalisation predicate (strip `0x`, strip leading zeros, pad to 64, lower-case, compare), which is pure; the test also reads protected files and starts a runtime. It waits for the Verus report entry and stays.
+- `engine_runtime_tests::a_listener_on_the_engine_address_or_its_wildcard_is_refused_before_spawn`, `a_port_holding_only_time_wait_connections_passes_the_port_check` — **not replaceable**: kernel socket semantics.
+- `tests/daemon_engine_process_test.rs` (4 tests, custom harness) — **not replaceable**: process spawning, signals and a stub engine binary.

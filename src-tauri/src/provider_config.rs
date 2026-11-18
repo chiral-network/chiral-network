@@ -190,6 +190,93 @@ impl ProviderConfig {
         let identity = protocol::canonical_json(&self.network.identity)?;
         Ok(self.data_dir.join(hex::encode(protocol::digest(&identity))))
     }
+
+    /// Every engine key, managed or external, is a separate credential (book line 474;
+    /// `CLAUDE.md`: llama.cpp runs "with a protected API-key file and no wallet key"). The daemon
+    /// hands a managed engine its key file and presents the key as the bearer of every private
+    /// engine request, so a key that repeats the signing key in any spelling (`0x`, letter case,
+    /// leading zeros), the administration token or the RPC bearer would give that credential to
+    /// the engine. Reads the protected files; call it before any engine starts. Errors name the
+    /// rule, never a value.
+    pub fn verify_separate_engine_keys(&self) -> Result<(), String> {
+        use subtle::ConstantTimeEq;
+        use zeroize::Zeroizing;
+        let engines: Vec<_> = self
+            .models
+            .iter()
+            .filter_map(|m| m.engine_api_key_file.as_deref().map(|path| (&m.model.id, path)))
+            .collect();
+        if engines.is_empty() {
+            return Ok(());
+        }
+        // Lower-case hexadecimal without `0x`.
+        let signing = Zeroizing::new(crate::wallet::load_private_key(&self.signing_key_file)?);
+        let admin = Zeroizing::new(read_secret(&self.admin_token_file)?);
+        let bearer = match &self.network.rpc_bearer_file {
+            Some(path) => Some((path.as_path(), read_rpc_bearer(path)?)),
+            None => None,
+        };
+        let equal = |a: &str, b: &str| bool::from(a.as_bytes().ct_eq(b.as_bytes()));
+        for (model, path) in engines {
+            let key = Zeroizing::new(
+                read_secret(path)
+                    .map_err(|e| format!("engine API key file of model {model}: {e}"))?,
+            );
+            let key: &str = &key;
+            let unprefixed = key
+                .strip_prefix("0x")
+                .or_else(|| key.strip_prefix("0X"))
+                .unwrap_or(key);
+            // As 64 lower-case digits: leading zeros added or removed spell the same 256-bit key.
+            let digits = unprefixed.trim_start_matches('0');
+            let mut spelling = Zeroizing::new(String::with_capacity(digits.len().max(64)));
+            spelling.extend(std::iter::repeat_n('0', 64usize.saturating_sub(digits.len())));
+            spelling.push_str(digits);
+            spelling.make_ascii_lowercase();
+            let repeated = if same_file(path, &self.signing_key_file) | equal(&spelling, &signing)
+            {
+                Some("the provider signing key")
+            } else if same_file(path, &self.admin_token_file) | equal(key, &admin) {
+                Some("the administration token")
+            } else if bearer
+                .as_ref()
+                .is_some_and(|(file, bearer)| same_file(path, file) | equal(key, bearer))
+            {
+                Some("the RPC bearer")
+            } else {
+                None
+            };
+            if let Some(credential) = repeated {
+                return Err(format!(
+                    "engine_api_key_file of model {model} must hold a separate credential, not {credential}; issue a distinct engine token (book line 474)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Two configured paths that name one file, compared without reading either.
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
+}
+
+/// The RPC bearer as `rpc_client` sends it: a protected file's trimmed token.
+fn read_rpc_bearer(path: &Path) -> Result<zeroize::Zeroizing<String>, String> {
+    let unreadable =
+        || "cannot read the protected RPC bearer file to check that engine keys differ from it";
+    let mut bearer = zeroize::Zeroizing::new(String::new());
+    crate::wallet::protected_file(path)
+        .map_err(|_| unreadable())?
+        .take(4097)
+        .read_to_string(&mut bearer)
+        .map_err(|_| unreadable())?;
+    let token = bearer.trim();
+    if token.is_empty() || token.len() > 4096 || token.bytes().any(|b| b.is_ascii_control()) {
+        return Err(unreadable().into());
+    }
+    Ok(zeroize::Zeroizing::new(token.to_owned()))
 }
 
 /// Configuration paths name places next to their configuration file, not in the process working

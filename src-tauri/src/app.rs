@@ -90,6 +90,8 @@ pub struct ProviderRuntime {
 impl ProviderRuntime {
     pub async fn start(config: ProviderConfig) -> Result<Arc<Self>, String> {
         config.validate()?;
+        // Before anything, and so before any engine, starts.
+        config.verify_separate_engine_keys()?;
         let private_key = wallet::load_private_key(&config.signing_key_file)?;
         let wallet = wallet::address_from_private_key(&private_key)?;
         let offers = Arc::new(OfferRegistry::new(
@@ -1006,6 +1008,54 @@ mod tests {
                 "{path}"
             );
         }
+        runtime.dht.stop().await;
+        server.abort();
+    }
+
+    /// Book line 474 (`managed-engine-runtime` requirement 6, task 2.1): an engine key that
+    /// repeats the signing key in any spelling (`0x`, letter case, leading zeros), the
+    /// administration token or the RPC bearer is refused before anything starts, without printing
+    /// it; a distinct key is accepted.
+    #[tokio::test]
+    async fn an_engine_key_that_repeats_another_credential_is_refused_before_anything_starts() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, server) = unavailable_provider(directory.path()).await;
+        let protected = |name: &str, token: &str| {
+            let path = directory.path().join(name);
+            wallet::create_secret_file(&path).unwrap().write_all(token.as_bytes()).unwrap();
+            path
+        };
+        // Test-only values; the signing key has letters, so that letter case matters.
+        let signing = "0123456789abcdef".repeat(4);
+        config.signing_key_file = directory.path().join("lettered-wallet.key");
+        wallet::save_private_key(&config.signing_key_file, &signing).unwrap();
+        let bearer = "private-test-rpc-bearer-token-of-40-chars";
+        config.network.rpc_bearer_file = Some(protected("rpc.token", bearer));
+        let cases = [
+            (config.signing_key_file.clone(), "the provider signing key"),
+            (protected("upper.key", &format!("0X{}", signing.to_ascii_uppercase())), "the provider signing key"),
+            (protected("prefixed.key", &format!("0x{signing}\n")), "the provider signing key"),
+            // The same 256-bit value without its leading zero, or with more of them.
+            (protected("unpadded.key", signing.trim_start_matches('0')), "the provider signing key"),
+            (protected("padded.key", &format!("0X000{}", signing.to_ascii_uppercase())), "the provider signing key"),
+            (protected("admin-copy.token", OPERATOR_TOKEN), "the administration token"),
+            (config.admin_token_file.clone(), "the administration token"),
+            (protected("bearer-copy.token", bearer), "the RPC bearer"),
+        ];
+        for (engine_key, credential) in cases {
+            let mut refused = config.clone();
+            refused.models[0].engine_api_key_file = Some(engine_key);
+            let error = ProviderRuntime::start(refused).await.err().unwrap();
+            assert!(error.contains("must hold a separate credential") && error.contains(credential), "{error}");
+            assert!(error.contains(&config.models[0].model.id), "{error}");
+            for value in [signing.trim_start_matches('0'), OPERATOR_TOKEN, bearer] {
+                assert!(!error.to_ascii_lowercase().contains(&value.to_ascii_lowercase()), "{error}");
+            }
+            // Refused before the DHT, the deployment lock or any engine.
+            assert!(!config.data_dir.exists());
+        }
+        config.models[0].engine_api_key_file = Some(protected("engine.token", &"e7".repeat(32)));
+        let runtime = ProviderRuntime::start(config).await.unwrap();
         runtime.dht.stop().await;
         server.abort();
     }

@@ -20,15 +20,47 @@ struct Args {
     check: bool,
 }
 
-async fn shutdown_signal() {
+/// Termination requests (`SIGTERM` or `SIGINT` on Unix, Ctrl-C on Windows). tokio installs a
+/// handler only when a stream is created, so these exist before any engine starts: a request
+/// during startup must stop the engines already started instead of ending the daemon by the
+/// default action, which on macOS orphans them (book lines 634 and 642).
+struct Termination {
     #[cfg(unix)]
-    {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
-        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    ctrl_c: tokio::signal::windows::CtrlC,
+}
+
+impl Termination {
+    fn install() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Self {
+                terminate: signal(SignalKind::terminate())?,
+                interrupt: signal(SignalKind::interrupt())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                ctrl_c: tokio::signal::windows::ctrl_c()?,
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Ok(Self {})
+        }
     }
-    #[cfg(not(unix))]
-    {
+
+    async fn requested(&mut self) {
+        #[cfg(unix)]
+        tokio::select! { _ = self.terminate.recv() => {}, _ = self.interrupt.recv() => {} }
+        #[cfg(windows)]
+        let _ = self.ctrl_c.recv().await;
+        #[cfg(not(any(unix, windows)))]
         let _ = tokio::signal::ctrl_c().await;
     }
 }
@@ -66,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if token.len() < 32 {
             return Err("administration token must contain at least 32 random characters".into());
         }
+        config.verify_separate_engine_keys()?;
         for model in &config.models {
             if model.runtime.is_some() {
                 chiral_network::engine_runtime::validate_inventory(model)?;
@@ -76,13 +109,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Provider configuration and protected credentials validated; no services started");
         return Ok(());
     }
+    let mut termination = Termination::install()?;
     // Bind both before starting DHT/maintenance, so a failed operator bind cannot leave
     // an uncontrollable public provider running.
     let public_listener = tokio::net::TcpListener::bind(config.public_bind).await?;
     let admin_listener = tokio::net::TcpListener::bind(config.admin_bind).await?;
     let public_addr = public_listener.local_addr()?;
     let admin_addr = admin_listener.local_addr()?;
-    let runtime = ProviderRuntime::start(config).await?;
+    // Dropping an unfinished start drops its `ManagedEngine`s and the child of a launch in
+    // progress, which kills them; nothing has been served or published by then.
+    let runtime = tokio::select! {
+        started = ProviderRuntime::start(config) => started?,
+        _ = termination.requested() => {
+            return Err("termination requested during startup; the engines already started were stopped and nothing was served".into());
+        }
+    };
     let maintenance = runtime.maintenance();
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let mut public_stop = stop_rx.clone();
@@ -112,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::select! {
         result = &mut public => { public_finished = true; server_error = Some(format!("public listener stopped: {result:?}")); },
         result = &mut admin => { admin_finished = true; server_error = Some(format!("administration listener stopped: {result:?}")); },
-        _ = shutdown_signal() => {}
+        _ = termination.requested() => {}
     }
     maintenance.abort();
     let _ = maintenance.await;

@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-18 (forty-second round) — Code: separate engine key, no orphaned engine on a startup signal, wildcard port probe
+
+- In step at `9d77b6cd`; whitepaper unchanged; no new answers.
+- Code step (`specify-managed-engine-launch` tasks 2.1–2.3).
+  - 2.1 (security, book line 474): a new `ProviderConfig::verify_separate_engine_keys` runs at start and in `--check`, before anything starts. It refuses an engine key file that is, or repeats, the signing key in any spelling (`0x`/`0X`, any case, leading zeros added or removed — the review found the leading-zero bypass), the admin token or the RPC bearer. Comparisons are constant-time, and errors never echo a value.
+  - 2.3: the daemon now installs its SIGTERM and SIGINT handlers (Ctrl-C on Windows) before starting the runtime and races startup against them. A signal during engine startup drops the start future, which kills started engines, and exits nonzero instead of dying by default action and orphaning the engine on macOS.
+  - 2.2: a non-listening wildcard probe, bound before the endpoint, now refuses a wildcard listener on the engine port while a port holding only `TIME_WAIT` connections stays usable. IPv6 uses `V6ONLY`; Windows skips `SO_REUSEADDR` (left to native task 4.1).
+  - New regressions fail without their changes, in `app.rs`, `engine_runtime_tests.rs` and a new process target `tests/daemon_engine_process_test.rs`. That target has its own harness (`harness = false` in `Cargo.toml`) because a copy of the test binary stands in for `llama-server`.
+- Behaviour changes for operators: an unreadable `rpc_bearer_file` or external engine key file now refuses start (fail closed); on Linux, a listener on any other specific IPv4 address on the engine port is refused.
+- Verified on macOS only; Linux and Windows socket and signal behaviour stay in task 4.1.
+- Checks: full headless suite 522 passed, 2 ignored (`inference_owner_control_test` 60/60 in 2,105 s). The first full run had 19 failures in `inference_owner_control_test` after only 88 s (SQLite and fixture `unwrap` panics). The three failed tests I ran individually passed, no stub engine or daemon was left over, and a complete rerun passed. The cause was not identified: watch for a recurrence, especially right after the new `daemon_engine_process_test` target.
+
 ## 2026-11-18 (forty-first round) — Managed engine launch specified
 
 - In step at `fae2ea6d`; whitepaper unchanged; no new answers.
@@ -398,7 +410,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. `specify-managed-engine-launch` code differences 2.1 (wallet key as engine key), 2.3 (orphaned engine on startup signal) and 2.2 (wildcard port probe), then its acceptance tests 3.x.
+1. `specify-managed-engine-launch` acceptance tests 3.x (launch arguments, cleared environment); 2.1–2.3 are done.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

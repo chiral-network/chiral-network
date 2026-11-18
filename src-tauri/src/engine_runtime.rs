@@ -242,6 +242,40 @@ fn launch_command(model: &ModelConfig, validated: &ValidatedRuntime) -> Result<C
     Ok(command)
 }
 
+const OCCUPIED_ENGINE_PORT: &str = "managed engine loopback port is already occupied";
+
+/// Half of the occupied-port check (requirement 4, design decision 5). The endpoint listener
+/// that `ManagedEngine::start` also binds uses `SO_REUSEADDR` (mio sets it on Unix), with which
+/// macOS binds `127.0.0.1:P` beside another process listening on `0.0.0.0:P`. This socket binds,
+/// without listening, the wildcard address of the endpoint's family on the same port, which such
+/// a listener refuses. It keeps `SO_REUSEADDR` on Unix, because without it a port that holds
+/// only expiring `TIME_WAIT` connections (a stopped engine's) is refused too. On Windows the
+/// option would let the probe share a port another socket holds, so, as mio does, it is not set
+/// there. An IPv6 probe is `IPV6_V6ONLY`, so an IPv4-only wildcard listener does not refuse an
+/// IPv6 endpoint. It is bound before the endpoint listener: Linux refuses a wildcard bind on a
+/// port where a socket listens on a specific address, the launcher's own reservation included,
+/// but not a specific-address bind beside a wildcard socket that does not listen.
+fn wildcard_port_probe(endpoint: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpSocket> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    let (socket, wildcard) = match endpoint {
+        SocketAddr::V4(_) => (tokio::net::TcpSocket::new_v4()?, SocketAddr::from((Ipv4Addr::UNSPECIFIED, endpoint.port()))),
+        SocketAddr::V6(_) => (tokio::net::TcpSocket::new_v6()?, SocketAddr::from((Ipv6Addr::UNSPECIFIED, endpoint.port()))),
+    };
+    #[cfg(not(windows))]
+    socket.set_reuseaddr(true)?;
+    #[cfg(unix)]
+    if endpoint.is_ipv6() {
+        use std::os::fd::AsRawFd;
+        let on: libc::c_int = 1;
+        // SAFETY: a valid option pointer and length for an open socket descriptor.
+        if unsafe { libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, (&on as *const libc::c_int).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    socket.bind(wildcard)?;
+    Ok(socket)
+}
+
 pub struct ManagedEngine {
     child: Mutex<Child>,
     ready: AtomicBool,
@@ -259,9 +293,11 @@ impl ManagedEngine {
         // Refuse an already occupied endpoint rather than accidentally qualifying an unrelated process.
         let endpoint = parse_origin(&model.engine_url)?;
         let address = endpoint.socket_addrs(|| None).map_err(|_| "invalid engine bind address")?.into_iter().next().ok_or("missing engine bind address")?;
-        let reservation = tokio::net::TcpListener::bind(address).await.map_err(|_| "managed engine loopback port is already occupied")?;
+        let wildcard = wildcard_port_probe(address).map_err(|_| OCCUPIED_ENGINE_PORT)?;
+        let reservation = tokio::net::TcpListener::bind(address).await.map_err(|_| OCCUPIED_ENGINE_PORT)?;
         let mut launch = launch_command(model, &validated)?;
         drop(reservation);
+        drop(wildcard);
         let child = launch.spawn().map_err(|_| "cannot start pinned native llama-server")?;
         let pid = child.id().ok_or("managed engine did not acquire process identity")?;
         #[cfg(windows)]
