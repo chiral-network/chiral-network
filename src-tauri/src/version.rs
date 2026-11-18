@@ -384,7 +384,7 @@ fn reset_slot(slot: &RwLock<EffectivePolicy>) {
     *slot.write() = EffectivePolicy::default();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 pub(crate) fn set_effective_policy_for_test(policy: VersionPolicy) {
     effective_slot().write().policy = Some(policy);
 }

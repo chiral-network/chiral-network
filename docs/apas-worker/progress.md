@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-18 (thirty-sixth round) — Spec and code: consumer profile paths resolve next to the profile
+
+- In step at `43d93e71`; whitepaper unchanged; no new answers.
+- Step: comparison item 2, the high-severity one (book lines 449 and 470).
+  - Spec: new change `specify-profile-path-resolution` (5 requirements, 15 scenarios).
+  - Code: `Consumer::load` used to resolve a relative `data_dir`, RPC bearer file and DHT identity file against the working directory, so one profile run from two folders used two wallets and journals. It now resolves them against the profile's directory, as the provider, relay and gateway already did.
+  - A profile whose state exists only at the old working-directory location is refused, naming both paths and both remedies (an absolute `data_dir`, or a deliberate move), and nothing is moved. The review found that an empty scaffold made by a read-only command could hide an old wallet; the check now also compares the wallet key.
+  - Six binary-level regressions and a library test fail without the change.
+- Also: my round-34 test hook `version::set_effective_policy_for_test` caused a dead-code warning in headless test builds; it is now compiled only with the desktop feature.
+- Report: should line 449 name the relay and RPC-gateway configurations and the command-line exception, and should a client warn when both locations hold state (defaults: yes to the wording, no warning).
+
 ## 2026-11-18 (thirty-fifth round) — Comparison pass: 19 confirmed findings recorded
 
 - In step at `a5aa2b88`; whitepaper unchanged; no new answers.
@@ -310,7 +321,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (item 2, consumer profile paths, is high), then the missing specifications in its order.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (items 3–7; item 2 is done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

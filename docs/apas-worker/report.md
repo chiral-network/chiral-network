@@ -289,3 +289,18 @@ Question: may line 483 say "its signed gas limit (the chain's eSpace estimate, a
 Proposed default (what the spec and code already do): the eSpace estimate within those bounds. No spec or code change is planned; only the whitepaper wording would change.
 
 Nonblocking: no requirement or task waits on this answer.
+
+## 2026-11-18 — Profile paths: wording of line 449 and state at the old working-directory location
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Configuration and state* (line 449: "Paths in consumer/provider configurations are resolved relative to their configuration file") and line 472 ("Changing paths or restoring an older layout without deliberate state preservation is not an upgrade strategy"). Spec: the new change `specify-profile-path-resolution` (capability `profile-path-resolution`), design decisions 3 and 7 and open questions 1 and 2.
+
+What it says now: the consumer resolved its relative `data_dir`, RPC bearer file and DHT identity file against the working directory, unlike the provider, relay and RPC gateway. The consumer now resolves them against the profile. A profile whose state exists only at the old working-directory location is refused, with both paths and both remedies named, and nothing is moved.
+
+Questions:
+
+1. **Should line 449 name the relay and RPC-gateway configurations and the command-line exception?** Proposed wording: "Paths inside consumer, provider, relay and RPC-gateway configuration files are resolved relative to that file; paths given as command-line arguments follow the working directory." The spec adopts this reading.
+2. **Should a client warn when the old working-directory location also holds state?** When both locations hold this network's state, the profile's own location is used and the other is left untouched without a message. Proposed default (what the spec adopts): no warning, because the user has already acted deliberately.
+
+Nonblocking: no requirement or task waits on these answers.

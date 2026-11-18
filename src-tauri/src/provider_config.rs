@@ -186,7 +186,9 @@ impl ProviderConfig {
     }
 }
 
-fn resolve_path(base: &Path, path: &mut PathBuf) {
+/// Configuration paths name places next to their configuration file, not in the process working
+/// directory (book line 449). Absolute paths are kept unchanged.
+pub(crate) fn resolve_path(base: &Path, path: &mut PathBuf) {
     if path.is_relative() {
         *path = base.join(&*path);
     }

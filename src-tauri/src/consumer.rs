@@ -443,9 +443,114 @@ fn funding_stage(saved: &SavedAccount) -> &str {
     }
 }
 
+/// Resolves every relative path-valued field of a consumer profile against the profile's
+/// directory, as provider, relay and RPC-gateway configurations already are (book line 449).
+fn resolve_profile_paths(config: &mut ConsumerConfig, base: &Path) {
+    use crate::provider_config::resolve_path;
+    resolve_path(base, &mut config.data_dir);
+    if let Some(path) = config.network.rpc_bearer_file.as_mut() {
+        resolve_path(base, path);
+    }
+    if let Some(dht) = config.dht.as_mut() {
+        resolve_path(base, &mut dht.identity_file);
+    }
+}
+
+/// Before profile paths were resolved against the profile, a relative path named a place in the
+/// process working directory. State found only there is never silently replaced by a fresh empty
+/// location, and is never moved here: the profile is refused, naming both paths (book lines 470,
+/// 472 and 652). The check looks only at the two candidate locations of each relative field.
+fn refuse_stranded_profile_state(
+    profile: &Path,
+    unresolved: &ConsumerConfig,
+    resolved: &ConsumerConfig,
+) -> Result<(), String> {
+    let present = |path: &Path| fs::symlink_metadata(path).is_ok();
+    let shown = |path: &Path| {
+        std::path::absolute(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .display()
+            .to_string()
+    };
+    let profile = shown(profile);
+    let (old, new) = (&unresolved.data_dir, &resolved.data_dir);
+    if old.is_relative() && old != new {
+        let old_state = unresolved.network.scoped_dir(old);
+        let new_state = resolved.network.scoped_dir(new);
+        if present(&old_state) && !present(&new_state) {
+            return Err(format!(
+                "consumer profile {profile}: relative data_dir {:?} now resolves against the profile's directory to {}, which holds no state for this network, but this network's existing state is only under the working-directory location {} ({}). Refusing to start with empty state; nothing was created, moved or deleted. Either set data_dir to the absolute path {}, or stop every process that uses that state and deliberately move {} to {}, keeping its wallet key, nonce journal, agreements and policy watermark together",
+                old,
+                shown(new),
+                shown(old),
+                shown(&old_state),
+                shown(old),
+                shown(&old_state),
+                shown(&new_state),
+            ));
+        }
+        // Any load, even a read-only command from another working directory, creates the
+        // network-scoped directories, an empty journal and the policy directory at the resolved
+        // location. That scaffold is not this profile's wallet: while the consumer wallet key
+        // exists only at the working-directory location, the profile is still refused, so a later
+        // `wallet create` cannot silently start a second wallet beside the old one.
+        let old_key = old_state.join("consumer").join("wallet.key");
+        let new_key = new_state.join("consumer").join("wallet.key");
+        if present(&old_key) && !present(&new_key) {
+            return Err(format!(
+                "consumer profile {profile}: relative data_dir {:?} now resolves against the profile's directory to {}, which holds no consumer wallet key for this network ({} is absent), but this network's consumer wallet key exists only under the working-directory location {} ({}). Refusing to start without that wallet; nothing was created, moved or deleted. Either set data_dir to the absolute path {}, or stop every process that uses either location, set aside what is already at {}, and deliberately move {} to {}, keeping its wallet key, nonce journal, agreements and policy watermark together",
+                old,
+                shown(new),
+                shown(&new_key),
+                shown(old),
+                shown(&old_key),
+                shown(old),
+                shown(&new_state),
+                shown(&old_state),
+                shown(&new_state),
+            ));
+        }
+    }
+    let files = [
+        (
+            "network.rpc_bearer_file",
+            unresolved.network.rpc_bearer_file.as_ref(),
+            resolved.network.rpc_bearer_file.as_ref(),
+        ),
+        (
+            "dht.identity_file",
+            unresolved.dht.as_ref().map(|dht| &dht.identity_file),
+            resolved.dht.as_ref().map(|dht| &dht.identity_file),
+        ),
+    ];
+    for (field, old, new) in files {
+        let (Some(old), Some(new)) = (old, new) else {
+            continue;
+        };
+        if old.is_relative() && old != new && present(old) && !present(new) {
+            return Err(format!(
+                "consumer profile {profile}: relative {field} {:?} now resolves against the profile's directory to {}, which does not exist, but the file exists only at the working-directory location {}. Refusing to start without it; nothing was created, moved or deleted. Either set {field} to the absolute path {}, or deliberately move that file to {}",
+                old,
+                shown(new),
+                shown(old),
+                shown(old),
+                shown(new),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Consumer {
+    /// Loads a consumer profile. Relative paths in it are resolved against the profile's
+    /// directory, so one profile reaches one `data_dir`, wallet, agreement store, policy watermark
+    /// and nonce journal from any working directory (book lines 449 and 470).
     pub fn load(path: &Path) -> Result<Self, String> {
-        let config = decode(&fs::read(path).map_err(|_| "cannot read consumer config")?)?;
+        let unresolved: ConsumerConfig =
+            decode(&fs::read(path).map_err(|_| "cannot read consumer config")?)?;
+        let mut config = unresolved.clone();
+        resolve_profile_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
+        refuse_stranded_profile_state(path, &unresolved, &config)?;
         Self::new(config)
     }
     pub fn new(config: ConsumerConfig) -> Result<Self, String> {
@@ -2440,6 +2545,41 @@ mod tests {
             development: false,
             dht: None,
         }
+    }
+    #[test]
+    fn every_relative_profile_path_resolves_against_the_profile_directory() {
+        let mut config = configuration(Path::new("data"));
+        config.network.rpc_bearer_file = Some("secrets/rpc.token".into());
+        config.dht = Some(crate::provider_config::DhtConfig {
+            listen: "/ip4/127.0.0.1/tcp/0".into(),
+            bootstrap: vec![],
+            identity_file: "peer.key".into(),
+        });
+        // An absolute base on every platform; nothing is created there.
+        let root = std::env::temp_dir();
+        let base = root.join("profiles");
+        let base = base.as_path();
+        resolve_profile_paths(&mut config, base);
+        assert_eq!(config.data_dir, base.join("data"));
+        assert_eq!(
+            config.network.rpc_bearer_file.as_deref(),
+            Some(base.join("secrets/rpc.token").as_path())
+        );
+        assert_eq!(
+            config.dht.as_ref().unwrap().identity_file,
+            base.join("peer.key")
+        );
+        // Absolute paths are unchanged, and an absent optional path stays absent.
+        let mut absolute = configuration(&root.join("state"));
+        absolute.dht = Some(crate::provider_config::DhtConfig {
+            listen: "/ip4/127.0.0.1/tcp/0".into(),
+            bootstrap: vec![],
+            identity_file: root.join("peer.key"),
+        });
+        resolve_profile_paths(&mut absolute, base);
+        assert_eq!(absolute.data_dir, root.join("state"));
+        assert_eq!(absolute.network.rpc_bearer_file, None);
+        assert_eq!(absolute.dht.unwrap().identity_file, root.join("peer.key"));
     }
     #[test]
     fn network_scoping_and_process_mutation_locks() {

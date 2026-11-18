@@ -138,3 +138,10 @@ Requirement source: `openspec/changes/specify-version-policy/specs/client-versio
 - `version::tests::reset_forgets_the_effective_policy_and_its_scope` (`specify-version-policy` task 2.4) — **replaceable in principle**: resetting the slot is a pure state assignment, but the slot is a `parking_lot::RwLock` in a `OnceCell`, which Verus would model only through an external specification. It waits for the Verus report entry; the test stays.
 - `desktop::tests::logout_drops_the_previous_networks_version_status` — **not replaceable**: async session teardown with Tokio locks and a process-wide policy cell.
 - `tests/versionStatus.test.ts` — TypeScript tests of a Svelte store and the rendered shell; Verus does not apply.
+
+## Judged 2026-11-18 — profile path resolution regressions
+
+Requirement source: `openspec/changes/specify-profile-path-resolution/specs/profile-path-resolution/spec.md`.
+
+- The six tests in `src-tauri/tests/consumer_profile_paths_test.rs` — **not replaceable**: they run the `chiral` binary from different working directories and inspect files on disk; Verus models neither processes nor the file system.
+- `consumer::tests::every_relative_profile_path_resolves_against_the_profile_directory` — **replaceable in principle** for the join rule (absolute paths unchanged, relative paths joined to the base), which is pure; `std::path` would need an external specification. It waits for the Verus report entry; the test stays.
