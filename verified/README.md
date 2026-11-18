@@ -8,7 +8,7 @@ This directory contains a narrow [Verus](https://verus-lang.github.io) specifica
 |---|---|---|
 | `method_allowlist.rs` | `src-tauri/src/chain_rpc_api.rs::allowed_method` | Exact membership in an explicit set of settlement RPC methods; unlisted methods rejected; selected chain-operator/admin/unsigned-send methods excluded |
 
-The specification lists `eth_chainId`, `net_version`, `eth_blockNumber`, `eth_gasPrice`, `eth_getBalance`, `eth_getTransactionCount`, `eth_getTransactionReceipt`, `eth_sendRawTransaction`, `eth_syncing`, `eth_getBlockByNumber` and `eth_estimateGas`. This is **not** a wildcard permission for `eth_*`; the obsolete chiral-coin methods are not allowed. The runtime additionally validates parameters and applies transport/body/admission boundaries; those are outside this companion's proof scope.
+The specification lists `eth_chainId`, `eth_blockNumber`, `eth_gasPrice`, `eth_getBalance`, `eth_getTransactionCount`, `eth_getTransactionReceipt`, `eth_sendRawTransaction`, `eth_syncing`, `eth_getBlockByNumber` and `eth_estimateGas`. This is **not** a wildcard permission for `eth_*`; `net_version` and the obsolete chiral-coin methods are not allowed. The runtime additionally validates parameters and applies transport/body/admission boundaries; those are outside this companion's proof scope.
 
 The companion must remain aligned with the runtime manually. A proof of its specification alone does not establish equivalence to the deployed Rust function or validate a public RPC ingress. The former README's expected `8 verified` result referred to older proof contents and is not evidence for the current file.
 

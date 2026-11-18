@@ -241,3 +241,41 @@ fn legacy_ipv4_spellings_cannot_disguise_loopback_or_metadata_addresses() {
         );
     }
 }
+
+#[test]
+fn single_label_remote_hostnames_are_rejected_including_root_dot_spellings() {
+    // Every input is otherwise a valid public origin (HTTPS, port 443, root path),
+    // so the single-label rule is the only reason for refusal.
+    for (input, host) in [
+        ("https://intranet", "intranet"),
+        ("https://com", "com"),
+        ("https://intranet./", "intranet."),
+        ("https://com./", "com."),
+        ("https://intranet..", "intranet.."),
+        ("https://INTRANET.:443/", "intranet."),
+        ("https://intranet%2e/", "intranet."),
+        ("https://intranet\u{3002}", "intranet."),
+        // An empty leading label adds no label either.
+        ("https://.intranet/", ".intranet"),
+        ("https://.com./", ".com."),
+        ("https://..intranet/", "..intranet"),
+    ] {
+        // These are accepted by the URL parser, not malformed-URL refusals.
+        assert_eq!(url::Url::parse(input).unwrap().host_str(), Some(host));
+        for development in [false, true] {
+            assert!(
+                validate_endpoint(input, development).is_err(),
+                "single-label origin accepted: {input}, development={development}"
+            );
+        }
+    }
+    // The root dot is ignored only for classification; a valid absolute name is kept as given.
+    for development in [false, true] {
+        assert_eq!(
+            validate_endpoint("https://inference.example.org./", development)
+                .unwrap()
+                .as_str(),
+            "https://inference.example.org./"
+        );
+    }
+}

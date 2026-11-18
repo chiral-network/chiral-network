@@ -158,3 +158,13 @@ Requirement source: `openspec/changes/specify-offer-discovery/specs/inference-of
 - `dht::tests::republished_namespaces_keep_their_manifest_pages` — **replaceable in principle**: page construction over an ordered map is pure; it waits for Verus.
 - `dht::tests::failed_publication_serves_and_advertises_nothing`, `app::tests::failed_refresh_withdraws_the_offers_it_published` — **not replaceable**: a libp2p swarm, a Kademlia store, HTTP fixtures and async refresh.
 - `dht::tests::symbolic_link_to_identity_file_is_refused_unchanged`, `exposed_identity_file_is_refused_unchanged`, `windows_identity_file_has_a_current_user_only_access_list` — **not replaceable**: file-system modes, symlinks and Windows access lists.
+
+## 2026-11-18 — chain RPC gateway and origin regressions; Verus companion narrowed
+
+Requirement sources: `openspec/changes/specify-chain-rpc-gateway/specs/chain-rpc-gateway/spec.md` and `specify-inference-commercial-terms` *Offer freshness and advertised origin*.
+
+- `verified/method_allowlist.rs` (an existing Verus companion of `chain_rpc_api::allowed_method`) was narrowed in step with the runtime: `net_version` was removed from `allowed_methods()`. Neither lemma (`unlisted_methods_are_rejected`, `operator_methods_are_rejected`) depends on `net_version`, removing a set member cannot falsify a non-membership `ensures`, and no `assume`, `admit` or `external_body` was added. The proof was **not re-run**, because Verus is unavailable (open report entry); re-run it when Verus is installed.
+- `chain_rpc_api::tests::allowlist_is_exactly_ten_eth_methods` — **replaced in principle** by the Verus companion for membership, but the companion's equivalence to the Rust function is manual (see `verified/README.md`), so the test stays.
+- `src-tauri/tests/chain_rpc_gateway_test.rs` (3 tests) — **not replaceable**: they spawn the gateway binary and use HTTP and protected files.
+- `inference_offer_origin_test::single_label_remote_hostnames_are_rejected_including_root_dot_spellings` — **replaceable in principle** for the label-count predicate, which is pure; URL parsing would need an external specification. It waits for Verus.
+- `scripts/test_provider_preflight.py`, `scripts/test_provision_provider.py` — Python; Verus does not apply.

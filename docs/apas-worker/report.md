@@ -334,3 +334,18 @@ Proposed default (what the spec adopts): (a), by not listing performance withdra
 Separately, the spec records three code differences, not questions: a manifest assembled from pages of different snapshots counts as complete and can withdraw a live offer (comparison item 4); a refresh that fails leaves the offers it published earlier in that pass served; and the DHT identity key file is not a protected secret on Windows and is read through symbolic links on Unix (tasks 2.1–2.3).
 
 Nonblocking: no requirement or task waits on this answer.
+
+## 2026-11-18 — Chain RPC gateway: the relay's unauthenticated RPC route, and the wording of lines 644 and 667
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Native provider provisioning and operations* (line 644: "The standalone RPC gateway has its own inbound bearer and persistent journal, distinct from engine/admin credentials") and *Listener and secret boundaries* (line 656: Caddy TLS ingress in front of "the bounded authenticated chain RPC gateway (`127.0.0.1:8547`)"; line 667: "an exact `eth_*` method allowlist"). Spec: the new change `specify-chain-rpc-gateway` (capability `chain-rpc-gateway`), design decisions 2, 4, 5 and 9 and open questions 1 and 2. Code: `src-tauri/src/bin/chiral_rpc_gateway.rs`, `src-tauri/src/chain_rpc_api.rs:25–38` and `src-tauri/src/bin/relay_server.rs:232`.
+
+What it says now: the gateway served every request without a bearer when bound to loopback, although the generated Caddyfile forwards the public RPC domain to that loopback port (comparison item 7). It now refuses to start without `--bearer-file` on any bind address, with no development exception, and requires an owner-only file of at least 32 visible ASCII characters that differs from the upstream RPC bearer. Requests carrying `Origin` stay refused, and `net_version` was removed from the allowlist because it is not an `eth_*` method and no Chiral client calls it. The relay still mounts the same RPC route on its loopback HTTP listener with no bearer; the reference Caddyfile does not forward it.
+
+Questions:
+
+1. **Should the relay keep its unauthenticated `/api/chain/rpc` route?** Options: (a) remove it, since provider and relay already call the standalone gateway; (b) require a protected bearer and refuse `Origin` there too; (c) keep it as a loopback-only convenience. Proposed default (what this change does): the relay is unchanged until you answer.
+2. **May lines 644 and 667 state the bearer rule and the method list?** Proposed wording for line 644: "The standalone RPC gateway requires its own protected inbound bearer file on every bind address, including loopback (at least 32 visible ASCII characters, distinct from its upstream RPC bearer and from engine/admin credentials), and keeps its own persistent journal." For line 667: "exposes exactly `eth_chainId`, `eth_blockNumber`, `eth_gasPrice`, `eth_syncing`, `eth_getBalance`, `eth_getTransactionCount`, `eth_getBlockByNumber`, `eth_getTransactionReceipt`, `eth_estimateGas` and `eth_sendRawTransaction`, with fixed parameter shapes, not arbitrary node administration". This also confirms that `net_version` stays excluded.
+
+Nonblocking: no requirement or task waits on these answers.

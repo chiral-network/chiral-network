@@ -182,6 +182,9 @@ def main():
     require(re.fullmatch(r'(0x)?[0-9a-fA-F]{64}', key) and 0 < int(key, 16) < 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141, 'invalid provider secp256k1 key')
     rpc_token = secret_file(c['rpc_token_file'])
     require(len(rpc_token) >= 32, 'RPC bearer must contain at least 32 characters')
+    upstream_rpc_token = secret_file(c['upstream_rpc_token_file']) if c.get('upstream_rpc_token_file') else None
+    # The gateway refuses to start when its inbound bearer equals its upstream bearer.
+    require(upstream_rpc_token != rpc_token, 'the inbound RPC bearer must differ from the upstream RPC bearer')
     policy = json.loads(Path(c['version_policy_file']).read_text())
     require(re.fullmatch(r'[0-9a-fA-F]{128}', policy.get('signature', '')), 'signed release policy required; relay verifies the signature at startup')
     model_dir = Path(c['model_dir']).resolve(strict=True)
@@ -234,8 +237,8 @@ def main():
     save('secrets/engine.token', secrets.token_urlsafe(48) + '\n', True)
     upstream_network = dict(network)
     upstream_network['rpc_bearer_file'] = None
-    save('secrets/upstream-rpc.token', secret_file(c['upstream_rpc_token_file']) + '\n' if c.get('upstream_rpc_token_file') else '', True)
-    if c.get('upstream_rpc_token_file'):
+    save('secrets/upstream-rpc.token', upstream_rpc_token + '\n' if upstream_rpc_token is not None else '', True)
+    if upstream_rpc_token is not None:
         upstream_network['rpc_bearer_file'] = mapped('secrets/upstream-rpc.token', '/run/secrets/upstream-rpc.token')
     save('rpc-gateway.json', upstream_network)
     public_network = dict(network, rpc_url='http://127.0.0.1:8547/api/chain/rpc', rpc_bearer_file=mapped('secrets/rpc.token', '/run/secrets/rpc.token'),

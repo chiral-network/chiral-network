@@ -170,7 +170,9 @@ pub fn validate_endpoint(endpoint: &str, development: bool) -> Result<url::Url, 
     let local =
         literal.is_some_and(|ip| ip.is_loopback()) || host.eq_ignore_ascii_case("localhost");
     if !(development && local) {
-        // A DNS root dot does not leave the reserved localhost namespace.
+        // A DNS root dot neither leaves the reserved localhost namespace nor adds a
+        // label: classify the trimmed name, but return the origin as given. An empty
+        // leading label (`.intranet`) adds no label either, so only nonempty labels count.
         // Do not use this spelling to broaden the exact development exception.
         let dns_name = host.trim_end_matches('.');
         if url.scheme() != "https"
@@ -179,7 +181,7 @@ pub fn validate_endpoint(endpoint: &str, development: bool) -> Result<url::Url, 
             || local
             || dns_name.eq_ignore_ascii_case("localhost")
             || dns_name.ends_with(".localhost")
-            || (literal.is_none() && !host.contains('.'))
+            || (literal.is_none() && dns_name.split('.').filter(|l| !l.is_empty()).count() < 2)
         {
             return Err("endpoint must be public HTTPS on port 443; development only permits loopback exceptions".into());
         }

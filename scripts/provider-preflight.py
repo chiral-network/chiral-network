@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.request
 
 provision = importlib.import_module('provision-provider')
 qualifier = importlib.import_module('qualify-provider')
@@ -18,6 +19,20 @@ qualifier = importlib.import_module('qualify-provider')
 
 def run(command):
     return subprocess.run(command, check=True, capture_output=True, text=True, timeout=30).stdout
+
+
+def check_rpc_gateway_bearer(base='http://127.0.0.1:8547'):
+    """The chain RPC gateway must refuse a JSON-RPC request that lacks its inbound bearer.
+    TLS ingress forwards public requests to this loopback port, so loopback is not private."""
+    body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'eth_chainId', 'params': []}).encode()
+    request = urllib.request.Request(base + '/api/chain/rpc', body, {'Content-Type': 'application/json'}, method='POST')
+    try:
+        with qualifier.OPENER.open(request, timeout=10) as response:
+            status = response.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+    if status != 401:
+        raise RuntimeError('chain RPC gateway answered a request without its bearer with HTTP %d, not 401' % status)
 
 
 def check_listeners():
@@ -151,6 +166,7 @@ def main():
         for url in ('http://127.0.0.1:8081/api/health', 'http://127.0.0.1:8081/api/ready', 'http://127.0.0.1:8547/healthz', 'http://127.0.0.1:8547/readyz'):
             if status(url) != 200:
                 raise RuntimeError('relay or chain readiness unavailable')
+        check_rpc_gateway_bearer()
         for path in ('/admin/status', '/admin/runtime', '/tokenize', '/apply-template', '/metrics', '/api/headless/wallet'):
             if status(config['public_endpoint'] + path) not in (401, 403, 404, 405):
                 raise RuntimeError('private or retired route exposed: ' + path)

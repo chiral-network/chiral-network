@@ -20,11 +20,12 @@ use std::{
 };
 use tokio::sync::Semaphore;
 const MAX_BATCH: usize = 8;
+/// The exact `eth_*` allowlist (book line 667). No Chiral client calls `net_version`;
+/// clients identify the network with `eth_chainId` and the genesis block.
 pub fn allowed_method(method: &str) -> bool {
     matches!(
         method,
         "eth_chainId"
-            | "net_version"
             | "eth_blockNumber"
             | "eth_gasPrice"
             | "eth_getBalance"
@@ -364,6 +365,45 @@ mod tests {
             "eth_getTransactionReceipt",
         ] {
             assert!(allowed_method(method));
+        }
+    }
+    #[test]
+    fn allowlist_is_exactly_ten_eth_methods() {
+        for method in [
+            "eth_chainId",
+            "eth_blockNumber",
+            "eth_gasPrice",
+            "eth_getBalance",
+            "eth_getTransactionCount",
+            "eth_getTransactionReceipt",
+            "eth_sendRawTransaction",
+            "eth_syncing",
+            "eth_getBlockByNumber",
+            "eth_estimateGas",
+        ] {
+            assert!(allowed_method(method), "{method}");
+        }
+        // Not in the eth_* allowlist, and no case, prefix or padding variant of a listed name.
+        for method in [
+            "net_version",
+            "net_listening",
+            "net_peerCount",
+            "web3_clientVersion",
+            "web3_sha3",
+            "eth_chainid",
+            "ETH_CHAINID",
+            "eth_chainId ",
+            " eth_chainId",
+            "eth_",
+            "eth_*",
+            "",
+        ] {
+            assert!(!allowed_method(method), "{method:?}");
+            assert_eq!(
+                validate(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":[]})),
+                Err("RPC method is not exposed"),
+                "{method:?}"
+            );
         }
     }
     #[test]

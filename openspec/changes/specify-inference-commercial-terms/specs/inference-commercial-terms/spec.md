@@ -145,7 +145,7 @@ GPU layers SHALL be 1–999. One device SHALL use split mode `none` with an empt
 
 Current offer acceptance SHALL require `expires_at > issued_at`, `expires_at > now`, issuance no more than 30 seconds in the future, and lifetime no greater than 3,600 seconds. Native publication SHALL normally issue 120-second offers; that shorter issuer lifetime SHALL NOT replace the receiver's 3,600-second bound. Offer expiry SHALL prevent fresh selection/proposal without erasing a previously acknowledged agreement.
 
-An advertised remote origin SHALL use HTTPS on port 443, with no credentials, query, fragment or non-root path. Forbidden literal addresses, loopback/localhost names and non-public remote origins SHALL be rejected. Explicit development mode SHALL permit HTTP(S) and non-443 ports only for literal loopback or exact `localhost`, not arbitrary private LAN or metadata endpoints. Consumers SHALL not append an SDK path before validating the origin. Static declaration acceptance SHALL NOT be represented as successful DNS/reachability, health or qualification verification; outbound transport safeguards remain additionally required.
+An advertised remote origin SHALL use HTTPS on port 443, with no credentials, query, fragment or non-root path. Forbidden literal addresses, loopback/localhost names, single-label remote hostnames and non-public remote origins SHALL be rejected. A hostname SHALL be classified after URL normalization by its nonempty labels, so trailing DNS root dots and empty leading labels add no label: a root-dot spelling such as `https://intranet./`, `https://com./` or `https://intranet..`, and a leading-dot spelling such as `https://.intranet/`, is a single-label hostname; classification SHALL NOT rewrite the accepted origin, so `https://inference.example.org./` remains valid as given. Explicit development mode SHALL permit HTTP(S) and non-443 ports only for literal loopback or exact `localhost`, not arbitrary private LAN or metadata endpoints. Consumers SHALL not append an SDK path before validating the origin. Static declaration acceptance SHALL NOT be represented as successful DNS/reachability, health or qualification verification; outbound transport safeguards remain additionally required.
 
 #### Scenario: Inclusive issuance and lifetime bounds
 
@@ -158,6 +158,12 @@ An advertised remote origin SHALL use HTTPS on port 443, with no credentials, qu
 - **WHEN** an offer advertises a path-prefixed origin, remote cleartext HTTP, remote port 8443, a private address or a metadata endpoint
 - **THEN** origin validation rejects it
 - **AND** enabling development does not authorize the private LAN/metadata/remote cases
+
+#### Scenario: Single-label remote hostname, including a root-dot spelling
+
+- **WHEN** an offer advertises `https://intranet`, `https://intranet./`, `https://com./`, `https://intranet..` or `https://.intranet/` on port 443
+- **THEN** origin validation rejects it, with or without development mode
+- **AND** `https://inference.example.org./` is accepted and returned with its root dot
 
 ### Requirement: Complete signed quote and immutable copied terms
 

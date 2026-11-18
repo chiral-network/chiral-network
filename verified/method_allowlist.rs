@@ -6,7 +6,6 @@ verus! {
 pub open spec fn allowed_methods() -> Set<Seq<char>> {
     set![
         "eth_chainId"@,
-        "net_version"@,
         "eth_blockNumber"@,
         "eth_gasPrice"@,
         "eth_getBalance"@,

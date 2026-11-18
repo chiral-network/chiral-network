@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-18 (fortieth round) — Spec and code: the chain RPC gateway always requires its bearer; single-label origins refused
+
+- In step at `43a5dff0`; whitepaper unchanged; no new answers.
+- Step: comparison items 7 and 5.
+  - Item 7 (security). `chiral_rpc_gateway` served every request without authentication when bound to loopback without `--bearer-file`. Behind the generated Caddy ingress, that would expose `eth_sendRawTransaction` with the operator's upstream bearer (book lines 644, 656 and 667).
+    - New change `specify-chain-rpc-gateway` (8 requirements, 25 scenarios).
+    - The gateway now requires a protected bearer file on every bind address, of at least 32 visible ASCII characters and distinct from the upstream bearer. A 401 carries `no-store`. The allowlist is exactly ten `eth_*` methods (`net_version` removed; the Verus companion was narrowed in step, but its proof was not re-run).
+    - Preflight now requires an unauthenticated POST to get 401, and provisioning refuses equal inbound and upstream bearers.
+  - Item 5. Origin validation now classifies hostnames by their nonempty labels, so `https://intranet./` and `https://.intranet/` are refused. The review found the leading-dot form. A scenario and task were added to commercial-terms *Offer freshness and advertised origin*.
+  - New tests fail without their changes: 3 gateway process tests, an allowlist test, an origin test and 6 script tests.
+- Report: should the relay's own loopback RPC route (`relay_server.rs:232`, no bearer) be removed, bearer-protected or kept? And may lines 644 and 667 state the bearer rule and the ten methods (excluding `net_version`)?
+
 ## 2026-11-18 (thirty-ninth round) — Code: snapshot-safe manifest withdrawal, clean failed refreshes, a protected DHT identity
 
 - In step at `b416c157`; whitepaper unchanged; no new answers.
@@ -364,7 +376,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison items 5–7, then `specify-offer-discovery` task 2.4; items 2–4 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

@@ -222,7 +222,7 @@ python scripts/provider-preflight.py --deployment "$DEPLOY_DIR" \
 python scripts/provider-admin.py --token-file "$DEPLOY_DIR/secrets/admin.token" status
 ```
 
-Running preflight requires provider `/healthz` and `/readyz`, relay `/api/health` and `/api/ready`, and RPC gateway `/healthz` and `/readyz` all return 200; it checks authenticated managed runtime identity and that private/retired routes remain inaccessible via provider ingress. Listener inspection requires `ss` on Linux, `lsof` on macOS, or PowerShell `Get-NetTCPConnection` on Windows. Private ports 8000, 9419, 9421, 8547 and 8081 must remain loopback. Readiness is not qualification; a temporary 503/429 is not permission to bypass guards.
+Running preflight requires provider `/healthz` and `/readyz`, relay `/api/health` and `/api/ready`, and RPC gateway `/healthz` and `/readyz` all return 200, and that the RPC gateway answers a `POST /api/chain/rpc` without its bearer with 401; it checks authenticated managed runtime identity and that private/retired routes remain inaccessible via provider ingress. Listener inspection requires `ss` on Linux, `lsof` on macOS, or PowerShell `Get-NetTCPConnection` on Windows. Private ports 8000, 9419, 9421, 8547 and 8081 must remain loopback. Readiness is not qualification; a temporary 503/429 is not permission to bypass guards.
 
 ### Memory fit before choosing concurrency
 
