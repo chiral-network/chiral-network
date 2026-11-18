@@ -349,3 +349,26 @@ Questions:
 2. **May lines 644 and 667 state the bearer rule and the method list?** Proposed wording for line 644: "The standalone RPC gateway requires its own protected inbound bearer file on every bind address, including loopback (at least 32 visible ASCII characters, distinct from its upstream RPC bearer and from engine/admin credentials), and keeps its own persistent journal." For line 667: "exposes exactly `eth_chainId`, `eth_blockNumber`, `eth_gasPrice`, `eth_syncing`, `eth_getBalance`, `eth_getTransactionCount`, `eth_getBlockByNumber`, `eth_getTransactionReceipt`, `eth_estimateGas` and `eth_sendRawTransaction`, with fixed parameter shapes, not arbitrary node administration". This also confirms that `net_version` stays excluded.
 
 Nonblocking: no requirement or task waits on these answers.
+
+## 2026-11-18 — Managed engine launch: what "before startup" requires of fit, and CPU headroom outside development
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Hardware participation and platform status* (line 90: "at least 4,096 MiB headroom" for shared-memory operation versus "at least 256 MiB per dedicated device"; line 100: CPU is a development path) and *Native provider provisioning and operations* (line 617: "Model fit/headroom is checked after actual loading as well as before startup"). Spec: the new change `specify-managed-engine-launch` (capability `managed-engine-runtime`), requirement *Physical devices are observed independently, and headroom is enforced before startup and after loading*, design decisions 6 and 7 and open questions 1 and 2. Code: `src-tauri/src/engine_runtime.rs:32–54` (`EngineRuntimeConfig::validate`), `253–284` (`ManagedEngine::start`) and `349–416` (`observe_devices`).
+
+What it says now: the provider daemon's managed launch is now specified for the current runtime (comparison item 8). Before spawning the engine, the daemon checks that each selected device has free memory of at least the reserve. It does not estimate whether weights, KV cache and buffers fit in free memory minus the reserve. With automatic fitting off, the actual load decides fit, and after the engine reports health the daemon observes the devices again and stops the engine if headroom was lost. A CPU runtime observes no device, has no reserve floor and no memory check, and the configuration accepts it outside development for an unprofiled embedding model.
+
+Questions:
+
+1. **What does "before startup" require of fit?** Options: (a) the headroom check before startup, as today, with the actual load and the post-load check deciding fit; (b) also an estimate of weights, KV cache and buffers against free memory minus the reserve, refused before spawning, as the desktop target design (`desktop-local-runtime`, *Fit is checked before and after loading*) does. Proposed default (what the spec adopts): (a).
+2. **What headroom applies to a CPU runtime outside development?** Options: (a) none, as today: CPU carries no capacity tier, headroom or speed claim; (b) a system-memory reserve, for example 4,096 MiB as for unified memory, checked before and after loading; (c) no CPU managed runtime outside development. Proposed default (what the spec adopts): (a). This is related to, but separate from, the entry of 2026-11-18 about priced, unprofiled embedding deployments on external engines.
+
+Separately, the spec records three code differences, not questions:
+
+- the engine key file is not checked against the provider signing key, administration token or RPC bearer, so a configuration naming the signing key file hands the wallet key to the engine (book line 474);
+- the occupied-port probe uses address reuse, so on macOS a wildcard listener on the engine port is not detected (book lines 627 and 642). Simply dropping address reuse would also refuse a prompt restart while the old engine's connections are in `TIME_WAIT`;
+- the daemon installs its termination handlers only after startup, so on macOS a `SIGTERM` or `SIGINT` while an engine loads orphans the engine (book lines 634 and 642).
+
+These are tasks 2.1–2.3.
+
+Nonblocking: no requirement or task waits on these answers; option (b) of either question would add one task.

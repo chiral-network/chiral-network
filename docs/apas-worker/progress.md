@@ -1,5 +1,27 @@
 # APAS progress
 
+## 2026-11-18 (forty-first round) — Managed engine launch specified
+
+- In step at `fae2ea6d`; whitepaper unchanged; no new answers.
+- Spec step (comparison item 8, missing specification): new change `specify-managed-engine-launch` (capability `managed-engine-runtime`, 11 requirements, 48 scenarios) for the current provider daemon's managed llama.cpp launch (book lines 69–103 and 605–680). It covers:
+  - only the pinned `llama-server` as a supervised child;
+  - inventories verified before every launch;
+  - explicit, bounded settings that are refused rather than adjusted;
+  - a loopback-only engine, with an occupied port refused;
+  - the serving contract passed as explicit arguments;
+  - a minimal environment, with the API key only as a protected file path;
+  - independent device observation and headroom before and after loading;
+  - no contract reduction;
+  - bounded startup, and an engine exit withdrawing service with no restart;
+  - shutdown stopping the children.
+  Commercial-terms, generation-performance and offer-discovery requirements are cited by name. Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1: the engine API key file is never checked against the signing key, admin token or RPC bearer, so a provider pointed at its wallet key file would hand the wallet key to the engine as its bearer;
+  - 2.2: on macOS, the occupied-port probe misses a wildcard listener;
+  - 2.3: a SIGTERM or Ctrl-C during engine startup kills the daemon before its handlers exist, orphaning the engine on macOS.
+- Missing launch tests are acceptance tasks 3.x.
+- Report: what "before startup" requires for fit (default: free memory ≥ reserve, then a post-load check, as today), and what headroom applies to a CPU managed runtime outside development (default: no capacity claim, as today).
+
 ## 2026-11-18 (fortieth round) — Spec and code: the chain RPC gateway always requires its bearer; single-label origins refused
 
 - In step at `43a5dff0`; whitepaper unchanged; no new answers.
@@ -376,12 +398,13 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. `specify-managed-engine-launch` code differences 2.1 (wallet key as engine key), 2.3 (orphaned engine on startup signal) and 2.2 (wildcard port probe), then its acceptance tests 3.x.
+2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 
-2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
-3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 

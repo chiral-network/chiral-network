@@ -17,7 +17,7 @@ Whitepaper `docs/chiral-book.md` (SHA-256 `eda22ce0…3933`) against the OpenSpe
 
 ## Missing specifications (spec before code)
 
-8. **Managed provider engine launch contract** (medium; found by two slices). Book lines 73, 75, 90, 92 and 615–619. The code implements it (`engine_runtime.rs:201–206`, `221–241`, `259–262`, `277–282`, `349–358`; `app.rs:196–214`) but only target-design specs state it, and no test asserts the launch arguments or the cleared environment.
+8. **Managed provider engine launch contract** (medium; found by two slices). Book lines 73, 75, 90, 92 and 615–619. The code implements it (`engine_runtime.rs:201–206`, `221–241`, `259–262`, `277–282`, `349–358`; `app.rs:196–214`) but only target-design specs state it, and no test asserts the launch arguments or the cleared environment. Specified in round 41 (specify-managed-engine-launch).
 9. **Current offer discovery and publication: revisions, equivocation, withdrawal, bounded registry** (medium). Book lines 29, 59, 211–261. Specified in round 38 (specify-offer-discovery).
 10. **Payment-gated reputation: feedback admission, storage, Elo, revalidation** (medium). Book lines 361–446.
 11. **Outbound HTTP safeguards and the private engine origin boundary** (medium). Book lines 262–279.
