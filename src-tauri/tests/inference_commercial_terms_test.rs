@@ -796,3 +796,46 @@ fn native_embedding_price_validation_covers_every_configured_model() {
         assert_native_config_admission(&config, &path, false);
     }
 }
+
+/// A profiled generation deployment, managed or on an operator-owned external engine.
+fn generation_provider_config(development: bool, managed: bool) -> ProviderConfig {
+    let mut config = serde_json::to_value(embedding_provider_config(development, false)).unwrap();
+    let mut model = profiled_model_document();
+    model["capabilities"] = json!(["chat"]);
+    config["models"][0]["model"] = model;
+    config["models"][0]["price"] = json!({ "input_wei_per_1k": "1000", "output_wei_per_1k": "2000" });
+    config["models"][0]["qualification_evidence_file"] = json!("evidence.json");
+    config["models"][0]["runtime"] = if managed {
+        json!({
+            "runtime_dir": "runtime", "artifact_dir": "model", "backend": "cuda",
+            "device_ids": ["CUDA0"], "memory_reserve_mib": 256, "gpu_layers": 999,
+            "split_mode": "none", "tensor_split": [],
+            "cache_type_k": "f16", "cache_type_v": "f16", "flash_attention": true,
+            "batch_size": 512, "ubatch_size": 128, "startup_timeout_secs": 30
+        })
+    } else {
+        Value::Null
+    };
+    serde_json::from_value(config).unwrap()
+}
+
+#[test]
+fn qualified_profiles_require_a_managed_runtime_outside_development() {
+    // Book lines 73, 609 and 615-617: qualification evidence binds a managed launch's
+    // verified runtime, artifacts and devices; an external engine is for calibration only.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("provider.json");
+    let external = generation_provider_config(false, false);
+    let error = external.validate().unwrap_err();
+    assert!(error.contains("requires a Rust-managed runtime"), "{error}");
+    assert_native_config_admission(&external, &path, false);
+    // A private-network external engine is refused just the same.
+    let mut private_ip = serde_json::to_value(&external).unwrap();
+    private_ip["models"][0]["engine_url"] = json!("http://10.0.0.5:8080");
+    let private_ip: ProviderConfig = serde_json::from_value(private_ip).unwrap();
+    assert!(private_ip.validate().unwrap_err().contains("requires a Rust-managed runtime"));
+    // The same profile under a managed runtime is accepted.
+    assert_native_config_admission(&generation_provider_config(false, true), &path, true);
+    // Explicit development calibration may still point a profile at an external engine.
+    assert_native_config_admission(&generation_provider_config(true, false), &path, true);
+}

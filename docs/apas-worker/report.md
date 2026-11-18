@@ -304,3 +304,17 @@ Questions:
 2. **Should a client warn when the old working-directory location also holds state?** When both locations hold this network's state, the profile's own location is used and the other is left untouched without a message. Proposed default (what the spec adopts): no warning, because the user has already acted deliberately.
 
 Nonblocking: no requirement or task waits on these answers.
+
+## 2026-11-18 — May a priced, unprofiled embedding deployment use an external engine?
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Why llama.cpp* (line 73: Rust "starts and supervises a pinned private `llama-server` subprocess … and verifies artifacts before use"), *Native provider provisioning and operations* (line 609: an operator-owned external private llama.cpp endpoint "is available for calibration, not a substitute for managed runtime evidence") and *Listener and secret boundaries* (line 656: an engine endpoint "may be a literal private IP for a protected trusted-network deployment"). Spec: `specify-inference-commercial-terms`, requirement *Native deployment constraints cannot be bypassed by declaration validity*, and its task 2.6.
+
+What it says now: a qualified generation profile now requires a Rust-managed runtime outside development, and an external engine is refused. An embedding deployment carries no speed profile, and the configuration still accepts a priced embedding model on an external engine (loopback or a literal private IP) without a managed runtime. In that case no runtime, artifact or device inventory is verified before the offer is published; only readiness probes run. Book line 656 allows a private-IP engine, but a managed engine is loopback-only, so a private-IP engine can never be managed.
+
+Question: may a non-development, priced, unprofiled embedding deployment be served by an external engine (lines 656 and 609 read as allowing a trusted-network engine), or must every non-development priced model run on a Rust-managed runtime (line 73)?
+
+Proposed default (what the code does today): allow it, because line 656 permits a private-IP engine and embeddings carry no performance claim. If you choose the managed rule, the refusal extends to every priced model outside development.
+
+Nonblocking: no requirement or task waits on this answer.

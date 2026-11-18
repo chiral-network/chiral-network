@@ -145,3 +145,7 @@ Requirement source: `openspec/changes/specify-profile-path-resolution/specs/prof
 
 - The six tests in `src-tauri/tests/consumer_profile_paths_test.rs` — **not replaceable**: they run the `chiral` binary from different working directories and inspect files on disk; Verus models neither processes nor the file system.
 - `consumer::tests::every_relative_profile_path_resolves_against_the_profile_directory` — **replaceable in principle** for the join rule (absolute paths unchanged, relative paths joined to the base), which is pure; `std::path` would need an external specification. It waits for the Verus report entry; the test stays.
+
+## Judged 2026-11-18 — managed-runtime requirement for qualified profiles
+
+- `inference_commercial_terms_test::qualified_profiles_require_a_managed_runtime_outside_development` (commercial-terms task 2.6) — **replaceable in principle**: `ProviderConfig::validate`'s rule is a pure predicate over the parsed configuration, but the test exercises JSON parsing and the file-loading path too. It waits for the Verus report entry; the test stays.

@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-18 (thirty-seventh round) — Code: a qualified profile needs a managed runtime
+
+- In step at `eb0b75e9`; whitepaper unchanged; no new answers.
+- Step: comparison item 3, a code difference (book lines 73, 609 and 615–617; commercial-terms *Native deployment constraints cannot be bypassed by declaration validity*). A non-development provider could publish a qualified generation profile from an operator-owned external engine. Readiness checked only the evidence file and a few `/props` fields, so evidence measured on one runtime could be reused on other hardware, another backend or another OS. `ProviderConfig::validate` now refuses a serving profile without a managed runtime outside development; development calibration still may use one. Spec: a SHALL and a scenario in that requirement, plus task 2.6. The new regression fails without the check.
+- Report: may a priced, unprofiled embedding deployment use an external engine (book 609 versus 656)? Default: yes, as today.
+
 ## 2026-11-18 (thirty-sixth round) — Spec and code: consumer profile paths resolve next to the profile
 
 - In step at `43d93e71`; whitepaper unchanged; no new answers.
@@ -321,7 +327,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (items 3–7; item 2 is done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (items 4–7; items 2 and 3 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

@@ -309,6 +309,8 @@ A managed GGUF deployment SHALL bind its model/tokenizer to the same immutable G
 
 Actual runtime/artifact verification, readiness/capability probes and deployment-specific qualification SHALL remain necessary before publication/admission; a valid JSON declaration, model card or downloaded file SHALL NOT substitute for them.
 
+Outside explicit development, a model with a serving profile SHALL be served only by a Rust-managed runtime, whose launch verifies the runtime and artifact inventory and the selected devices; native configuration SHALL refuse a serving profile whose deployment has no managed runtime. An operator-owned external engine is for calibration only and SHALL NOT carry a qualified profile into publication (book lines 73, 609 and 615–617).
+
 #### Scenario: Direct native embedding configuration bypasses provisioning
 
 - **WHEN** a native embedding configuration specifies a nonzero output price without using the provisioning script
@@ -318,6 +320,13 @@ Actual runtime/artifact verification, readiness/capability probes and deployment
 
 - **WHEN** a provider mixes profiled and unprofiled models or assigns the same physical device ID to simultaneous qualified models
 - **THEN** configuration validation rejects the deployment instead of borrowing another model's qualification
+
+#### Scenario: A qualified profile on an external engine is refused
+
+- **GIVEN** a non-development provider configuration whose generation model carries a serving profile and an evidence file
+- **WHEN** the model has no managed `runtime` and names an external engine, on loopback or a private address
+- **THEN** native configuration validation refuses it, and no offer is signed or published
+- **AND** the same profile under a managed runtime is accepted, and explicit development calibration may still use an external engine
 
 #### Scenario: Managed task or artifact substitution
 

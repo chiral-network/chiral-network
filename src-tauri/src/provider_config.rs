@@ -125,6 +125,12 @@ impl ProviderConfig {
                     || config.qualification_evidence_file.is_none() {
                     return Err("serving profile requires matching concurrency and qualification evidence".into());
                 }
+                // Qualification evidence binds a managed launch's verified runtime, artifacts
+                // and devices; an operator-owned external engine is for calibration only
+                // (book lines 73, 609 and 615-617).
+                if config.runtime.is_none() && !self.development {
+                    return Err("a qualified serving profile requires a Rust-managed runtime; an external engine is for calibration only".into());
+                }
             } else if !self.development
                 && config.model.capabilities.iter().any(|c| matches!(c.as_str(), "chat" | "completions")) {
                 return Err("public generation requires a qualified serving profile".into());
