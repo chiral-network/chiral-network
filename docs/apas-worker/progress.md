@@ -1,5 +1,13 @@
 # APAS progress
 
+## 2026-11-17 (twelfth round) — CLI loopback gateway specified
+
+- In step at `d064cbda`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-cli-loopback-gateway` (capability `cli-loopback-gateway`, 12 requirements, about 55 scenarios), the follow-up that milestone 2 named for the book's "the native desktop and CLI therefore run a local loopback gateway" (line 315). `chiral --config <profile> gateway serve --port <port>` is a foreground, loopback-only gateway for funded network accounts (HTTPS or libp2p). It reuses milestone 2's gate, bounds, routing, route-credential, request-identity and recovery requirements by name.
+  - CLI-specific rules: a required port with no fallback; signal shutdown that cancels in-flight requests and reports them as possibly charged; owner-only state scoped to network and wallet; a bearer that no command prints; route commands that issue dedicated capped credentials, always show the spending disclosure and need `--accept-spending-risk`; JSON-line events on stdout with the transport path; and no consumer lock held while serving.
+  - M2's proposal and design now point at the change. The review fixed six defects, including an issued credential left unmentioned when its route cannot be saved, and an unrequired DHT start. All three affected changes pass strict validation. No code changed; checks are unchanged since round 11.
+- Report: new entry asking whether the CLI gateway should also serve local models (default: no).
+
 ## 2026-11-17 (eleventh round) — Code: the desktop re-reads the funding journal after every funding attempt
 
 - In step at `820b6567`; whitepaper unchanged; no new answers.
@@ -83,7 +91,7 @@
 
 Missing specifications (spec before code):
 
-1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
+1. Milestone 3 gap found while specifying the CLI gateway: neither `specify-p2p-provider-transport` nor any other change says how two processes on one consumer profile (the desktop and a CLI gateway) share its DHT identity and fixed `dht.listen` port. Specify it in M3.
 2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 

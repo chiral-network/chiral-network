@@ -72,7 +72,7 @@ None.
 - **Documentation:** `docs/chiral-book.md`, as committed in `fe473508` plus the uncommitted 2026-11-16 *Author decisions* edit (items 1–11) and the author's later 2026-11-16 chat decisions recorded in *Wire change*, *Share online* step 4 and *Launch reputation* (checked against the working copy with SHA-256 `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933`), is read-only authority for this change and is not edited.
 - **Out of scope:**
   - LAN exposure.
-  - The CLI loopback gateway, left to a named follow-up change, `specify-cli-loopback-gateway`.
+  - The CLI loopback gateway, specified by the follow-up change `specify-cli-loopback-gateway` (capability `cli-loopback-gateway`), which cites this capability's requirements by name and is archived after this change.
   - Extra OpenAI endpoints.
   - Funding, or any credential management other than issuing a route's credential.
   - Model download or loading (see design).

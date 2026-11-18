@@ -246,7 +246,7 @@ Other milestones are dependencies and are not specified here:
 
 - **Network exposure.** No LAN, remote or TLS exposure, as the book requires ("Exposure to a LAN is out of scope"). There is no bind option, port mapping or reverse-proxy guidance.
 - **The OS account is the trust boundary.** Any process of the same OS user that can read the bearer file can use the server, so this change does not protect against malware running as that user. The spend cap and expiry of each route credential bound what such a process can spend; the protected file excludes other users only. The connection bounds limit what other users' processes can do at the TCP layer.
-- **CLI gateway.** The book says "the native desktop and CLI therefore run a local loopback gateway." This change specifies only the desktop. `specify-p2p-provider-transport` explicitly excludes the CLI gateway. It is therefore owned by a named follow-up change, `specify-cli-loopback-gateway`, which reuses this capability's gate, bounds, routing, route-credential and request-identity rules. The routing core is specified so that a CLI front end can reuse it. See open question 1.
+- **CLI gateway.** The book says "the native desktop and CLI therefore run a local loopback gateway." This change specifies only the desktop. `specify-p2p-provider-transport` explicitly excludes the CLI gateway. It is therefore owned by the follow-up change `specify-cli-loopback-gateway` (capability `cli-loopback-gateway`), which reuses this capability's gate, bounds, routing, route-credential and request-identity rules by citing these requirements by name. The routing core is specified so that the CLI front end can reuse it; that change also requires the core to build without desktop libraries. See open question 1.
 - **Other OpenAI surfaces.** No Responses API, images, audio, files, fine-tuning, batch, assistants or tool execution, matching the book's API scope.
 - **No funding or credential management from the server.**
   - The HTTP server performs no quotes, funding, top-ups, funding recovery or owner challenges, and no credential issuance, rotation, revocation or export.
@@ -290,8 +290,8 @@ The author's 2026-11-16 chat decisions A–D (book SHA-256 `32f447d9…`: keepin
 The following remain open:
 
 1. **CLI loopback gateway** (non-blocking for the desktop).
-   - `specify-p2p-provider-transport` excludes the CLI gateway, and this change covers only the desktop. The book's statement is therefore tracked by a named follow-up change, `specify-cli-loopback-gateway`.
-   - That follow-up reuses this capability's gate, bounds, routing, route-credential and request-identity rules, and adds the CLI's own lifecycle and bearer location.
+   - `specify-p2p-provider-transport` excludes the CLI gateway, and this change covers only the desktop. The book's statement is therefore specified by the follow-up change `specify-cli-loopback-gateway` (capability `cli-loopback-gateway`).
+   - That follow-up reuses this capability's gate, bounds, routing, route-credential and request-identity rules by requirement name, and adds the CLI's own lifecycle and bearer location. It is archived after this change.
    - The author should confirm that split, or move the CLI gateway into this change before it is archived. Only a CLI task depends on the answer, and this change includes none.
 2. **Persisted enablement at launch** (non-blocking).
    - Decision 2 restarts a server the user left enabled. If the author prefers the server to start disabled at every launch, only the first requirement's persistence sentence and task 2.1's launch behavior change.

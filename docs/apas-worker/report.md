@@ -189,3 +189,24 @@ Context: the new change `specify-funding-settlement` specifies the whitepaper's 
 3. **CLI reorganization disclosure.** A.1.6 requires the desktop to show, and the user to accept, that reorganizations can freeze or reverse credit before any opening or top-up. The book states no CLI equivalent, and the CLI `fund`/`topup` commands do not show it. Should the CLI carry the same disclosure and acceptance?
 
 None blocks the specification; questions 1 and 2 block the matching code tasks.
+
+## 2026-11-17 — Should the CLI loopback gateway also serve local models?
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Peer-to-peer provider transport → SDK and tool compatibility* (line 315) and *Desktop local-client workflow → Discover and download models*, "One artifact contract" (line 702). Spec: the new change `specify-cli-loopback-gateway` (capability `cli-loopback-gateway`), design.md open question 1.
+
+What it says now: line 315 says "The native desktop and CLI therefore run a **local loopback gateway** (`http://127.0.0.1:<port>/v1`, the desktop's local API server) that forwards requests for a funded network account to its provider". Line 702 says a model downloaded in the desktop "is therefore usable unchanged by the CLI, the daemon and qualification". The desktop's local API server also routes names to loaded local models (line 725), through milestone 1's load, eject and per-model engine, which exist only in the desktop.
+
+Question: should `chiral gateway serve` also serve local models? That would need a CLI way to load and eject a model on the managed runtime.
+
+Proposed default (what the spec adopts): no. The CLI gateway serves funded network accounts only, over HTTPS or libp2p. It refuses local targets and never starts an engine. Answer only if you want local routes in the CLI; that would be a later change that adds a CLI runtime surface and applies milestone 2's local-route rules.
+
+Related choices in the same change, for your awareness (answer only to change them):
+- No command prints the gateway's bearer. `gateway serve` and `gateway show` print only the path of its owner-only file, and regenerating it requires stopping the gateway first.
+- `--port` is required and has no default, following "on a user-chosen port" (line 723).
+- At most one gateway serves a profile (network plus wallet) at a time. Its state is kept apart from the desktop's `local-server/`. It never holds the consumer lock, so funding and credential commands keep working while it runs.
+
+Not asked again: whether CLI funding should carry the A.1.6 reorganization disclosure is item 3 of *Funding settlement: three questions*. The gateway funds nothing, so either answer leaves this change unchanged.
+
+Nonblocking: no requirement or task waits on this answer.
