@@ -293,7 +293,7 @@ async fn transport(base: &str, development: bool) -> Result<Client, String> {
     endpoint_url(base, &[], development)?;
     crate::offer_registry::safe_http_client(base, development).await
 }
-async fn response_bytes(response: Response) -> Result<Vec<u8>, String> {
+async fn bounded_body(response: Response) -> Result<(reqwest::StatusCode, Vec<u8>), String> {
     let status = response.status();
     let mut stream = response.bytes_stream();
     let mut body = Vec::new();
@@ -305,6 +305,10 @@ async fn response_bytes(response: Response) -> Result<Vec<u8>, String> {
         }
         body.extend_from_slice(&chunk);
     }
+    Ok((status, body))
+}
+async fn response_bytes(response: Response) -> Result<Vec<u8>, String> {
+    let (status, body) = bounded_body(response).await?;
     if !status.is_success() {
         // Classify trusted protocol codes, never echo provider-supplied text or secrets.
         let error = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
@@ -312,6 +316,36 @@ async fn response_bytes(response: Response) -> Result<Vec<u8>, String> {
         return Err(format!("{code}: {message} (HTTP {})", status.as_u16()));
     }
     Ok(body)
+}
+/// Reputation catalog responses are classified with the catalog's own codes and reported
+/// as the catalog's answer: a catalog or RPC outage is never attributed to the provider.
+async fn catalog_bytes(response: Response) -> Result<Vec<u8>, String> {
+    let (status, body) = bounded_body(response).await?;
+    if !status.is_success() {
+        let error = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        let (code, message) = catalog_error(status.as_u16(), &error);
+        return Err(format!("{code}: {message} (catalog HTTP {})", status.as_u16()));
+    }
+    Ok(body)
+}
+/// Fixed messages naming the catalog and the remedy; catalog-supplied text is never echoed.
+fn catalog_error(status: u16, value: &Value) -> (&'static str, &'static str) {
+    if status == 413 {
+        return ("feedback_too_large", "The reputation catalog refused an oversized request body");
+    }
+    match value["error"]["code"].as_str().unwrap_or("") {
+        "invalid_feedback" => ("invalid_feedback", "The reputation catalog refused the feedback as invalid; check the score, revision and saved payment evidence"),
+        "expired_feedback" => ("expired_feedback", "The reputation catalog refused feedback signed too long ago; sign a new revision with a higher number"),
+        "feedback_conflict" => ("feedback_conflict", "The reputation catalog refused a conflicting vote; sign a new revision with a higher number"),
+        "feedback_busy" => ("feedback_busy", "The reputation catalog is busy verifying evidence; retry later. This says nothing about the provider"),
+        "payment_pending" => ("payment_pending", "The reputation catalog has not seen the opening payment at the eSpace safe frontier yet; wait, then retry"),
+        "payment_rejected" => ("payment_rejected", "The reputation catalog found the opening payment ineligible; do not resubmit this evidence"),
+        "chain_unavailable" => ("chain_unavailable", "The reputation catalog cannot verify chain evidence now; this says nothing about the provider"),
+        "chain_timeout" => ("chain_timeout", "The reputation catalog timed out verifying chain evidence; retry later. This says nothing about the provider"),
+        "invalid_wallet" => ("invalid_wallet", "The reputation catalog refused the provider wallet as not canonical"),
+        "internal_error" => ("internal_error", "The reputation catalog failed internally; retry later. This says nothing about the provider"),
+        _ => ("catalog_error", "Reputation catalog error; this says nothing about the provider"),
+    }
 }
 fn safe_error(value: &Value) -> (&'static str, &'static str) {
     match value["error"]["code"].as_str().unwrap_or("") {
@@ -621,7 +655,7 @@ impl Consumer {
                 let client=transport(catalog,self.config.development).await?;
                 let url=endpoint_url(catalog,&["api","ratings",&offer.payload.provider_wallet],self.config.development)?;
                 let response=client.get(url).timeout(Duration::from_secs(30)).send().await.map_err(|_|"reputation catalog unavailable")?;
-                let value:Value=decode(&response_bytes(response).await?)?;
+                let value:Value=decode(&catalog_bytes(response).await?)?;
                 let network:NetworkIdentity=serde_json::from_value(value["network"].clone()).map_err(|_|"invalid reputation network")?;
                 let elo=value["elo"].as_f64().filter(|n|n.is_finite()&&(0.0..=100.0).contains(n)).ok_or("invalid reputation score")?;
                 if network!=self.config.network.identity || value["provider_wallet"].as_str()!=Some(offer.payload.provider_wallet.as_str())
@@ -2405,7 +2439,7 @@ impl Consumer {
             .send()
             .await
             .map_err(|_| "feedback submission failed")?;
-        decode(&response_bytes(response).await?)
+        decode(&catalog_bytes(response).await?)
     }
     pub async fn provider_admin(
         &self,
@@ -5013,5 +5047,145 @@ mod tests {
         assert!(private_read(&link).is_err());
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(private_read(&path).is_err());
+    }
+    /// One loopback origin serving a live, ready provider and a reputation catalog that
+    /// answers every rating request with `answer`, counting catalog requests.
+    struct CatalogFixture {
+        answer: std::sync::Mutex<(u16, String, &'static str)>,
+        requests: std::sync::atomic::AtomicU64,
+    }
+    async fn catalog_answer(
+        axum::extract::State(state): axum::extract::State<Arc<CatalogFixture>>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        state
+            .requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let (status, body, content_type) = state.answer.lock().unwrap().clone();
+        (
+            axum::http::StatusCode::from_u16(status).unwrap(),
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            body,
+        )
+            .into_response()
+    }
+    async fn catalog_fixture(
+        path: &Path,
+    ) -> (
+        Consumer,
+        SavedAccount,
+        Arc<CatalogFixture>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let mut config = configuration(path);
+        config.development = true;
+        config.catalog_url = Some(origin.clone());
+        let consumer = Consumer::new(config).unwrap();
+        consumer.wallet_create().unwrap();
+        let key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &key, &origin, false, false);
+        let mut saved = saved_funding(offer, quote);
+        saved.raw_transaction = Some("0x01".into());
+        saved.tx_hash = Some(format!("0x{}", "44".repeat(32)));
+        consumer.save_account(&saved).unwrap();
+        let state = Arc::new(CatalogFixture {
+            answer: std::sync::Mutex::new((200, "{}".into(), "application/json")),
+            requests: std::sync::atomic::AtomicU64::new(0),
+        });
+        let app = axum::Router::new()
+            .route(
+                "/healthz",
+                axum::routing::get(|| async { axum::Json(json!({"status":"live"})) }),
+            )
+            .route(
+                "/readyz",
+                axum::routing::get(|| async { axum::Json(json!({"ready":true})) }),
+            )
+            .route("/api/ratings/feedback", axum::routing::post(catalog_answer))
+            .route("/api/ratings/:wallet", axum::routing::get(catalog_answer))
+            .with_state(state.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (consumer, saved, state, task)
+    }
+    /// Catalog-supplied text that must never be echoed.
+    const CATALOG_TEXT: &str = "catalog-supplied detail";
+    fn catalog_error_body(code: &str) -> String {
+        json!({"error":{"message":CATALOG_TEXT,"type":"invalid_request_error","param":null,"code":code}})
+            .to_string()
+    }
+    fn assert_catalog_answer(error: &str, code: &str) {
+        assert!(error.starts_with(&format!("{code}: ")), "{error}");
+        assert!(error.contains("reputation catalog") || error.contains("Reputation catalog"), "{error}");
+        for provider_text in ["Provider operation failed", "provider_error", CATALOG_TEXT] {
+            assert!(!error.contains(provider_text), "{error}");
+        }
+    }
+    #[tokio::test]
+    async fn feedback_reports_catalog_codes_not_provider_failures() {
+        // payment-gated-reputation requirement 11, task 2.3 (design code difference 3).
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = catalog_fixture(directory.path()).await;
+        let id = &saved.quote.payload.id;
+        for (status, code) in [
+            (429, "feedback_busy"),
+            (400, "feedback_conflict"),
+            (409, "payment_pending"),
+            (400, "invalid_feedback"),
+            (400, "expired_feedback"),
+            (400, "payment_rejected"),
+            (503, "chain_unavailable"),
+            (503, "chain_timeout"),
+            (500, "internal_error"),
+        ] {
+            *state.answer.lock().unwrap() = (status, catalog_error_body(code), "application/json");
+            let error = consumer.feedback(id, 80, 2).await.unwrap_err();
+            assert_catalog_answer(&error, code);
+            assert!(error.ends_with(&format!("(catalog HTTP {status})")), "{error}");
+        }
+        // The body limit's plain-text 413, and a code the catalog does not define.
+        *state.answer.lock().unwrap() = (413, CATALOG_TEXT.into(), "text/plain");
+        assert_catalog_answer(&consumer.feedback(id, 80, 2).await.unwrap_err(), "feedback_too_large");
+        *state.answer.lock().unwrap() = (418, catalog_error_body("teapot"), "application/json");
+        assert_catalog_answer(&consumer.feedback(id, 80, 2).await.unwrap_err(), "catalog_error");
+        assert_eq!(state.requests.load(std::sync::atomic::Ordering::SeqCst), 11);
+        // A success is still returned as the catalog's body.
+        *state.answer.lock().unwrap() = (200, json!({"accepted":true}).to_string(), "application/json");
+        assert_eq!(consumer.feedback(id, 80, 2).await.unwrap(), json!({"accepted":true}));
+        task.abort();
+    }
+    #[tokio::test]
+    async fn provider_info_reports_catalog_outage_without_blaming_provider() {
+        // payment-gated-reputation requirement 12, task 2.3: book line 443.
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = catalog_fixture(directory.path()).await;
+        for (status, code) in [
+            (503, "chain_unavailable"),
+            (503, "chain_timeout"),
+            (429, "feedback_busy"),
+            (400, "invalid_wallet"),
+        ] {
+            *state.answer.lock().unwrap() = (status, catalog_error_body(code), "application/json");
+            let info = consumer.provider_info(&saved.offer).await.unwrap();
+            assert_eq!(info["reputation"]["available"], false, "{info}");
+            assert!(info["reputation"].get("snapshot").is_none(), "{info}");
+            assert_catalog_answer(info["reputation"]["error"].as_str().unwrap(), code);
+            // Health and readiness are observed and reported unchanged.
+            assert_eq!(info["health"]["live"], true, "{info}");
+            assert_eq!(info["readiness"]["ready"], true, "{info}");
+        }
+        assert_eq!(state.requests.load(std::sync::atomic::Ordering::SeqCst), 4);
+        task.abort();
+    }
+    #[test]
+    fn catalog_and_provider_error_tables_stay_separate() {
+        // Provider responses keep the provider table; catalog codes are not provider codes.
+        let body = |code: &str| json!({"error":{"code":code}});
+        assert_eq!(safe_error(&body("funding_pending")).0, "funding_pending");
+        assert_eq!(safe_error(&body("chain_unavailable")).0, "provider_error");
+        assert_eq!(catalog_error(503, &body("chain_unavailable")).0, "chain_unavailable");
+        assert_eq!(catalog_error(400, &body("funding_pending")).0, "catalog_error");
+        assert_eq!(catalog_error(413, &Value::Null).0, "feedback_too_large");
     }
 }

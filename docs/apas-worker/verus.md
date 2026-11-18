@@ -176,3 +176,11 @@ Requirement source: `openspec/changes/specify-managed-engine-launch/specs/manage
 - `app::tests::an_engine_key_that_repeats_another_credential_is_refused_before_anything_starts` — **replaceable in principle** for the normalisation predicate (strip `0x`, strip leading zeros, pad to 64, lower-case, compare), which is pure; the test also reads protected files and starts a runtime. It waits for the Verus report entry and stays.
 - `engine_runtime_tests::a_listener_on_the_engine_address_or_its_wildcard_is_refused_before_spawn`, `a_port_holding_only_time_wait_connections_passes_the_port_check` — **not replaceable**: kernel socket semantics.
 - `tests/daemon_engine_process_test.rs` (4 tests, custom harness) — **not replaceable**: process spawning, signals and a stub engine binary.
+
+## Judged 2026-11-18 — reputation error-mapping regressions
+
+Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/payment-gated-reputation/spec.md` (requirements 2, 6, 7, 11 and 12).
+
+- `rating_api::tests::{malformed_feedback_is_invalid_feedback_without_rpc_or_vote, malformed_feedback_takes_no_verification_slot, oversized_feedback_body_is_413_before_decoding, store_fault_is_a_catalog_failure_and_conflicts_stay_conflicts, out_of_range_score_or_revision_takes_no_verification_slot, unreadable_feedback_body_is_invalid_feedback_json}` — **not replaceable**: axum routing, HTTP bodies, a semaphore and an RPC fixture.
+- `rating_storage::tests::{locked_store_is_a_fault_not_a_refusal, store_conflicts_are_typed_refusals_without_database_text}` — **not replaceable**: SQLite locking and transactions.
+- `consumer::tests::{feedback_reports_catalog_codes_not_provider_failures, provider_info_reports_catalog_outage_without_blaming_provider}` — **not replaceable**: async HTTP fixtures. `catalog_and_provider_error_tables_stay_separate` — **replaceable in principle** (a pure mapping), but trivial; it stays.

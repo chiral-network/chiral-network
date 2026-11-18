@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-18 (forty-fourth round) — Code: feedback errors are classified and reported as the catalog's
+
+- In step at `f436797a`; whitepaper unchanged; no new answers.
+- Code step (`specify-payment-gated-reputation` tasks 2.1–2.3; comparison item 6).
+  - 2.1: feedback submission now reads raw bytes and decodes them strictly. Any content-type, syntax, trailing-content, schema, out-of-range score or zero revision, or unreadable-body failure gets 400 `invalid_feedback` JSON before a verification slot is taken. 413 stays. The review added the range check and the unreadable-body case.
+  - 2.2: the store distinguishes typed refusals (`feedback_conflict` with fixed text) from faults (500 with a catalog message, detail only in logs). A reused payment is found by lookup, not constraint text.
+  - 2.3: the native client decodes reputation-catalog responses with a catalog code table, so a catalog or RPC outage no longer reads as a provider failure (book line 443). Provider responses are unchanged.
+  - Twelve new regressions fail without their changes. The displayed text on Marketplace and Usage changes; no layout changed.
+- Checks: full headless suite 457 passed, 2 ignored, and 1 failed: `inference_owner_control_test::native_topup_snapshots_preserve_pending_originals_after_committed_credit` panicked at line 5689 ("must reach successful top-up"). It passes alone (2,057 s), and it also failed in round 42's first full run, before this round's `consumer.rs` change, so it is an intermittent failure under full-suite load, not caused by this change. Because cargo stops after a failing target, the targets after `inference_owner_control_test` did not run in this suite; they ran and passed in round 42. The next round investigates it, since a failing check ranks first.
+- Follow-ups found in review and recorded as unchecked tasks: reputation 2.5 (snapshot-path faults still blame the provider), offer-discovery 2.5 (catalog page errors decoded as provider errors) and version-policy 2.5 (policy-source errors decoded as provider errors).
+
 ## 2026-11-18 (forty-third round) — Payment-gated reputation specified
 
 - In step at `1b514eb5`; whitepaper unchanged; no new answers.
@@ -433,7 +444,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: `specify-payment-gated-reputation` 2.1–2.3 (2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Failing check first: the intermittent `native_topup_snapshots_preserve_pending_originals_after_committed_credit` failure under full-suite load (rounds 42 and 44). Then code differences: reputation 2.5, offer-discovery 2.5, version-policy 2.5 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
