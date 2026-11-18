@@ -176,7 +176,7 @@ try {
   {#if !$session.configured}<Callout kind="info" role="status">Load a consumer profile in <a class="link" href="#/settings">Settings</a> to see this network's provider accounts and funding recovery.</Callout>
   {:else if !busy && !accounts.length}<Callout kind="info">No accounts in this network's local journal. <a class="link" href="#/marketplace">Open a provider account</a>.</Callout>{/if}
   {#if pendingCount && tab !== 'recovery'}
-    <Callout kind="warning" title="{pendingCount} journaled funding operation{pendingCount === 1 ? '' : 's'} pending">
+    <Callout kind="warning" role="status" title="{pendingCount} journaled funding operation{pendingCount === 1 ? '' : 's'} pending">
       Resume the existing transaction instead of sending a duplicate payment.
       <button class="ml-1 link inline-flex items-center gap-0.5" onclick={() => tab = 'recovery'}>Open Funding & recovery<ChevronRight class="w-3.5 h-3.5" /></button>
     </Callout>
@@ -240,7 +240,7 @@ try {
                   </Callout>
                 {/if}
                 {#if pending}
-                  <Callout kind="warning">Funding unresolved. Resume the existing journaled payment or explicitly cancel it under Funding & recovery after accepting the gas and race risk. Do not create a duplicate payment.
+                  <Callout kind="warning" role="status">Funding unresolved. Resume the existing journaled payment or explicitly cancel it under Funding & recovery after accepting the gas and race risk. Do not create a duplicate payment.
                     <div class="mt-3"><button class="btn-secondary btn-sm" disabled={busy} onclick={resume}><RotateCcw class="w-3.5 h-3.5" />Resume pending funding</button></div>
                   </Callout>
                 {/if}
@@ -339,11 +339,11 @@ try {
       {#if account}
         <Card icon={Star} tone="amber" title="Payment-backed provider feedback" subtitle="Submit your subjective score against this account's verified funding evidence. Revision must increase when replacing earlier feedback.">
           <form class="space-y-4" onsubmit={e => { e.preventDefault(); void run(async () => { feedbackResult = await command('feedback', { contract_id: contractId, score: feedbackScore, revision: feedbackRevision }); }); }}>
-            <label class="block">
-              <span class="field-label flex items-center justify-between">Score (0–100)<span class="text-lg font-bold text-primary-600 dark:text-primary-400 tabular-nums">{feedbackScore}</span></span>
+            <div class="block">
+              <label for="feedback-score" class="field-label flex items-center justify-between">Score (0–100)<span class="text-lg font-bold text-primary-600 dark:text-primary-400 tabular-nums" aria-hidden="true">{feedbackScore}</span></label>
               <input class="w-full accent-primary-600" type="range" min="0" max="100" bind:value={feedbackScore} aria-hidden="true" tabindex="-1" />
-              <input class="input mt-2 max-w-[8rem]" type="number" min="0" max="100" bind:value={feedbackScore} required />
-            </label>
+              <input id="feedback-score" class="input mt-2 max-w-[8rem]" type="number" min="0" max="100" bind:value={feedbackScore} required />
+            </div>
             <label class="block max-w-[12rem]"><span class="field-label">Revision</span><input class="input" type="number" min="1" bind:value={feedbackRevision} required /></label>
             <button class="btn-primary" disabled={busy}><ThumbsUp class="w-4 h-4" />Sign and submit feedback</button>
           </form>

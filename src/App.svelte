@@ -93,7 +93,7 @@
           Install the desktop app or use the CLI/SDK. This preview does not simulate wallets, providers, payments, credentials, or inference.
         </Callout>
       {:else}
-        <Callout kind="warning" title="No network selected yet.">
+        <Callout kind="warning" role="status" title="No network selected yet.">
           Load your explicit consumer profile in <a class="link" href="#/settings">Settings</a>. No network or provider is selected automatically.
         </Callout>
       {/if}

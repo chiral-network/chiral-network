@@ -4,6 +4,7 @@
   import { command, errorText, formatCfx, isCanonicalWei, parseCfx, type Offer, type Signed, type Quote, type Account } from '$lib/native';
   import { session } from '$lib/stores';
   import { stageLabel, unresolvedPayments, type PendingFunding } from '$lib/funding';
+  import { scrollBehavior } from '$lib/motion';
   import { toasts } from '$lib/toastStore';
   import Result from '$lib/components/Result.svelte';
   import ServingProfile from '$lib/components/ServingProfile.svelte';
@@ -48,7 +49,7 @@
   async function select(offer: Signed<Offer>) {
     selected = offer; amount = formatCfx(offer.payload.min_funding_wei); quote = null; account = null; accepted = false; error = ''; pendingId = ''; providerInfo = null;
     busy = true;
-    await tick(); fundingPanel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    await tick(); fundingPanel?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
     try { providerInfo = await command('provider_info', { offer }); }
     catch (e) { error = errorText(e); } finally { busy = false; }
   }

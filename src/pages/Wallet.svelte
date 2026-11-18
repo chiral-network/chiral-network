@@ -86,6 +86,7 @@
             <button class="p-1.5 hover:bg-white/10 rounded-lg shrink-0" onclick={copyAddress} title="Copy public address" aria-label="Copy public address">
               {#if copied}<Check class="w-4 h-4" />{:else}<Copy class="w-4 h-4" />{/if}
             </button>
+            <span class="sr-only" role="status">{copied ? 'Address copied' : ''}</span>
           </div>
         </div>
         <div class="p-5 flex flex-wrap gap-2">

@@ -1,5 +1,15 @@
 # APAS progress
 
+## 2026-11-18 (twenty-sixth round) — Code: accessibility labels, live-region roles and reduced motion
+
+- In step at `a114e665`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` tasks 2.4–2.6, requirement 10, A.1.9).
+  - The Usage feedback score field is now labelled.
+  - Notifications use `alert` only for errors and warnings, and `status` otherwise. The no-network banner, the Usage funding notices and the Wallet copy confirmation are status messages.
+  - A shared `src/lib/motion.ts` combines the system and in-app reduced-motion preferences. The toast transition and the Marketplace scroll respect it; CSS could not reach these script-driven motions.
+  - New `tests/accessibility.test.ts`: five behaviour tests fail on the previous components, including one that visits every Usage tab and checks that every field is labelled. A screenshot confirms the feedback form layout is unchanged.
+- Checks: svelte-check 0/0, 52 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-fifth round) — Code: canonical wei display and an honest stream-cancel boundary
 
 - In step at `c2392ec7`; whitepaper unchanged; no new answers.
@@ -214,7 +224,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`: accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3, 2.7 and 2.9–2.12 are done.
+1. Code difference in `specify-desktop-gui-global-rules`: fonts 2.8 (the webview loads Google Fonts). Confirm each GUI change with screenshots; every other task 2.x is done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

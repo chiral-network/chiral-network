@@ -2,6 +2,7 @@
   import { fly, fade } from 'svelte/transition';
   import { X, CheckCircle2, AlertCircle, Info, AlertTriangle } from 'lucide-svelte';
   import { onMount } from 'svelte';
+  import { motionDuration } from '$lib/motion';
 
   interface Props {
     message: string;
@@ -74,10 +75,10 @@
 </script>
 
 <div
-  transition:fly={{ x: 80, duration: 250 }}
+  transition:fly={{ x: 80, duration: motionDuration(250) }}
   class="fixed right-4 z-50 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border {s.border} {s.bg} shadow-lg dark:shadow-2xl"
   style="top: {topOffset}px;"
-  role="alert"
+  role={type === 'error' || type === 'warning' ? 'alert' : 'status'}
   onmouseenter={() => paused = true}
   onmouseleave={() => paused = false}
 >
