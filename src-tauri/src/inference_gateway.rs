@@ -25,7 +25,7 @@ use std::{
     sync::{atomic::Ordering, Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 const MAX_BODY_READERS: usize = 64;
@@ -318,9 +318,12 @@ async fn embeddings(State(gateway): State<Arc<Gateway>>, request: Request) -> Re
         .unwrap_or_else(IntoResponse::into_response)
 }
 
-/// A single owner moves from handler to stream worker. Drop also covers task
-/// cancellation/panic, socket teardown and pre-stream errors. Process death is
-/// handled by BillingStore::recover_requests before admission on next startup.
+/// A single owner moves from the handler to the request task (`execute`), which
+/// settles cancellation, client disconnects, deadlines and engine results with
+/// `finish`. Drop settles only what the gateway cannot attribute, such as a task
+/// panic, runtime shutdown or a failed durable write, as `interrupted`, which is
+/// provider-incomplete. Process death is handled by
+/// BillingStore::recover_requests before admission on next startup.
 struct Settlement {
     gateway: Arc<Gateway>,
     id: String,
@@ -594,8 +597,8 @@ async fn infer(
         Err(error) => return Err(ledger_error(error)),
     };
     let id = reservation.id;
-    let (cancel_tx, mut cancel_rx) = watch::channel(false);
-    let mut settlement = Settlement {
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let settlement = Settlement {
         gateway: gateway.clone(),
         id: id.clone(),
         known_usage: None,
@@ -616,9 +619,42 @@ async fn infer(
         .lock()
         .map_err(|_| ApiError::internal("Cancellation lock unavailable"))?
         .insert(id.clone(), cancel_tx);
+    // Dispatch and collection run in a task that owns the settlement. When the
+    // client closes its connection, hyper drops this handler future; the task
+    // sees the closed reply and settles a client disconnect, not `interrupted`.
+    let (reply, answer) = oneshot::channel();
+    tokio::spawn(execute(
+        engine.clone(), request, context.account.model.id, client_stream,
+        settlement, cancel_rx, reply, deadline,
+    ));
+    Ok(answer.await.unwrap_or_else(|_| {
+        // Only a task panic or runtime shutdown ends the task without an answer;
+        // Settlement::drop has then recorded a provider-incomplete interruption.
+        with_id(ApiError::internal("Inference task ended without a response").into_response(), &id)
+    }))
+}
+
+/// Owns one reserved request from engine dispatch to settlement, outside the
+/// HTTP handler. A closed `reply` (the handler was dropped, e.g. on client EOF)
+/// or a closed SSE body is a client disconnect. Every return drops any pending
+/// engine request or response stream, which cancels upstream generation.
+#[allow(clippy::too_many_arguments)]
+async fn execute(
+    engine: Backend,
+    request: backend::PreparedRequest,
+    model: String,
+    client_stream: bool,
+    mut settlement: Settlement,
+    mut cancel: watch::Receiver<bool>,
+    mut reply: oneshot::Sender<Response>,
+    deadline: Instant,
+) {
+    let endpoint = request.endpoint;
+    let id = settlement.id.clone();
     let response = tokio::select! {
         biased;
-        _ = cancelled(&mut cancel_rx) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+        _ = cancelled(&mut cancel) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+        _ = reply.closed() => Err(client_disconnected()),
         _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference timed out; it will not be replayed")),
         response = engine.dispatch(&request, &id) => response,
     };
@@ -629,59 +665,46 @@ async fn infer(
                 Ok(()) => error,
                 Err(settlement_error) => settlement_error,
             };
-            return Ok(with_id(error.into_response(), &id));
+            return answer(settlement, reply, error.into_response());
         }
     };
     if client_stream {
         let (sender, receiver) = mpsc::channel::<Bytes>(4);
         let spec = StreamSpec {
             endpoint,
-            model: context.account.model.id,
+            model,
             prompt: request.prompt_tokens,
             output: request.max_output_tokens,
             include_usage: request.include_usage,
         };
-        // Only bounded chunks and, for echo, the bounded prompt cross the task boundary.
-        tokio::spawn(stream_worker(
-            response, spec, settlement, cancel_rx, sender, deadline,
-        ));
-        let body = futures_util::stream::unfold(receiver, |mut receiver| async {
-            receiver
-                .recv()
-                .await
-                .map(|bytes| (Ok::<Bytes, Infallible>(bytes), receiver))
-        });
-        let mut response = Body::from_stream(body).into_response();
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/event-stream"),
-        );
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-cache, no-transform"),
-        );
-        response
-            .headers_mut()
-            .insert("x-accel-buffering", HeaderValue::from_static("no"));
-        Ok(with_id(response, &id))
+        if reply.send(with_id(event_stream(receiver), &id)).is_err() {
+            // The client left before its event stream could start.
+            let _ = settlement.finish("disconnected");
+            return;
+        }
+        // Only bounded chunks and, for echo, the bounded prompt reach the response body.
+        stream_worker(response, spec, settlement, cancel, sender, deadline).await;
     } else if endpoint != Endpoint::Embeddings {
         let spec = StreamSpec {
-            endpoint, model: context.account.model.id, prompt: request.prompt_tokens,
+            endpoint, model, prompt: request.prompt_tokens,
             output: request.max_output_tokens, include_usage: true,
         };
-        let result = stream_inner(response, &spec, &mut settlement, &mut cancel_rx, None, deadline).await;
+        let result = stream_inner(response, &spec, &mut settlement, &mut cancel,
+            &mut Client::Collect(&mut reply), deadline).await;
         let status = terminal_status(result.as_ref().err());
-        if let Err(error) = settlement.finish(status) {
-            return Ok(with_id(error.into_response(), &id));
-        }
-        Ok(with_id(match result {
-            Ok(value) => Json(value).into_response(),
+        let response = match settlement.finish(status) {
             Err(error) => error.into_response(),
-        }, &id))
+            Ok(()) => match result {
+                Ok(value) => Json(value).into_response(),
+                Err(error) => error.into_response(),
+            },
+        };
+        answer(settlement, reply, response);
     } else {
         let result = tokio::select! {
             biased;
-            _ = cancelled(&mut cancel_rx) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+            _ = cancelled(&mut cancel) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
+            _ = reply.closed() => Err(client_disconnected()),
             _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference timed out; it will not be replayed")),
             result = backend::read_json(response, MAX_RESPONSE_BYTES) => result,
         };
@@ -697,17 +720,73 @@ async fn infer(
             Ok(value)
         });
         let status = terminal_status(result.as_ref().err());
-        if let Err(error) = settlement.finish(status) {
-            return Ok(with_id(error.into_response(), &id));
-        }
-        Ok(with_id(
-            match result {
+        let response = match settlement.finish(status) {
+            Err(error) => error.into_response(),
+            Ok(()) => match result {
                 Ok(value) => Json(value).into_response(),
                 Err(error) => error.into_response(),
             },
-            &id,
-        ))
+        };
+        answer(settlement, reply, response);
     }
+}
+
+/// Answers the handler once the request has settled. Dropping the settlement
+/// first releases the model slot and cancellation entry before the client can
+/// see the answer, as when the handler itself returned the response.
+fn answer(settlement: Settlement, reply: oneshot::Sender<Response>, response: Response) {
+    let id = settlement.id.clone();
+    drop(settlement);
+    let _ = reply.send(with_id(response, &id));
+}
+
+fn event_stream(receiver: mpsc::Receiver<Bytes>) -> Response {
+    let body = futures_util::stream::unfold(receiver, |mut receiver| async {
+        receiver
+            .recv()
+            .await
+            .map(|bytes| (Ok::<Bytes, Infallible>(bytes), receiver))
+    });
+    let mut response = Body::from_stream(body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response
+}
+
+/// Where generated output goes, and how the client's departure is observed.
+enum Client<'a> {
+    /// Public SSE: chunks cross a bounded queue whose receiver is the response body.
+    Stream(&'a mpsc::Sender<Bytes>),
+    /// Non-streaming: output is collected for the handler's single reply.
+    Collect(&'a mut oneshot::Sender<Response>),
+}
+impl Client<'_> {
+    /// Resolves once nothing can reach the client any more.
+    async fn closed(&mut self) {
+        match self {
+            Client::Stream(sender) => sender.closed().await,
+            Client::Collect(reply) => reply.closed().await,
+        }
+    }
+    fn sender(&self) -> Option<&mpsc::Sender<Bytes>> {
+        match self {
+            Client::Stream(sender) => Some(*sender),
+            Client::Collect(_) => None,
+        }
+    }
+}
+
+fn client_disconnected() -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, "client_disconnected", "Client disconnected")
 }
 async fn cancelled(receiver: &mut watch::Receiver<bool>) {
     loop {
@@ -740,7 +819,7 @@ async fn send_chunk(
         biased;
         _ = cancelled(cancel) => Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
         _ = tokio::time::sleep_until(deadline) => Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference stream timed out")),
-        result = sender.send(bytes) => result.map_err(|_| ApiError::new(StatusCode::CONFLICT, "client_disconnected", "Client disconnected")),
+        result = sender.send(bytes) => result.map_err(|_| client_disconnected()),
     }
 }
 async fn stream_worker(
@@ -756,7 +835,7 @@ async fn stream_worker(
         &spec,
         &mut settlement,
         &mut cancel,
-        Some(&sender),
+        &mut Client::Stream(&sender),
         deadline,
     )
     .await;
@@ -859,7 +938,7 @@ async fn stream_inner(
     spec: &StreamSpec,
     settlement: &mut Settlement,
     cancel: &mut watch::Receiver<bool>,
-    sender: Option<&mpsc::Sender<Bytes>>,
+    client: &mut Client<'_>,
     deadline: Instant,
 ) -> Result<Value, ApiError> {
     let mut upstream: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>> + Send>> =
@@ -872,7 +951,7 @@ async fn stream_inner(
         let chunk = tokio::select! {
             biased;
             _ = cancelled(cancel) => return Err(ApiError::new(StatusCode::CONFLICT, "request_cancelled", "Inference request was cancelled")),
-            _ = async { match sender { Some(sender) => sender.closed().await, None => std::future::pending::<()>().await } } => return Err(ApiError::new(StatusCode::CONFLICT, "client_disconnected", "Client disconnected")),
+            _ = client.closed() => return Err(client_disconnected()),
             _ = tokio::time::sleep_until(deadline) => return Err(ApiError::new(StatusCode::GATEWAY_TIMEOUT, "engine_timeout", "Inference stream timed out")),
             chunk = upstream.next() => chunk.ok_or_else(backend::upstream_error)?.map_err(|_| backend::upstream_error())?,
         };
@@ -889,7 +968,7 @@ async fn stream_inner(
                         return Err(backend::upstream_error());
                     }
                     settlement.finish("completed")?;
-                    if let Some(sender) = sender {
+                    if let Some(sender) = client.sender() {
                         send_chunk(sender, cancel, deadline, Bytes::from_static(b"data: [DONE]\n\n")).await?;
                     }
                     return Ok(collected);
@@ -925,6 +1004,7 @@ async fn stream_inner(
                         }
                     }
                 }
+                let sender = client.sender();
                 if sender.is_none() {
                     collect_event(&mut collected, &mut value, spec.endpoint)?;
                 }
@@ -1514,5 +1594,243 @@ mod tests {
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
         engine_task.abort();
+    }
+
+    /// A qualified, profiled agreement served by the real HTTP/1 stack on a TCP
+    /// listener, with the delaying engine below.
+    struct DisconnectFixture {
+        directory: tempfile::TempDir,
+        state: Arc<ProviderState>,
+        bearer: String,
+        contract: String,
+        model: protocol::ModelSpec,
+        gateway: std::net::SocketAddr,
+        engine_events: mpsc::UnboundedReceiver<&'static str>,
+        tasks: [tokio::task::JoinHandle<()>; 2],
+    }
+    impl Drop for DisconnectFixture {
+        fn drop(&mut self) {
+            for task in &self.tasks {
+                task.abort();
+            }
+        }
+    }
+
+    /// Engine whose chat prompt `headers:<µs>` delays the engine response itself
+    /// and `token:<µs>` delays the first token. The stream then stays open, so
+    /// only the gateway can end the engine request. Each engine request reports
+    /// `first_token` when it emits one and `dropped` when the gateway abandons it.
+    async fn delayed_engine(events: mpsc::UnboundedSender<&'static str>, body: Value) -> Response {
+        struct InFlight(mpsc::UnboundedSender<&'static str>);
+        impl Drop for InFlight {
+            fn drop(&mut self) {
+                let _ = self.0.send("dropped");
+            }
+        }
+        let in_flight = InFlight(events.clone());
+        let plan = body["messages"][0]["content"].as_str().unwrap().to_owned();
+        let (phase, micros) = plan.split_once(':').unwrap();
+        let delay = Duration::from_micros(micros.parse().unwrap());
+        if phase == "headers" {
+            tokio::time::sleep(delay).await;
+        }
+        let token_delay = if phase == "token" { delay } else { Duration::ZERO };
+        let first = json!({"id":"engine-response","object":"chat.completion.chunk","model":"model","created":1,
+            "choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null,
+                "logprobs":{"content":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5,
+                    "top_logprobs":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5}]}]}}]});
+        let stream = futures_util::stream::once(async move {
+            tokio::time::sleep(token_delay).await;
+            let _ = events.send("first_token");
+            Ok::<_, Infallible>(Bytes::from(format!("data: {first}\n\n")))
+        })
+        .chain(futures_util::stream::pending())
+        .map(move |event| {
+            // The in-flight marker lives exactly as long as the engine stream.
+            std::hint::black_box(&in_flight);
+            event
+        });
+        ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(stream)).into_response()
+    }
+
+    async fn disconnect_fixture() -> DisconnectFixture {
+        let (directory, mut state, _) = ingress_fixture();
+        let (events, engine_events) = mpsc::unbounded_channel();
+        let engine_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let engine_url = format!("http://{}", engine_listener.local_addr().unwrap());
+        let engine = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/apply-template", post(|| async { Json(json!({"prompt":"rendered"})) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens":[10,11]})) }))
+            .route("/v1/chat/completions", post(move |Json(body): Json<Value>| delayed_engine(events.clone(), body)));
+        let engine_task = tokio::spawn(async move { axum::serve(engine_listener, engine).await.unwrap() });
+        let inner = Arc::get_mut(&mut state).unwrap();
+        let config = Arc::get_mut(&mut inner.config).unwrap();
+        // Enough concurrency and arrival credit that sequential requests are never refused.
+        let mut profile = crate::performance::test_profile();
+        profile.max_concurrency = 4;
+        config.models[0].max_concurrency = 4;
+        config.models[0].engine_url = engine_url;
+        config.models[0].model.serving = Some(profile);
+        let model = config.models[0].model.clone();
+        inner.model_slots = ProviderState::slots(&inner.config);
+        inner.qualified_models.write().unwrap().insert(model.id.clone());
+        let now = protocol::now().unwrap();
+        let quote = protocol::sign(protocol::QUOTE_DOMAIN, protocol::Quote {
+            id: protocol::random_id(), network: inner.config.network.identity.clone(),
+            offer_id: protocol::random_id(), provider_wallet: inner.wallet.clone(),
+            consumer_wallet: crate::wallet::address_from_private_key(&"22".repeat(32)).unwrap(),
+            model: model.clone(), price: inner.config.models[0].price.clone(),
+            funding_wei: "0".into(), platform_wallet: inner.config.platform_wallet.clone(),
+            fee_bps: 50, max_concurrency: 1, nonce: protocol::random_id(),
+            issued_at: now, expires_at: now + 300,
+        }, &inner.private_key).unwrap();
+        inner.ledger.store_quote(&quote, now).unwrap();
+        let opened = inner.ledger.open_account(&quote, None, now).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let gateway = listener.local_addr().unwrap();
+        let app = router(state.clone());
+        let gateway_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        DisconnectFixture {
+            directory, state, model, gateway, engine_events,
+            bearer: opened.credential.unwrap().bearer,
+            contract: quote.payload.id,
+            tasks: [engine_task, gateway_task],
+        }
+    }
+
+    impl DisconnectFixture {
+        /// Writes one complete HTTP/1.1 request on a real socket. Dropping the
+        /// returned socket closes the connection, as a departing client does.
+        async fn send(&self, key: &str, content: &str, stream: bool) -> tokio::net::TcpStream {
+            use tokio::io::AsyncWriteExt;
+            let body = json!({"model":"model","messages":[{"role":"user","content":content}],
+                "stream":stream,"max_tokens":4}).to_string();
+            let mut socket = tokio::net::TcpStream::connect(self.gateway).await.unwrap();
+            socket.write_all(format!(
+                "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\n\
+                 Content-Type: application/json\r\nIdempotency-Key: {key}\r\nContent-Length: {}\r\n\r\n{body}",
+                self.gateway, self.bearer, body.len(),
+            ).as_bytes()).await.unwrap();
+            socket
+        }
+
+        async fn settled(&self, key: &str) -> RequestView {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Ok(view) = self.state.ledger.request_view(&self.contract, key) {
+                    if view.status != "reserved" {
+                        return view;
+                    }
+                }
+                assert!(Instant::now() < deadline, "request {key} never settled");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+
+        async fn engine_event(&mut self) -> &'static str {
+            tokio::time::timeout(Duration::from_secs(10), self.engine_events.recv())
+                .await.expect("engine event").unwrap()
+        }
+
+        fn observations(&self) -> Vec<(String, bool)> {
+            let db = rusqlite::Connection::open_with_flags(
+                self.directory.path().join("ledger.sqlite"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            ).unwrap();
+            let mut query = db.prepare("SELECT request,miss FROM performance_observations ORDER BY sequence").unwrap();
+            let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+            rows.collect::<Result<_, _>>().unwrap()
+        }
+
+        fn assert_still_qualified(&self) {
+            assert!(!self.state.ledger.performance_withdrawn(&self.model).unwrap());
+            assert!(self.state.qualified_model(&self.model).is_some());
+        }
+    }
+
+    /// The gateway has not answered: the request is still in progress.
+    fn assert_unanswered(socket: &tokio::net::TcpStream) {
+        let mut buffer = [0; 512];
+        match socket.try_read(&mut buffer) {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            other => panic!("gateway answered before the disconnect: {other:?} {}",
+                String::from_utf8_lossy(&buffer)),
+        }
+    }
+
+    fn assert_client_interrupted(view: &RequestView) {
+        assert_eq!(view.status, "disconnected_unknown_usage");
+        assert_eq!((view.usage.prompt_tokens, view.usage.completion_tokens), (0, 0));
+        let performance = view.performance.as_ref().unwrap();
+        assert_eq!(performance.eligibility, "client_interrupted");
+        assert_eq!(performance.attained, None);
+        assert_eq!(performance.remedy, "none");
+        assert_eq!(performance.ttft_us, None);
+        assert_eq!(view.waived_wei, "0");
+        // Settled at the disconnect (about 500,000 µs), before any measured miss.
+        let elapsed = performance.elapsed_us.unwrap();
+        assert!((250_000..crate::performance::TTFT_US).contains(&elapsed), "elapsed {elapsed} µs");
+    }
+
+    #[tokio::test]
+    async fn non_streaming_disconnects_before_a_miss_are_client_interruptions_and_never_latch() {
+        let mut fixture = disconnect_fixture().await;
+        // Three in a row would latch withdrawal if each counted as a provider miss.
+        for attempt in 0..3 {
+            let key = format!("non-streaming-disconnect-{attempt}");
+            // The engine responds at once but holds its first token for 10 s.
+            let socket = fixture.send(&key, "token:10000000", false).await;
+            tokio::time::sleep(Duration::from_micros(500_000)).await;
+            assert_unanswered(&socket);
+            drop(socket);
+            let view = fixture.settled(&key).await;
+            assert_client_interrupted(&view);
+            // The disconnect cancelled the engine request; it did not run to its deadline.
+            assert_eq!(fixture.engine_event().await, "dropped");
+            assert!(fixture.observations().is_empty());
+            fixture.assert_still_qualified();
+        }
+    }
+
+    #[tokio::test]
+    async fn disconnect_before_the_engine_responds_is_a_client_interruption_in_both_modes() {
+        let mut fixture = disconnect_fixture().await;
+        for stream in [false, true] {
+            let key = format!("dispatch-disconnect-{stream}");
+            // The engine itself does not respond for 10 s.
+            let socket = fixture.send(&key, "headers:10000000", stream).await;
+            tokio::time::sleep(Duration::from_micros(500_000)).await;
+            assert_unanswered(&socket);
+            drop(socket);
+            assert_client_interrupted(&fixture.settled(&key).await);
+            assert_eq!(fixture.engine_event().await, "dropped");
+        }
+        assert!(fixture.observations().is_empty());
+        fixture.assert_still_qualified();
+    }
+
+    #[tokio::test]
+    async fn a_measured_miss_survives_a_later_non_streaming_disconnect() {
+        let mut fixture = disconnect_fixture().await;
+        let key = "late-first-token-then-disconnect";
+        let socket = fixture.send(key, "token:2100000", false).await;
+        assert_eq!(fixture.engine_event().await, "first_token");
+        // Let the gateway record the token; the engine stream stays open.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(fixture.engine_events.try_recv().is_err(), "engine request ended early");
+        assert_unanswered(&socket);
+        drop(socket);
+        let view = fixture.settled(key).await;
+        assert_eq!(view.status, "disconnected_unknown_usage");
+        let performance = view.performance.as_ref().unwrap();
+        assert_eq!(performance.eligibility, "eligible");
+        assert_eq!(performance.attained, Some(false));
+        assert_eq!(performance.remedy, "inference_waiver");
+        assert!(performance.ttft_us.unwrap() >= 2_100_000, "{performance:?}");
+        assert_eq!(fixture.observations(), vec![(view.id.clone(), true)]);
+        assert_eq!(fixture.engine_event().await, "dropped");
+        // One miss does not latch withdrawal.
+        fixture.assert_still_qualified();
     }
 }

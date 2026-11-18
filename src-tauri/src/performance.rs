@@ -297,10 +297,12 @@ pub fn outcome(p: &ServingProfile, in_envelope: bool, ttft_us: Option<u64>, deco
         _ => None,
     };
     let measured_miss = ttft_missed || decode_ok == Some(false);
+    // The gateway settles every client cancellation, disconnect or stall it can
+    // observe as such. `interrupted` remains only for what it cannot attribute
+    // (a task panic, runtime shutdown), which is provider-incomplete.
     let (eligibility, attained) = if !in_envelope { ("outside_workload", None) }
         else if measured_miss { (if short { "short_output_ttft_only" } else { "eligible" }, Some(false)) }
         else if client { ("client_interrupted", None) }
-        else if status == "interrupted" { ("interrupted_unknown_origin", Some(false)) }
         else if status != "completed" || usage.is_none() || ttft_us.is_none() || (!short && decode_ok.is_none()) { ("provider_incomplete", Some(false)) }
         else if short { ("short_output_ttft_only", Some(true)) }
         else { ("eligible", Some(true)) };
@@ -410,9 +412,21 @@ mod tests {
         let unknown = outcome(&p, true, Some(1), None, None, "failed", false, None, &(&p).qualification.evidence_sha256);
         assert_eq!(unknown.output_tokens, None);
         assert_eq!(unknown.remedy, "inference_waiver");
+        // An interruption the gateway cannot attribute is provider-incomplete,
+        // never a separate eligibility class.
         let interrupted = outcome(&p, true, None, None, None, "interrupted", false, Some(1), &(&p).qualification.evidence_sha256);
-        assert_eq!(interrupted.eligibility, "interrupted_unknown_origin");
+        assert_eq!(interrupted.eligibility, "provider_incomplete");
+        assert_eq!(interrupted.attained, Some(false));
         assert_eq!(interrupted.remedy, "inference_waiver");
+        // A disconnect before a measured miss is the client's; after one, the miss stays.
+        let disconnected = outcome(&p, true, None, None, None, "disconnected", false, Some(500_000), &p.qualification.evidence_sha256);
+        assert_eq!(disconnected.eligibility, "client_interrupted");
+        assert_eq!(disconnected.attained, None);
+        assert_eq!(disconnected.remedy, "none");
+        let late = outcome(&p, true, Some(2_100_000), None, None, "disconnected", false, Some(2_400_000), &p.qualification.evidence_sha256);
+        assert_eq!(late.eligibility, "eligible");
+        assert_eq!(late.attained, Some(false));
+        assert_eq!(late.remedy, "inference_waiver");
     }
 
     #[test]

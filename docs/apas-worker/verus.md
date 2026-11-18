@@ -77,3 +77,12 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 - `src-tauri/tests/inference_cli_fund_disclosure_test.rs::fund_discloses_registration_risk_on_stderr_and_keeps_stdout_machine_readable` — **not replaceable**: it runs the `chiral` binary as a process and checks its stderr and stdout text and an on-disk wallet journal; Verus proves properties of Rust functions, not process output or user-facing wording.
 - The seven tests in `tests/fundingDisclosure.test.ts` are TypeScript tests of rendered Svelte pages; Verus does not apply to them.
 - `tests/fundingDisclosure.test.ts` › `shows the journaled stage after a failed top-up without Refresh, and clears it after resume` (task 2.9) — TypeScript test of a rendered Svelte page; Verus does not apply.
+
+## Judged 2026-11-17 — client-disconnect classification regressions
+
+Requirement source: `openspec/changes/specify-generation-performance/specs/inference-generation-performance/spec.md` (requirements 11 and 12).
+
+- `inference_gateway::tests::non_streaming_disconnects_before_a_miss_are_client_interruptions_and_never_latch` — **not replaceable**: it drives the async axum/hyper gateway over real TCP sockets with a delaying fixture engine and reads a SQLite ledger; Verus models none of these.
+- `inference_gateway::tests::a_measured_miss_survives_a_later_non_streaming_disconnect` — **not replaceable**, for the same reasons.
+- `inference_gateway::tests::disconnect_before_the_engine_responds_is_a_client_interruption_in_both_modes` — **not replaceable**, for the same reasons.
+- `performance::tests::exclusions_do_not_erase_a_previously_observed_miss` (updated) — **replaceable in principle**: `performance::outcome` is a pure function over status, timings and token counts. A Verus proof could show that a `disconnected` status without a measured miss is never attained or waived, and that an `interrupted` status is always a counted provider-incomplete miss. It waits for the Verus report entry; the test stays.

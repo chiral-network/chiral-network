@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-17 (fifteenth round) — Code: client disconnects no longer count as provider misses
+
+- In step at `505fb9ed`; whitepaper unchanged; no new answers.
+- Code step (`specify-generation-performance` task 2.1, requirements 11 and 12). Before this change, a client that disconnected during `engine.dispatch`, or during non-streaming generation, dropped the HTTP handler. The request then settled as `interrupted`, which was waived and counted as a provider miss, so three cheap disconnects could latch a provider's withdrawal (book line 571). After reservation, the gateway now runs dispatch and collection in a task that owns the `Settlement` and answers the handler through a oneshot channel. A closed reply settles `disconnected` (`client_interrupted`, not counted). An already measured miss stays a waived, counted miss. Only interruptions the gateway cannot attribute (a panic or runtime shutdown) remain `interrupted`, now classified `provider_incomplete`. Three real-socket gateway regressions and the updated `outcome` test fail without the change.
+- The adversarial review found no defect. Its probes covered cancellation, a streaming disconnect after headers, deadlines in both phases, an engine crash and runtime shutdown, and the public HTTP responses were byte-identical to HEAD apart from ids and timings. It noted that a provider stall after a timely first token, followed by the client leaving, is now `client_interrupted`. That follows the book: a decode miss needs authoritative usage.
+
 ## 2026-11-17 (fourteenth round) — Generation performance specified
 
 - In step at `8ea5a5a4`; whitepaper unchanged; no new answers.
@@ -107,7 +113,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-generation-performance`: tasks 2.1 (client disconnects counted as provider misses), 2.2 (0 µs TTFT) and 2.3 (out-of-bucket samples). These rank above the missing specs below.
+1. Code differences in `specify-generation-performance`: tasks 2.2 (0 µs TTFT) and 2.3 (out-of-bucket samples); 2.1 is done. These rank above the missing specs below.
 2. Fee remittance (obligation states, aggregation thresholds, remittance gas) has no SHALL requirements.
    (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
