@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-18 (twenty-eighth round) — Desktop GUI page behaviour specified
+
+- In step at `a7d36fa4`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-desktop-gui-pages` (capability `desktop-gui-pages`, 15 requirements, 45 scenarios) for Appendix A.5's required page behaviour. It covers the native operation behind each page action; Marketplace order and gating; offer and serving terms before a quote; Playground limits; Usage accounts, top-up, credentials, request reconciliation, funding recovery and feedback; Wallet file-path key handling with an owner-only backup; Provider loopback administration through a token file; Account, Network, Settings and Diagnostics; and a rule that presentation may change while required elements stay reachable at every width. A.1 rules, funding-settlement, fee-remittance and performance requirements are cited by name. Cited tests pass (55 frontend, 3 Rust). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1: the credential lifetime (60 s–30 days) is not enforced before `credential_issue`;
+  - 2.2: the masked API key cannot be copied in Chromium webviews;
+  - 2.3: the Settings profile indicator is colour-only;
+  - 2.4: a successful profile load is never announced, because the remount discards the notice.
+- The review could not reproduce the 390 px Usage overflow in headless Chrome: the tab list scrolls inside its own container. It is recorded as an observation for native task 4.1. No author question.
+
 ## 2026-11-18 (twenty-seventh round) — Code: the webview loads nothing from a remote origin
 
 - In step at `cbd3b273`; whitepaper unchanged; no new answers.
@@ -231,14 +242,15 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet. It is the next missing specification; include the Usage tab strip, which overflows at 390 px.
+1. Code differences in `specify-desktop-gui-pages`: 2.1 (credential lifetime), 2.2 (copy the revealed key), 2.3 (profile indicator text), 2.4 (profile-load announcement). Confirm each with screenshots.
+2. No further missing specification is known. The version gate (A.2) has no capability yet (design observation 9 of `specify-desktop-gui-pages`); consider specifying it with the version-policy section.
 
 Earlier open work, unchanged:
 
-2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
-3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
