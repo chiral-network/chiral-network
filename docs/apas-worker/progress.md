@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-18 (twenty-third round) — Code: profile-dependent actions wait for a loaded profile
+
+- In step at `2e346ae4`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` task 2.2, requirement 4, A.1.3). With no profile loaded, Usage and Playground used to read the native journal on open, and Usage reported "No accounts in this network's local journal". Usage's Refresh and recovery actions, Playground's Refresh accounts and Diagnostics' Collect were enabled; native code refused them. They now read nothing until a profile is loaded, the actions are disabled, and Usage points to Settings. The Diagnostics runtime tile stays. A new rendered test, `tests/profileGate.test.ts`, fails on the previous pages. Screenshots were checked.
+- Checks: svelte-check 0/0, 42 frontend tests, build. Rust is unchanged since the full headless suite passed at `2e346ae4` (491 passed, 2 ignored).
+
 ## 2026-11-18 (twenty-second round) — Code: the Usage top-up card shows every A.1.6 item
 
 - In step at `c365d384`; whitepaper unchanged; no new answers.
@@ -190,7 +196,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1, 2.3 and 2.12 are done.
+1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3 and 2.12 are done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

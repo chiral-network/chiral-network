@@ -10,6 +10,7 @@
   import Callout from '$lib/components/ui/Callout.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import { statusBadge } from '$lib/components/ui/tones';
+  import { session } from '$lib/stores';
   import { stageLabel, unresolvedPayments, type PendingFunding as JournalEntry } from '$lib/funding';
   type PendingFunding = { pending: JournalEntry[] };
   let accounts = $state<Account[]>([]), contractId = $state(''), account = $state<Account | null>(null);
@@ -82,7 +83,8 @@
     });
   }
   async function reveal() { await run(async () => { secret = await command('credential_export', { contract_id: contractId, credential_id: credentialId || null }); }); }
-  onMount(() => { void refresh(); });
+  // Nothing is read before an explicit profile is loaded (A.1.3); a profile change remounts the page.
+  onMount(() => { if ($session.configured) void refresh(); });
 
   // ---- presentation only ----
   type Tab = 'overview' | 'keys' | 'requests' | 'recovery' | 'feedback';
@@ -155,7 +157,7 @@ try {
 <section class="page" aria-labelledby="usage-title">
   <PageHeader id="usage-title" title="Usage & API credentials" subtitle="Balances, metered usage, API keys and funding recovery for each provider account.">
     {#snippet actions()}
-      <button class="btn-secondary" disabled={busy} onclick={refresh}><RefreshCw class="w-4 h-4 {busy ? 'animate-spin' : ''}" />{busy ? 'Loading…' : 'Refresh'}</button>
+      <button class="btn-secondary" disabled={busy || !$session.configured} onclick={refresh}><RefreshCw class="w-4 h-4 {busy ? 'animate-spin' : ''}" />{busy ? 'Loading…' : 'Refresh'}</button>
     {/snippet}
   </PageHeader>
 
@@ -171,7 +173,8 @@ try {
   </div>
 
   {#if error}<Callout kind="error" role="alert">{error}</Callout>{/if}
-  {#if !busy && !accounts.length}<Callout kind="info">No accounts in this network's local journal. <a class="link" href="#/marketplace">Open a provider account</a>.</Callout>{/if}
+  {#if !$session.configured}<Callout kind="info" role="status">Load a consumer profile in <a class="link" href="#/settings">Settings</a> to see this network's provider accounts and funding recovery.</Callout>
+  {:else if !busy && !accounts.length}<Callout kind="info">No accounts in this network's local journal. <a class="link" href="#/marketplace">Open a provider account</a>.</Callout>{/if}
   {#if pendingCount && tab !== 'recovery'}
     <Callout kind="warning" title="{pendingCount} journaled funding operation{pendingCount === 1 ? '' : 's'} pending">
       Resume the existing transaction instead of sending a duplicate payment.
@@ -312,8 +315,8 @@ try {
           <Result value={pendingAccounts} title="Native pending funding journal" open={pendingCount > 0} />
           <form class="flex flex-col sm:flex-row gap-2 sm:items-end" onsubmit={e => { e.preventDefault(); void recover(); }}>
             <label class="flex-1 min-w-0"><span class="field-label">Journaled contract / quote ID</span><input class="input font-mono" bind:value={recoveryId} required /></label>
-            <button class="btn-primary py-2.5" disabled={busy || !recoveryId}>{#if busy}<Loader2 class="w-4 h-4 animate-spin" />{:else}<RotateCcw class="w-4 h-4" />{/if}Resume journaled funding</button>
-            <button type="button" class="btn-secondary py-2.5" disabled={busy || !recoveryId} onclick={inspectRecovery}><Search class="w-4 h-4" />Inspect wallet recovery history</button>
+            <button class="btn-primary py-2.5" disabled={busy || !recoveryId || !$session.configured}>{#if busy}<Loader2 class="w-4 h-4 animate-spin" />{:else}<RotateCcw class="w-4 h-4" />{/if}Resume journaled funding</button>
+            <button type="button" class="btn-secondary py-2.5" disabled={busy || !recoveryId || !$session.configured} onclick={inspectRecovery}><Search class="w-4 h-4" />Inspect wallet recovery history</button>
           </form>
           <Result value={recoveryHistory} title="Wallet funding operations (including historical cancellations)" />
           <details class="group rounded-xl border border-red-200 dark:border-red-900/60 overflow-hidden">
@@ -323,7 +326,7 @@ try {
               <p class="prose-muted">Blank operation selects the current pending top-up, or an opening that has not created an account. For an existing account with no pending top-up, select an exact operation ID from wallet recovery history. Historical cancellations and orphaned openings remain recoverable after a reorg. Existing credit remains usable; this action is not a refund.</p>
               <label class="block"><span class="field-label">Exact wallet operation ID (optional)</span><input class="input font-mono" bind:value={recoveryOperation} placeholder="topup:contract-id:operation-id" disabled={busy} /></label>
               <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={cancelAccepted} disabled={busy} />I accept the gas cost and the risk that the original payment executes first.</label>
-              <button class="btn-danger" disabled={busy || !recoveryId || !cancelAccepted} onclick={cancelFunding}><Ban class="w-4 h-4" />Submit or resume cancellation</button>
+              <button class="btn-danger" disabled={busy || !recoveryId || !cancelAccepted || !$session.configured} onclick={cancelFunding}><Ban class="w-4 h-4" />Submit or resume cancellation</button>
               <Result value={cancellation} title="Canonical cancellation outcome" />
             </div>
           </details>

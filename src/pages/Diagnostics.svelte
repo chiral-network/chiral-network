@@ -5,6 +5,7 @@
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import StatTile from '$lib/components/ui/StatTile.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
+  import { session } from '$lib/stores';
   let value = $state<unknown>(null), error = $state(''), busy = $state(false);
   async function inspect() { busy = true; error = ''; try { value = await command('diagnostics'); } catch (e) { error = errorText(e); } finally { busy = false; } }
   // ---- presentation only ----
@@ -17,7 +18,7 @@
 <section class="page" aria-labelledby="diag-title">
   <PageHeader id="diag-title" title="Diagnostics" subtitle="Live status of the native runtime. No synthetic providers, balances, or success responses are supplied.">
     {#snippet actions()}
-      <button class="btn-primary" disabled={busy || !native} onclick={inspect}>
+      <button class="btn-primary" disabled={busy || !native || !$session.configured} onclick={inspect}>
         {#if busy}<Loader2 class="w-4 h-4 animate-spin" />Collecting…{:else}<RefreshCw class="w-4 h-4" />Collect native diagnostics{/if}
       </button>
     {/snippet}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { session } from '$lib/stores';
   import { onDestroy, onMount } from 'svelte';
   import { RefreshCw, MessageSquare, TextCursorInput, Binary, Send, Square, Loader2, CheckCircle2, XCircle, CircleDot, Ban, Sparkles, Store, ReceiptText, Wallet } from 'lucide-svelte';
   import { command, stream, cancelStream, errorText, formatCfx, textDelta, type Account, type StreamEvent } from '$lib/native';
@@ -84,7 +85,8 @@
     try { usage = await command('request_status', { contract_id: contractId, request_id: requestId }); }
     catch (e) { error = errorText(e); }
   }
-  onMount(() => { void load(); });
+  // Nothing is read before an explicit profile is loaded (A.1.3); a profile change remounts the page.
+  onMount(() => { if ($session.configured) void load(); });
   onDestroy(() => { destroyed = true; cancellationRequested = true; if (streamId && busy) void cancelStream(streamId).catch(() => {}); });
 
   // ---- presentation helpers (read-only) ----
@@ -113,7 +115,7 @@
     <div class="space-y-4 lg:sticky lg:top-20">
       <Card icon={Wallet} title="Session" subtitle="Provider account used for these requests">
         {#snippet actions()}
-          <button class="icon-btn" onclick={load} disabled={busy || loading} title="Refresh accounts" aria-label="Refresh accounts">
+          <button class="icon-btn" onclick={load} disabled={busy || loading || !$session.configured} title="Refresh accounts" aria-label="Refresh accounts">
             <RefreshCw class="w-4 h-4 {loading ? 'animate-spin' : ''}" />
           </button>
         {/snippet}
