@@ -34,13 +34,23 @@
     await run(async () => { [accounts, pendingAccounts] = await Promise.all([command<Account[]>('accounts'), command<PendingFunding>('pending_accounts')]); if (!contractId && accounts.length) contractId = accounts[0].contract_id; });
     if (contractId) await select();
   }
+  // A funding attempt, then a re-read of the native funding journal whether it succeeded or
+  // failed: after an error, timeout or lost reply the journaled stage and hash show without
+  // Refresh, and a resolved operation leaves no stale notice.
+  async function attempt(action: () => Promise<void>) {
+    busy = true; error = '';
+    try { await action(); } catch (e) { error = errorText(e); }
+    try { pendingAccounts = await command<PendingFunding>('pending_accounts'); }
+    catch (e) { error = [error, `Pending funding journal unavailable: ${errorText(e)}`].filter(Boolean).join(' '); }
+    finally { busy = false; }
+  }
   async function topup() {
     if (!accept) return;
-    await run(async () => { const amountWei = parseCfx(amount); pending = true; account = await command<Account>('topup', { contract_id: contractId, amount_wei: amountWei }); pending = false; accept = false; });
+    await attempt(async () => { const amountWei = parseCfx(amount); pending = true; account = await command<Account>('topup', { contract_id: contractId, amount_wei: amountWei }); pending = false; accept = false; });
   }
-  async function resume() { await run(async () => { account = await command<Account>('resume', { contract_id: contractId }); pending = false; }); }
+  async function resume() { await attempt(async () => { account = await command<Account>('resume', { contract_id: contractId }); pending = false; }); }
   async function recover() {
-    await run(async () => { account = await command<Account>('resume', { contract_id: recoveryId }); contractId = recoveryId; accounts = await command<Account[]>('accounts'); pendingAccounts = await command<PendingFunding>('pending_accounts'); });
+    await attempt(async () => { account = await command<Account>('resume', { contract_id: recoveryId }); contractId = recoveryId; accounts = await command<Account[]>('accounts'); });
     if (account) await select();
   }
   async function inspectRecovery() {

@@ -229,6 +229,40 @@ describe('Usage top-up disclosure (requirements 2 and 3)', () => {
     expect(native.calls.filter(call => call.operation === 'topup')).toHaveLength(1);
   });
 
+  it('shows the journaled stage after a failed top-up without Refresh, and clears it after resume', async () => {
+    const card = await openUsage(account());
+    const notice = () => byText(target, '[role="alert"], .rounded-xl', /journaled funding operations? pending/);
+    expect(notice()).toBeUndefined();
+    const journaled = { contract_id: 'contract-under-test', provider_wallet: provider, topup_wei: '500000000000000000', tx_hash: '0x' + 'ab'.repeat(32), funding_stage: 'topup_settlement_pending' };
+    native.handlers.topup = () => { throw new Error('control request interrupted; resume with the same account/transaction, never fund again'); };
+    native.handlers.pending_accounts = () => ({ pending: [journaled] });
+    const amount = card.querySelector<HTMLInputElement>('input[inputmode="decimal"]')!;
+    amount.value = '0.5'; amount.dispatchEvent(new Event('input', { bubbles: true }));
+    card.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); await settle();
+    byText<HTMLButtonElement>(card, 'button', /Sign and top up/)!.click(); await settle();
+
+    // No Refresh: the attempt itself re-read the native journal.
+    expect(native.calls.map(call => call.operation).filter(operation => operation === 'accounts')).toHaveLength(1);
+    expect(text(notice())).toMatch(/^1 journaled funding operation pending/);
+    expect(text(target.querySelector('[role="alert"]'))).toMatch(/interrupted/);
+    byText<HTMLElement>(notice()!, 'button, a', /Open Funding & recovery/)!.click(); await settle();
+    expect(text(target)).toMatch(/topup_settlement_pending/);
+    expect(text(target)).toContain(journaled.tx_hash);
+    expect(text(target)).not.toMatch(/No pending funding in the native journal/);
+
+    native.handlers.resume = () => account({ funded_wei: '500000000000001000' });
+    native.handlers.pending_accounts = () => ({ pending: [] });
+    byText<HTMLButtonElement>(target, '[role="tablist"] button, button', /^Overview$/)!.click(); await settle();
+    const overviewCard = [...target.querySelectorAll('section.card')].find(section => text(section.querySelector('h2')) === 'Top up this provider')!;
+    byText<HTMLButtonElement>(overviewCard, 'button', /Resume pending funding/)!.click(); await settle();
+    expect(native.calls.filter(call => call.operation === 'resume').map(call => call.args)).toEqual([{ contract_id: 'contract-under-test' }]);
+    expect(notice()).toBeUndefined();
+    byText<HTMLButtonElement>(target, 'button', /^Funding & recovery/)!.click(); await settle();
+    expect(text(target)).toMatch(/No pending funding in the native journal/);
+    expect(text(target)).not.toMatch(/topup_settlement_pending/);
+    expect(native.calls.filter(call => call.operation === 'topup')).toHaveLength(1);
+  });
+
   it('keeps a journaled pending top-up unresolved on load and offers only resume', async () => {
     const card = await openUsage(account(), [{ contract_id: 'contract-under-test', topup_wei: '500000000000000000' }]);
     expect(text(card)).toMatch(/Funding unresolved/);

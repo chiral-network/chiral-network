@@ -76,3 +76,4 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 
 - `src-tauri/tests/inference_cli_fund_disclosure_test.rs::fund_discloses_registration_risk_on_stderr_and_keeps_stdout_machine_readable` — **not replaceable**: it runs the `chiral` binary as a process and checks its stderr and stdout text and an on-disk wallet journal; Verus proves properties of Rust functions, not process output or user-facing wording.
 - The seven tests in `tests/fundingDisclosure.test.ts` are TypeScript tests of rendered Svelte pages; Verus does not apply to them.
+- `tests/fundingDisclosure.test.ts` › `shows the journaled stage after a failed top-up without Refresh, and clears it after resume` (task 2.9) — TypeScript test of a rendered Svelte page; Verus does not apply.

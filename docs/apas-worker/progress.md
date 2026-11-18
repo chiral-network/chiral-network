@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-17 (eleventh round) — Code: the desktop re-reads the funding journal after every funding attempt
+
+- In step at `820b6567`; whitepaper unchanged; no new answers.
+- Code step (`specify-funding-settlement` task 2.9, requirement 2). `Usage.svelte` used to leave the pending-funding journal stale after a top-up or resume attempt. After a top-up error the *Funding & recovery* tab said nothing was pending until *Refresh*, and a resolved operation could leave a stale notice. `topup()`, `resume()` and the recovery-tab `recover()` now go through an `attempt()` helper that re-reads `pending_accounts` whether the action succeeds or fails. A new frontend regression fails on the previous page. Screenshots show the notice, and the stage and hash, after a failed top-up without *Refresh*. Checks: svelte-check 0/0, 32 frontend tests, build, 46 script tests. Rust is unchanged since the full headless suite passed at `820b6567` (475 passed, 2 ignored).
+- `specify-funding-settlement` code differences are now all fixed except 2.4, which waits for the report question. Its remaining open items are acceptance tests (3.x) and live-chain evidence (4.x).
+
 ## 2026-11-17 (tenth round) — Code: funding-risk disclosures on the Marketplace, Usage and CLI
 
 - In step at `ea1c7202`; whitepaper unchanged; no new answers.
@@ -78,7 +84,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.1–2.3 and 2.5–2.8 are done, code task 2.9 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
