@@ -1,5 +1,27 @@
 # APAS progress
 
+## 2026-11-17 (seventeenth round) — Fee remittance specified
+
+- In step at `5d97430f`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-fee-remittance` (capability `inference-fee-remittance`, 12 requirements, 44 scenarios) for the book's provider-remitted platform fee (line 528 and related lines). It covers:
+  - a funding charge once per accepted payment, never per request, with no obligation for free openings;
+  - a durable obligation per fee to the agreement's signed `platform_wallet`;
+  - forward-only states pending → batched → submitted → confirmed;
+  - inclusive automatic aggregation at 10^15 wei or 86,400 s, per platform wallet;
+  - immutable sealed batches;
+  - a loopback-only `fees/remit` operator action;
+  - one transfer per batch through the shared nonce journal, with the provider paying gas;
+  - safe-frontier confirmation, with recheck and reorg handling;
+  - restart recovery with no fee bump;
+  - an operator view that separates obligations from remittances, with the not-trustless and not-proof-of-receipt statements.
+  Orphan reversal and restoration are cited from `specify-funding-settlement`. The cited tests were re-run and pass (21 library, 1 integration, 46 script tests). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1: the operator view never shows `submitted` or `confirmed`;
+  - 2.2: no route shows batches, transaction hashes or the not-proof-of-receipt statement;
+  - 2.3: aggregation reads only the 1,000 oldest pending obligations across all wallets;
+  - 2.4: confirmed-batch rechecks page by clock, so with more than 100 batches and passes 60 s apart, some batches are never rechecked and their reorg goes undetected.
+- Report: what evidence makes a remittance confirmed (default: the funding safe-frontier policy), and how a failed or displaced remittance is resolved (default: no automatic replacement, reported every pass).
+
 ## 2026-11-17 (sixteenth round) — Code: zero TTFT and out-of-boundary qualification samples
 
 - In step at `904cc43e`; whitepaper unchanged; no new answers.
@@ -120,9 +142,9 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. Fee remittance (obligation states, aggregation thresholds, remittance gas) has no SHALL requirements.
+1. Code differences in `specify-fee-remittance`: tasks 2.4 (recheck paging misses batches), 2.3 (1,000-obligation aggregation window), then 2.1 and 2.2 (operator view states and batch evidence). These rank above the missing spec below.
    (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
 2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 

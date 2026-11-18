@@ -240,3 +240,20 @@ Proposed default (what the spec adopts): it counts as provider-incomplete. The g
 Separately, the spec records as a code difference, not a question, that a client disconnect is now waived and counted as a provider miss (task 2.1). Line 571 already says that interruption before a measured miss is not an automatic waiver.
 
 Nonblocking: no requirement or task waits on this answer.
+
+## 2026-11-17 — Fee remittance: what "confirmed" means, and what happens to a failed remittance
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Durable accounting and fees* (line 528: fee obligations are "separately tracked as pending/batched/submitted/confirmed"). Spec: the new change `specify-fee-remittance` (capability `inference-fee-remittance`), design decisions 5 and 7 and open questions 1 and 2.
+
+What it says now: line 528 names the confirmed state and says that recording an obligation is not proof that the platform received it. It does not say what evidence confirms a remittance, or what happens when a remittance cannot be confirmed. `CLAUDE.md` forbids automatic fee bumps and replacements.
+
+Questions:
+
+1. **Confirmation evidence.** Should a remittance count as confirmed under the funding policy `canonical-successful-receipt-at-espace-safe-v1` (successful canonical execution at the healthy `safe` frontier, observed twice, matching the batch's sender, recipient, value and calldata), or does it need something else, such as PoS `finalized`? Proposed default (what the spec adopts): the funding policy, as the code already does. Safe acceptance is not finality, and a confirmed remittance returns to submitted if a reorganization undoes it.
+2. **Failed or displaced remittance.** A remittance can fail canonically (for example, a platform wallet that is a contract rejecting the transfer), or its nonce can be consumed without its receipt (`nonce_conflict`). Today its obligations stay unconfirmed in their batch forever and every maintenance pass reports a fee failure; a `nonce_conflict` also blocks every later original of that wallet, including consumer funding that shares the journal, until the receipt returns. Should an explicit operator action re-seal those obligations into a new batch and send a new transaction (paying gas again) once the failure is canonical at `safe`, should they stay as permanently unremitted debt shown in the fee view, or something else? Proposed default (what the spec adopts): no automatic replacement, a failure reported on every pass, and no recovery action until you answer.
+
+Separately, the spec records four code differences, not questions: the fee view reports no "submitted" state and calls confirmed obligations `remitted`; it lists no remittance transactions and omits the "not proof of receipt" statement; aggregation considers only the 1,000 oldest pending obligations per pass; and monitoring can skip some confirmed remittances indefinitely once there are more than 100 (tasks 2.1–2.4).
+
+Nonblocking: no requirement or task waits on these answers; question 2 would add a recovery task.
