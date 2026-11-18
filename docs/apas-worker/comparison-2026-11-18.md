@@ -10,7 +10,7 @@ Whitepaper `docs/chiral-book.md` (SHA-256 `eda22ce0…3933`) against the OpenSpe
 
 2. **Consumer profile paths resolve against the working directory** (high). Book line 449: configuration paths resolve relative to the configuration file; line 470: one wallet, one `data_dir` base and journal. `Consumer::load` (`consumer.rs:447–449`) does not resolve `data_dir`, `network.rpc_bearer_file` or `dht.identity_file`; `ProviderConfig::load` does (`provider_config.rs:63–74`, `resolve_path` at 189). Reproduced: `chiral wallet create` from another directory created state there. Step: resolve against the profile's directory, refuse to start silently empty when state exists at the old cwd-relative path, specify it (funding-settlement *Every spender of one wallet shares one coordinated nonce journal* or a consumer-profile change), and add a binary regression with a different working directory. Done in round 36: `specify-profile-path-resolution` (capability `profile-path-resolution`, 5 requirements, 15 scenarios) and its task 2.1 fix in `Consumer::load`, with regressions in `src-tauri/tests/consumer_profile_paths_test.rs`.
 3. **A qualified profile can be published from an unmanaged external engine** (medium; found by two slices). Book lines 73, 102 and 609: the managed runtime supplies runtime evidence, and an external endpoint is "for calibration, not a substitute". `ProviderConfig::validate` (`provider_config.rs:120–127`) accepts `serving` with `runtime: null`; inventory and device checks run only for a managed engine (`app.rs:153–157`, `engine_runtime.rs:171`, `258`); the offer is then signed and published (`app.rs:352–386`). Only `scripts/provider-preflight.py:87–89` refuses it. Step: refuse `serving` without `runtime` outside development; add a scenario to commercial-terms *Native deployment constraints cannot be bypassed by declaration validity* and a regression in `inference_commercial_terms_test.rs`. Done in round 37: commercial-terms task 2.6 refuses it outside development; the embedding case is a report question.
-4. **A manifest assembled from pages of different snapshots counts as complete and can withdraw a live offer** (low). Book discovery section (lines 211–261). Re-read the verifier's citation before acting.
+4. **A manifest assembled from pages of different snapshots counts as complete and can withdraw a live offer** (low). Book discovery section (lines 211–261). Re-read the verifier's citation before acting. Recorded as task 2.1 of specify-offer-discovery.
 5. **Origin validation accepts single-label hostnames with a trailing root dot** (low). Book HTTP origins (262–279).
 6. **Malformed feedback gets axum's plain-text 422/400 instead of `invalid_feedback`** (low). Book reputation section (361–446).
 7. **`chiral_rpc_gateway` has no inbound bearer when bound to loopback, although the reference topology puts public TLS in front of that port** (low). Book line 658 topology.
@@ -18,12 +18,12 @@ Whitepaper `docs/chiral-book.md` (SHA-256 `eda22ce0…3933`) against the OpenSpe
 ## Missing specifications (spec before code)
 
 8. **Managed provider engine launch contract** (medium; found by two slices). Book lines 73, 75, 90, 92 and 615–619. The code implements it (`engine_runtime.rs:201–206`, `221–241`, `259–262`, `277–282`, `349–358`; `app.rs:196–214`) but only target-design specs state it, and no test asserts the launch arguments or the cleared environment.
-9. **Current offer discovery and publication: revisions, equivocation, withdrawal, bounded registry** (medium). Book lines 29, 59, 211–261.
+9. **Current offer discovery and publication: revisions, equivocation, withdrawal, bounded registry** (medium). Book lines 29, 59, 211–261. Specified in round 38 (specify-offer-discovery).
 10. **Payment-gated reputation: feedback admission, storage, Elo, revalidation** (medium). Book lines 361–446.
 11. **Outbound HTTP safeguards and the private engine origin boundary** (medium). Book lines 262–279.
 12. **Credential issuance and secret storage** (medium). Book lines 325–360.
 13. **The provider's public OpenAI-compatible API and per-capability model qualification** (medium). Book lines 579–601.
 14. **Daemon lifecycle and readiness: health, drain, resume, refresh, child failure, shutdown, maintenance cadence** (medium). Book lines 605–680.
-15. **Catalog precedence, the catalog page contract and the readiness endpoint** (low). Book lines 211–261.
+15. **Catalog precedence, the catalog page contract and the readiness endpoint** (low). Book lines 211–261. Specified in round 38 (specify-offer-discovery).
 16. **The application never starts a node or miner on login** (low). Book Part I.
-17. **Offer revision and equivocation rules for the current runtime** (low; overlaps item 9).
+17. **Offer revision and equivocation rules for the current runtime** (low; overlaps item 9). Specified in round 38 (specify-offer-discovery).

@@ -1,5 +1,30 @@
 # APAS progress
 
+## 2026-11-18 (thirty-eighth round) — Current offer discovery specified
+
+- In step at `ff0d3935`; whitepaper unchanged; no new answers.
+- Spec step (comparison items 9, 15 and 17, missing specification; item 4's code fix needs a home). New change `specify-offer-discovery` (capability `inference-offer-discovery`, 16 requirements, 62 scenarios) for the current runtime's discovery (book lines 29, 59 and 211–261). It covers:
+  - candidate offers, not a census;
+  - network-scoped indexes under a stable, protected peer identity;
+  - admission-bounded connections;
+  - the paged `/chiral/inference/manifest/1` protocol in stable namespace order;
+  - bounded searches;
+  - the 8,192-entry registry;
+  - monotonic revisions with rollback and equivocation rejected;
+  - withdrawal keeping its watermark for 3,630 s;
+  - withdrawal only on a complete, single-snapshot manifest;
+  - provider publication (30 s refresh, 120 s offers);
+  - fresh-registry consumer discovery with DHT precedence;
+  - the relay catalog and its client;
+  - liveness and readiness;
+  - native inspection.
+  M3 and commercial-terms requirements are cited by name. The cited tests pass (14 library and 5 integration). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1 (comparison item 4): a manifest built from pages of different snapshots can withdraw a live offer;
+  - 2.2: a failed refresh leaves the offers it published earlier in that pass served;
+  - 2.3: the DHT identity file is not handled as a protected secret (no owner or symlink check; unchecked on Windows).
+- Report: is a provider whose every probe-ready model is performance-withdrawn "ready" (default: yes, provider-wide, as today)?
+
 ## 2026-11-18 (thirty-seventh round) — Code: a qualified profile needs a managed runtime
 
 - In step at `eb0b75e9`; whitepaper unchanged; no new answers.
@@ -327,7 +352,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (items 4–7; items 2 and 3 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (`specify-offer-discovery` tasks 2.1–2.3, then comparison items 5–7; items 2 and 3 are done, item 4 is task 2.1), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

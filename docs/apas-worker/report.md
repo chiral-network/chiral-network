@@ -318,3 +318,19 @@ Question: may a non-development, priced, unprofiled embedding deployment be serv
 Proposed default (what the code does today): allow it, because line 656 permits a private-IP engine and embeddings carry no performance claim. If you choose the managed rule, the refusal extends to every priced model outside development.
 
 Nonblocking: no requirement or task waits on this answer.
+
+## 2026-11-18 — Is a provider whose every model is performance-withdrawn ready?
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Immutable terms versus current availability* (line 252: `/readyz` returns its status "based on serving readiness", and "durable performance withdrawal can prevent admission") and *Provider lifecycle and immutable agreements* (lines 633 and 636). Spec: the new change `specify-offer-discovery` (capability `inference-offer-discovery`), requirement *Provider liveness and readiness are point-in-time observations, separate from new-funding readiness*, design decision 7 and open question 1. Code: `app.rs:335–345` and `477–483`; `inference_backend.rs:1370–1397`; `app.rs:63–70` and `353`.
+
+What it says now: the book says `/readyz` reports serving readiness, separate from new-funding readiness, and lists performance withdrawal among the things that "can prevent admission". It does not say whether a provider with no admissible model is serving-ready. Today `ready` is `true`, and `funding_ready` can be `true`, when every configured model passes its readiness probe but carries a durable performance-withdrawal latch: `accepting` requires only that some model passed its probe, and the probe consults the latch only while the engine is busy. Requests and new quotes for those models are refused, and no offer is published for them.
+
+Question: should `ready` (a) stay provider-wide and leave performance withdrawal to admission and publication, as today, or (b) be `false` when no configured model is admissible, counting the latch?
+
+Proposed default (what the spec adopts): (a), by not listing performance withdrawal among the conditions that close `ready`. Option (b) would add that condition and one implementation task. The target-design launch reputation counts a sample as available only with a qualifying published offer, so either answer leaves its samples unchanged.
+
+Separately, the spec records three code differences, not questions: a manifest assembled from pages of different snapshots counts as complete and can withdraw a live offer (comparison item 4); a refresh that fails leaves the offers it published earlier in that pass served; and the DHT identity key file is not a protected secret on Windows and is read through symbolic links on Unix (tasks 2.1–2.3).
+
+Nonblocking: no requirement or task waits on this answer.
