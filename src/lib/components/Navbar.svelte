@@ -31,7 +31,7 @@
 </script>
 
 <nav aria-label="Main navigation" class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700">
-  <div class="max-w-7xl mx-auto px-3 sm:px-4">
+  <div class="max-w-7xl min-[1440px]:max-w-[1400px] mx-auto px-3 sm:px-4">
     <div class="flex items-center justify-between h-14 gap-2">
       <a href="#/marketplace" class="flex items-center gap-2 shrink-0 no-underline" onclick={closeMenus}>
         <img src="/logo.png" alt="" class="w-7 h-7 rounded-lg" />

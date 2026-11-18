@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (twenty-seventh round) — Code: the webview loads nothing from a remote origin
+
+- In step at `cbd3b273`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` task 2.8, requirement 1). `index.html` used to preconnect to, and load a stylesheet from, Google Fonts; the production CSP already blocked the stylesheet. The links are removed. Roboto stays first in the local font stack, which matches the native app's existing rendering; it is not bundled, because this loop may not download a font.
+  - With the system font, the browser preview showed that the top bar overflowed by 10 px at exactly 1440 px, as the native app already did. The navbar container now widens to A.3's 1,400 px page frame from 1440 px; there is no overflow at 1280, 1440 or 1536 px.
+  - New `tests/noRemoteResources.test.ts` fails on the previous `index.html`. The preview's resource timing shows no request to another origin.
+- Every code difference in `specify-desktop-gui-global-rules` is now fixed; its acceptance tasks 3.x and native verification 4.1 remain.
+- Checks: svelte-check 0/0, 55 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-sixth round) — Code: accessibility labels, live-region roles and reduced motion
 
 - In step at `a114e665`; whitepaper unchanged; no new answers.
@@ -222,15 +231,14 @@
 
 ## Next steps, in order
 
-Code differences, then missing specifications (spec before code):
+Missing specifications (spec before code):
 
-1. Code difference in `specify-desktop-gui-global-rules`: fonts 2.8 (the webview loads Google Fonts). Confirm each GUI change with screenshots; every other task 2.x is done.
-2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
+1. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet. It is the next missing specification; include the Usage tab strip, which overflows at 390 px.
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
-4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
