@@ -4,22 +4,27 @@
 //! `version::is_acceptable_remote_policy`.
 //!
 //! Subcommands:
-//!   keygen                   — print a fresh Ed25519 keypair (hex).
-//!   sign --key <hex>         — read policy JSON from stdin (or --in <path>),
-//!                              fill `signature`, write to stdout (or --out).
+//!   keygen --out <path>      — create a fresh Ed25519 key in a new owner-only file and
+//!                              print only the public key (JSON).
+//!   sign --key-file <path>   — read policy JSON from stdin (or --in <path>), fill
+//!                              `signature` with the key from that protected file, and
+//!                              write to stdout (or --out).
 //!   verify --pub <hex>       — verify a signed policy against a public key.
 //!
-//! The matching public key is supplied as `CHIRAL_POLICY_PUBLIC_KEY` when
-//! building release binaries. The private key stays offline / in a CI
-//! secret — never checked in.
+//! The matching public key is supplied as `CHIRAL_POLICY_PUBLIC_KEY` when building
+//! release binaries. The private key stays offline in a protected file: it is never
+//! accepted on the command line or from the environment and never printed.
 
 use std::fs;
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use chiral_network::version::{
     canonical_signing_payload, verify_policy, VersionPolicy, POLICY_PUBLIC_KEY,
 };
+use chiral_network::wallet::{create_secret_file, open_secret_file};
+use zeroize::Zeroizing;
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
@@ -33,16 +38,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Generate a fresh Ed25519 keypair. Prints `public=<hex>` and
-    /// `secret=<hex>` to stdout. Paste the public into
-    /// release builds as `CHIRAL_POLICY_PUBLIC_KEY`; keep the secret offline.
-    Keygen,
-    /// Sign a policy JSON. Reads from `--in` or stdin; writes the signed
-    /// JSON to `--out` or stdout.
+    /// Generate a fresh Ed25519 key. Writes the secret to a new owner-only file at
+    /// `--out` (an existing path is refused) and prints only
+    /// `{"public_key": <hex>, "secret_file": <path>}`. Use the public key as
+    /// `CHIRAL_POLICY_PUBLIC_KEY` in release builds; keep the file offline.
+    Keygen {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Sign a policy JSON with the key in a protected file. Reads from `--in` or
+    /// stdin; writes the signed JSON to `--out` or stdout.
     Sign {
-        /// 64-hex-char (32-byte) Ed25519 secret key.
-        #[arg(long, env = "CHIRAL_POLICY_SECRET")]
-        key: String,
+        /// Owner-only file holding the 64-hex-char (32-byte) Ed25519 secret key.
+        #[arg(long = "key-file")]
+        key_file: PathBuf,
         #[arg(long)]
         r#in: Option<String>,
         #[arg(long)]
@@ -61,14 +70,20 @@ enum Cmd {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Keygen => {
-            let signing = SigningKey::generate(&mut OsRng);
-            let verifying: VerifyingKey = signing.verifying_key();
-            println!("public={}", hex::encode(verifying.to_bytes()));
-            println!("secret={}", hex::encode(signing.to_bytes()));
-            ExitCode::SUCCESS
-        }
-        Cmd::Sign { key, r#in, out } => match run_sign(&key, r#in.as_deref(), out.as_deref()) {
+        Cmd::Keygen { out } => match run_keygen(&out) {
+            Ok(public) => {
+                println!(
+                    "{}",
+                    serde_json::json!({"public_key": public, "secret_file": out.display().to_string()})
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("keygen: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Cmd::Sign { key_file, r#in, out } => match run_sign(&key_file, r#in.as_deref(), out.as_deref()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("sign: {e}");
@@ -115,8 +130,29 @@ fn write_output(path: Option<&str>, s: &str) -> io::Result<()> {
     }
 }
 
-fn parse_secret(hex_str: &str) -> Result<SigningKey, String> {
-    let bytes = hex::decode(hex_str.trim()).map_err(|e| format!("bad hex secret: {e}"))?;
+/// Create the key file first, so nothing is generated for a path that already exists,
+/// then write the secret into it. Returns the public key only.
+fn run_keygen(out: &Path) -> Result<String, String> {
+    let mut file = create_secret_file(out)?;
+    let signing = SigningKey::generate(&mut OsRng);
+    let secret = Zeroizing::new(hex::encode(signing.to_bytes()));
+    file.write_all(secret.as_bytes())
+        .and_then(|()| file.write_all(b"\n"))
+        .and_then(|()| file.sync_all())
+        .map_err(|e| format!("write key file: {e}"))?;
+    let verifying: VerifyingKey = signing.verifying_key();
+    Ok(hex::encode(verifying.to_bytes()))
+}
+
+/// Read the secret from a protected file: a symbolic link, a non-regular file or (on
+/// Unix) a file another user or group can access is refused before anything is signed.
+fn read_secret(path: &Path) -> Result<SigningKey, String> {
+    let mut text = Zeroizing::new(String::new());
+    open_secret_file(path)?
+        .take(4097)
+        .read_to_string(&mut text)
+        .map_err(|_| "cannot read key file".to_string())?;
+    let bytes = Zeroizing::new(hex::decode(text.trim()).map_err(|_| "key file must hold a hex secret".to_string())?);
     let arr: [u8; 32] = bytes
         .as_slice()
         .try_into()
@@ -124,8 +160,8 @@ fn parse_secret(hex_str: &str) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&arr))
 }
 
-fn run_sign(key: &str, in_path: Option<&str>, out_path: Option<&str>) -> Result<(), String> {
-    let signing = parse_secret(key)?;
+fn run_sign(key_file: &Path, in_path: Option<&str>, out_path: Option<&str>) -> Result<(), String> {
+    let signing = read_secret(key_file)?;
     let raw = read_input(in_path).map_err(|e| format!("read input: {e}"))?;
     let mut policy: VersionPolicy =
         serde_json::from_str(&raw).map_err(|e| format!("parse policy: {e}"))?;

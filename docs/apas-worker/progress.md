@@ -1,5 +1,10 @@
 # APAS progress
 
+## 2026-11-18 (thirty-second round) — Code: the policy authority's key stays in a protected file
+
+- In step at `7dcb5887`; whitepaper unchanged; no new answers.
+- Code step (`specify-version-policy` task 2.1, requirement 8; book lines 474 and 648). `chiral-policy-sign sign` took the authority's private key as `--key <hex>` or from `CHIRAL_POLICY_SECRET`, and `keygen` printed `secret=<hex>`. Now `keygen --out <path>` writes the key to a new owner-only file (an existing path is refused) and prints only the public key as JSON. `sign --key-file <path>` reads it through `wallet::open_secret_file`, which refuses symlinks and group- or world-accessible files. A new process-level test, `policy_sign_cli_test.rs`, fails on the previous binary. The only documentation reference (`docs/provider-qualification.md`) uses `verify`, which is unchanged.
+
 ## 2026-11-18 (thirty-first round) — Client version policy specified
 
 - In step at `df2240bf`; whitepaper unchanged; no new answers.
@@ -281,7 +286,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-version-policy`: 2.1 (signing key on argv/env/stdout) first, then 2.2–2.4 (update gate). After them, no further missing specification is known.
+1. Code differences in `specify-version-policy`: 2.2–2.4 (update gate); 2.1 is done. After them, no further missing specification is known.
 
 Earlier open work, unchanged:
 

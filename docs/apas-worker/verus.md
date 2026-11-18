@@ -128,3 +128,9 @@ Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (require
 - `tests/noRemoteResources.test.ts` (task 2.8, requirement 1) — TypeScript check of HTML pages; Verus does not apply.
 - `tests/credentials.test.ts` (`specify-desktop-gui-pages` tasks 2.1 and 2.2, requirement 6) — TypeScript tests of a rendered Svelte page; Verus does not apply.
 - `tests/settings.test.ts` (`specify-desktop-gui-pages` tasks 2.3 and 2.4, requirement 13) — TypeScript tests of rendered Svelte components; Verus does not apply.
+
+## Judged 2026-11-18 — policy signer key-file regressions
+
+Requirement source: `openspec/changes/specify-version-policy/specs/client-version-policy/spec.md` (requirement 8).
+
+- `src-tauri/tests/policy_sign_cli_test.rs` (`keygen_writes_an_owner_only_key_file_and_prints_only_the_public_key`, `sign_reads_the_key_only_from_a_protected_file`) — **not replaceable**: they run the `chiral-policy-sign` binary as a process and check file modes, symlink refusal, stdout and signatures; Verus models none of these.
