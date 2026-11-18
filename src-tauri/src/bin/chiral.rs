@@ -223,7 +223,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                 .await?,
         )?,
         Command::Fund { offer, quote } => {
-            eprintln!("Funding is provider-specific and non-refundable. The client broadcasts only after a durable provider acknowledgement, but the provider receives signed bytes and could broadcast them without acknowledging. On pending/error inspect pending and resume the contract; explicit cancel-funding costs gas and can lose the race.");
+            eprintln!("Funding is provider-specific and non-refundable. The client broadcasts only after a durable provider acknowledgement, but the provider receives independently broadcastable signed bytes and could broadcast them before or without acknowledging; this ordering is not cryptographic escrow. An HTTP error, timeout or missing reply does not prove that no money moved: inspect pending and resume CONTRACT_ID instead of funding again. Explicit cancel-funding costs gas and can lose the race.");
             value(
                 consumer
                     .fund(

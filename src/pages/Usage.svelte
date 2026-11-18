@@ -204,12 +204,12 @@ try {
           <div class="space-y-4">
             <Card icon={PlusCircle} tone="green" title="Top up this provider">
               <div class="space-y-4">
-                <Callout kind="warning">Non-refundable. Only provider <span class="font-mono break-all">{account.provider_wallet}</span> can serve this credit. Use a small balance; gas is extra and reorg risk remains.</Callout>
+                <Callout kind="warning">Non-refundable. Only provider <span class="font-mono break-all">{account.provider_wallet}</span> can serve this credit. Use a small balance; gas is extra. Chain reorganizations can freeze or reverse credit.</Callout>
                 <form class="space-y-3" onsubmit={e => { e.preventDefault(); void topup(); }}>
                   <label class="block"><span class="field-label">Amount (CFX)</span>
                     <span class="relative block"><input class="input pr-14" bind:value={amount} inputmode="decimal" required disabled={busy || pending} /><span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">CFX</span></span>
                   </label>
-                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || pending} />I accept this provider-specific non-refundable top-up.</label>
+                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || pending} />I accept this provider-specific non-refundable top-up and that chain reorganizations can freeze or reverse credit.</label>
                   <button class="btn-primary w-full" disabled={busy || pending || !accept}><PlusCircle class="w-4 h-4" />Sign and top up</button>
                 </form>
                 {#if pending}

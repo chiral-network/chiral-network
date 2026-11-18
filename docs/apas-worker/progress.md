@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-17 (tenth round) — Code: funding-risk disclosures on the Marketplace, Usage and CLI
+
+- In step at `ea1c7202`; whitepaper unchanged; no new answers.
+- Code step (`specify-funding-settlement` tasks 2.1–2.3, requirements 2 and 3). Before this step, the Marketplace funding panel and its pending notice said payment is broadcast only after the provider's acknowledgement, and the CLI `fund` text and the Usage top-up card left out parts of the book's disclosures. All three now follow book line 489 and A.1.6. The Marketplace panel has a *Residual registration risk:* paragraph: the client broadcasts only after a durable acknowledgement, the provider holds broadcastable bytes and could broadcast before or without acknowledging, the ordering is not cryptographic escrow, and an error does not prove no money moved. Its acceptance covers that risk and the reorganization statement. The CLI `fund` stderr has the same elements. The Usage top-up card states that reorganizations can freeze or reverse credit and must be accepted before *Sign and top up*, without registration wording. New tests: seven in `tests/fundingDisclosure.test.ts` and one CLI process test; the four that cover new text fail on the old text. Screenshots of the panel, the pending notice, the top-up card and a frozen account (browser preview with a scratchpad-only IPC stub) were checked. Task 3.3 is complete.
+- Spec: the review found that `Usage.svelte` does not re-read the funding journal after a top-up or resume attempt, so the journaled stage is not shown after a top-up error until *Refresh*. This is recorded as design code difference 9 and task 2.9.
+
 ## 2026-11-17 (ninth round) — Code: a top-up cancellation request is durable before the attempt
 
 - In step at `3ea39335`; whitepaper unchanged; no new answers.
@@ -72,7 +78,7 @@
 Missing specifications (spec before code):
 
 1. `specify-cli-loopback-gateway`: the book says the desktop **and CLI** run the loopback gateway. M2 and M3 both defer the CLI part to this change, which does not exist yet.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.5–2.8 are done, code tasks 2.1–2.3 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
+2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is now `specify-funding-settlement`; 2.1–2.3 and 2.5–2.8 are done, code task 2.9 can proceed, and 2.4 waits for the report question. Code differences rank above the missing specs.)
 3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:

@@ -69,3 +69,10 @@ Requirement source: `openspec/changes/specify-funding-settlement/specs/inference
 
 - `consumer::tests::failed_topup_cancellation_attempt_keeps_the_request_and_never_rebroadcasts_the_original` — **not replaceable**: it drives the async native consumer through a failed cancellation attempt, restarts and an explicit retry, against a local HTTP provider and a scripted JSON-RPC chain, with protected files and the wallet journal; Verus models none of these.
 - `consumer::tests::won_topup_original_after_a_failed_cancellation_attempt_is_credited_once_by_resume` — **not replaceable**, for the same reasons.
+
+## Judged 2026-11-17 — funding disclosure tests
+
+Requirement source: `openspec/changes/specify-funding-settlement/specs/inference-funding-settlement/spec.md` (requirements 2 and 3).
+
+- `src-tauri/tests/inference_cli_fund_disclosure_test.rs::fund_discloses_registration_risk_on_stderr_and_keeps_stdout_machine_readable` — **not replaceable**: it runs the `chiral` binary as a process and checks its stderr and stdout text and an on-disk wallet journal; Verus proves properties of Rust functions, not process output or user-facing wording.
+- The seven tests in `tests/fundingDisclosure.test.ts` are TypeScript tests of rendered Svelte pages; Verus does not apply to them.

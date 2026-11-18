@@ -227,8 +227,9 @@
                 <dt>Quote expiry</dt><dd>{new Date(quote.payload.expires_at * 1000).toLocaleString()}</dd>
               </dl>
             </div>
-            <p class="prose-muted">The provider must acknowledge the signed funding intent before payment is broadcast. An acknowledged intent retains these prices while settlement is pending. Credit requires a successful canonical receipt at eSpace's safe frontier; execution alone is not spendable credit or PoS finality.</p>
-            <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accepted} disabled={busy || !!pendingId} />I accept this provider-specific non-refundable prepayment and residual reorg risk.</label>
+            <p class="prose-muted"><strong>Residual registration risk:</strong> Your client broadcasts the payment only after a durable provider acknowledgement of the signed funding intent. The provider already receives the signed bytes, which anyone holding them can broadcast, so it could broadcast them before or without acknowledging; this ordering is not cryptographic escrow. An error, timeout or missing reply does not prove that no money moved: inspect the pending funding stage and resume instead of paying again.</p>
+            <p class="prose-muted">An acknowledged intent retains these prices while settlement is pending. Credit requires a successful canonical receipt at eSpace's safe frontier; execution alone is not spendable credit or PoS finality.</p>
+            <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accepted} disabled={busy || !!pendingId} />I accept this provider-specific non-refundable prepayment, the registration risk above, and that chain reorganizations can freeze or reverse credit.</label>
             <button class="btn-primary" disabled={busy || !accepted || !!pendingId} onclick={fund}>
               {#if busy}<Loader2 class="w-4 h-4 animate-spin" />Registering or settling funding…{:else}<CircleDollarSign class="w-4 h-4" />Register intent, fund, and open account{/if}
             </button>
@@ -237,7 +238,7 @@
 
         {#if pendingId}
           <Callout kind="warning" role="status" title="Funding stage: {fundingStage || 'preparing'}">
-            Do not send another payment. Resume this journaled intent; payment is broadcast only after the provider’s signed acknowledgement.
+            Do not send another payment. The provider already holds the signed bytes and could broadcast them before or without acknowledging; this ordering is not cryptographic escrow. An error, timeout or missing reply does not prove that no money moved. Inspect the funding stage above and resume this journaled intent; your client broadcasts only the original payment, and only after a durable provider acknowledgement.
             <div class="mt-3"><button class="btn-secondary btn-sm" disabled={busy} onclick={resume}><RotateCcw class="w-3.5 h-3.5" />Resume funding</button></div>
           </Callout>
         {/if}
