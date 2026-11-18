@@ -25,16 +25,40 @@
     }
   }
 
-  async function openDownload() {
-    if (!status) return;
+  // Only an HTTPS URL without credentials is offered for copying (book A.2).
+  function httpsDownload(value: string | undefined): string | null {
     try {
-      const url = new URL(status.policy.downloadUrl);
-      if (url.protocol !== 'https:' || url.username || url.password) throw new Error('invalid URL');
-      await navigator.clipboard.writeText(url.href);
+      const url = new URL(value ?? '');
+      return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+    } catch { return null; }
+  }
+  const downloadUrl = $derived(httpsDownload(status?.policy.downloadUrl));
+
+  async function openDownload() {
+    if (!downloadUrl) return;
+    try {
+      await navigator.clipboard.writeText(downloadUrl);
       toasts.show('Download URL copied. Open it in your browser to update.', 'info');
     } catch {
       toasts.show('Copy the displayed HTTPS download URL into your browser.', 'warning');
     }
+  }
+
+  // The required-update modal takes focus and keeps Tab inside it; the application
+  // shell behind it is made inert by App.svelte.
+  let modal = $state<HTMLElement>();
+  $effect(() => {
+    if (status?.status === 'required' && modal && !modal.contains(document.activeElement)) {
+      (modal.querySelector<HTMLElement>('button, a[href], [tabindex]:not([tabindex="-1"])') ?? modal).focus();
+    }
+  });
+  function trapFocus(event: KeyboardEvent) {
+    if (event.key !== 'Tab' || !modal) return;
+    const focusable = [...modal.querySelectorAll<HTMLElement>('button, a[href], [tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) { event.preventDefault(); modal.focus(); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === modal)) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 </script>
 
@@ -45,10 +69,13 @@
       cannot pass through. The user's only path out is to update.
     -->
     <div
+      bind:this={modal}
       class="fixed inset-0 z-[2147483646] flex items-center justify-center bg-black/80 backdrop-blur-sm"
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="update-required-title"
+      tabindex="-1"
+      onkeydown={trapFocus}
     >
       <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-red-200 dark:border-red-700 max-w-md w-full mx-4 p-6">
         <div class="flex items-center gap-3 mb-4">
@@ -70,17 +97,19 @@
             {status.policy.message}
           </p>
         {/if}
-        <button
-          type="button"
-          onclick={openDownload}
-          class="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg flex items-center justify-center gap-2 font-medium transition"
-        >
-          <ExternalLink class="w-4 h-4" />
-          Copy download URL
-        </button>
-        <p class="text-xs text-gray-400 dark:text-gray-500 mt-3 text-center break-all">
-          {status.policy.downloadUrl}
-        </p>
+        {#if downloadUrl}
+          <button
+            type="button"
+            onclick={openDownload}
+            class="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg flex items-center justify-center gap-2 font-medium transition"
+          >
+            <ExternalLink class="w-4 h-4" />
+            Copy download URL
+          </button>
+          <p class="text-xs text-gray-400 dark:text-gray-500 mt-3 text-center break-all">{downloadUrl}</p>
+        {:else}
+          <p class="text-sm text-gray-700 dark:text-gray-300">This policy gives no HTTPS download URL. Obtain the update from your distribution channel.</p>
+        {/if}
       </div>
     </div>
   {:else if status.status === 'recommended' && !dismissedRecommended}
@@ -100,13 +129,15 @@
           {status.policy.message}
         {/if}
       </span>
-      <button
-        type="button"
-        onclick={openDownload}
-        class="text-sm text-amber-900 dark:text-amber-200 underline hover:no-underline whitespace-nowrap"
-      >
-        Update
-      </button>
+      {#if downloadUrl}
+        <button
+          type="button"
+          onclick={openDownload}
+          class="text-sm text-amber-900 dark:text-amber-200 underline hover:no-underline whitespace-nowrap"
+        >
+          Update
+        </button>
+      {/if}
       <button
         type="button"
         onclick={dismissRecommended}

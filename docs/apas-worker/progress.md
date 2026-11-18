@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (thirty-third round) — Code: the required-update modal blocks the keyboard, and only HTTPS download URLs are offered
+
+- In step at `fe9b6098`; whitepaper unchanged; no new answers.
+- Code step (`specify-version-policy` tasks 2.2 and 2.3, requirement 13; book A.2 line 846).
+  - The required-update modal blocked the pointer only. The navigation, page and Log out stayed reachable by keyboard and assistive technology. One `shellBlocked` flag in `App.svelte` now makes the skip link, navigation and `main` inert, and the modal takes focus and keeps Tab inside it. The tray's Quit dialog stays usable in the top layer.
+  - *Copy download URL* and the banner's *Update* were offered for any URL. They now appear only for an HTTPS URL without credentials; otherwise the gate says the policy gives no HTTPS download URL.
+  - New `tests/updateGate.test.ts`: four tests fail on the previous components, and two guard the other cases. Headless Chrome confirmed the inert shell and that the navbar still sticks; screenshots checked.
+- Checks: svelte-check 0/0, 67 frontend tests, build. Rust is unchanged since the full headless suite passed at `fe9b6098` (493 passed, 2 ignored).
+
 ## 2026-11-18 (thirty-second round) — Code: the policy authority's key stays in a protected file
 
 - In step at `7dcb5887`; whitepaper unchanged; no new answers.
@@ -286,7 +295,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-version-policy`: 2.2–2.4 (update gate); 2.1 is done. After them, no further missing specification is known.
+1. Code difference in `specify-version-policy`: 2.4 (stale update status after logout); 2.1–2.3 are done. After them, no further missing specification is known.
 
 Earlier open work, unchanged:
 

@@ -12,6 +12,7 @@
   import Diagnostics from './pages/Diagnostics.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import UpdateGate from '$lib/components/UpdateGate.svelte';
+  import { versionStatus } from '$lib/stores/versionStore';
   import Navbar from '$lib/components/Navbar.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
@@ -29,6 +30,9 @@
   // Closing the window minimizes it (book A.1.10); only a confirmed Quit ends the process.
   let darkSystem = $state(false), quitting = false, closeHintShown = false, sidebarCollapsed = $state(false);
   const CurrentPage = $derived(pages[page]);
+  // While an update is required the shell behind the update modal is inert (book A.2).
+  // This is the one place a later decision can relax the block for recovery pages.
+  const shellBlocked = $derived($versionStatus.status === 'required');
   const pageLabel = $derived(navItems.find(item => item.key === page)?.label ?? 'Marketplace');
   $effect(() => {
     document.documentElement.classList.toggle('dark', $settings.theme === 'dark' || ($settings.theme === 'system' && darkSystem));
@@ -77,15 +81,17 @@
   });
 </script>
 <svelte:head><title>{pageLabel} | Chiral Network</title><meta name="description" content="Verified model discovery and provider-specific prepaid inference." /></svelte:head>
-<a href="#main" class="skip-link" onclick={event => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
+<a href="#main" class="skip-link" inert={shellBlocked} onclick={event => { event.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to content</a>
 
+<div class="contents" inert={shellBlocked}>
 {#if $settings.navStyle === 'sidebar'}
   <Sidebar {page} bind:collapsed={sidebarCollapsed} {signingOut} onLogout={logout} onQuit={nativeAvailable() ? requestQuit : undefined} />
 {:else}
   <Navbar {page} {signingOut} onLogout={logout} onQuit={nativeAvailable() ? requestQuit : undefined} />
 {/if}
+</div>
 
-<main id="main" tabindex="-1" class="focus:outline-none focus-visible:ring-0 transition-[margin] duration-200 {$settings.navStyle === 'sidebar' ? (sidebarCollapsed ? 'md:ml-16' : 'md:ml-52') : ''}">
+<main id="main" tabindex="-1" inert={shellBlocked} class="focus:outline-none focus-visible:ring-0 transition-[margin] duration-200 {$settings.navStyle === 'sidebar' ? (sidebarCollapsed ? 'md:ml-16' : 'md:ml-52') : ''}">
   {#if !nativeAvailable() || !$session.configured}
     <div class="max-w-[1400px] mx-auto px-4 sm:px-6 pt-4 sm:pt-6 -mb-2 sm:-mb-4">
       {#if !nativeAvailable()}
