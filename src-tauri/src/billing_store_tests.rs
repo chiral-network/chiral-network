@@ -1364,10 +1364,25 @@ fn fee_obligation_cannot_be_marked_paid_without_matching_chain_evidence() {
     assert!(store.update_fee_batch(&batch).is_err());
     batch.evidence = Some(evidence);
     store.update_fee_batch(&batch).unwrap();
-    assert_eq!(store.fee_summary().unwrap()["amounts_wei"]["remitted"], "5");
+    // The fee view reports the book's states (inference-fee-remittance design
+    // decision 4): an accepted batch's obligation is confirmed, not "remitted".
+    let view = store.fee_summary().unwrap();
+    assert_eq!(view["amounts_wei"]["confirmed"], "5");
+    assert_eq!(view["amounts_wei"]["batched"], "0");
+    assert_eq!(view["batches"][0]["state"], "confirmed");
+    assert_eq!(view["batches"][0]["inclusion_block_number"], 100);
     batch.status = "orphaned".into();
     store.update_fee_batch(&batch).unwrap();
-    assert_eq!(store.fee_summary().unwrap()["amounts_wei"]["batched"], "5");
+    // A remittance proven orphaned keeps its signed bytes, so its obligation is
+    // submitted again, not batched, and its stale inclusion is not shown.
+    let view = store.fee_summary().unwrap();
+    assert_eq!(view["amounts_wei"]["submitted"], "5");
+    assert_eq!(view["amounts_wei"]["batched"], "0");
+    assert_eq!(view["amounts_wei"]["confirmed"], "0");
+    assert_eq!(view["batches"][0]["state"], "submitted");
+    assert_eq!(view["batches"][0]["tx_hash"], serde_json::json!(batch.tx_hash));
+    assert!(view["batches"][0]["inclusion_block_hash"].is_null());
+    assert!(view["batches"][0]["inclusion_block_number"].is_null());
     assert_eq!(
         store.prepare_fee_batches(300, true).unwrap()[0].id,
         batch.id
@@ -1463,6 +1478,114 @@ fn confirm_fee_batch(store: &BillingStore, mut batch: FeeBatch, nonce: u64) -> F
     });
     store.update_fee_batch(&batch).unwrap();
     batch
+}
+
+#[test]
+fn fee_view_reports_the_four_book_states_from_obligation_and_batch_state() {
+    // inference-fee-remittance requirements 3 and 11 (task 2.1). The ledger
+    // stores obligations as `pending`, `batched` or `remitted`; recording a
+    // batch's signed remittance changes only the batch, so the submitted state
+    // exists only as the batch's state and the stored status alone cannot show
+    // it (design decision 4).
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    let platform = format!("0x{}", "33".repeat(20));
+    pending_fee_obligations(&store, &q, &platform, 13, 150, 1, "confirmed");
+    let confirmed = store.prepare_fee_batches(200, true).unwrap().remove(0);
+    let confirmed = confirm_fee_batch(&store, confirmed, 0);
+    pending_fee_obligations(&store, &q, &platform, 11, 150, 1, "submitted");
+    let mut submitted = store.prepare_fee_batches(201, true).unwrap().remove(0);
+    let data = submitted.payment_data().unwrap();
+    let signed = crate::chain_client::sign_transaction(
+        PROVIDER_KEY,
+        network().chain_id,
+        1,
+        &submitted.platform_wallet,
+        11,
+        &data,
+        1,
+        native_fixture_gas(&data),
+    )
+    .unwrap();
+    submitted.tx_hash = Some(signed.tx_hash);
+    submitted.raw_transaction = Some(signed.raw_transaction);
+    submitted.status = "submitted".into();
+    store.update_fee_batch(&submitted).unwrap();
+    pending_fee_obligations(&store, &q, &platform, 7, 150, 1, "batched");
+    let batched = store
+        .prepare_fee_batches(202, true)
+        .unwrap()
+        .into_iter()
+        .find(|batch| batch.status == "prepared")
+        .unwrap();
+    pending_fee_obligations(&store, &q, &platform, 5, 150, 1, "pending");
+
+    let view = store.fee_summary().unwrap();
+    assert_eq!(
+        view["amounts_wei"],
+        serde_json::json!({"pending":"5","batched":"7","submitted":"11","confirmed":"13"})
+    );
+    assert_eq!(view["cancelled_wei"], "0");
+    assert_eq!(
+        view["orphaned_amounts_wei"],
+        serde_json::json!({"batched":"0","submitted":"0","confirmed":"0"})
+    );
+    let listed: Vec<_> = view["batches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|batch| (batch["id"].clone(), batch["state"].clone(), batch["amount_wei"].clone()))
+        .collect();
+    assert_eq!(
+        listed,
+        [(batched.id, "batched", "7"), (submitted.id, "submitted", "11"), (confirmed.id, "confirmed", "13")]
+            .map(|(id, state, amount)| {
+                (serde_json::Value::from(id), serde_json::Value::from(state), serde_json::Value::from(amount))
+            })
+    );
+    // Stored statuses keep their names; orphan restoration depends on them.
+    assert_eq!(fee_obligations_with_status(&store, "pending"), 1);
+    assert_eq!(fee_obligations_with_status(&store, "batched"), 2);
+    assert_eq!(fee_obligations_with_status(&store, "remitted"), 1);
+}
+
+#[test]
+fn fee_view_lists_only_the_newest_100_batches_but_totals_every_obligation() {
+    // inference-fee-remittance requirement 11 (task 2.2): the batch list is
+    // bounded and newest first; the totals still cover every obligation.
+    let store = memory();
+    let q = fee_fixture_account(&store);
+    let platform = format!("0x{}", "33".repeat(20));
+    let mut sealed: Vec<String> = Vec::new();
+    for index in 0..101u64 {
+        let label = format!("bound:{index}");
+        pending_fee_obligations(&store, &q, &platform, 5, 150, 1, &label);
+        store.prepare_fee_batches(200 + index, true).unwrap();
+        // The batch that sealed this obligation, read from the ledger itself.
+        let batch: String = store
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT batch FROM fee_obligations WHERE tx_hash=?1",
+                [protocol::hash_hex(format!("{label}:0").as_bytes())],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!sealed.contains(&batch));
+        sealed.push(batch);
+    }
+    let view = store.fee_summary().unwrap();
+    assert_eq!(view["amounts_wei"]["batched"], "505");
+    let listed: Vec<_> = view["batches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|batch| batch["id"].as_str().unwrap().to_string())
+        .collect();
+    let newest: Vec<_> = sealed.iter().rev().take(100).cloned().collect();
+    assert_eq!(listed, newest);
+    assert!(!listed.contains(&sealed[0]));
 }
 
 #[test]
@@ -2478,6 +2601,20 @@ fn orphan_restoration_compensates_spending_and_every_fee_state_once_across_resta
             if fee_state == "pending" { "500" } else { "505" }
         );
         assert_eq!(store.funding_to_recheck().unwrap(), vec![p.clone()]);
+        // The fee view reports the book's state names (design decision 4); the
+        // stored `remitted` status of an accepted batch's obligation is confirmed.
+        let reported = if fee_state == "remitted" { "confirmed" } else { fee_state };
+        let zeros = serde_json::json!({"pending":"0","batched":"0","submitted":"0","confirmed":"0"});
+        let view = store.fee_summary().unwrap();
+        // Orphaned funding's fee is never ordinary debt: an unsealed obligation
+        // is cancelled, a sealed one is orphaned by its batch's state.
+        assert_eq!(view["amounts_wei"], zeros);
+        assert_eq!(view["cancelled_wei"], if fee_state == "pending" { "5" } else { "0" });
+        let mut orphaned = serde_json::json!({"batched":"0","submitted":"0","confirmed":"0"});
+        if fee_state != "pending" {
+            orphaned[reported] = "5".into();
+        }
+        assert_eq!(view["orphaned_amounts_wei"], orphaned);
         for observation in [
             Ok(PaymentState::Pending),
             Err(ChainError::Pending("above frontier".into())),
@@ -2513,7 +2650,15 @@ fn orphan_restoration_compensates_spending_and_every_fee_state_once_across_resta
         assert_eq!(account.available_wei, "495");
         assert_eq!(account.reversed_wei, "0");
         assert_eq!(account.provider_loss_wei, "0");
-        assert_eq!(store.fee_summary().unwrap()["amounts_wei"][fee_state], "5");
+        let view = store.fee_summary().unwrap();
+        let mut ordinary = zeros.clone();
+        ordinary[reported] = "5".into();
+        assert_eq!(view["amounts_wei"], ordinary);
+        assert_eq!(view["cancelled_wei"], "0");
+        assert_eq!(
+            view["orphaned_amounts_wei"],
+            serde_json::json!({"batched":"0","submitted":"0","confirmed":"0"})
+        );
         assert_eq!(store.funding_to_recheck().unwrap(), vec![restored]);
         assert_eq!(
             store

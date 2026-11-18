@@ -1500,13 +1500,10 @@ impl BillingStore {
             rows(tx,"SELECT record FROM fee_batches WHERE status!='accepted' ORDER BY rowid LIMIT 100",[])
         })
     }
+    /// The newest 100 fee batches, newest first.
     pub fn fee_batches(&self) -> Result<Vec<FeeBatch>, String> {
         let db = self.db.lock().map_err(|_| "ledger lock poisoned")?;
-        rows(
-            &db,
-            "SELECT record FROM fee_batches ORDER BY rowid DESC LIMIT 100",
-            [],
-        )
+        newest_fee_batches(&db)
     }
     /// At most 100 confirmed batches, least recently rechecked first: batches
     /// never rechecked come first, then the oldest time recorded by
@@ -1636,30 +1633,166 @@ impl BillingStore {
             json!({"accounts":accounts,"active_requests":active_requests,"requests":requests,"frozen_accounts":frozen_accounts,"pending_funding_intents":pending_funding_intents,"active_funding_intents":active_funding_intents,"max_pending_funding_intents":MAX_PENDING,"settlement_policy":"canonical-successful-receipt-at-espace-safe-v1","unknown_usage_policy":"release-hold-provider-loss","fee_min_remit_wei":FEE_MIN_REMIT_WEI.to_string(),"fee_max_age_secs":FEE_MAX_AGE_SECS}),
         )
     }
+    /// The operator fee view (inference-fee-remittance requirements 3, 11 and
+    /// 12), returned by `GET /admin/fees` and `POST /admin/fees/remit`.
+    ///
+    /// `amounts_wei` totals ordinary obligations in the book's four states,
+    /// derived from each obligation's stored status and its batch's status
+    /// (design decision 4); `cancelled_wei` and `orphaned_amounts_wei` (by batch
+    /// state) are kept out of those totals. Every total is an exact decimal wei
+    /// string, zero included. `batches` lists the newest 100 remittance batches
+    /// without their signed bytes. The totals and the batch list are read in one
+    /// ledger transaction, so they describe the same state. Stored statuses are
+    /// not renamed: funding orphan restoration depends on them.
     pub fn fee_summary(&self) -> Result<Value, String> {
-        let db = self.db.lock().map_err(|_| "ledger lock poisoned")?;
-        let mut statement = db
-            .prepare("SELECT status,amount FROM fee_obligations")
-            .map_err(sql)?;
-        let mapped = statement
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .map_err(sql)?;
-        let mut totals: std::collections::BTreeMap<String, U256> =
-            std::collections::BTreeMap::new();
-        for row in mapped {
-            let (status, amount) = row.map_err(sql)?;
-            let entry = totals.entry(status).or_default();
-            *entry = entry
-                .checked_add(U256::from(money(&amount)?))
-                .ok_or("fee aggregate overflow")?;
+        let mut db = self.db.lock().map_err(|_| "ledger lock poisoned")?;
+        let tx = db.transaction().map_err(sql)?;
+        let zero = |states: &[&'static str]| -> std::collections::BTreeMap<&'static str, U256> {
+            states.iter().map(|state| (*state, U256::zero())).collect()
+        };
+        let mut ordinary = zero(&["pending", "batched", "submitted", "confirmed"]);
+        let mut orphaned = zero(&["batched", "submitted", "confirmed"]);
+        let mut cancelled = U256::zero();
+        {
+            let mut statement = tx
+                .prepare("SELECT o.status,o.amount,o.batch IS NOT NULL,b.status FROM fee_obligations o LEFT JOIN fee_batches b ON b.id=o.batch")
+                .map_err(sql)?;
+            let mapped = statement
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, bool>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })
+                .map_err(sql)?;
+            for row in mapped {
+                let (status, amount, sealed, batch) = row.map_err(sql)?;
+                let batch = match (sealed, batch) {
+                    (false, _) => None,
+                    (true, Some(batch)) => Some(batch),
+                    (true, None) => {
+                        return Err("ledger invariant: fee obligation references a missing batch".into())
+                    }
+                };
+                let total = match reported_fee_obligation(&status, batch.as_deref())? {
+                    ReportedFee::Ordinary(state) => ordinary.get_mut(state),
+                    ReportedFee::Orphaned(state) => orphaned.get_mut(state),
+                    ReportedFee::Cancelled => Some(&mut cancelled),
+                }
+                .ok_or("ledger invariant: unreported fee obligation state")?;
+                *total = total
+                    .checked_add(U256::from(money(&amount)?))
+                    .ok_or("fee aggregate overflow")?;
+            }
         }
-        let totals: std::collections::BTreeMap<_, _> = totals
-            .into_iter()
-            .map(|(k, v)| (k, v.to_string()))
-            .collect();
+        let batches = newest_fee_batches(&tx)?
+            .iter()
+            .map(fee_batch_view)
+            .collect::<Result<Vec<_>, _>>()?;
+        let decimal = |totals: std::collections::BTreeMap<&'static str, U256>| -> std::collections::BTreeMap<&'static str, String> {
+            totals.into_iter().map(|(state, total)| (state, total.to_string())).collect()
+        };
         Ok(
-            json!({"amounts_wei":totals,"minimum_remittance_wei":FEE_MIN_REMIT_WEI.to_string(),"maximum_age_secs":FEE_MAX_AGE_SECS,"aggregation":"per-platform-wallet; floor50bps-per-funding; amount-threshold-or-age; gas-paid-by-provider","collection":"provider-remitted-not-trustless"}),
+            json!({"amounts_wei":decimal(ordinary),"cancelled_wei":cancelled.to_string(),"orphaned_amounts_wei":decimal(orphaned),"batches":batches,"minimum_remittance_wei":FEE_MIN_REMIT_WEI.to_string(),"maximum_age_secs":FEE_MAX_AGE_SECS,"aggregation":"per-platform-wallet; floor50bps-per-funding; amount-threshold-or-age; gas-paid-by-provider","collection":"provider-remitted-not-trustless","platform_receipt":FEE_RECEIPT_STATEMENT}),
         )
+    }
+}
+
+/// Book line 528 and inference-fee-remittance requirement 12.
+const FEE_RECEIPT_STATEMENT: &str =
+    "A recorded fee obligation is not proof that the platform received the fee.";
+
+/// One remittance batch as the operator fee view lists it (inference-fee-
+/// remittance requirement 11). It never carries the signed transaction bytes.
+/// Inclusion evidence appears only while the batch is confirmed: evidence kept
+/// from a remittance that monitoring no longer confirms is not inclusion.
+#[derive(Debug, Clone, Serialize)]
+pub struct FeeBatchView {
+    pub id: String,
+    pub platform_wallet: String,
+    pub amount_wei: String,
+    pub state: &'static str,
+    pub tx_hash: Option<String>,
+    pub inclusion_block_hash: Option<String>,
+    pub inclusion_block_number: Option<u64>,
+    pub created_at: u64,
+}
+
+fn fee_batch_view(batch: &FeeBatch) -> Result<FeeBatchView, String> {
+    let state = reported_fee_batch_state(&batch.status)?;
+    let inclusion = match state {
+        "confirmed" => Some(
+            batch
+                .evidence
+                .as_ref()
+                .ok_or("ledger invariant: confirmed fee batch lacks inclusion evidence")?,
+        ),
+        _ => None,
+    };
+    Ok(FeeBatchView {
+        id: batch.id.clone(),
+        platform_wallet: batch.platform_wallet.clone(),
+        amount_wei: batch.amount_wei.clone(),
+        state,
+        tx_hash: batch.tx_hash.clone(),
+        inclusion_block_hash: inclusion.map(|evidence| evidence.block_hash.clone()),
+        inclusion_block_number: inclusion.map(|evidence| evidence.block_number),
+        created_at: batch.created_at,
+    })
+}
+
+fn newest_fee_batches(db: &Connection) -> Result<Vec<FeeBatch>, String> {
+    rows(
+        db,
+        "SELECT record FROM fee_batches ORDER BY rowid DESC LIMIT 100",
+        [],
+    )
+}
+
+/// The reported state of a stored batch status (inference-fee-remittance design
+/// decision 4). A batch whose remittance is not recorded is batched. A recorded
+/// remittance is submitted until confirmed, including after monitoring proved a
+/// confirmed remittance orphaned (`orphaned`), because the batch keeps its
+/// signed bytes. An `accepted` batch is confirmed.
+fn reported_fee_batch_state(status: &str) -> Result<&'static str, String> {
+    match status {
+        "prepared" => Ok("batched"),
+        "submitted" | "orphaned" => Ok("submitted"),
+        "accepted" => Ok("confirmed"),
+        _ => Err("ledger invariant: unknown fee batch state".into()),
+    }
+}
+
+/// Where the fee view reports one obligation.
+enum ReportedFee {
+    Ordinary(&'static str),
+    Cancelled,
+    /// Of orphaned funding, by its batch's reported state.
+    Orphaned(&'static str),
+}
+
+/// Maps a stored obligation status and its batch's stored status (`None` when
+/// unsealed) to the reported state (design decision 4). A combination that the
+/// ledger's transitions never produce is refused instead of being reported
+/// under a guessed state.
+fn reported_fee_obligation(status: &str, batch: Option<&str>) -> Result<ReportedFee, String> {
+    let sealed = |confirmed: bool| match batch {
+        Some("accepted") if confirmed => Ok("confirmed"),
+        Some(state @ ("prepared" | "submitted" | "orphaned")) if !confirmed => {
+            reported_fee_batch_state(state)
+        }
+        _ => Err("ledger invariant: fee obligation state disagrees with its batch".to_string()),
+    };
+    match (status, batch) {
+        ("pending", None) => Ok(ReportedFee::Ordinary("pending")),
+        ("cancelled", None) => Ok(ReportedFee::Cancelled),
+        ("batched", Some(_)) => sealed(false).map(ReportedFee::Ordinary),
+        ("remitted", Some(_)) => sealed(true).map(ReportedFee::Ordinary),
+        ("orphaned_batched", Some(_)) => sealed(false).map(ReportedFee::Orphaned),
+        ("orphaned_remitted", Some(_)) => sealed(true).map(ReportedFee::Orphaned),
+        _ => Err("ledger invariant: fee obligation state disagrees with its batch".into()),
     }
 }
 

@@ -101,3 +101,10 @@ Requirement source: `openspec/changes/specify-fee-remittance/specs/inference-fee
 
 - `billing_store::tests::amount_threshold_is_evaluated_and_sealed_over_every_pending_obligation`, `explicit_remittance_seals_every_pending_obligation_but_never_a_cancelled_one`, `a_wallet_splits_into_several_batches_only_at_u128_overflow`, `every_confirmed_fee_batch_is_rechecked_whatever_the_pass_timing` and `confirmed_fee_batches_are_rechecked_least_recently_checked_first` — **not replaceable**: their properties live in SQLite queries, transactions and ordering over an on-disk ledger, which Verus does not model. The u128 split rule is pure arithmetic and could be proved separately once Verus is available.
 - `billing_store::tests::fee_recheck_time_advances_after_unavailable_and_faulted_outcomes` — **not replaceable**: async maintenance against a scripted JSON-RPC outage fixture and a SQLite ledger.
+
+## Judged 2026-11-18 — fee view regressions
+
+Requirement source: `openspec/changes/specify-fee-remittance/specs/inference-fee-remittance/spec.md` (requirements 3, 11 and 12).
+
+- `billing_store::tests::fee_view_reports_the_four_book_states_from_obligation_and_batch_state` and `fee_view_lists_only_the_newest_100_batches_but_totals_every_obligation` — **not replaceable**: SQLite joins and ordering over an on-disk ledger. The state mapping `reported_fee_obligation` is a pure function of two status strings and could be proved total and exact once Verus is available.
+- `app::tests::fee_view_lists_confirmed_remittances_and_the_receipt_statement` — **not replaceable**: async HTTP through the admin router, a provider runtime and signed transactions.

@@ -637,17 +637,20 @@ mod tests {
         provider_config::{DhtConfig, ModelConfig},
     };
 
-    #[tokio::test]
-    async fn deployments_share_a_wallet_without_sharing_accounts_or_process_locks() {
-        let directory = tempfile::tempdir().unwrap();
+    const OPERATOR_TOKEN: &str = "private-test-operator-token-32-bytes";
+
+    /// A development provider with signing key `11…11` whose RPC and engine
+    /// both answer 503, with the server that answers for them.
+    async fn unavailable_provider(
+        directory: &std::path::Path,
+    ) -> (ProviderConfig, tokio::task::JoinHandle<()>) {
         let offer = crate::offer_registry::tests::offer().payload;
-        let key = "11".repeat(32);
-        let key_file = directory.path().join("wallet.key");
-        wallet::save_private_key(&key_file, &key).unwrap();
-        let admin_file = directory.path().join("admin.token");
+        let key_file = directory.join("wallet.key");
+        wallet::save_private_key(&key_file, &"11".repeat(32)).unwrap();
+        let admin_file = directory.join("admin.token");
         wallet::create_secret_file(&admin_file)
             .unwrap()
-            .write_all(b"private-test-operator-token-32-bytes")
+            .write_all(OPERATOR_TOKEN.as_bytes())
             .unwrap();
         // Engine/RPC outage is deliberate: restoring a provider must not require either.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -669,7 +672,7 @@ mod tests {
                 explorer_url: None,
                 policy_url: None,
             },
-            data_dir: directory.path().join("data"),
+            data_dir: directory.join("data"),
             signing_key_file: key_file,
             admin_token_file: admin_file,
             public_endpoint: "http://127.0.0.1:9419".into(),
@@ -691,10 +694,181 @@ mod tests {
             dht: DhtConfig {
                 listen: "/ip4/127.0.0.1/tcp/0".into(),
                 bootstrap: vec![],
-                identity_file: directory.path().join("peer-a.key"),
+                identity_file: directory.join("peer-a.key"),
             },
             development: true,
         };
+        (config, server)
+    }
+
+    #[tokio::test]
+    async fn fee_view_lists_confirmed_remittances_and_the_receipt_statement() {
+        // inference-fee-remittance requirements 11 and 12 (task 2.2). Both fee
+        // routes list actual remittances with their transaction and inclusion
+        // evidence, never their signed bytes, and state that a recorded
+        // obligation is not proof that the platform received the fee.
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (config, server) = unavailable_provider(directory.path()).await;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let state = &runtime.state;
+        let identity = state.config.network.identity.clone();
+        let consumer_key = "22".repeat(32);
+        let now = protocol::now().unwrap();
+        let quote = protocol::sign(
+            protocol::QUOTE_DOMAIN,
+            Quote {
+                id: protocol::random_id(),
+                network: identity.clone(),
+                offer_id: protocol::random_id(),
+                provider_wallet: state.wallet.clone(),
+                consumer_wallet: wallet::address_from_private_key(&consumer_key).unwrap(),
+                model: state.config.models[0].model.clone(),
+                price: state.config.models[0].price.clone(),
+                funding_wei: "1000".into(),
+                platform_wallet: state.config.platform_wallet.clone(),
+                fee_bps: 50,
+                max_concurrency: 1,
+                nonce: protocol::random_id(),
+                issued_at: now,
+                expires_at: now + 300,
+            },
+            &state.private_key,
+        )
+        .unwrap();
+        state.ledger.store_quote(&quote, now).unwrap();
+        // A 1,000-wei opening owes a 5-wei fee; its funding evidence is a ledger
+        // input here, past the chain verification boundary.
+        let opening = protocol::opening_data(&quote.payload).unwrap();
+        let funding = crate::chain_client::sign_transaction(
+            &consumer_key,
+            identity.chain_id,
+            0,
+            &state.wallet,
+            1000,
+            &opening,
+            1,
+            21_000 + 40 * opening.len() as u64,
+        )
+        .unwrap();
+        state
+            .ledger
+            .register_funding_intent(
+                &quote,
+                &quote.payload.consumer_wallet,
+                &funding.raw_transaction,
+                &funding.tx_hash,
+                0,
+                &state.private_key,
+                || Ok(now),
+                true,
+                &quote.payload.model,
+            )
+            .unwrap();
+        let payment = crate::chain_client::VerifiedPayment {
+            network: identity.clone(),
+            tx_hash: funding.tx_hash,
+            from: quote.payload.consumer_wallet.clone(),
+            to: state.wallet.clone(),
+            value_wei: "1000".into(),
+            data: opening,
+            block_hash: format!("0x{}", "44".repeat(32)),
+            block_number: 110,
+            raw_transaction: funding.raw_transaction,
+        };
+        state.ledger.open_account(&quote, Some(&payment), now).unwrap();
+        // Seal, record and confirm one 5-wei remittance in block 120.
+        let mut batch = state.ledger.prepare_fee_batches(now, true).unwrap().remove(0);
+        assert_eq!(batch.amount_wei, "5");
+        let data = batch.payment_data().unwrap();
+        let remittance = crate::chain_client::sign_transaction(
+            &state.private_key,
+            identity.chain_id,
+            0,
+            &batch.platform_wallet,
+            5,
+            &data,
+            1,
+            21_000 + 40 * data.len() as u64,
+        )
+        .unwrap();
+        batch.tx_hash = Some(remittance.tx_hash.clone());
+        batch.raw_transaction = Some(remittance.raw_transaction.clone());
+        batch.status = "submitted".into();
+        state.ledger.update_fee_batch(&batch).unwrap();
+        let block_hash = format!("0x{}", "55".repeat(32));
+        batch.status = "accepted".into();
+        batch.evidence = Some(crate::chain_client::VerifiedPayment {
+            network: identity,
+            tx_hash: remittance.tx_hash.clone(),
+            from: state.wallet.clone(),
+            to: batch.platform_wallet.clone(),
+            value_wei: "5".into(),
+            data,
+            block_hash: block_hash.clone(),
+            block_number: 120,
+            raw_transaction: remittance.raw_transaction.clone(),
+        });
+        state.ledger.update_fee_batch(&batch).unwrap();
+
+        for (method, path) in [("GET", "/admin/fees"), ("POST", "/admin/fees/remit")] {
+            // The operator bearer, without a browser `Origin`.
+            let response = runtime
+                .admin_router()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            // The signed bytes stay in the ledger and the journal.
+            assert!(!text.contains("raw_transaction"), "{path}: {text}");
+            assert!(
+                !text.contains(remittance.raw_transaction.trim_start_matches("0x")),
+                "{path}: {text}"
+            );
+            let view: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(view["amounts_wei"]["confirmed"], "5", "{path}");
+            assert_eq!(
+                view["batches"],
+                json!([{
+                    "id": batch.id,
+                    "platform_wallet": state.config.platform_wallet,
+                    "amount_wei": "5",
+                    "state": "confirmed",
+                    "tx_hash": remittance.tx_hash,
+                    "inclusion_block_hash": block_hash,
+                    "inclusion_block_number": 120,
+                    "created_at": now,
+                }]),
+                "{path}"
+            );
+            assert_eq!(view["collection"], "provider-remitted-not-trustless", "{path}");
+            assert_eq!(
+                view["platform_receipt"],
+                "A recorded fee obligation is not proof that the platform received the fee.",
+                "{path}"
+            );
+        }
+        runtime.dht.stop().await;
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn deployments_share_a_wallet_without_sharing_accounts_or_process_locks() {
+        let directory = tempfile::tempdir().unwrap();
+        let offer = crate::offer_registry::tests::offer().payload;
+        let key = "11".repeat(32);
+        let (config, server) = unavailable_provider(directory.path()).await;
         let first = ProviderRuntime::start(config.clone()).await.unwrap();
         assert!(ProviderRuntime::start(config.clone()).await.is_err());
         let mut second_config = config.clone();

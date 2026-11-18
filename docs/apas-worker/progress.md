@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-18 (nineteenth round) — Code: the operator fee view shows the book's states, actual remittances and the receipt disclaimer
+
+- In step at `92ec946a`; whitepaper unchanged; no new answers.
+- Code step (`specify-fee-remittance` tasks 2.1 and 2.2, requirements 3, 11 and 12). The fee view used to total obligations by stored status, so a broadcast remittance awaiting safe showed as `batched` and the book's `submitted` and `confirmed` never appeared. No route listed actual remittances. `fee_summary` now derives each obligation's state from its own and its batch's status (design decision 4). `amounts_wei` reports pending, batched, submitted and confirmed; cancelled and orphaned amounts are reported separately. The view lists the newest 100 batches, with transaction hash and inclusion evidence and never signed bytes, read in the same snapshot as the totals. `platform_receipt` states that a recorded obligation is not proof the platform received the fee. Stored statuses are unchanged, and a combination the ledger never produces fails closed. Three regressions fail without the change, two existing assertions moved to the reported names and became stricter, and the review added a 100-batch-limit test.
+- `amounts_wei.remitted` is now `amounts_wei.confirmed`. Every reader in the repository (`provider-admin.py`, the CLI and desktop `provider_admin`, the Provider page's raw-JSON panel) prints the view unchanged, so no frontend source changed.
+- Every `specify-fee-remittance` code difference is now fixed; its acceptance tasks 3.x and live evidence 4.x remain.
+
 ## 2026-11-17 (eighteenth round) — Code: every confirmed remittance is rechecked, and aggregation sees every obligation
 
 - In step at `421e103e`; whitepaper unchanged; no new answers.
@@ -150,16 +157,14 @@
 
 ## Next steps, in order
 
-Code differences, then missing specifications (spec before code):
+Missing specifications (spec before code):
 
-1. Code differences in `specify-fee-remittance`: tasks 2.1 and 2.2 (operator view states and batch evidence); 2.3 and 2.4 are done. These rank above the missing spec below.
-   (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
-2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+1. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
-4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
