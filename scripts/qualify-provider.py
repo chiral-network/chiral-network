@@ -437,7 +437,7 @@ def sample(args, model, path, endpoint, streaming, index, token, tracker, prepar
 
 def passes(sample, rate):
     return (not sample["error"] and sample["usage_known"] and 0 < sample["prompt_tokens"] <= 2048 and sample["output_tokens"] == 256
-            and sample["ttft_us"] <= 2000000 and 0 < sample["decode_us"]
+            and 0 < sample["ttft_us"] <= 2000000 and 0 < sample["decode_us"]
             and sample["decode_us"] * rate <= 255000000
             and sample["elapsed_us"] >= sample["ttft_us"] + sample["decode_us"])
 

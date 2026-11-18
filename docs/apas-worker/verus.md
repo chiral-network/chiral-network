@@ -86,3 +86,11 @@ Requirement source: `openspec/changes/specify-generation-performance/specs/infer
 - `inference_gateway::tests::a_measured_miss_survives_a_later_non_streaming_disconnect` — **not replaceable**, for the same reasons.
 - `inference_gateway::tests::disconnect_before_the_engine_responds_is_a_client_interruption_in_both_modes` — **not replaceable**, for the same reasons.
 - `performance::tests::exclusions_do_not_erase_a_previously_observed_miss` (updated) — **replaceable in principle**: `performance::outcome` is a pure function over status, timings and token counts. A Verus proof could show that a `disconnected` status without a measured miss is never attained or waived, and that an `interrupted` status is always a counted provider-incomplete miss. It waits for the Verus report entry; the test stays.
+
+## Judged 2026-11-17 — zero-TTFT and prompt-boundary regressions
+
+Requirement source: `openspec/changes/specify-generation-performance/specs/inference-generation-performance/spec.md` (requirements 4, 8, 9 and 11).
+
+- `performance::tests::zero_ttft_is_no_evidence_of_attainment` — **replaceable in principle**: `performance::outcome` is pure. A Verus proof could show that `ttft_us == Some(0)` is never attained. It waits for the Verus report entry; the test stays.
+- `performance::evidence_tests::zero_ttft_samples_do_not_attain` and `performance::evidence_tests::samples_outside_every_prompt_boundary_are_rejected` — **not replaceable as written**: they read evidence files through `validate_evidence`, which parses JSON from disk and hashes it. The inner `passes` predicate and the boundary predicate are pure and could be proved separately once Verus is available.
+- `scripts/test_qualify_provider.py` `ttft_us` 0 case — Python; Verus does not apply.

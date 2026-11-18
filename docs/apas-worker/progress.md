@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-17 (sixteenth round) — Code: zero TTFT and out-of-boundary qualification samples
+
+- In step at `904cc43e`; whitepaper unchanged; no new answers.
+- Code step (`specify-generation-performance` tasks 2.2 and 2.3, requirements 4, 8, 9 and 11), done together because both are evidence predicates in `performance.rs`.
+  - A 0 µs TTFT used to count as attained, in native validation, in the runner and at runtime (book line 558: nonpositive timing is not evidence). It is now no evidence of attainment: a qualification sample with it does not pass, and at runtime it counts as a missing first token.
+  - `validate_evidence` used to count samples outside every prompt boundary (book line 566). It now rejects any sample outside 120–128, 504–512, 1,016–1,024 and 2,040–2,048.
+  - Three Rust regressions and one runner case fail without the change.
+- Checks: full headless suite 481 passed, 2 ignored; svelte-check 0/0, 32 frontend tests, 46 script tests, py_compile.
+
 ## 2026-11-17 (fifteenth round) — Code: client disconnects no longer count as provider misses
 
 - In step at `505fb9ed`; whitepaper unchanged; no new answers.
@@ -111,17 +120,16 @@
 
 ## Next steps, in order
 
-Code differences, then missing specifications (spec before code):
+Missing specifications (spec before code):
 
-1. Code differences in `specify-generation-performance`: tasks 2.2 (0 µs TTFT) and 2.3 (out-of-bucket samples); 2.1 is done. These rank above the missing specs below.
-2. Fee remittance (obligation states, aggregation thresholds, remittance gas) has no SHALL requirements.
+1. Fee remittance (obligation states, aggregation thresholds, remittance gas) has no SHALL requirements.
    (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
-3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
 
-4. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
-5. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
+4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 

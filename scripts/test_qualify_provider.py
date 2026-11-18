@@ -134,7 +134,7 @@ class SamplingTests(unittest.TestCase):
         sample = dict(error=False, usage_known=True, prompt_tokens=128, output_tokens=256,
                       ttft_us=100000, decode_us=10000000, elapsed_us=10100000)
         self.assertTrue(qualifier.passes(sample, 20))
-        for field, value in [('usage_known', False), ('output_tokens', 255), ('decode_us', 0), ('elapsed_us', 1)]:
+        for field, value in [('usage_known', False), ('output_tokens', 255), ('ttft_us', 0), ('decode_us', 0), ('elapsed_us', 1)]:
             with self.subTest(field=field):
                 self.assertFalse(qualifier.passes(dict(sample, **{field: value}), 20))
 

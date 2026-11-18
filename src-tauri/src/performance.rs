@@ -244,9 +244,13 @@ pub fn validate_evidence(model: &ModelSpec, path: &Path, now: u64) -> Result<Vec
                 || (!r.error && r.client_stream && (r.external_ttft_us.is_none() || r.external_decode_us.is_none())) {
                 return Err("qualification endpoint, prompt uniqueness or external timing missing".into());
             }
+            // Every qualification prompt sits at a boundary, at most eight tokens below it.
+            if ![128u64, 512, 1024, 2048].iter().any(|target| (target - 8..=*target).contains(&r.prompt_tokens)) {
+                return Err("qualification prompt is outside every prompt-size boundary".into());
+            }
         }
         let passes = |r: &&Sample| !r.error && r.usage_known && r.prompt_tokens > 0 && r.prompt_tokens <= 2048
-            && r.output_tokens == 256 && r.ttft_us <= TTFT_US && r.decode_us > 0
+            && r.output_tokens == 256 && r.ttft_us > 0 && r.ttft_us <= TTFT_US && r.decode_us > 0
             && r.decode_us as u128 * p.output_tokens_per_second as u128 <= 255_000_000
             && r.elapsed_us >= r.ttft_us.saturating_add(r.decode_us);
         for endpoint in model.capabilities.iter().filter(|c| matches!(c.as_str(), "chat" | "completions")) {
@@ -288,8 +292,10 @@ pub fn outcome(p: &ServingProfile, in_envelope: bool, ttft_us: Option<u64>, deco
     usage: Option<&TokenUsage>, status: &str, client_stalled: bool, elapsed_us: Option<u64>,
     evidence_sha256: &str) -> PerformanceOutcome {
     let tokens = usage.map(|u| u.completion_tokens);
-    let ttft_missed = ttft_us.is_some_and(|t| t > TTFT_US)
-        || (ttft_us.is_none() && elapsed_us.is_some_and(|t| t > TTFT_US));
+    // A nonpositive TTFT is no evidence of attainment: it counts as a missing first token.
+    let first_token = ttft_us.filter(|t| *t > 0);
+    let ttft_missed = first_token.is_some_and(|t| t > TTFT_US)
+        || (first_token.is_none() && elapsed_us.is_some_and(|t| t > TTFT_US));
     let client = client_stalled || matches!(status, "cancelled" | "disconnected");
     let short = tokens.is_some_and(|n| n < 2);
     let decode_ok = match (decode_us, tokens) {
@@ -303,7 +309,7 @@ pub fn outcome(p: &ServingProfile, in_envelope: bool, ttft_us: Option<u64>, deco
     let (eligibility, attained) = if !in_envelope { ("outside_workload", None) }
         else if measured_miss { (if short { "short_output_ttft_only" } else { "eligible" }, Some(false)) }
         else if client { ("client_interrupted", None) }
-        else if status != "completed" || usage.is_none() || ttft_us.is_none() || (!short && decode_ok.is_none()) { ("provider_incomplete", Some(false)) }
+        else if status != "completed" || usage.is_none() || first_token.is_none() || (!short && decode_ok.is_none()) { ("provider_incomplete", Some(false)) }
         else if short { ("short_output_ttft_only", Some(true)) }
         else { ("eligible", Some(true)) };
     PerformanceOutcome { evidence_sha256: evidence_sha256.into(), policy: p.policy.clone(),
@@ -394,6 +400,21 @@ mod tests {
                 assert_eq!(missed.remedy, "inference_waiver");
             }
         }
+    }
+
+    #[test]
+    fn zero_ttft_is_no_evidence_of_attainment() {
+        let p = test_profile();
+        let usage = TokenUsage { prompt_tokens: 128, completion_tokens: 256 };
+        let zero = outcome(&p, true, Some(0), Some(1_000_000), Some(&usage), "completed", false, Some(1_000_000), &p.qualification.evidence_sha256);
+        assert_eq!(zero.eligibility, "provider_incomplete");
+        assert_eq!(zero.attained, Some(false));
+        assert_eq!(zero.remedy, "inference_waiver");
+        assert_eq!(zero.ttft_us, Some(0));
+        let short = TokenUsage { prompt_tokens: 128, completion_tokens: 1 };
+        assert_eq!(outcome(&p, true, Some(0), None, Some(&short), "completed", false, Some(1), &p.qualification.evidence_sha256).attained, Some(false));
+        // A client interruption before any measured miss is still not counted.
+        assert_eq!(outcome(&p, true, Some(0), None, None, "disconnected", false, Some(1), &p.qualification.evidence_sha256).attained, None);
     }
 
     #[test]
@@ -587,5 +608,43 @@ mod evidence_tests {
         persist(&mut model, &mut report, &path);
         model.context_length = 8192;
         assert!(validate_evidence(&model, &path, 100).is_err());
+    }
+
+    #[test]
+    fn zero_ttft_samples_do_not_attain() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("synthetic-evidence.json");
+        // Requests 0 and 4 of the gateway sweep share the 128-token bucket of 25 samples.
+        let (mut model, mut report) = fixture();
+        report["sweeps"][1]["requests"][0]["ttft_us"] = json!(0);
+        persist(&mut model, &mut report, &path);
+        assert!(validate_evidence(&model, &path, 100).is_ok());
+        report["sweeps"][1]["requests"][4]["ttft_us"] = json!(0);
+        persist(&mut model, &mut report, &path);
+        assert!(validate_evidence(&model, &path, 100).is_err());
+    }
+
+    #[test]
+    fn samples_outside_every_prompt_boundary_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("synthetic-evidence.json");
+        let (mut model, mut report) = fixture();
+        let mut extra = report["sweeps"][1]["requests"][0].clone();
+        extra["prompt_tokens"] = json!(300);
+        extra["prompt_sha256"] = json!(hex::encode(Sha256::digest(b"outside-every-boundary")));
+        let requests = report["sweeps"][1]["requests"].as_array_mut().unwrap();
+        requests.push(extra);
+        // Keep the offered rate exactly at the declared rate for the longer sweep.
+        let count = requests.len() as u64;
+        report["sweeps"][1]["duration_ms"] = json!(count * 20_000);
+        persist(&mut model, &mut report, &path);
+        let error = validate_evidence(&model, &path, 100).unwrap_err();
+        assert!(error.contains("outside every prompt-size boundary"), "{error}");
+        for boundary in [120u64, 128, 504, 2048] {
+            let (mut model, mut report) = fixture();
+            report["sweeps"][1]["requests"][0]["prompt_tokens"] = json!(boundary);
+            persist(&mut model, &mut report, &path);
+            assert!(validate_evidence(&model, &path, 100).is_ok(), "{boundary}");
+        }
     }
 }
