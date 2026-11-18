@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (twenty-fourth round) — Code: request failures point to recovery and cancellation is labelled possibly billed
+
+- In step at `77914a4b`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` tasks 2.10 and 2.11, requirement 8, book lines 355, 913 and 931).
+  - A Playground stream that failed before a request ID was labelled "inspect request status", but there was no request ID to inspect. It is now "Failed — inspect Usage before retrying", with the native error and a note linking to Usage › Requests, where the local request keys are listed. A failure after a request ID keeps *Reconcile*. Nothing is resent.
+  - Usage's *Cancel provider request* now states that cancelling does not make generated work free, that the request may still be billed, that cancellation is not a refund, and that *Read status* shows the final accounting.
+  - New rendered tests in `tests/requestRecovery.test.ts`: two fail on the previous pages, and one guards the unchanged *Reconcile* path. Screenshots were checked.
+- Checks: svelte-check 0/0, 45 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-third round) — Code: profile-dependent actions wait for a loaded profile
 
 - In step at `2e346ae4`; whitepaper unchanged; no new answers.
@@ -196,7 +205,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3 and 2.12 are done.
+1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1–2.3 and 2.10–2.12 are done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

@@ -302,6 +302,7 @@ try {
             <button class="btn-secondary py-2.5" disabled={busy || !requestId} onclick={() => run(async () => { requestResult = await command('request_status', { contract_id: contractId, request_id: requestId }); })}><Search class="w-4 h-4" />Read status</button>
             <button class="btn-secondary py-2.5 text-red-600 dark:text-red-400" disabled={busy || !requestId} onclick={() => run(async () => { requestResult = await command('cancel_request', { contract_id: contractId, request_id: requestId }); })}><Ban class="w-4 h-4" />Cancel provider request</button>
           </div>
+          <p class="prose-muted text-xs mt-3">Cancelling stops further generation; it does not make generated work free. The request may still be billed for the tokens already generated, and cancellation is not a refund. Use <span class="font-semibold">Read status</span> to see the final accounting.</p>
         </Card>
         <Result value={requestResult} title="Request result" />
         <Result value={usage} title="Requests and metered usage" />

@@ -48,7 +48,9 @@
       output += delta;
       if (data.usage) usage = data.usage;
     }
-    if (event.kind === 'error') { error = String(data.message ?? 'Inference failed'); status = 'Failed — inspect request status before retrying'; busy = false; }
+    // With a request ID the request can be reconciled here; without one (a dispatch failure)
+    // the only handle is the local request key listed under Usage › Requests. Nothing is resent.
+    if (event.kind === 'error') { error = String(data.message ?? 'Inference failed'); status = requestId ? 'Failed — inspect request status before retrying' : 'Failed — inspect Usage before retrying'; busy = false; }
     if (event.kind === 'done' || event.kind === 'cancelled') {
       status = event.kind === 'done' ? 'Completed' : 'Cancelled — generated tokens may be billed'; busy = false;
       toasts.notify('inference', status, 'info'); void select();
@@ -202,6 +204,11 @@
         </Card>
       {/if}
       <Result value={embeddingPreview} title="Embedding preview — first eight components" />
+      {#if !requestId && status === 'Failed — inspect Usage before retrying'}
+        <div class="card px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
+          No request ID was received, so this request cannot be reconciled here, and it may still have reached the provider. Do not send it again: open <a class="link" href="#/usage">Usage › Requests</a>, where this account's local request keys are listed, and read its status there before retrying.
+        </div>
+      {/if}
       {#if requestId}
         <div class="card px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <p class="text-xs text-gray-600 dark:text-gray-400 min-w-0">Request: <span class="mono">{requestId}</span></p>
