@@ -15,6 +15,8 @@
   let accounts = $state<Account[]>([]), contractId = $state(''), account = $state<Account | null>(null);
   let usage = $state<unknown>(null), receipt = $state<unknown>(null), credentials = $state<unknown>(null);
   let secret = $state<{ api_key: string; base_url: string; model: string } | null>(null);
+  // Public terms of the selected agreement, read natively, for the top-up disclosure (A.1.6).
+  let terms = $state<{ provider_wallet: string; endpoint: string; peer_id: string; fee_bps: number } | null>(null);
   let credentialId = $state(''), amount = $state(''), accept = $state(false), busy = $state(false), error = $state('');
   let pending = $state(false), ttl = $state(86400), feedbackScore = $state(50), feedbackRevision = $state(1), feedbackResult = $state<unknown>(null);
   let pendingAccounts = $state<PendingFunding | null>(null), recoveryId = $state(''), funding = $state<unknown>(null), localRequests = $state<unknown>(null), requestId = $state(''), requestResult = $state<unknown>(null);
@@ -22,13 +24,13 @@
   let recoveryOperation = $state(''), recoveryHistory = $state<unknown>(null);
   async function run(action: () => Promise<void>) { busy = true; error = ''; try { await action(); } catch (e) { error = errorText(e); } finally { busy = false; } }
   async function select() {
-    secret = null; usage = null; receipt = null; credentials = null; account = null; pending = false; accept = false; funding = null; localRequests = null; requestResult = null;
+    secret = null; usage = null; receipt = null; credentials = null; account = null; pending = false; accept = false; funding = null; localRequests = null; requestResult = null; terms = null;
     if (!contractId) return;
     await run(async () => {
       account = await command<Account>('account', { contract_id: contractId });
       pending = pendingAccounts?.pending.some(item => item.contract_id === contractId && item.topup_wei !== null) ?? false;
       if (!recoveryId) recoveryId = contractId;
-      [usage, credentials, funding, localRequests] = await Promise.all([command('usage', { contract_id: contractId }), command('credentials', { contract_id: contractId }), command('funding', { contract_id: contractId }), command('local_requests', { contract_id: contractId })]);
+      [usage, credentials, funding, localRequests, terms] = await Promise.all([command('usage', { contract_id: contractId }), command('credentials', { contract_id: contractId }), command('funding', { contract_id: contractId }), command('local_requests', { contract_id: contractId }), command<typeof terms>('agreement', { contract_id: contractId })]);
     });
   }
   async function refresh() {
@@ -97,7 +99,8 @@
   // exists, this account's top-up is not offered either (A.1.7). The selected account's own
   // pending top-up keeps its existing Resume path.
   const otherUnresolved = $derived(unresolvedPayments(pendingAccounts?.pending ?? []).filter(item => !(item.contract_id === contractId && item.topup_wei !== null)));
-  const topupBlocked = $derived(pending || otherUnresolved.length > 0);
+  // No top-up is offered until the full disclosure can be shown from the agreement's terms.
+  const topupBlocked = $derived(pending || otherUnresolved.length > 0 || !terms);
   const python = `import os
 from openai import OpenAI
 
@@ -220,12 +223,12 @@ try {
           <div class="space-y-4">
             <Card icon={PlusCircle} tone="green" title="Top up this provider">
               <div class="space-y-4">
-                <Callout kind="warning">Non-refundable. Only provider <span class="font-mono break-all">{account.provider_wallet}</span> can serve this credit. Use a small balance; gas is extra. Chain reorganizations can freeze or reverse credit.</Callout>
+                <Callout kind="warning">Non-refundable. Usable only with provider <span class="font-mono break-all">{account.provider_wallet}</span>{#if terms}{' '}at <span class="break-all">{terms.endpoint || `libp2p peer ${terms.peer_id}`}</span>{/if}. Use a small balance. The provider receives your prompts in plaintext; signed metadata does not prove model execution.{#if terms}{' '}The provider remits a {terms.fee_bps / 100}% platform fee ({terms.fee_bps} basis points) on this top-up.{/if}{' '}Network gas is additional. Chain reorganizations can freeze or reverse credit.</Callout>
                 <form class="space-y-3" onsubmit={e => { e.preventDefault(); void topup(); }}>
                   <label class="block"><span class="field-label">Amount (CFX)</span>
                     <span class="relative block"><input class="input pr-14" bind:value={amount} inputmode="decimal" required disabled={busy || topupBlocked} /><span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">CFX</span></span>
                   </label>
-                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || topupBlocked} />I accept this provider-specific non-refundable top-up and that chain reorganizations can freeze or reverse credit.</label>
+                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || topupBlocked} />I accept these terms for this provider-specific non-refundable top-up, including that chain reorganizations can freeze or reverse credit.</label>
                   <button class="btn-primary w-full" disabled={busy || topupBlocked || !accept}><PlusCircle class="w-4 h-4" />Sign and top up</button>
                 </form>
                 {#if !pending && otherUnresolved.length}

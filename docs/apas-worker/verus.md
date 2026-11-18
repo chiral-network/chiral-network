@@ -114,3 +114,10 @@ Requirement source: `openspec/changes/specify-fee-remittance/specs/inference-fee
 Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (A.1.7, through `inference-funding-settlement` requirement 2).
 
 - The four new tests in `tests/fundingDisclosure.test.ts` (`a reopened Marketplace offers only Resume…`, `settled, unpaid or free journal entries do not block…`, `an unreadable journal keeps new funding disabled…`, `another account's unresolved payment keeps this account's top-up disabled in Usage`) are TypeScript tests of rendered Svelte pages; Verus does not apply.
+
+## Judged 2026-11-18 — top-up disclosure regressions
+
+Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (requirement 7).
+
+- `consumer::tests::agreement_exposes_only_public_disclosure_terms` — **not replaceable**: it opens an agreement through the async native consumer against a local HTTP provider and scripted JSON-RPC, then reads protected files; Verus models none of these.
+- The two new tests in `tests/fundingDisclosure.test.ts` are TypeScript tests of a rendered Svelte page; Verus does not apply.

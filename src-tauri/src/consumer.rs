@@ -712,6 +712,16 @@ impl Consumer {
         }
         Ok(json!({"pending":pending}))
     }
+    /// Public, read-only terms of a saved agreement for disclosure before a top-up (A.1.6):
+    /// the provider wallet and endpoint from the signed offer, and the platform fee rate
+    /// from the signed quote. Contains no credential, key or signed payment bytes.
+    pub fn agreement(&self, id: &str) -> Result<Value, String> {
+        let saved = self.load_account(id)?;
+        let (offer, quote) = (&saved.offer.payload, &saved.quote.payload);
+        Ok(json!({"contract_id":quote.id,"provider_wallet":quote.provider_wallet,
+            "endpoint":offer.endpoint,"peer_id":offer.peer_id,"model":quote.model.id,
+            "fee_bps":quote.fee_bps}))
+    }
     pub fn local_requests(&self, id: &str) -> Result<Value, String> {
         self.load_account(id)?;
         let directory = self.account_directory()?.join("requests");
@@ -4310,6 +4320,28 @@ mod tests {
                 .is_empty());
             task.abort();
         }
+    }
+    #[tokio::test]
+    async fn agreement_exposes_only_public_disclosure_terms() {
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, _state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let terms = consumer.agreement(id).unwrap();
+        assert_eq!(
+            terms,
+            json!({"contract_id":id,"provider_wallet":saved.quote.payload.provider_wallet,
+                "endpoint":saved.offer.payload.endpoint,"peer_id":saved.offer.payload.peer_id,
+                "model":saved.quote.payload.model.id,"fee_bps":saved.quote.payload.fee_bps})
+        );
+        // Public data only: no credential, key, signature or signed payment bytes.
+        let bearer = consumer.credential_export(id, None).unwrap()["api_key"].as_str().unwrap().to_owned();
+        let text = terms.to_string();
+        assert!(!text.contains(&bearer));
+        assert!(!text.contains(&saved.quote.signature));
+        assert!(!text.contains("raw_transaction") && !text.contains("api_key"));
+        assert!(consumer.agreement("missing-agreement").is_err());
+        task.abort();
     }
     #[tokio::test]
     async fn resumed_open_accounts_preserve_exported_credentials_and_refresh_funding_status() {

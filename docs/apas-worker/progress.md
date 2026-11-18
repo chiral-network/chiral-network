@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-18 (twenty-second round) — Code: the Usage top-up card shows every A.1.6 item
+
+- In step at `c365d384`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` task 2.1, requirement 7). The top-up card used to omit the endpoint, plaintext prompts, the statement that signed metadata does not prove execution, and the fee rate. The webview's account data cannot carry the endpoint or rate, and `AccountView` mirrors the provider wire format. A new read-only native operation `agreement` returns only public terms from the saved signed offer and quote. The card now states every A.1.6 item, with the fee rate exact ("0.5% platform fee (50 basis points)"), and no top-up is offered until those terms are read. The acceptance covers them and resets on account change. A Rust test and two rendered regressions fail without the change. The tests also caught Svelte trimming spaces at `{#if}` boundaries, which is fixed. Screenshots were checked at 1440 px and 390 px.
+- Observation, not caused by this change: at 390 px the Usage tab strip makes the page 415 px wide; it does so on the previous page too. This is A.2/A.3 presentation, to consider with the A.5 specification.
+
 ## 2026-11-18 (twenty-first round) — Code: no new payment is offered while a journaled payment is unresolved
 
 - In step at `7be73013`; whitepaper unchanged; no new answers.
@@ -184,7 +190,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.1 (top-up disclosures), 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.3 and 2.12 are done.
+1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.1, 2.3 and 2.12 are done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

@@ -178,6 +178,7 @@ async function openUsage(saved: Account, pending: { contract_id: string; topup_w
     credentials: () => ({}),
     funding: () => ({}),
     local_requests: () => ({}),
+    agreement: ({ contract_id }) => ({ contract_id, provider_wallet: saved.provider_wallet, endpoint: 'https://provider.test', peer_id: 'peer', model: 'test/model', fee_bps: 50 }),
   };
   mounted = mount(Usage, { target });
   await settle();
@@ -208,6 +209,39 @@ describe('Usage top-up disclosure (requirements 2 and 3)', () => {
     expect(native.calls.map(call => call.operation)).not.toContain('topup');
     checkbox.click(); await settle();
     expect(button.disabled).toBe(false);
+  });
+
+  it('discloses every A.1.6 item before a top-up, from the agreement\'s signed terms', async () => {
+    const card = await openUsage(account());
+    expect(native.calls.filter(call => call.operation === 'agreement').map(call => call.args)).toEqual([{ contract_id: 'contract-under-test' }]);
+    const warning = text(byText(card, '.rounded-xl', /^Non-refundable\./));
+    expect(warning).toMatch(/^Non-refundable\./);
+    expect(warning).toContain(`Usable only with provider ${provider} at https://provider.test`);
+    expect(warning).toMatch(/receives your prompts in plaintext/);
+    expect(warning).toMatch(/signed metadata does not prove model execution/);
+    expect(warning).toMatch(/0\.5% platform fee \(50 basis points\)/);
+    expect(warning).toMatch(/gas is additional/i);
+    expect(warning).toMatch(reorganization);
+    const checkbox = card.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.checked).toBe(false);
+    expect(byText<HTMLButtonElement>(card, 'button', /Sign and top up/)!.disabled).toBe(true);
+  });
+
+  it('offers no top-up when the agreement\'s terms cannot be read', async () => {
+    const saved = account();
+    native.handlers = {
+      accounts: () => [saved], pending_accounts: () => ({ pending: [] }), account: () => saved,
+      usage: () => ({}), credentials: () => ({}), funding: () => ({}), local_requests: () => ({}),
+      agreement: () => { throw new Error('agreement terms unavailable'); },
+    };
+    mounted = mount(Usage, { target });
+    await settle();
+    expect(text(target.querySelector('[role="alert"]'))).toContain('agreement terms unavailable');
+    const card = [...target.querySelectorAll('section.card')].find(section => text(section.querySelector('h2')) === 'Top up this provider');
+    expect(card).toBeDefined();
+    expect(card!.querySelector<HTMLInputElement>('input[type="checkbox"]')!.disabled).toBe(true);
+    expect(byText<HTMLButtonElement>(card!, 'button', /Sign and top up/)!.disabled).toBe(true);
+    expect(native.calls.filter(call => call.operation === 'topup')).toHaveLength(0);
   });
 
   it('presents a failed top-up as unresolved funding to resume and never says that no money moved', async () => {
@@ -359,6 +393,7 @@ describe('no new payment while a journaled payment is unresolved (A.1.7)', () =>
       pending_accounts: () => ({ pending: [{ ...earlier, contract_id: 'contract-under-test', opening_pending: false, topup_wei: '500000000000000000', funding_stage: 'topup_settlement_pending' }] }),
       account: ({ contract_id }) => (contract_id === 'other-contract' ? other : account()),
       usage: () => ({}), credentials: () => ({}), funding: () => ({}), local_requests: () => ({}),
+      agreement: ({ contract_id }) => ({ contract_id, provider_wallet: provider, endpoint: 'https://provider.test', peer_id: 'peer', model: 'test/model', fee_bps: 50 }),
     };
     mounted = mount(Usage, { target });
     await settle();

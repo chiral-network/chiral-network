@@ -92,6 +92,7 @@ async fn consumer_command(
         }
         "accounts" => value(consumer.accounts()?),
         "pending_accounts" => consumer.pending_accounts(),
+        "agreement" => consumer.agreement(text(&args, "contract_id")?),
         "local_requests" => consumer.local_requests(text(&args, "contract_id")?),
         "funding" => consumer.funding(text(&args, "contract_id")?).await,
         "account" => value(consumer.account(text(&args, "contract_id")?).await?),
