@@ -1,5 +1,23 @@
 # APAS progress
 
+## 2026-11-18 (thirty-first round) — Client version policy specified
+
+- In step at `df2240bf`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-version-policy` (capability `client-version-policy`, 14 requirements, 47 scenarios) for the book's version policy (lines 646–652) and the A.2 update gate (846). It covers:
+  - a non-placeholder release authority and a once-per-process override;
+  - authentic, current policies and the required, recommended and ok statuses;
+  - the durable, protected rollback watermark scoped to authority and network, kept through expiry, with fail-closed caches;
+  - the placeholder authority for development only, and an offline signing key;
+  - configured policy sources and the provider's client-version header check;
+  - what a required update refuses (fund, top-up and new inference at minimum), provider self-health, the desktop gate, and preservation across upgrades.
+  The cited tests pass (34 `version::`, 2 `network::`, 61 frontend). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1: `chiral-policy-sign` takes the authority's private key on argv or from the environment and prints it on keygen;
+  - 2.2: the required-update modal does not trap focus or make the shell inert;
+  - 2.3: *Copy download URL* is offered for non-HTTPS URLs;
+  - 2.4: the previous network's update status stays visible after logout or a failed check.
+- Report: which operations stay available under a required update, including a corrupt policy cache (default: recovery only), and whether an unreachable `policy_url` fails closed (default: yes, as today).
+
 ## 2026-11-18 (thirtieth round) — Code: the Settings profile state is stated in text and a load is announced
 
 - In step at `b5a6a5f4`; whitepaper unchanged; no new answers.
@@ -261,9 +279,9 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. No further missing specification is known. The version gate (A.2) has no capability yet (design observation 9 of `specify-desktop-gui-pages`); consider specifying it with the version-policy section.
+1. Code differences in `specify-version-policy`: 2.1 (signing key on argv/env/stdout) first, then 2.2–2.4 (update gate). After them, no further missing specification is known.
 
 Earlier open work, unchanged:
 
