@@ -1,5 +1,28 @@
 # APAS progress
 
+## 2026-11-18 (forty-third round) — Payment-gated reputation specified
+
+- In step at `1b514eb5`; whitepaper unchanged; no new answers.
+- Spec step (comparison item 10, missing specification; item 6 recorded). New change `specify-payment-gated-reputation` (capability `payment-gated-reputation`, 12 requirements, 60 scenarios) for the current runtime's experimental, catalog-specific reputation (book lines 361–446). It covers:
+  - the relay serves no prompts or inference;
+  - an exact submission shape, with every malformed body `invalid_feedback`;
+  - payer-signed votes bound to their quote, parties and network;
+  - no free-session votes;
+  - exact canonical opening payments at the eSpace safe frontier;
+  - one vote per agreement, with strictly increasing revisions;
+  - a durable, bounded store;
+  - an exact Elo computation;
+  - snapshots that revalidate evidence and never serve a score from unavailable evidence;
+  - bounded verification;
+  - native submission and inspection.
+  M5, funding-settlement and GUI-pages requirements are cited by name. 16 cited tests re-run and pass. Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1 (comparison item 6): malformed or trailing-content bodies get axum's plain-text 415/400/422, or are accepted, instead of 400 `invalid_feedback`;
+  - 2.2: store faults are reported as `feedback_conflict` and leak SQLite text;
+  - 2.3: the native client maps every catalog code to a provider error, blaming the provider for catalog or RPC outages;
+  - 2.4: untrustworthy RPC evidence is treated as a rejected payment and can mark votes ineligible (the rating-path counterpart of funding-settlement 2.4).
+- Report: can a provider pre-empt its consumer's vote by reusing a quote ID (default: book text, disclosed), and must every snapshot revalidate every vote within 30 s, when the chain client's 300 ms pacing allows about 12 votes (default: as today)?
+
 ## 2026-11-18 (forty-second round) — Code: separate engine key, no orphaned engine on a startup signal, wildcard port probe
 
 - In step at `9d77b6cd`; whitepaper unchanged; no new answers.
@@ -410,7 +433,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. `specify-managed-engine-launch` acceptance tests 3.x (launch arguments, cleared environment); 2.1–2.3 are done.
+1. Code differences: `specify-payment-gated-reputation` 2.1–2.3 (2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
