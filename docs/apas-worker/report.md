@@ -224,3 +224,19 @@ Question: while one process (for example the desktop) runs the profile's libp2p 
 Proposed default (what the spec adopts): no. An exclusive lock on the identity file admits one node at a time. The second process fails its libp2p operations with a fixed error (503 `transport_unavailable` on HTTP surfaces) and never switches port or identity. HTTPS forwarding and catalog discovery keep working. Answer only to ask for sharing one node between processes, or for a separate identity per process, in a later change.
 
 Nonblocking: no current code depends on it; implementation tasks M3 2.19 and 3.16 follow the default.
+
+## 2026-11-17 — Generation performance: do failures caused by the request count against the provider?
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Performance accounting and withdrawal* (line 571: "Provider-incomplete execution cannot masquerade as success") and the withdrawal latch at line 573. Spec: the new change `specify-generation-performance` (capability `inference-generation-performance`), design decision 3 and open question 1.
+
+What it says now: the whitepaper separates client interruption (not an automatic waiver, line 571) from provider-incomplete execution, which cannot count as success. It does not say how to classify an in-envelope request that fails after admission because of something in the request itself, for example a structured-output schema that the gateway's validation admitted but the engine cannot compile. The code counts every such failure as provider-incomplete: a waived miss in the withdrawal window (`performance.rs:304`). Usage of a failed request is usually unknown, so it costs the consumer nothing. If consumers can trigger such failures, one funded consumer could latch withdrawal of a provider's report with three requests.
+
+Question: should a failure attributable to the request count as a provider miss, be excluded from the window like a client interruption, or be prevented by stricter validation before reservation?
+
+Proposed default (what the spec adopts): it counts as provider-incomplete. The gateway admitted the request and the provider can validate options before reservation; excluding failures would let a provider turn slow requests into failures to avoid withdrawal. Answer only to choose exclusion or a different rule.
+
+Separately, the spec records as a code difference, not a question, that a client disconnect is now waived and counted as a provider miss (task 2.1). Line 571 already says that interruption before a measured miss is not an automatic waiver.
+
+Nonblocking: no requirement or task waits on this answer.

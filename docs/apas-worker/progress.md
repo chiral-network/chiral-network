@@ -1,5 +1,15 @@
 # APAS progress
 
+## 2026-11-17 (fourteenth round) — Generation performance specified
+
+- In step at `8ea5a5a4`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-generation-performance` (capability `inference-generation-performance`, 12 requirements) for the book's *Performance accounting and withdrawal* contract. It covers profile-bound speed classes, `warm-generation-v1`, the runtime guarantee envelope (requested output, prepared prompt), TTFT and decode in integer microseconds, the private token clock, overload refusal, evidence v2, the qualification sweep and joint attainment, memory counters, per-request classification for waivers, and the durable withdrawal latch. Renewal and the waiver's money effect are cited from `specify-inference-commercial-terms` and `specify-inference-request-accounting`. The cited tests were re-run and pass (20 library, 2 owner-control, 17 runner tests). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks:
+  - 2.1, serious: an unattributed client disconnect is waived and counted as a provider miss, so three cheap disconnects can latch withdrawal;
+  - 2.2: a 0 µs TTFT counts as attained;
+  - 2.3: qualification samples outside every prompt bucket are counted.
+- Report: new entry on whether request-caused failures (for example, an engine-rejected structured-output schema) count as provider-incomplete misses (default: yes, as the code does).
+
 ## 2026-11-17 (thirteenth round) — M3: one process per consumer libp2p identity
 
 - In step at `5449f06f`; whitepaper unchanged; no new answers.
@@ -95,16 +105,17 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements.
+1. Code differences in `specify-generation-performance`: tasks 2.1 (client disconnects counted as provider misses), 2.2 (0 µs TTFT) and 2.3 (out-of-bucket samples). These rank above the missing specs below.
+2. Fee remittance (obligation states, aggregation thresholds, remittance gas) has no SHALL requirements.
    (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
-2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
-4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+4. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
+5. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
