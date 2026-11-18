@@ -1,7 +1,7 @@
 //! Bounded signed inference discovery. Kademlia supplies candidates, never trusted
 //! records; manifests are merged until a fixed deadline, including after bad replies.
 use crate::{
-    offer_registry::OfferRegistry,
+    offer_registry::{self, OfferRegistry},
     protocol::{self, InferenceOffer, NetworkIdentity, Signed},
     provider_config::DhtConfig,
 };
@@ -13,7 +13,7 @@ use libp2p::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io,
     path::Path,
     sync::Arc,
@@ -24,6 +24,8 @@ use tokio::sync::{mpsc, oneshot};
 const MAX_PEERS: usize = 64;
 const MAX_LOCAL: usize = 64;
 const PAGE: usize = 8;
+// A persisted Ed25519 identity is 68 bytes; the bound only refuses a non-key file.
+const MAX_IDENTITY_BYTES: u64 = 4096;
 const WINDOW: Duration = Duration::from_secs(8);
 // Keep the 256-connection budget, reserving 64 slots from inbound-only floods.
 // Two connections per identity allow simultaneous inbound/outbound dialing.
@@ -160,54 +162,164 @@ struct Search {
     deadline: tokio::time::Instant,
     seen: HashSet<PeerId>,
     reply: oneshot::Sender<Result<Vec<Signed<InferenceOffer>>, String>>,
-    received: HashMap<PeerId, HashSet<String>>,
-    invalid: HashSet<PeerId>,
+    manifests: HashMap<PeerId, PeerManifest>,
 }
 struct Pending {
     query: kad::QueryId,
     peer: PeerId,
     offset: usize,
 }
+/// What one search received from one peer's manifest, page by page.
+#[derive(Default)]
+struct PeerManifest {
+    /// IDs of the offers the registry accepted or idempotently replayed.
+    received: HashSet<String>,
+    /// Every revision carried by an offer on any page.
+    revisions: BTreeSet<u64>,
+    /// A page after the first held no offers.
+    empty_later_page: bool,
+    /// An offer or page was rejected, so the manifest is partial.
+    partial: bool,
+}
+impl PeerManifest {
+    /// Whether pages ending with a `next` of `null` at `last_offset` are a complete, valid
+    /// manifest from one snapshot. `/1` pages carry no snapshot marker. One page is one
+    /// snapshot; longer pages are only when no later page is empty and every offer carries
+    /// one revision, as the native provider signs each refresh with one revision.
+    fn complete(&self, last_offset: usize) -> bool {
+        !self.partial
+            && (last_offset == 0 || (!self.empty_later_page && self.revisions.len() <= 1))
+    }
+}
+/// An offer this peer serves in its own manifest.
+struct LocalOffer {
+    id: String,
+    offer: Signed<InferenceOffer>,
+}
+/// Local offers keyed, and therefore paged, by namespace.
+type LocalManifest = BTreeMap<String, LocalOffer>;
 
-fn load_identity(path: &Path) -> Result<identity::Keypair, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if std::fs::metadata(path)
-                    .map_err(|e| e.to_string())?
-                    .permissions()
-                    .mode()
-                    & 0o077
-                    != 0
-                {
-                    return Err("persisted peer identity must be owner-only".into());
+/// Serves `offer` in place of any earlier offer of its namespace. Keying by namespace
+/// rather than offer ID keeps every namespace on its page when a refresh republishes
+/// it under a new revision, and so a new offer ID.
+fn serve_local(local: &mut LocalManifest, id: String, offer: Signed<InferenceOffer>) {
+    local.insert(
+        offer_registry::namespace(&offer.payload),
+        LocalOffer { id, offer },
+    );
+}
+/// One page of this peer's manifest: unexpired offers in the model scope, in namespace order.
+fn manifest_page(
+    local: &LocalManifest,
+    model: Option<&str>,
+    offset: usize,
+    now: u64,
+) -> ManifestResponse {
+    let all: Vec<_> = local
+        .values()
+        .map(|held| &held.offer)
+        .filter(|o| o.payload.expires_at > now && model.is_none_or(|m| o.payload.model.id == m))
+        .collect();
+    let offers = all.iter().skip(offset).take(PAGE).map(|o| (*o).clone()).collect();
+    let next = (all.len() > offset + PAGE).then_some(offset + PAGE);
+    ManifestResponse { offers, next }
+}
+/// Inserts the valid offers of one page that `peer` answered for `offset`, and returns
+/// the next offset to request. On the last page of a complete single-snapshot manifest,
+/// withdraws that peer's cached offers in the model scope that the manifest omitted.
+fn receive_page(
+    registry: &OfferRegistry,
+    model: Option<&str>,
+    peer: &PeerId,
+    offset: usize,
+    response: ManifestResponse,
+    manifest: &mut PeerManifest,
+) -> Option<usize> {
+    if response.offers.len() > PAGE {
+        manifest.partial = true;
+        return None;
+    }
+    if offset > 0 && response.offers.is_empty() {
+        manifest.empty_later_page = true;
+    }
+    let peer_id = peer.to_string();
+    for offer in response.offers {
+        manifest.revisions.insert(offer.payload.revision);
+        if offer.payload.peer_id != peer_id || !model.is_none_or(|m| offer.payload.model.id == m) {
+            manifest.partial = true;
+            continue;
+        }
+        match registry.insert(offer) {
+            Ok(id) => {
+                manifest.received.insert(id);
+            }
+            Err(_) => manifest.partial = true,
+        }
+    }
+    if response.next == Some(offset + PAGE) {
+        return Some(offset + PAGE);
+    }
+    if response.next.is_none() && manifest.complete(offset) {
+        // An authenticated complete manifest can withdraw this peer's cached offers
+        // only. Partial, invalid or mixed-snapshot replies never erase offers.
+        for offer in registry.list() {
+            if offer.payload.peer_id == peer_id && model.is_none_or(|m| offer.payload.model.id == m) {
+                if let Ok(id) = protocol::offer_id(&offer.payload) {
+                    if !manifest.received.contains(&id) {
+                        registry.withdraw(&id);
+                    }
                 }
+            }
+        }
+    }
+    None
+}
+
+/// The peer identity is a private key, kept in a protected secret file. An existing file
+/// is never replaced: a new peer ID is a different deployment.
+fn load_identity(path: &Path) -> Result<identity::Keypair, String> {
+    use std::io::{Read, Write};
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            let refuse = |reason: &str| {
+                format!(
+                    "persisted peer identity is not a protected secret file ({reason}); protect the \
+                     existing file in place as an owner-only regular file instead of replacing or \
+                     deleting it, because the peer identity must be preserved"
+                )
+            };
+            let file = crate::wallet::open_secret_file(path).map_err(|e| refuse(&e))?;
+            let mut bytes = zeroize::Zeroizing::new(Vec::new());
+            file.take(MAX_IDENTITY_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| refuse("unreadable"))?;
+            if bytes.len() as u64 > MAX_IDENTITY_BYTES {
+                return Err("persisted peer identity exceeds its size limit".into());
             }
             identity::Keypair::from_protobuf_encoding(&bytes)
                 .map_err(|e| format!("invalid persisted peer identity: {e}"))
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = path.parent() {
+            let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+            if let Some(parent) = parent {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let key = identity::Keypair::generate_ed25519();
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
+            let encoded =
+                zeroize::Zeroizing::new(key.to_protobuf_encoding().map_err(|e| e.to_string())?);
+            let mut file = crate::wallet::create_secret_file(path)?;
+            file.write_all(&encoded)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| format!("cannot persist peer identity: {e}"))?;
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
+            if let Some(parent) = parent {
+                std::fs::File::open(parent)
+                    .and_then(|dir| dir.sync_all())
+                    .map_err(|e| format!("cannot persist peer identity directory: {e}"))?;
             }
-            let mut file = options.open(path).map_err(|e| e.to_string())?;
-            use std::io::Write;
-            file.write_all(&key.to_protobuf_encoding().map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
-            file.sync_all().map_err(|e| e.to_string())?;
             Ok(key)
         }
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(format!("cannot inspect persisted peer identity: {e}")),
     }
 }
 fn index(network: &NetworkIdentity, model: Option<&str>) -> kad::RecordKey {
@@ -409,27 +521,62 @@ fn request_peer(
 fn sync_indexes(
     swarm: &mut Swarm<Behaviour>,
     network: &NetworkIdentity,
-    local: &BTreeMap<String, Signed<InferenceOffer>>,
+    local: &LocalManifest,
     advertised: &mut HashSet<kad::RecordKey>,
 ) -> Result<(), String> {
     let mut wanted = HashSet::new();
     if !local.is_empty() {
         wanted.insert(index(network, None));
     }
-    for offer in local.values() {
-        wanted.insert(index(network, Some(&offer.payload.model.id)));
+    for held in local.values() {
+        wanted.insert(index(network, Some(&held.offer.payload.model.id)));
     }
     for key in advertised.difference(&wanted) {
         swarm.behaviour_mut().kad.stop_providing(key);
     }
-    for key in wanted.difference(advertised) {
-        swarm
-            .behaviour_mut()
-            .kad
-            .start_providing(key.clone())
-            .map_err(|e| e.to_string())?;
+    advertised.retain(|key| wanted.contains(key));
+    // Record each key as it is advertised, so that a later failure leaves no key
+    // advertised that the next synchronisation would not stop.
+    for key in wanted {
+        if !advertised.contains(&key) {
+            swarm
+                .behaviour_mut()
+                .kad
+                .start_providing(key.clone())
+                .map_err(|e| e.to_string())?;
+            advertised.insert(key);
+        }
     }
-    *advertised = wanted;
+    Ok(())
+}
+/// Serves `offer` and advertises its index keys. A publication that fails serves and
+/// advertises nothing for the offer's namespace, so a caller that withdraws the offers
+/// it published when it fails leaves none served.
+fn publish_local(
+    swarm: &mut Swarm<Behaviour>,
+    network: &NetworkIdentity,
+    registry: &OfferRegistry,
+    local: &mut LocalManifest,
+    advertised: &mut HashSet<kad::RecordKey>,
+    offer: Signed<InferenceOffer>,
+) -> Result<(), String> {
+    if offer.payload.peer_id != swarm.local_peer_id().to_string() {
+        return Err("offer peer ID does not match persisted identity".into());
+    }
+    let namespace = offer_registry::namespace(&offer.payload);
+    if local.len() >= MAX_LOCAL && !local.contains_key(&namespace) {
+        return Err("local manifest is full".into());
+    }
+    let id = registry.insert(offer.clone())?;
+    serve_local(local, id.clone(), offer);
+    // Advertising fails when the provider record store is full, which records that
+    // other peers store here also fill.
+    if let Err(error) = sync_indexes(swarm, network, local, advertised) {
+        local.remove(&namespace);
+        registry.withdraw(&id);
+        let _ = sync_indexes(swarm, network, local, advertised);
+        return Err(error);
+    }
     Ok(())
 }
 async fn run(
@@ -440,7 +587,7 @@ async fn run(
     ready: oneshot::Sender<Result<(), String>>,
 ) {
     let mut ready = Some(ready);
-    let mut local: BTreeMap<String, Signed<InferenceOffer>> = BTreeMap::new();
+    let mut local = LocalManifest::new();
     let mut advertised = HashSet::new();
     let mut searches: HashMap<kad::QueryId, Search> = HashMap::new();
     let mut pending = HashMap::new();
@@ -451,18 +598,13 @@ async fn run(
         tokio::select! {
             command = commands.recv() => match command {
                 Some(Command::Publish(offer,reply)) => {
-                    let result = if offer.payload.peer_id != swarm.local_peer_id().to_string() { Err("offer peer ID does not match persisted identity".into()) }
-                    else if local.len() >= MAX_LOCAL && !local.values().any(|o| o.payload.provider_wallet == offer.payload.provider_wallet && o.payload.deployment_id == offer.payload.deployment_id && o.payload.model.id == offer.payload.model.id) { Err("local manifest is full".into()) }
-                    else { registry.insert(offer.clone()).and_then(|id| {
-                        local.retain(|_,old| !(old.payload.provider_wallet == offer.payload.provider_wallet && old.payload.deployment_id == offer.payload.deployment_id && old.payload.model.id == offer.payload.model.id));
-                        local.insert(id,offer); sync_indexes(&mut swarm,&network,&local,&mut advertised)
-                    }) }; let _ = reply.send(result);
+                    let _ = reply.send(publish_local(&mut swarm,&network,&registry,&mut local,&mut advertised,offer));
                 }
-                Some(Command::Withdraw(id,reply)) => { local.remove(&id); registry.withdraw(&id); let _ = sync_indexes(&mut swarm,&network,&local,&mut advertised); let _ = reply.send(()); }
+                Some(Command::Withdraw(id,reply)) => { local.retain(|_,held| held.id != id); registry.withdraw(&id); let _ = sync_indexes(&mut swarm,&network,&local,&mut advertised); let _ = reply.send(()); }
                 Some(Command::Discover(model,reply)) => {
                     if searches.len() >= 4 { let _ = reply.send(Err("discovery is busy".into())); continue; }
                     let query = swarm.behaviour_mut().kad.get_providers(index(&network,model.as_deref()));
-                    let mut search = Search { query,model,deadline:tokio::time::Instant::now()+WINDOW,seen:HashSet::new(),received:HashMap::new(),invalid:HashSet::new(),reply };
+                    let mut search = Search { query,model,deadline:tokio::time::Instant::now()+WINDOW,seen:HashSet::new(),manifests:HashMap::new(),reply };
                     // Connected bootstrap peers are candidates too, not authoritative answers.
                     let peers: Vec<_> = swarm.connected_peers().copied().take(MAX_PEERS).collect();
                     for peer in peers { request_peer(&mut swarm,&network,&mut search,&mut pending,peer,0); }
@@ -485,7 +627,7 @@ async fn run(
                     }
                 }
                 let clock = protocol::now().unwrap_or(u64::MAX);
-                local.retain(|id,o| { if o.payload.expires_at <= clock { registry.withdraw(id); false } else { true } });
+                local.retain(|_,held| { if held.offer.payload.expires_at <= clock { registry.withdraw(&held.id); false } else { true } });
                 let _ = sync_indexes(&mut swarm,&network,&local,&mut advertised);
                 inbound.retain(|_,(start,_)| now.duration_since(*start) < Duration::from_secs(30));
             },
@@ -514,34 +656,16 @@ async fn run(
                         if inbound.len() >= 256 && !inbound.contains_key(&peer) { continue; }
                         let rate = inbound.entry(peer).or_insert((tokio::time::Instant::now(),0)); rate.1 += 1;
                         if rate.1 > 32 || request.network != network || request.offset >= MAX_LOCAL || request.offset % PAGE != 0 || request.model.as_ref().is_some_and(|m| m.len()>256) { continue; }
-                        let now = protocol::now().unwrap_or(u64::MAX);
-                        let all: Vec<_> = local.values().filter(|o| o.payload.expires_at>now && request.model.as_ref().map_or(true,|m| &o.payload.model.id==m)).collect();
-                        let offers = all.iter().skip(request.offset).take(PAGE).map(|o| (*o).clone()).collect();
-                        let next = (all.len()>request.offset+PAGE).then_some(request.offset+PAGE);
-                        let _ = swarm.behaviour_mut().manifest.send_response(channel,ManifestResponse {offers,next});
+                        let page = manifest_page(&local,request.model.as_deref(),request.offset,protocol::now().unwrap_or(u64::MAX));
+                        let _ = swarm.behaviour_mut().manifest.send_response(channel,page);
                     }
                     rr::Message::Response {request_id,response} => {
                         let Some(p) = pending.remove(&request_id) else { continue; };
-                        if p.peer != peer || response.offers.len()>PAGE { continue; }
+                        if p.peer != peer { continue; }
                         if let Some(search) = searches.get_mut(&p.query) {
-                            for offer in response.offers {
-                                if offer.payload.peer_id != peer.to_string() || !search.model.as_ref().map_or(true,|m| &offer.payload.model.id==m) { search.invalid.insert(peer); continue; }
-                                match registry.insert(offer) {
-                                    Ok(id) => { search.received.entry(peer).or_default().insert(id); }
-                                    Err(_) => { search.invalid.insert(peer); }
-                                }
-                            }
-                            if response.next == Some(p.offset+PAGE) { request_peer(&mut swarm,&network,search,&mut pending,peer,p.offset+PAGE); }
-                            else if response.next.is_none() && !search.invalid.contains(&peer) {
-                                // An authenticated complete manifest can withdraw this peer's
-                                // cached offers only. Invalid/partial replies never erase votes.
-                                for offer in registry.list() {
-                                    if offer.payload.peer_id == peer.to_string() && search.model.as_ref().map_or(true,|m| &offer.payload.model.id==m) {
-                                        if let Ok(id) = protocol::offer_id(&offer.payload) {
-                                            if !search.received.get(&peer).is_some_and(|ids| ids.contains(&id)) { registry.withdraw(&id); }
-                                        }
-                                    }
-                                }
+                            let manifest = search.manifests.entry(peer).or_default();
+                            if let Some(next) = receive_page(&registry,search.model.as_deref(),&peer,p.offset,response,manifest) {
+                                request_peer(&mut swarm,&network,search,&mut pending,peer,next);
                             }
                         }
                     }
@@ -580,6 +704,270 @@ mod tests {
             load_identity(&path).unwrap().public().to_peer_id(),
             load_identity(&path).unwrap().public().to_peer_id()
         );
+        // A new identity is created as a protected secret file.
+        crate::wallet::open_secret_file(&path).unwrap();
+    }
+
+    // inference-offer-discovery requirement 2, task 2.3: the identity key file is a
+    // protected secret, refused without being replaced when it is not protected.
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_link_to_identity_file_is_refused_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("owner-only.key");
+        let peer = load_identity(&target).unwrap().public().to_peer_id();
+        let bytes = std::fs::read(&target).unwrap();
+        let link = dir.path().join("peer.key");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let error = load_identity(&link).unwrap_err();
+        assert!(error.contains("protect the existing file in place"), "{error}");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        assert_eq!(std::fs::read(&target).unwrap(), bytes);
+        assert_eq!(load_identity(&target).unwrap().public().to_peer_id(), peer);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exposed_identity_file_is_refused_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peer.key");
+        load_identity(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let error = load_identity(&path).unwrap_err();
+        assert!(error.contains("owner-only"), "{error}");
+        assert!(error.contains("protect the existing file in place"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_identity_file_has_a_current_user_only_access_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("peer.key");
+        let peer = load_identity(&path).unwrap().public().to_peer_id();
+        // The shared validator accepts only a protected, current-user-only DACL.
+        crate::wallet::open_secret_file(&path).unwrap();
+        assert_eq!(load_identity(&path).unwrap().public().to_peer_id(), peer);
+        // A file written normally inherits the directory's access list.
+        let inherited = dir.path().join("inherited.key");
+        let bytes = identity::Keypair::generate_ed25519()
+            .to_protobuf_encoding()
+            .unwrap();
+        std::fs::write(&inherited, &bytes).unwrap();
+        let error = load_identity(&inherited).unwrap_err();
+        assert!(error.contains("protect the existing file in place"), "{error}");
+        assert_eq!(std::fs::read(&inherited).unwrap(), bytes);
+    }
+
+    const PROVIDER_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// One provider peer's offers for models `model-0`, `model-1`, …, one namespace each,
+    /// all signed with one revision as a native provider refresh signs them.
+    fn refresh_offers(
+        peer: &PeerId,
+        revision: u64,
+        models: std::ops::Range<usize>,
+        now: u64,
+    ) -> Vec<Signed<InferenceOffer>> {
+        let template = crate::offer_registry::tests::offer().payload;
+        models
+            .map(|index| {
+                let mut payload = template.clone();
+                payload.peer_id = peer.to_string();
+                payload.deployment_id = peer.to_string();
+                payload.model.id = format!("model-{index}");
+                payload.revision = revision;
+                payload.issued_at = now;
+                payload.expires_at = now + 120;
+                protocol::sign(protocol::OFFER_DOMAIN, payload, PROVIDER_KEY).unwrap()
+            })
+            .collect()
+    }
+    fn serve(local: &mut LocalManifest, offers: &[Signed<InferenceOffer>]) {
+        for offer in offers {
+            serve_local(local, protocol::offer_id(&offer.payload).unwrap(), offer.clone());
+        }
+    }
+    fn page_entries(page: &ManifestResponse) -> Vec<(String, u64)> {
+        page.offers
+            .iter()
+            .map(|o| (o.payload.model.id.clone(), o.payload.revision))
+            .collect()
+    }
+    /// The receiver's verified registry, holding `cached`.
+    fn cache(cached: &[Signed<InferenceOffer>]) -> OfferRegistry {
+        let registry = OfferRegistry::new(cached[0].payload.network.clone(), false);
+        for offer in cached {
+            registry.insert(offer.clone()).unwrap();
+        }
+        registry
+    }
+    fn listed(registry: &OfferRegistry) -> BTreeMap<String, u64> {
+        registry
+            .list()
+            .into_iter()
+            .map(|o| (o.payload.model.id, o.payload.revision))
+            .collect()
+    }
+
+    // Requirement 4, task 2.1: a peer pages its manifest by namespace.
+    #[test]
+    fn republished_namespaces_keep_their_manifest_pages() {
+        // Fixed identities and times make every offer ID, and so any ID order, fixed.
+        let peer = identity::Keypair::ed25519_from_bytes([7u8; 32])
+            .unwrap()
+            .public()
+            .to_peer_id();
+        let now = 1_800_000_000;
+        let mut local = LocalManifest::new();
+        serve(&mut local, &refresh_offers(&peer, 5, 0..9, now));
+        let first = manifest_page(&local, None, 0, now);
+        let last = manifest_page(&local, None, 8, now);
+        assert_eq!((first.offers.len(), first.next), (8, Some(8)));
+        assert_eq!((last.offers.len(), last.next), (1, None));
+        let before = [page_entries(&first), page_entries(&last)];
+        // The next refresh republishes every namespace at revision 6, with new offer IDs.
+        serve(&mut local, &refresh_offers(&peer, 6, 0..9, now + 30));
+        assert_eq!(local.len(), 9);
+        let after = [
+            page_entries(&manifest_page(&local, None, 0, now)),
+            page_entries(&manifest_page(&local, None, 8, now)),
+        ];
+        for (before, after) in before.iter().zip(&after) {
+            assert!(before.iter().all(|(_, revision)| *revision == 5));
+            assert!(after.iter().all(|(_, revision)| *revision == 6));
+            let names = |page: &Vec<(String, u64)>| page.iter().map(|(m, _)| m.clone()).collect::<Vec<_>>();
+            assert_eq!(names(before), names(after), "a republish moved a namespace to another page");
+        }
+    }
+
+    // Requirement 9, task 2.1: pages from two refreshes are not one snapshot.
+    #[test]
+    fn manifest_straddling_a_republish_withdraws_nothing() {
+        let peer = PeerId::random();
+        let now = protocol::now().unwrap();
+        let old = refresh_offers(&peer, 5, 0..9, now);
+        let new = refresh_offers(&peer, 6, 0..9, now);
+        let mut local = LocalManifest::new();
+        serve(&mut local, &old);
+        let first = manifest_page(&local, None, 0, now);
+        // This peer, which pages by namespace, and a peer that pages by offer ID, which can
+        // place any namespace on page 8 after the republish (here `model-0`, already
+        // received on page 0 at revision 5, so that `model-8` arrives at neither revision).
+        serve(&mut local, &new);
+        for last in [
+            manifest_page(&local, None, 8, now),
+            ManifestResponse { offers: vec![new[0].clone()], next: None },
+        ] {
+            let registry = cache(&old);
+            let mut manifest = PeerManifest::default();
+            assert_eq!(
+                receive_page(&registry, None, &peer, 0, first.clone(), &mut manifest),
+                Some(8)
+            );
+            assert_eq!(receive_page(&registry, None, &peer, 8, last, &mut manifest), None);
+            let held = listed(&registry);
+            assert_eq!(
+                held.keys().cloned().collect::<Vec<_>>(),
+                (0..9).map(|i| format!("model-{i}")).collect::<Vec<_>>(),
+                "a live cached offer was withdrawn"
+            );
+            assert!(held.values().all(|revision| matches!(revision, 5 | 6)));
+        }
+    }
+
+    // Requirement 9, task 2.1: an empty later page is not evidence of a complete manifest.
+    #[test]
+    fn manifest_that_shrank_between_pages_withdraws_nothing() {
+        let peer = PeerId::random();
+        let now = protocol::now().unwrap();
+        let old = refresh_offers(&peer, 5, 0..9, now);
+        let registry = cache(&old);
+        let mut local = LocalManifest::new();
+        serve(&mut local, &old);
+        let mut manifest = PeerManifest::default();
+        let first = manifest_page(&local, None, 0, now);
+        assert_eq!(receive_page(&registry, None, &peer, 0, first, &mut manifest), Some(8));
+        // The peer stops publishing `model-0`, so `model-8` moves to page 0.
+        local.retain(|_, held| held.offer.payload.model.id != "model-0");
+        let last = manifest_page(&local, None, 8, now);
+        assert_eq!((last.offers.len(), last.next), (0, None));
+        assert_eq!(receive_page(&registry, None, &peer, 8, last, &mut manifest), None);
+        assert_eq!(listed(&registry).len(), 9, "a live cached offer was withdrawn");
+    }
+
+    // Requirement 9: a complete single-snapshot manifest still withdraws omitted offers.
+    #[test]
+    fn complete_snapshot_manifest_withdraws_an_omitted_offer() {
+        let peer = PeerId::random();
+        let now = protocol::now().unwrap();
+        let registry = cache(&refresh_offers(&peer, 5, 0..10, now));
+        // The next refresh stops publishing `model-3` and republishes nine at revision 6.
+        let mut local = LocalManifest::new();
+        let new = refresh_offers(&peer, 6, 0..10, now);
+        serve(&mut local, &[&new[..3], &new[4..]].concat());
+        let mut manifest = PeerManifest::default();
+        let first = manifest_page(&local, None, 0, now);
+        assert_eq!(receive_page(&registry, None, &peer, 0, first, &mut manifest), Some(8));
+        let last = manifest_page(&local, None, 8, now);
+        assert_eq!(receive_page(&registry, None, &peer, 8, last, &mut manifest), None);
+        let held = listed(&registry);
+        assert_eq!(held.len(), 9);
+        assert!(!held.contains_key("model-3"));
+        assert!(held.values().all(|revision| *revision == 6));
+
+        // One page is one snapshot, whatever revisions its offers carry.
+        let registry = cache(&refresh_offers(&peer, 5, 0..3, now));
+        let page = ManifestResponse {
+            offers: [
+                refresh_offers(&peer, 6, 0..1, now),
+                refresh_offers(&peer, 7, 1..2, now),
+            ]
+            .concat(),
+            next: None,
+        };
+        let mut manifest = PeerManifest::default();
+        assert_eq!(receive_page(&registry, None, &peer, 0, page, &mut manifest), None);
+        assert_eq!(
+            listed(&registry),
+            BTreeMap::from([("model-0".into(), 6), ("model-1".into(), 7)])
+        );
+    }
+
+    // Requirement 11, task 2.2: a publication that fails serves and advertises nothing, so
+    // a failed refresh that withdraws the offers it published leaves no offer served.
+    #[tokio::test]
+    async fn failed_publication_serves_and_advertises_nothing() {
+        use kad::store::RecordStore;
+        let key = identity::Keypair::generate_ed25519();
+        let peer = key.public().to_peer_id();
+        let now = protocol::now().unwrap();
+        let offer = refresh_offers(&peer, 5, 0..1, now).remove(0);
+        let network = offer.payload.network.clone();
+        let mut swarm = build_swarm(key, &network).unwrap();
+        // Provider records that other peers stored here, as any DHT server peer may,
+        // leave room for one more key: the offer's first index key is advertised and its
+        // second is refused.
+        let other = PeerId::random();
+        for n in 0u32..127 {
+            let record = kad::ProviderRecord::new(kad::RecordKey::new(&n.to_be_bytes()), other, Vec::new());
+            swarm.behaviour_mut().kad.store_mut().add_provider(record).unwrap();
+        }
+        let registry = OfferRegistry::new(network.clone(), false);
+        let mut local = LocalManifest::new();
+        let mut advertised = HashSet::new();
+        assert!(publish_local(&mut swarm, &network, &registry, &mut local, &mut advertised, offer)
+            .is_err());
+        assert!(manifest_page(&local, None, 0, now).offers.is_empty(), "a failed publication is served");
+        assert!(registry.list().is_empty());
+        assert!(advertised.is_empty());
+        assert_eq!(swarm.behaviour_mut().kad.store_mut().provided().count(), 0);
     }
     #[tokio::test]
     async fn oversized_manifest_rejected_before_allocation() {

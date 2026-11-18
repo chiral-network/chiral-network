@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-18 (thirty-ninth round) — Code: snapshot-safe manifest withdrawal, clean failed refreshes, a protected DHT identity
+
+- In step at `b416c157`; whitepaper unchanged; no new answers.
+- Code step (`specify-offer-discovery` tasks 2.1–2.3; comparison item 4).
+  - Manifest pages now follow a stable namespace order, and a receiver withdraws cached offers only for a complete single-snapshot manifest. A refresh between page fetches, or a manifest that shrank between pages, can no longer withdraw a live offer (book line 234).
+  - A failed refresh now withdraws the offers it had already published.
+  - The review found that a failed DHT advertisement could leave an offer served, and that a partly successful index sync forgot keys it had started. Both are fixed: a failed publication now serves and advertises nothing.
+  - The DHT identity file is created and read as a protected secret (symlinks, exposed modes, other owners and Windows inherited access lists are refused, never rewritten).
+  - Nine new regressions fail without their changes (the Windows one runs only in CI).
+- Recorded as unchecked task 2.4 and a design risk: remote provider records share this node's 128-key Kademlia store, so other peers can fill it and block a provider's new index advertisements until their records expire (600 s). This needs a design choice.
+- Behaviour change for operators: identity files with inherited Windows access lists, or owned by another user, are now refused at startup with instructions to protect them in place.
+
 ## 2026-11-18 (thirty-eighth round) — Current offer discovery specified
 
 - In step at `ff0d3935`; whitepaper unchanged; no new answers.
@@ -352,7 +364,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (`specify-offer-discovery` tasks 2.1–2.3, then comparison items 5–7; items 2 and 3 are done, item 4 is task 2.1), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison items 5–7, then `specify-offer-discovery` task 2.4; items 2–4 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

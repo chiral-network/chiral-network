@@ -248,6 +248,7 @@ impl ProviderRuntime {
         *self.refresh_error.write().await = result.as_ref().err().cloned();
         if result.is_err() {
             self.state.funding_ready.store(false, Ordering::Release);
+            // Includes every offer the failed pass published before it failed.
             self.withdraw_published().await;
         }
         result
@@ -385,15 +386,18 @@ impl ProviderRuntime {
                 } else {
                     self.dht.publish(&signed).await.map_err(|_| "DHT offer publication failed")?;
                 }
+                // Published from here on: if a later model fails this pass, `refresh`
+                // withdraws this offer with the earlier set, so none stays served.
+                self.published.lock().await.insert(id.clone());
                 next.insert(id);
             }
         }
-        let mut previous = self.published.lock().await;
-        for id in previous.difference(&next) {
+        let mut published = self.published.lock().await;
+        for id in published.difference(&next) {
             self.dht.withdraw(id).await;
         }
-        *previous = next;
-        Ok(previous.len())
+        *published = next;
+        Ok(published.len())
     }
 
     pub async fn stop_engines(&self) {
@@ -699,6 +703,149 @@ mod tests {
             development: true,
         };
         (config, server)
+    }
+
+    /// A chain RPC whose eSpace `safe` frontier is current, so a refresh finds the
+    /// provider new-funding ready. Other methods answer 503.
+    async fn ready_chain(
+        request: Json<Value>,
+    ) -> Response {
+        let now = protocol::now().unwrap();
+        let block = |height: u64, hash: String| {
+            json!({"number": format!("0x{height:x}"), "hash": hash,
+                "timestamp": format!("0x{:x}", now - (12 - height))})
+        };
+        let result = match request["method"].as_str().unwrap_or("") {
+            "eth_chainId" => json!("0x47"),
+            "eth_syncing" => json!(false),
+            "eth_getBlockByNumber" => match request["params"][0].as_str().unwrap_or("") {
+                "0x0" => block(0, crate::network::ESPACE_TESTNET_GENESIS.into()),
+                "latest" => block(12, format!("0x{}", "55".repeat(32))),
+                "safe" => block(10, format!("0x{}", "56".repeat(32))),
+                "finalized" => block(6, format!("0x{}", "57".repeat(32))),
+                _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+            },
+            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result})).into_response()
+    }
+
+    /// A private engine serving one embeddings model well enough to pass its readiness
+    /// probe: two tokens per input and one-dimensional embeddings.
+    fn embeddings_engine(model: protocol::ModelSpec) -> Router {
+        let id = model.id.clone();
+        let props = json!({"build_info": "b1-cd959ba", "total_slots": 1, "model_alias": model.id,
+            "default_generation_settings": {"n_ctx": model.context_length}});
+        Router::new()
+            .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
+            .route("/v1/models", get(move || async move { Json(json!({"data": [{"id": id}]})) }))
+            .route("/props", get(move || async move { Json(props) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens": [1, 2]})) }))
+            .route("/v1/embeddings", post(|request: Json<Value>| async move {
+                let inputs = request["input"].as_array().cloned().unwrap_or_default();
+                let tokens: usize = inputs.iter().map(|i| i.as_array().map_or(0, Vec::len)).sum();
+                // 0.5 as one little-endian float32.
+                let embedding = if request["encoding_format"] == "base64" { json!("AAAAPw==") } else { json!([0.5]) };
+                let data: Vec<_> = (0..inputs.len()).map(|index| json!({"index": index,
+                    "object": "embedding", "embedding": embedding})).collect();
+                Json(json!({"model": request["model"], "object": "list", "data": data,
+                    "usage": {"prompt_tokens": tokens, "total_tokens": tokens}}))
+            }))
+    }
+
+    async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        (origin, tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }))
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_withdraws_the_offers_it_published() {
+        // inference-offer-discovery requirement 11, task 2.2: a refresh that publishes
+        // one model's offer and then fails on the next leaves no offer served.
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        // Public embedding deployments, which a non-development provider publishes
+        // through its DHT manifest without a serving profile.
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let template = config.models.remove(0);
+        let mut engines = Vec::new();
+        for id in ["embed-a", "embed-b"] {
+            let mut model = template.clone();
+            model.model.id = id.into();
+            model.model.capabilities = vec!["embeddings".into()];
+            model.model.max_output_tokens = 0;
+            model.price.output_wei_per_1k = "0".into();
+            let (engine, server) = serve(embeddings_engine(model.model.clone())).await;
+            model.engine_url = engine;
+            engines.push(server);
+            config.models.push(model);
+        }
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let offers = |runtime: Arc<ProviderRuntime>| async move {
+            let response = runtime.admin_router().oneshot(Request::builder().uri("/admin/offers")
+                .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+                .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()["offers"].as_array().unwrap().len()
+        };
+        // The starting refresh found the provider ready and published both offers.
+        assert!(runtime.state.funding_ready.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 2);
+        assert_eq!(offers(runtime.clone()).await, 2);
+        let status = runtime.dht.status().await;
+        let address = format!(
+            "{}/p2p/{}",
+            status["listening_addresses"][0].as_str().unwrap(),
+            runtime.dht.peer_id()
+        );
+        let network = runtime.state.config.network.identity.clone();
+        let discover = |name: &'static str| {
+            let (address, network, directory) = (address.clone(), network.clone(), directory.path().to_owned());
+            async move {
+                let consumer = DhtService::start(
+                    provider_config::DhtConfig {
+                        listen: "/ip4/127.0.0.1/tcp/0".into(),
+                        bootstrap: vec![address],
+                        identity_file: directory.join(name),
+                    },
+                    network.clone(),
+                    Arc::new(OfferRegistry::new(network, false)),
+                )
+                .await
+                .unwrap();
+                let offers = consumer.discover(None).await.unwrap();
+                consumer.stop().await;
+                offers
+            }
+        };
+        assert_eq!(discover("consumer-a.key").await.len(), 2);
+
+        // `embed-b`'s next offer cannot be published: the provider's registry already
+        // holds a higher signed revision of its namespace, as after a lowered counter.
+        let mut blocking = runtime.state.offers.get(&runtime.published.lock().await.iter()
+            .find(|id| runtime.state.offers.get(id).is_some_and(|o| o.payload.model.id == "embed-b"))
+            .unwrap().clone()).unwrap().payload;
+        blocking.revision = 1_000_000;
+        runtime.state.offers.insert(protocol::sign(protocol::OFFER_DOMAIN, blocking,
+            &runtime.state.private_key).unwrap()).unwrap();
+        assert!(runtime.refresh().await.is_err());
+        assert!(runtime.refresh_error.read().await.is_some());
+        assert!(!runtime.state.funding_ready.load(Ordering::Acquire));
+        // `embed-a`'s new offer, published earlier in the failed pass, is withdrawn too.
+        assert_eq!(runtime.dht.status().await["published_offers"], 0);
+        assert_eq!(offers(runtime.clone()).await, 0);
+        assert!(discover("consumer-b.key").await.is_empty());
+
+        runtime.dht.stop().await;
+        for server in engines.into_iter().chain([rpc_server, unavailable]) {
+            server.abort();
+        }
     }
 
     #[tokio::test]

@@ -28,6 +28,13 @@ pub struct OfferRegistry {
     state: RwLock<RegistryState>,
 }
 
+/// The revision stream an offer belongs to: `provider_wallet/deployment_id/model.id`.
+pub(crate) fn namespace(offer: &InferenceOffer) -> String {
+    format!(
+        "{}/{}/{}",
+        offer.provider_wallet, offer.deployment_id, offer.model.id
+    )
+}
 pub fn validate_wallet(wallet: &str) -> Result<(), String> {
     if wallet.len() != 42
         || !wallet.starts_with("0x")
@@ -294,7 +301,7 @@ impl OfferRegistry {
         {
             return Err("expired or invalid offer lifetime".into());
         }
-        let namespace = format!("{}/{}/{}", o.provider_wallet, o.deployment_id, o.model.id);
+        let namespace = namespace(o);
         let id = protocol::offer_id(o)?;
         let mut state = self.state.write();
         // Any lower-revision signature issued before this watermark was observed

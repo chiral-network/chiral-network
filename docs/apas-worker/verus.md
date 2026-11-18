@@ -149,3 +149,12 @@ Requirement source: `openspec/changes/specify-profile-path-resolution/specs/prof
 ## Judged 2026-11-18 — managed-runtime requirement for qualified profiles
 
 - `inference_commercial_terms_test::qualified_profiles_require_a_managed_runtime_outside_development` (commercial-terms task 2.6) — **replaceable in principle**: `ProviderConfig::validate`'s rule is a pure predicate over the parsed configuration, but the test exercises JSON parsing and the file-loading path too. It waits for the Verus report entry; the test stays.
+
+## Judged 2026-11-18 — discovery withdrawal, refresh and identity regressions
+
+Requirement source: `openspec/changes/specify-offer-discovery/specs/inference-offer-discovery/spec.md` (requirements 2, 4, 9 and 11).
+
+- `dht::tests::manifest_straddling_a_republish_withdraws_nothing`, `manifest_that_shrank_between_pages_withdraws_nothing`, `complete_snapshot_manifest_withdraws_an_omitted_offer` — **replaceable in principle** for the completeness predicate (`PeerManifest::complete`), which is pure over received revisions and page flags; the tests also drive the registry. They wait for the Verus report entry and stay.
+- `dht::tests::republished_namespaces_keep_their_manifest_pages` — **replaceable in principle**: page construction over an ordered map is pure; it waits for Verus.
+- `dht::tests::failed_publication_serves_and_advertises_nothing`, `app::tests::failed_refresh_withdraws_the_offers_it_published` — **not replaceable**: a libp2p swarm, a Kademlia store, HTTP fixtures and async refresh.
+- `dht::tests::symbolic_link_to_identity_file_is_refused_unchanged`, `exposed_identity_file_is_refused_unchanged`, `windows_identity_file_has_a_current_user_only_access_list` — **not replaceable**: file-system modes, symlinks and Windows access lists.
