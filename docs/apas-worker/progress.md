@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-18 (thirty-fifth round) — Comparison pass: 19 confirmed findings recorded
+
+- In step at `a5aa2b88`; whitepaper unchanged; no new answers.
+- With no known gap left, a new comparison ran over the whole book outside Appendix A and the target-design milestones: five slices, each with one finder and one adversarial verifier. 20 findings, 19 confirmed, recorded in `docs/apas-worker/comparison-2026-11-18.md` in priority order. They comprise one spec-versus-whitepaper wording item, six code differences (one high: consumer profile paths resolve against the working directory) and ten missing specifications.
+- This round's step (highest priority, spec contradicts whitepaper): book line 483 says the opening transaction carries "intrinsic gas", while the spec and code correctly use the eSpace estimate within the structural minimum and 1,000,000. The spec is right and the whitepaper is read-only, so a report entry proposes new book wording. No spec or code change.
+
 ## 2026-11-18 (thirty-fourth round) — Code: no update status from another network survives a logout or profile change
 
 - In step at `e63b9737`; whitepaper unchanged; no new answers.
@@ -302,9 +308,9 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. No missing specification or code difference is known in the changes so far. Re-run a spec-versus-whitepaper and code-versus-spec comparison to look for more before moving to the acceptance work below.
+1. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (item 2, consumer profile paths, is high), then the missing specifications in its order.
 
 Earlier open work, unchanged:
 

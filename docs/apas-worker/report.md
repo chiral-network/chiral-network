@@ -275,3 +275,17 @@ Questions:
 Separately, the spec records four code differences, not questions: the policy signer takes the authority's private key on the command line or from the environment and prints a new key to standard output (book line 474); the required modal does not block the keyboard or assistive technology; "Copy download URL" is offered for any URL, and its fallback points to a non-HTTPS URL; and the gate keeps showing the previous network's status after logout (tasks 2.1–2.4).
 
 Nonblocking: no requirement or task waits on these answers; question 1 would add tasks for both clients, the provider middleware and the desktop gate.
+
+## 2026-11-18 — Opening transaction gas: "intrinsic gas" versus the eSpace estimate
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Agreements and exact funding order*, step 2 (line 483: the journaled opening transaction includes its "terms commitment in calldata, nonce, value, intrinsic gas, and hash"). Spec: `specify-opening-funding-intent`, requirement *Native preparation durably owns one exact opening transaction* (`specs/inference-opening-funding-intent/spec.md:7`) and `design.md:15`. Code: `src-tauri/src/chain_client.rs:633–654` (`estimate_gas`) and the payment preparation path.
+
+What it says now: line 483 says the signed opening carries intrinsic gas. The spec instead requires the chain's eSpace estimate for the actual payment, at least the transaction's structural minimum and at most 1,000,000 gas, "without treating Ethereum intrinsic gas as a complete eSpace cost estimate". The code follows the spec: it signs `eth_estimateGas` within those bounds. eSpace can charge at least three quarters of the signed limit, so intrinsic gas would understate the cost. Line 491 already requires balance for the full gas limit, so this is wording, not a money-path defect. The wording appears to come from the older migration plan ("London intrinsic gas … when no estimation RPC exists").
+
+Question: may line 483 say "its signed gas limit (the chain's eSpace estimate, at least the structural minimum and at most 1,000,000 gas)" in place of "intrinsic gas"?
+
+Proposed default (what the spec and code already do): the eSpace estimate within those bounds. No spec or code change is planned; only the whitepaper wording would change.
+
+Nonblocking: no requirement or task waits on this answer.
