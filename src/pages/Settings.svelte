@@ -3,7 +3,7 @@
   import { command, errorText, nativeAvailable } from '$lib/native';
   import { settings, session, sessionEpoch, type ThemeMode, type ColorTheme, type NavStyle, type NotificationSettings } from '$lib/stores';
   import { availableThemes } from '$lib/services/colorThemeService';
-  import { refreshVersionStatus } from '$lib/stores/versionStore';
+  import { refreshVersionStatus, resetVersionStatus } from '$lib/stores/versionStore';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
   import { shortAddress } from '$lib/components/ui/tones';
@@ -14,6 +14,8 @@
     try {
       const result = await command<{ address: string | null }>('configure', { path: configPath });
       session.set({ address: result.address, configured: true });
+      // Drop the previous network's status before this profile's status arrives.
+      resetVersionStatus();
       await refreshVersionStatus();
       sessionEpoch.update(value => value + 1);
       // The session change remounts this page, so the confirmation lives in the app-level

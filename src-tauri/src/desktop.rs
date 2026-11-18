@@ -58,9 +58,7 @@ async fn consumer_command(
     args: Value,
 ) -> Result<Value, String> {
     if operation == "logout" {
-        let mut current = state.consumer.write().await;
-        state.cancel_all().await;
-        *current = None;
+        end_session(&state).await;
         return Ok(Value::Null);
     }
     if operation == "configure" {
@@ -294,16 +292,30 @@ async fn inference_cancel(state: State<'_, DesktopState>, stream_id: String) -> 
     Ok(())
 }
 
+/// Close the native session: cancel streams, drop the consumer and forget the network's
+/// effective version policy, so no status from that network is reported afterwards.
+async fn end_session(state: &DesktopState) {
+    let mut current = state.consumer.write().await;
+    state.cancel_all().await;
+    *current = None;
+    crate::version::reset_effective_policy();
+}
+
+/// The version status when no profile is loaded: the effective (after logout, bundled) policy.
+fn status_without_profile() -> Result<Value, String> {
+    let policy = crate::version::effective_policy();
+    Ok(
+        json!({"currentVersion":crate::version::CURRENT_VERSION,"status":crate::version::compare_to_policy(crate::version::CURRENT_VERSION,&policy)?,"policy":policy}),
+    )
+}
+
 #[tauri::command]
 async fn get_version_status(state: State<'_, DesktopState>) -> Result<Value, String> {
     let current = state.consumer.read().await;
     if let Some(consumer) = current.as_ref() {
         return consumer.version_status().await;
     }
-    let policy = crate::version::effective_policy();
-    Ok(
-        json!({"currentVersion":crate::version::CURRENT_VERSION,"status":crate::version::compare_to_policy(crate::version::CURRENT_VERSION,&policy)?,"policy":policy}),
-    )
+    status_without_profile()
 }
 
 // ---- System tray (book Appendix A.2; OpenSpec desktop-window-lifecycle) ----
@@ -421,6 +433,18 @@ mod tests {
         assert!(field::<u8>(&json!({"score":256}), "score").is_err());
         assert!(field::<Signed<Quote>>(&json!({"quote":{"id":"untrusted"}}), "quote").is_err());
         assert_eq!(optional_text(&json!({"model":null}), "model"), None);
+    }
+
+    #[tokio::test]
+    async fn logout_drops_the_previous_networks_version_status() {
+        let mut policy = crate::version::bundled_policy();
+        policy.recommended = "999.0.0".into();
+        crate::version::set_effective_policy_for_test(policy);
+        assert_eq!(status_without_profile().unwrap()["status"], "recommended");
+        end_session(&DesktopState::default()).await;
+        let status = status_without_profile().unwrap();
+        assert_eq!(status["status"], "ok");
+        assert_eq!(status["policy"], json!(crate::version::bundled_policy()));
     }
 
     #[tokio::test]

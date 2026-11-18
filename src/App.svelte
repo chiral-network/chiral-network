@@ -12,7 +12,7 @@
   import Diagnostics from './pages/Diagnostics.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import UpdateGate from '$lib/components/UpdateGate.svelte';
-  import { versionStatus } from '$lib/stores/versionStore';
+  import { resetVersionStatus, versionStatus } from '$lib/stores/versionStore';
   import Navbar from '$lib/components/Navbar.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Callout from '$lib/components/ui/Callout.svelte';
@@ -41,7 +41,7 @@
   });
   async function logout() {
     signingOut = true;
-    try { await command('logout'); clearSession(); window.location.hash = '/settings'; toasts.show('Native session closed; active requests cancelled. Wallet files remain on disk.', 'info'); }
+    try { await command('logout'); clearSession(); resetVersionStatus(); window.location.hash = '/settings'; toasts.show('Native session closed; active requests cancelled. Wallet files remain on disk.', 'info'); }
     catch (e) { toasts.show(errorText(e), 'error'); }
     finally { signingOut = false; }
   }
@@ -51,7 +51,7 @@
     signingOut = true; quitting = true;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await quitApplication(getCurrentWindow(), async () => { await command('logout'); clearSession(); });
+      await quitApplication(getCurrentWindow(), async () => { await command('logout'); clearSession(); resetVersionStatus(); });
     } catch (e) { quitting = false; toasts.show(errorText(e), 'error'); }
     finally { signingOut = false; }
   }

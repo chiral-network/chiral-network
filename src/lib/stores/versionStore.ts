@@ -46,6 +46,13 @@ export const versionStatus: Readable<VersionStatus> = { subscribe: internal.subs
 
 let pollHandle: number | undefined;
 
+/// Forget the current status when the session ends or a different profile is loaded,
+/// so no status derived from another network stays visible. A refresh that then fails
+/// leaves this neutral default rather than the previous network's status.
+export function resetVersionStatus(): void {
+  internal.set(DEFAULT_STATUS);
+}
+
 export async function refreshVersionStatus(): Promise<void> {
   if (typeof window === 'undefined') return;
   const inTauri = '__TAURI__' in window || '__TAURI_INTERNALS__' in window;

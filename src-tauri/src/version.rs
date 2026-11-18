@@ -373,6 +373,22 @@ pub fn effective_policy() -> VersionPolicy {
         .unwrap_or_else(bundled_policy)
 }
 
+/// Forget the effective policy and its scope, returning to the bundled policy. The
+/// desktop calls this when its session ends, so no other network's status is reported;
+/// a later profile load restores that network's watermark from its protected directory.
+pub fn reset_effective_policy() {
+    reset_slot(effective_slot());
+}
+
+fn reset_slot(slot: &RwLock<EffectivePolicy>) {
+    *slot.write() = EffectivePolicy::default();
+}
+
+#[cfg(test)]
+pub(crate) fn set_effective_policy_for_test(policy: VersionPolicy) {
+    effective_slot().write().policy = Some(policy);
+}
+
 /// Restore the authenticated policy for a network-scoped directory and the active
 /// authority. An expired policy still establishes the rollback watermark: callers
 /// may fetch a newer policy, but admission fails until that refresh succeeds.
@@ -631,6 +647,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reset_forgets_the_effective_policy_and_its_scope() {
+        let slot = RwLock::new(EffectivePolicy {
+            scope: Some(PathBuf::from("/network/authority")),
+            policy: Some(VersionPolicy { recommended: "999.0.0".into(), ..bundled_policy() }),
+        });
+        reset_slot(&slot);
+        let reset = slot.read();
+        assert!(reset.scope.is_none());
+        assert!(reset.policy.is_none());
+    }
     #[test]
     fn version_is_below_basic_ordering() {
         assert_eq!(version_is_below("1.0.0", "1.0.1"), Ok(true));

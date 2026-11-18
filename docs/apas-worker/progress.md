@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (thirty-fourth round) — Code: no update status from another network survives a logout or profile change
+
+- In step at `e63b9737`; whitepaper unchanged; no new answers.
+- Code step (`specify-version-policy` task 2.4, requirement 13; book A.1.8 and A.2). Logout left the process-wide effective policy in place. `get_version_status` without a profile kept reporting the previous network's status, and the webview kept its last status after a failed refresh, so a banner from the previous network stayed visible.
+  - `version::reset_effective_policy` and a desktop `end_session` now clear the effective policy on logout.
+  - The webview's `resetVersionStatus()` runs on logout, on quit, and before a profile load's refresh.
+  - Regressions fail without the change: a desktop-feature Rust test and two rendered webview tests. Supporting tests cover the reset itself. Screenshot checked.
+- Every code difference in `specify-version-policy` is now fixed; its author questions, acceptance tasks 3.x and release evidence 4.x remain.
+
 ## 2026-11-18 (thirty-third round) — Code: the required-update modal blocks the keyboard, and only HTTPS download URLs are offered
 
 - In step at `fe9b6098`; whitepaper unchanged; no new answers.
@@ -293,9 +302,9 @@
 
 ## Next steps, in order
 
-Code differences, then missing specifications (spec before code):
+Missing specifications (spec before code):
 
-1. Code difference in `specify-version-policy`: 2.4 (stale update status after logout); 2.1–2.3 are done. After them, no further missing specification is known.
+1. No missing specification or code difference is known in the changes so far. Re-run a spec-versus-whitepaper and code-versus-spec comparison to look for more before moving to the acceptance work below.
 
 Earlier open work, unchanged:
 
