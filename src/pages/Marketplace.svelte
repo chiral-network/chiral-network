@@ -3,6 +3,7 @@
   import { Search, Store, Bot, Coins, ArrowDownToLine, ArrowUpFromLine, Loader2, ArrowRight, CircleDollarSign, Activity, HeartPulse, Star, FileSignature, ShieldCheck, Sparkles, KeyRound, RotateCcw, Globe, Check } from 'lucide-svelte';
   import { command, errorText, formatCfx, parseCfx, type Offer, type Signed, type Quote, type Account } from '$lib/native';
   import { session } from '$lib/stores';
+  import { stageLabel, unresolvedPayments, type PendingFunding } from '$lib/funding';
   import { toasts } from '$lib/toastStore';
   import Result from '$lib/components/Result.svelte';
   import ServingProfile from '$lib/components/ServingProfile.svelte';
@@ -17,15 +18,28 @@
   let quote = $state<Signed<Quote> | null>(null), account = $state<Account | null>(null);
   let model = $state(''), amount = $state(''), accepted = $state(false), busy = $state(false);
   let searched = $state(false), error = $state(''), pendingId = $state('');
-  let fundingStage = $state('');
+  let journal = $state<PendingFunding[]>([]), journalRead = $state(false), journalUnavailable = $state(false);
   let fundingPanel = $state<HTMLElement>();
-  async function readFundingStage() {
-    if (!pendingId) { fundingStage = ''; return; }
+  // Every journaled paid operation that is still unresolved, including one left by an
+  // earlier session: while any exists, no new quote or payment is offered (A.1.7).
+  const unresolved = $derived(unresolvedPayments(journal));
+  const blocked = $derived(!journalRead || journalUnavailable || unresolved.length > 0);
+  const fundingStage = $derived(!pendingId ? '' : journalUnavailable ? 'journal unavailable'
+    : stageLabel(journal.find(item => item.contract_id === pendingId)?.funding_stage ?? 'unresolved'));
+  // Re-read the native journal; a failure keeps the native text beside any action error.
+  async function readJournal() {
     try {
-      const journal = await command<{ pending: { contract_id: string; funding_stage: string }[] }>('pending_accounts');
-      fundingStage = journal.pending.find(item => item.contract_id === pendingId)?.funding_stage.replaceAll('_', ' ') ?? 'unresolved';
-    } catch { fundingStage = 'journal unavailable'; }
+      journal = (await command<{ pending: PendingFunding[] }>('pending_accounts')).pending;
+      journalUnavailable = false;
+    } catch (e) {
+      journalUnavailable = true;
+      error = [error, errorText(e)].filter(Boolean).join('\n');
+    } finally { journalRead = true; }
   }
+  $effect(() => {
+    if ($session.configured) void readJournal();
+    else { journal = []; journalRead = false; journalUnavailable = false; }
+  });
   async function discover() {
     busy = true; error = ''; selected = null; quote = null; account = null;
     try { offers = await command<Signed<Offer>[]>('discover', { model: model || null }); searched = true; }
@@ -39,20 +53,30 @@
     catch (e) { error = errorText(e); } finally { busy = false; }
   }
   async function propose() {
+    if (blocked) return;
     busy = true; error = ''; quote = null; accepted = false;
     try { quote = await command<Signed<Quote>>('quote', { offer: selected, funding_wei: parseCfx(amount) }); }
     catch (e) { error = errorText(e); } finally { busy = false; }
   }
   async function fund() {
-    if (!quote || !selected || !accepted) return;
+    if (!quote || !selected || !accepted || blocked) return;
     busy = true; error = ''; pendingId = quote.payload.id;
     try { account = await command<Account>('fund', { offer: selected, quote }); pendingId = ''; toasts.notify('funding', 'Provider account opened', 'success'); }
-    catch (e) { error = errorText(e); } finally { await readFundingStage(); busy = false; }
+    catch (e) { error = errorText(e); } finally { await readJournal(); busy = false; }
   }
   async function resume() {
     busy = true; error = '';
     try { account = await command<Account>('resume', { contract_id: pendingId }); pendingId = ''; }
-    catch (e) { error = errorText(e); } finally { await readFundingStage(); busy = false; }
+    catch (e) { error = errorText(e); } finally { await readJournal(); busy = false; }
+  }
+  // Resume an operation journaled earlier, possibly by another session or before a restart.
+  async function resumeJournaled(contractId: string) {
+    busy = true; error = '';
+    try {
+      const resumed = await command<Account>('resume', { contract_id: contractId });
+      if (contractId === quote?.payload.id) { account = resumed; pendingId = ''; }
+      toasts.show(`Journaled funding resumed: account ${resumed.status}`, 'success');
+    } catch (e) { error = errorText(e); } finally { await readJournal(); busy = false; }
   }
 
   // ---- presentation helpers (read-only) ----
@@ -94,6 +118,25 @@
   </Card>
 
   {#if error}<Callout kind="error" role="alert">{error}</Callout>{/if}
+
+  {#if unresolved.some(item => item.contract_id !== pendingId)}
+    <Callout kind="warning" role="status" title="Unresolved funding in the native journal">
+      Do not send another payment. New quotes and funding stay disabled until each journaled payment below is resumed or reconciled under Usage › Funding &amp; recovery. An error or a restart does not prove that no money moved.
+      <ul class="mt-3 space-y-2">
+        {#each unresolved.filter(item => item.contract_id !== pendingId) as item (item.contract_id)}
+          <li class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="font-mono break-all">{item.contract_id}</span>
+            <span>{item.topup_wei !== null ? 'Top-up' : 'Opening'}{item.model ? ` · ${item.model}` : ''} · stage: {stageLabel(item.funding_stage)}</span>
+            {#if item.tx_hash}<span class="font-mono break-all text-xs">tx {item.tx_hash}</span>{/if}
+            <button class="btn-secondary btn-sm" disabled={busy} onclick={() => resumeJournaled(item.contract_id)}><RotateCcw class="w-3.5 h-3.5" />Resume</button>
+          </li>
+        {/each}
+      </ul>
+      <div class="mt-3"><a class="link" href="#/usage">Open Usage › Funding &amp; recovery</a></div>
+    </Callout>
+  {:else if $session.configured && journalUnavailable}
+    <Callout kind="warning" role="status" title="Funding journal unavailable">New quotes and funding stay disabled until the native funding journal can be read, because an unresolved payment could not be ruled out.</Callout>
+  {/if}
 
   {#if searched && !offers.length}
     <div class="card"><EmptyState icon={Store} title="No verified, unexpired offers found">Check the catalog/DHT configuration or try another model.</EmptyState></div>
@@ -209,11 +252,11 @@
             <label class="flex-1 min-w-0 max-w-sm">
               <span class="field-label">Funding amount (CFX)</span>
               <span class="relative block">
-                <input class="input pr-14" inputmode="decimal" bind:value={amount} required disabled={busy || !!pendingId} />
+                <input class="input pr-14" inputmode="decimal" bind:value={amount} required disabled={busy || !!pendingId || blocked} />
                 <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">CFX</span>
               </span>
             </label>
-            <button class="btn-secondary py-2.5" disabled={busy || !!pendingId || !$session.address}><FileSignature class="w-4 h-4" />Request signed quote</button>
+            <button class="btn-secondary py-2.5" disabled={busy || !!pendingId || blocked || !$session.address}><FileSignature class="w-4 h-4" />Request signed quote</button>
           </form>
         </div>
 
@@ -229,8 +272,8 @@
             </div>
             <p class="prose-muted"><strong>Residual registration risk:</strong> Your client broadcasts the payment only after a durable provider acknowledgement of the signed funding intent. The provider already receives the signed bytes, which anyone holding them can broadcast, so it could broadcast them before or without acknowledging; this ordering is not cryptographic escrow. An error, timeout or missing reply does not prove that no money moved: inspect the pending funding stage and resume instead of paying again.</p>
             <p class="prose-muted">An acknowledged intent retains these prices while settlement is pending. Credit requires a successful canonical receipt at eSpace's safe frontier; execution alone is not spendable credit or PoS finality.</p>
-            <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accepted} disabled={busy || !!pendingId} />I accept this provider-specific non-refundable prepayment, the registration risk above, and that chain reorganizations can freeze or reverse credit.</label>
-            <button class="btn-primary" disabled={busy || !accepted || !!pendingId} onclick={fund}>
+            <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accepted} disabled={busy || !!pendingId || blocked} />I accept this provider-specific non-refundable prepayment, the registration risk above, and that chain reorganizations can freeze or reverse credit.</label>
+            <button class="btn-primary" disabled={busy || !accepted || !!pendingId || blocked} onclick={fund}>
               {#if busy}<Loader2 class="w-4 h-4 animate-spin" />Registering or settling funding…{:else}<CircleDollarSign class="w-4 h-4" />Register intent, fund, and open account{/if}
             </button>
           </div>

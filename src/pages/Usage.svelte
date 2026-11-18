@@ -10,7 +10,8 @@
   import Callout from '$lib/components/ui/Callout.svelte';
   import EmptyState from '$lib/components/ui/EmptyState.svelte';
   import { statusBadge } from '$lib/components/ui/tones';
-  type PendingFunding = { pending: { contract_id: string; topup_wei: string | null }[] };
+  import { stageLabel, unresolvedPayments, type PendingFunding as JournalEntry } from '$lib/funding';
+  type PendingFunding = { pending: JournalEntry[] };
   let accounts = $state<Account[]>([]), contractId = $state(''), account = $state<Account | null>(null);
   let usage = $state<unknown>(null), receipt = $state<unknown>(null), credentials = $state<unknown>(null);
   let secret = $state<{ api_key: string; base_url: string; model: string } | null>(null);
@@ -45,7 +46,7 @@
     finally { busy = false; }
   }
   async function topup() {
-    if (!accept) return;
+    if (!accept || topupBlocked) return;
     await attempt(async () => { const amountWei = parseCfx(amount); pending = true; account = await command<Account>('topup', { contract_id: contractId, amount_wei: amountWei }); pending = false; accept = false; });
   }
   async function resume() { await attempt(async () => { account = await command<Account>('resume', { contract_id: contractId }); pending = false; }); }
@@ -92,6 +93,11 @@
     { id: 'feedback', label: 'Feedback', icon: ThumbsUp },
   ];
   const pendingCount = $derived(pendingAccounts?.pending.length ?? 0);
+  // Unresolved paid operations of other agreements, or of this account's opening: while any
+  // exists, this account's top-up is not offered either (A.1.7). The selected account's own
+  // pending top-up keeps its existing Resume path.
+  const otherUnresolved = $derived(unresolvedPayments(pendingAccounts?.pending ?? []).filter(item => !(item.contract_id === contractId && item.topup_wei !== null)));
+  const topupBlocked = $derived(pending || otherUnresolved.length > 0);
   const python = `import os
 from openai import OpenAI
 
@@ -217,11 +223,16 @@ try {
                 <Callout kind="warning">Non-refundable. Only provider <span class="font-mono break-all">{account.provider_wallet}</span> can serve this credit. Use a small balance; gas is extra. Chain reorganizations can freeze or reverse credit.</Callout>
                 <form class="space-y-3" onsubmit={e => { e.preventDefault(); void topup(); }}>
                   <label class="block"><span class="field-label">Amount (CFX)</span>
-                    <span class="relative block"><input class="input pr-14" bind:value={amount} inputmode="decimal" required disabled={busy || pending} /><span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">CFX</span></span>
+                    <span class="relative block"><input class="input pr-14" bind:value={amount} inputmode="decimal" required disabled={busy || topupBlocked} /><span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">CFX</span></span>
                   </label>
-                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || pending} />I accept this provider-specific non-refundable top-up and that chain reorganizations can freeze or reverse credit.</label>
-                  <button class="btn-primary w-full" disabled={busy || pending || !accept}><PlusCircle class="w-4 h-4" />Sign and top up</button>
+                  <label class="check-row"><input class="checkbox mt-0.5" type="checkbox" bind:checked={accept} disabled={busy || topupBlocked} />I accept this provider-specific non-refundable top-up and that chain reorganizations can freeze or reverse credit.</label>
+                  <button class="btn-primary w-full" disabled={busy || topupBlocked || !accept}><PlusCircle class="w-4 h-4" />Sign and top up</button>
                 </form>
+                {#if !pending && otherUnresolved.length}
+                  <Callout kind="warning" role="status">Another journaled payment is unresolved: <span class="font-mono break-all">{otherUnresolved[0].contract_id}</span> ({otherUnresolved[0].topup_wei !== null ? 'top-up' : 'opening'}, stage: {stageLabel(otherUnresolved[0].funding_stage)}){otherUnresolved.length > 1 ? ` and ${otherUnresolved.length - 1} more` : ''}. Resume or reconcile it before a new top-up. Do not create a duplicate payment.
+                    <div class="mt-3"><button class="btn-secondary btn-sm" onclick={() => tab = 'recovery'}><LifeBuoy class="w-3.5 h-3.5" />Open Funding &amp; recovery</button></div>
+                  </Callout>
+                {/if}
                 {#if pending}
                   <Callout kind="warning">Funding unresolved. Resume the existing journaled payment or explicitly cancel it under Funding & recovery after accepting the gas and race risk. Do not create a duplicate payment.
                     <div class="mt-3"><button class="btn-secondary btn-sm" disabled={busy} onclick={resume}><RotateCcw class="w-3.5 h-3.5" />Resume pending funding</button></div>

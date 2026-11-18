@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-18 (twenty-first round) — Code: no new payment is offered while a journaled payment is unresolved
+
+- In step at `7be73013`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-global-rules` tasks 2.3 and 2.12; A.1.7 and requirement 1). The Marketplace used to read the funding journal only after its own fund or resume. After a reopen or restart it offered a new quote and payment beside an unresolved one, and a failed journal read replaced the native error with a fixed phrase.
+  - The Marketplace now reads `pending_accounts` whenever a profile is loaded. While any paid operation is unresolved, or the journal cannot be read, it lists each one with its stage, transaction hash and *Resume*, and keeps the quote, acceptance and fund controls disabled.
+  - Usage disables every account's top-up while another agreement's payment is unresolved and points to it.
+  - The new `src/lib/funding.ts` defines unresolved: any stage except `not_prepared`, `cancelled`, `original_failed`, `cancellation_failed` and `free_open_pending`. A saved agreement stays listed until it opens, so terminal or unpaid entries must not block forever.
+  - A failed journal read keeps the native text.
+  - Three rendered regressions fail on the previous pages, and a fourth test guards against over-blocking. Screenshots were checked at 1440 px and 390 px.
+- Checks: svelte-check 0/0, 36 frontend tests, build, 46 script tests. Rust is unchanged since the full headless suite passed at `221212a7` (490 passed, 2 ignored).
+
 ## 2026-11-18 (twentieth round) — Desktop GUI global rules specified
 
 - In step at `221212a7`; whitepaper unchanged; no new answers.
@@ -173,7 +184,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.3 (second payment offered while one is unresolved), 2.1 (top-up disclosures), 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.12, 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots.
+1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.1 (top-up disclosures), 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots; 2.3 and 2.12 are done.
 2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:

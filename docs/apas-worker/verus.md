@@ -108,3 +108,9 @@ Requirement source: `openspec/changes/specify-fee-remittance/specs/inference-fee
 
 - `billing_store::tests::fee_view_reports_the_four_book_states_from_obligation_and_batch_state` and `fee_view_lists_only_the_newest_100_batches_but_totals_every_obligation` — **not replaceable**: SQLite joins and ordering over an on-disk ledger. The state mapping `reported_fee_obligation` is a pure function of two status strings and could be proved total and exact once Verus is available.
 - `app::tests::fee_view_lists_confirmed_remittances_and_the_receipt_statement` — **not replaceable**: async HTTP through the admin router, a provider runtime and signed transactions.
+
+## Judged 2026-11-18 — unresolved-funding GUI regressions
+
+Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (A.1.7, through `inference-funding-settlement` requirement 2).
+
+- The four new tests in `tests/fundingDisclosure.test.ts` (`a reopened Marketplace offers only Resume…`, `settled, unpaid or free journal entries do not block…`, `an unreadable journal keeps new funding disabled…`, `another account's unresolved payment keeps this account's top-up disabled in Usage`) are TypeScript tests of rendered Svelte pages; Verus does not apply.

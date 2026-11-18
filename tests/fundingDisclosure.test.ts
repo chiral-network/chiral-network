@@ -99,6 +99,7 @@ async function openFundingPanel() {
     discover: () => [offer],
     provider_info: () => ({ health: { reachable: true, live: true }, readiness: { reachable: true, ready: true }, reputation: { available: false, error: 'no votes' } }),
     quote: () => quote,
+    pending_accounts: () => ({ pending: [] }),
   };
   mounted = mount(Marketplace, { target });
   await settle();
@@ -288,5 +289,87 @@ describe('affected account warning (requirement 3, A.5.3)', () => {
     await unmount(mounted!); mounted = undefined; target.replaceChildren();
     await openUsage(account());
     expect(warningOf(target)).toBe('');
+  });
+});
+
+describe('no new payment while a journaled payment is unresolved (A.1.7)', () => {
+  const earlier = { contract_id: 'earlier-contract', provider_wallet: provider, model: 'test/model', funding_wei: '1000', opening_pending: true, topup_wei: null, tx_hash: '0x' + 'cd'.repeat(32), funding_stage: 'settlement_pending' };
+  async function inspectOffer(pending: unknown[]) {
+    native.handlers = {
+      discover: () => [offer],
+      provider_info: () => ({ health: { reachable: true, live: true }, readiness: { reachable: true, ready: true }, reputation: { available: false, error: 'no votes' } }),
+      quote: () => quote,
+      pending_accounts: () => ({ pending }),
+    };
+    mounted = mount(Marketplace, { target });
+    await settle();
+    byText<HTMLButtonElement>(target, 'button', /Discover providers/)!.click(); await settle();
+    byText<HTMLButtonElement>(target, 'button', /Inspect provider and funding terms/)!.click(); await settle();
+    return byText<HTMLButtonElement>(target, 'button', /Request signed quote/)!;
+  }
+
+  it('a reopened Marketplace offers only Resume for a payment journaled earlier', async () => {
+    const quoteButton = await inspectOffer([earlier]);
+    expect(native.calls.map(call => call.operation)).toContain('pending_accounts');
+    const notice = byText(target, '[role="status"]', /Unresolved funding in the native journal/);
+    expect(notice).toBeDefined();
+    expect(text(notice)).toContain('earlier-contract');
+    expect(text(notice)).toMatch(/stage: settlement pending/);
+    expect(text(notice)).toContain(earlier.tx_hash);
+    expect(text(notice)).toMatch(/Do not send another payment/);
+    expect(quoteButton.disabled).toBe(true);
+    quoteButton.click(); await settle();
+    expect(native.calls.filter(call => call.operation === 'quote')).toHaveLength(0);
+
+    native.handlers.resume = () => account({ contract_id: 'earlier-contract' });
+    native.handlers.pending_accounts = () => ({ pending: [] });
+    byText<HTMLButtonElement>(notice!, 'button', /Resume/)!.click(); await settle();
+    expect(native.calls.filter(call => call.operation === 'resume').map(call => call.args)).toEqual([{ contract_id: 'earlier-contract' }]);
+    expect(byText(target, '[role="status"]', /Unresolved funding in the native journal/)).toBeUndefined();
+    expect(byText<HTMLButtonElement>(target, 'button', /Request signed quote/)!.disabled).toBe(false);
+  });
+
+  it('settled, unpaid or free journal entries do not block a new payment', async () => {
+    const quoteButton = await inspectOffer(['cancelled', 'not_prepared', 'original_failed', 'cancellation_failed', 'free_open_pending']
+      .map((funding_stage, index) => ({ ...earlier, contract_id: `entry-${index}`, tx_hash: null, funding_stage })));
+    expect(byText(target, '[role="status"]', /Unresolved funding in the native journal/)).toBeUndefined();
+    expect(quoteButton.disabled).toBe(false);
+    quoteButton.click(); await settle();
+    expect(native.calls.filter(call => call.operation === 'quote')).toHaveLength(1);
+  });
+
+  it('an unreadable journal keeps new funding disabled and shows both native errors', async () => {
+    const { fundButton } = await openFundingPanel();
+    fundButton.closest('section')!.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); await settle();
+    native.handlers.fund = () => { throw new Error('control request interrupted; resume with the same account/transaction, never fund again'); };
+    native.handlers.pending_accounts = () => { throw new Error('cannot list pending accounts'); };
+    fundButton.click(); await settle();
+    const alert = text(target.querySelector('[role="alert"]'));
+    expect(alert).toContain('control request interrupted');
+    expect(alert).toContain('cannot list pending accounts');
+    expect(text(byText(target, '[role="status"]', /Funding stage:/))).toMatch(/Funding stage: journal unavailable/);
+    expect(byText<HTMLButtonElement>(target, 'button', /Request signed quote/)!.disabled).toBe(true);
+    expect(native.calls.filter(call => call.operation === 'fund')).toHaveLength(1);
+  });
+
+  it('another account\'s unresolved payment keeps this account\'s top-up disabled in Usage', async () => {
+    const other = account({ contract_id: 'other-contract' });
+    native.handlers = {
+      accounts: () => [account(), other],
+      pending_accounts: () => ({ pending: [{ ...earlier, contract_id: 'contract-under-test', opening_pending: false, topup_wei: '500000000000000000', funding_stage: 'topup_settlement_pending' }] }),
+      account: ({ contract_id }) => (contract_id === 'other-contract' ? other : account()),
+      usage: () => ({}), credentials: () => ({}), funding: () => ({}), local_requests: () => ({}),
+    };
+    mounted = mount(Usage, { target });
+    await settle();
+    const picker = target.querySelector<HTMLSelectElement>('select')!;
+    picker.value = 'other-contract'; picker.dispatchEvent(new Event('change', { bubbles: true })); await settle();
+    const card = [...target.querySelectorAll('section.card')].find(section => text(section.querySelector('h2')) === 'Top up this provider')!;
+    expect(text(card)).toMatch(/Another journaled payment is unresolved: contract-under-test \(top-up, stage: topup settlement pending\)/);
+    expect(card.querySelector<HTMLInputElement>('input[type="checkbox"]')!.disabled).toBe(true);
+    expect(byText<HTMLButtonElement>(card, 'button', /Sign and top up/)!.disabled).toBe(true);
+    byText<HTMLButtonElement>(card, 'button', /Open Funding & recovery/)!.click(); await settle();
+    expect(text(target)).toMatch(/topup_settlement_pending/);
+    expect(native.calls.filter(call => call.operation === 'topup')).toHaveLength(0);
   });
 });
