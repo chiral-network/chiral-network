@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-18 (twentieth round) — Desktop GUI global rules specified
+
+- In step at `221212a7`; whitepaper unchanged; no new answers.
+- Spec step: new change `specify-desktop-gui-global-rules` (capability `desktop-gui-global-rules`, 10 requirements, 34 scenarios) for Appendix A.1.1–A.1.9: a thin view over the native boundary, secrets staying native except an explicitly revealed key, no simulation, network actions only after an explicit profile load, exact wei, untrusted content as plain text, the remaining A.1.6 disclosures on every opening and top-up, reconcile instead of resend, session scoping, and accessibility. A.1.10 is cited from `desktop-window-lifecycle`, and the reorganization, registration-risk and path disclosures from the funding-settlement and M3 requirements. The cited frontend tests pass (32). Strict validation passes; no code changed.
+- Code differences recorded as unchecked tasks 2.1–2.12. The main ones:
+  - 2.3: the Marketplace offers a new quote and payment while another journaled payment is unresolved after a reopen or restart;
+  - 2.1: the Usage top-up card lacks the endpoint, plaintext-prompt, metadata and fee-rate statements, which needs native data;
+  - 2.2: Usage, Playground and Diagnostics act before a profile is loaded;
+  - 2.10–2.11: request-recovery guidance and the may-still-be-billed label are missing;
+  - 2.9: `formatCfx` accepts non-canonical wei;
+  - 2.4–2.6: accessibility gaps (an unlabelled input, alert and status roles, motion driven by script);
+  - 2.8: a remote Google Fonts stylesheet.
+  GUI fixes need screenshots.
+
 ## 2026-11-18 (nineteenth round) — Code: the operator fee view shows the book's states, actual remittances and the receipt disclaimer
 
 - In step at `92ec946a`; whitepaper unchanged; no new answers.
@@ -157,14 +171,15 @@
 
 ## Next steps, in order
 
-Missing specifications (spec before code):
+Code differences, then missing specifications (spec before code):
 
-1. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+1. Code differences in `specify-desktop-gui-global-rules`, in this order: 2.3 (second payment offered while one is unresolved), 2.1 (top-up disclosures), 2.2 (actions before a profile), 2.10–2.11 (request recovery and billing labels), 2.9 (`formatCfx`), 2.12, 2.7, then accessibility 2.4–2.6 and fonts 2.8. Confirm each GUI change with screenshots.
+2. Appendix A.5 per-page required behavior (disclosures, acceptance checkboxes and recovery paths beyond A.1) has no capability yet; specify it after these differences.
 
 Earlier open work, unchanged:
 
-2. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
-3. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 
