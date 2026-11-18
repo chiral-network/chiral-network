@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { RefreshCw, Wallet, Coins, Flame, Hourglass, Gift, Hash, LayoutDashboard, KeyRound, ListChecks, LifeBuoy, ThumbsUp, Bot, PlusCircle, RotateCcw, Search, Ban, ReceiptText, Eye, EyeOff, RotateCw, Trash2, Code, Star, Loader2, ShieldAlert, Inbox, ChevronRight } from 'lucide-svelte';
+  import { RefreshCw, Wallet, Coins, Flame, Hourglass, Gift, Hash, LayoutDashboard, KeyRound, ListChecks, LifeBuoy, ThumbsUp, Bot, PlusCircle, RotateCcw, Search, Ban, ReceiptText, Eye, EyeOff, RotateCw, Trash2, Code, Star, Loader2, ShieldAlert, Inbox, ChevronRight, Copy } from 'lucide-svelte';
   import { command, errorText, formatCfx, parseCfx, type Account } from '$lib/native';
   import Result from '$lib/components/Result.svelte';
   import ServingProfile from '$lib/components/ServingProfile.svelte';
@@ -75,12 +75,25 @@
       }
     });
   }
+  // A.5.3 issuance options: a whole number of seconds from 60 to 2,592,000 (30 days).
+  const lifetimeValid = (seconds: unknown) => typeof seconds === 'number' && Number.isInteger(seconds) && seconds >= 60 && seconds <= 2_592_000;
   async function credentialAction(action: string) {
     secret = null;
+    if (action !== 'credential_revoke' && !lifetimeValid(ttl)) {
+      error = 'The credential lifetime must be a whole number of seconds from 60 to 2,592,000 (30 days). No credential was issued.';
+      return;
+    }
     await run(async () => {
       await command(action, { contract_id: contractId, credential_id: credentialId, options: { expires_at: Math.floor(Date.now() / 1000) + ttl, spend_cap_wei: null, max_concurrency: 1, scopes: ['infer', 'read'] } });
       credentials = await command('credentials', { contract_id: contractId });
     });
+  }
+  // Copy the revealed key while it stays masked; the key is never stored by the page.
+  let keyCopy = $state<'' | 'copied' | 'failed'>('');
+  $effect(() => { void secret; keyCopy = ''; });
+  async function copyKey() {
+    if (!secret) return;
+    try { await navigator.clipboard.writeText(secret.api_key); keyCopy = 'copied'; } catch { keyCopy = 'failed'; }
   }
   async function reveal() { await run(async () => { secret = await command('credential_export', { contract_id: contractId, credential_id: credentialId || null }); }); }
   // Nothing is read before an explicit profile is loaded (A.1.3); a profile change remounts the page.
@@ -273,10 +286,15 @@ try {
             {#if secret}
               <section class="rounded-xl border-2 border-amber-400 dark:border-amber-600 bg-amber-50/60 dark:bg-amber-900/10 p-4 space-y-3">
                 <h3 class="font-semibold text-gray-900 dark:text-white flex items-center gap-2"><ShieldAlert class="w-4 h-4 text-amber-600" />Revealed API credential</h3>
-                <label class="block"><span class="field-label">API key</span><input class="input font-mono" type="password" readonly value={secret.api_key} aria-label="Revealed API key; select to copy" /></label>
+                <label class="block"><span class="field-label">API key</span><input class="input font-mono" type="password" readonly value={secret.api_key} aria-label="Revealed API key (masked)" /></label>
                 <dl class="kv text-xs"><dt>Base URL</dt><dd class="mono">{secret.base_url}</dd><dt>Model</dt><dd>{secret.model}</dd></dl>
-                <p class="text-xs text-gray-600 dark:text-gray-400">Select the password field to copy the key into your SDK's secure environment. Do not place it in source control.</p>
-                <button class="btn-secondary btn-sm" onclick={() => secret = null}><EyeOff class="w-3.5 h-3.5" />Hide credential</button>
+                <p class="text-xs text-gray-600 dark:text-gray-400">Use <span class="font-semibold">Copy key</span> to put the key into your SDK's secure environment, such as an environment variable. Do not place it in source control.</p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button class="btn-secondary btn-sm" onclick={copyKey}><Copy class="w-3.5 h-3.5" />Copy key</button>
+                  <button class="btn-secondary btn-sm" onclick={() => secret = null}><EyeOff class="w-3.5 h-3.5" />Hide credential</button>
+                  <span class="text-xs text-gray-600 dark:text-gray-400" role="status">{keyCopy === 'copied' ? 'Key copied to the clipboard.' : ''}</span>
+                  {#if keyCopy === 'failed'}<span class="text-xs text-red-600 dark:text-red-400" role="alert">The clipboard is unavailable; the key was not copied.</span>{/if}
+                </div>
               </section>
             {/if}
           </div>

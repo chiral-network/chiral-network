@@ -126,3 +126,4 @@ Requirement source: `openspec/changes/specify-desktop-gui-global-rules` (require
 - `tests/native.test.ts` cases added by tasks 2.7 and 2.9 (requirements 3 and 5) — TypeScript; Verus does not apply. The Rust side of exact wei parsing is already covered by `inference-wire-foundation` tests.
 - `tests/accessibility.test.ts` (tasks 2.4–2.6, requirement 10) — TypeScript tests of rendered Svelte components; Verus does not apply.
 - `tests/noRemoteResources.test.ts` (task 2.8, requirement 1) — TypeScript check of HTML pages; Verus does not apply.
+- `tests/credentials.test.ts` (`specify-desktop-gui-pages` tasks 2.1 and 2.2, requirement 6) — TypeScript tests of a rendered Svelte page; Verus does not apply.

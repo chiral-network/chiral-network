@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-18 (twenty-ninth round) — Code: credential lifetime enforced and the revealed key copyable while masked
+
+- In step at `128b3db6`; whitepaper unchanged; no new answers.
+- Code step (`specify-desktop-gui-pages` tasks 2.1 and 2.2, requirement 6, book lines 808 and 930).
+  - The lifetime field's bounds were never checked, because the buttons sat outside a form, so 5 s or 60-day credentials reached `credential_issue`. Issue and rotate now refuse anything but a whole number of seconds from 60 to 2,592,000 before any native call.
+  - The revealed key sat in a password field that Chromium webviews will not copy. A *Copy key* action now copies it while it stays masked, and reports success or failure in live regions.
+  - New `tests/credentials.test.ts`: three tests fail on the previous page, and one guards the default options. Screenshot checked.
+- Checks: svelte-check 0/0, 59 frontend tests, build. Rust is unchanged since `2e346ae4`.
+
 ## 2026-11-18 (twenty-eighth round) — Desktop GUI page behaviour specified
 
 - In step at `a7d36fa4`; whitepaper unchanged; no new answers.
@@ -244,7 +253,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences in `specify-desktop-gui-pages`: 2.1 (credential lifetime), 2.2 (copy the revealed key), 2.3 (profile indicator text), 2.4 (profile-load announcement). Confirm each with screenshots.
+1. Code differences in `specify-desktop-gui-pages`: 2.3 (profile indicator text) and 2.4 (profile-load announcement); 2.1 and 2.2 are done. Confirm each with screenshots.
 2. No further missing specification is known. The version gate (A.2) has no capability yet (design observation 9 of `specify-desktop-gui-pages`); consider specifying it with the version-policy section.
 
 Earlier open work, unchanged:
