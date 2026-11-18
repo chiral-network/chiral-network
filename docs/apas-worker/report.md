@@ -210,3 +210,17 @@ Related choices in the same change, for your awareness (answer only to change th
 Not asked again: whether CLI funding should carry the A.1.6 reorganization disclosure is item 3 of *Funding settlement: three questions*. The gateway funds nothing, so either answer leaves this change unchanged.
 
 Nonblocking: no requirement or task waits on this answer.
+
+## 2026-11-17 — Two processes on one consumer profile and its libp2p identity
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Peer-to-peer provider transport* → *SDK and tool compatibility* (line 315: "The native desktop and CLI therefore run a local loopback gateway"). Spec: `specify-p2p-provider-transport` requirement *A consumer libp2p identity runs in one process at a time*, design decision 27 and open question 5; `specify-cli-loopback-gateway` non-goal *Shared DHT identity*.
+
+What it says now: the book gives each consumer one stable, protected libp2p identity and lets both the desktop and the CLI run a loopback gateway. It does not say what happens when both run on the same profile at once. Two live nodes with one peer ID would split identify, Kademlia and hole-punching state, and a fixed `dht.listen` port cannot be bound twice.
+
+Question: while one process (for example the desktop) runs the profile's libp2p node, may a second process (a CLI gateway or `chiral discover`) use libp2p on the same profile?
+
+Proposed default (what the spec adopts): no. An exclusive lock on the identity file admits one node at a time. The second process fails its libp2p operations with a fixed error (503 `transport_unavailable` on HTTP surfaces) and never switches port or identity. HTTPS forwarding and catalog discovery keep working. Answer only to ask for sharing one node between processes, or for a separate identity per process, in a later change.
+
+Nonblocking: no current code depends on it; implementation tasks M3 2.19 and 3.16 follow the default.

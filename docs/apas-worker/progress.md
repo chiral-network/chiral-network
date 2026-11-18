@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-17 (thirteenth round) — M3: one process per consumer libp2p identity
+
+- In step at `5449f06f`; whitepaper unchanged; no new answers.
+- Spec step in `specify-p2p-provider-transport`: new requirement *A consumer libp2p identity runs in one process at a time* (decision 27, tasks 2.19 and 3.16, plus a coverage row). It closes the gap found last round: neither M3 nor any other change said how the desktop and a CLI gateway on one profile share its libp2p identity and fixed `dht.listen` port. An exclusive advisory lock on the identity file admits one node. A second process fails libp2p operations with a fixed error (503 `transport_unavailable` on HTTP surfaces), never switches port or identity, and keeps HTTPS and catalog discovery. A crashed holder's lock is released by the OS. The CLI gateway's *Shared DHT identity* non-goal now cites the requirement. Both changes pass strict validation; no code changed.
+- Report: new entry asking whether two processes on one profile should share libp2p instead (default: no).
+
 ## 2026-11-17 (twelfth round) — CLI loopback gateway specified
 
 - In step at `d064cbda`; whitepaper unchanged; no new answers.
@@ -91,14 +97,14 @@
 
 Missing specifications (spec before code):
 
-1. Milestone 3 gap found while specifying the CLI gateway: neither `specify-p2p-provider-transport` nor any other change says how two processes on one consumer profile (the desktop and a CLI gateway) share its DHT identity and fixed `dht.listen` port. Specify it in M3.
-2. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements. (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
-3. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
+1. Performance remedies (warm-generation-v1 envelope, TTFT/decode definitions, waiver eligibility, withdrawal latch) and fee remittance (obligation states, aggregation thresholds, remittance gas) have no SHALL requirements.
+   (Funding settlement is `specify-funding-settlement`: every code difference except 2.4 is fixed, and 2.4 waits for the report question. Its missing acceptance tests are listed in tasks 3.x.)
+2. Appendix A required GUI behavior (A.1 global rules and the required parts of A.5) has no capability except `desktop-window-lifecycle`. The behavior exists in the code; specify it, then confirm with screenshots.
 
 Earlier open work, unchanged:
 
-4. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
-5. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes.
+4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
 

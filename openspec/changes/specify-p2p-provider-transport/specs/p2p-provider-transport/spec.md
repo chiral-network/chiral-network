@@ -758,6 +758,29 @@ A consumer profile SHALL reach libp2p providers only through its configured `dht
 - **WHEN** the consumer `p2p` block contains an unrecognized member
 - **THEN** profile loading fails without ignoring the member
 
+### Requirement: A consumer libp2p identity runs in one process at a time
+
+A process SHALL start a consumer libp2p node only while it holds an exclusive, owner-only advisory lock on that node's protected identity file, and SHALL hold the lock for the node's whole lifetime. This applies to every consumer use, including a short-lived node started for one discovery, dialing a libp2p provider, the desktop local API server and the CLI loopback gateway. While another process holds the lock, a process SHALL NOT start a second node with that identity, SHALL NOT fall back to another listen port or another identity, and SHALL fail each libp2p operation with a fixed error stating that another process is using this profile's libp2p identity. An HTTP surface SHALL report that failure as 503 `transport_unavailable`. HTTPS transport and catalog discovery SHALL NOT depend on the lock. The lock SHALL be released when the node stops or its process exits, including by a crash, so a stale lock never blocks a later start. The lock SHALL confer no account, credential or payment authority.
+
+#### Scenario: A second process does not share the identity
+
+- **GIVEN** the desktop runs the libp2p node of a consumer profile
+- **WHEN** `chiral discover` runs DHT discovery on the same profile
+- **THEN** it starts no node and binds no port, and fails with the fixed error
+- **AND** the desktop's node keeps running unchanged
+
+#### Scenario: HTTPS does not depend on the lock
+
+- **GIVEN** another process holds the profile's libp2p identity lock
+- **WHEN** the native consumer forwards a request for an account whose offer declares `https`
+- **THEN** the request proceeds over HTTPS
+
+#### Scenario: A crashed holder does not block a later start
+
+- **GIVEN** a process holding the lock was killed
+- **WHEN** another process starts the profile's libp2p node
+- **THEN** it acquires the lock and starts the node
+
 ### Requirement: Operator provisioning supports libp2p-only provider deployments
 
 The operator provisioning input accepted by `scripts/provision-provider.py` and documented in `docs/provider-qualification.md` SHALL accept a strict libp2p serving object with the same fields and bounds as the provider configuration's libp2p serving block. It SHALL make the provider DNS name optional when, and only when, that object is present. Provisioning without a provider DNS name SHALL write a provider configuration whose advertised origin is `null` and which contains the libp2p serving block, and SHALL generate no provider TLS ingress. Provisioning with a provider DNS name SHALL keep writing `https://<provider DNS name>` as the advertised origin and MAY also write the block. Input with neither SHALL be rejected. The relay and RPC DNS names and the ACME email SHALL remain required for the relay and RPC gateway they configure, and calibration SHALL remain loopback-only.
