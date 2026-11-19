@@ -1,5 +1,15 @@
 # APAS progress
 
+## 2026-11-19 (forty-fifth round) — Failing check: frozen mock chain timestamps made owner-control tests fail after host sleep
+
+- In step at `a8ac7774`; whitepaper unchanged; no new answers.
+- Failing-check step. `native_topup_snapshots_preserve_pending_originals_after_committed_credit` (rounds 42 and 44) and round 42's opening-matrix failures had one cause. The mock chain servers `TopupRecoveryRpc` and `SafeOpeningRpc` in `inference_owner_control_test.rs` returned the `latest` and `safe` blocks with a timestamp frozen at each case's start. The product correctly refuses a head older than 120 s or a safe block older than 300 s (`chain_client.rs:617–621`). Once enough wall time passed inside a case, both clients got "eSpace head or safe frontier is stale" and the top-up or opening never reached the provider.
+  - The trigger was macOS sleep, not CPU load: the wall clock keeps running while test timers stop. `pmset` logs show clamshell sleeps in both failing runs, and the passing rerun had none.
+  - Reproduced deterministically: with the frozen fixture and 125 s of elapsed or backdated time, the same panics occur (lines 5689/5530 and 5371/5200); with the fix they pass.
+  - Fix (test fixture only, no product code, no assertion loosened): `latest` and `safe` now report `max(now, stored time)` on every read, and fixed historical blocks keep their stored time.
+- A sleep of several minutes can still exceed legitimate product limits (120 s owner challenges, 300 s quotes). Long suites now run under `caffeinate -dims`, and a failure that coincides with a `pmset` sleep entry is treated as an invalid run.
+- Checks: full headless suite under `caffeinate -dims` on AC power: 533 passed, 2 ignored, 0 failed across all 26 targets (`inference_owner_control_test` 60/60, 2,090 s; wall time 40.5 min, so no sleep). This also covers the targets that did not run after round 44's failure.
+
 ## 2026-11-18 (forty-fourth round) — Code: feedback errors are classified and reported as the catalog's
 
 - In step at `f436797a`; whitepaper unchanged; no new answers.
@@ -444,7 +454,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Failing check first: the intermittent `native_topup_snapshots_preserve_pending_originals_after_committed_credit` failure under full-suite load (rounds 42 and 44). Then code differences: reputation 2.5, offer-discovery 2.5, version-policy 2.5 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: reputation 2.5, offer-discovery 2.5, version-policy 2.5 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

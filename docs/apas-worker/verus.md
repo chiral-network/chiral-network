@@ -184,3 +184,7 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 - `rating_api::tests::{malformed_feedback_is_invalid_feedback_without_rpc_or_vote, malformed_feedback_takes_no_verification_slot, oversized_feedback_body_is_413_before_decoding, store_fault_is_a_catalog_failure_and_conflicts_stay_conflicts, out_of_range_score_or_revision_takes_no_verification_slot, unreadable_feedback_body_is_invalid_feedback_json}` — **not replaceable**: axum routing, HTTP bodies, a semaphore and an RPC fixture.
 - `rating_storage::tests::{locked_store_is_a_fault_not_a_refusal, store_conflicts_are_typed_refusals_without_database_text}` — **not replaceable**: SQLite locking and transactions.
 - `consumer::tests::{feedback_reports_catalog_codes_not_provider_failures, provider_info_reports_catalog_outage_without_blaming_provider}` — **not replaceable**: async HTTP fixtures. `catalog_and_provider_error_tables_stay_separate` — **replaceable in principle** (a pure mapping), but trivial; it stays.
+
+## 2026-11-19 — owner-control mock chain timestamps
+
+- The round-45 change edits only the `TopupRecoveryRpc` and `SafeOpeningRpc` fixtures in `inference_owner_control_test.rs` (block timestamps follow the wall clock). No test was added or removed, so there is no new judgment; the existing owner-control tests stay **not replaceable** (HTTP fixtures, SQLite ledgers and async consumers).

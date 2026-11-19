@@ -2827,12 +2827,27 @@ async fn paid_ledger_opening_at_free_limit(ledger_wide: bool) {
     assert!(rpc_server.await.unwrap_err().is_cancelled());
 }
 
+/// Timestamp of a synthetic eSpace block. These fixtures model a healthy chain that keeps
+/// producing blocks: its `latest` head and `safe` frontier carry the product's own clock
+/// (`protocol::now`) at every read, so a case stays within the head/safe freshness bounds
+/// however much wall time passes (contended control requests, a loaded suite, a suspended
+/// or sleeping host). Genesis and historical execution blocks keep fixed timestamps no later
+/// than that frontier, so repeated canonical observations of one block still agree exactly.
+fn synthetic_block_timestamp(selector: &str, historical: u64) -> u64 {
+    match selector {
+        "0x0" => 0,
+        "safe" | "latest" => protocol::now().unwrap().max(historical),
+        _ => historical,
+    }
+}
+
 struct SafeOpeningRpc {
     quote: Signed<Quote>,
     raw: String,
     hash: String,
     saved: PathBuf,
     phase: AtomicU64,
+    /// Timestamp of historical blocks; the head and safe frontier follow the clock.
     timestamp: AtomicU64,
     requests: Mutex<Vec<(bool, Value)>>,
 }
@@ -2872,7 +2887,7 @@ async fn safe_opening_rpc(
                 "0x8" => (8, format!("0x{:064x}", 8 + fork)),
                 tag => panic!("unexpected safe-opening block selector: {tag}"),
             };
-            let timestamp = if height == 0 { 0 } else { rpc.timestamp.load(Ordering::Acquire) };
+            let timestamp = synthetic_block_timestamp(args[0].as_str().unwrap(), rpc.timestamp.load(Ordering::Acquire));
             json!({"number":format!("0x{height:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
         }
         "eth_getTransactionCount" => {
@@ -3285,6 +3300,7 @@ struct TopupRecoveryRpc {
     quote: Quote,
     tx_hash: String,
     phase: AtomicU64,
+    /// Timestamp of historical blocks; the head and safe frontier follow the clock.
     timestamp: AtomicU64,
     requests: Mutex<Vec<Value>>,
 }
@@ -3307,7 +3323,7 @@ async fn topup_recovery_rpc(
                 "0x8" => (8, format!("0x{:064x}", 8)),
                 tag => panic!("unexpected top-up block selector: {tag}"),
             };
-            let timestamp = if height == 0 { 0 } else { rpc.timestamp.load(Ordering::Acquire) };
+            let timestamp = synthetic_block_timestamp(args[0].as_str().unwrap(), rpc.timestamp.load(Ordering::Acquire));
             json!({"number":format!("0x{height:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
         }
         "eth_getTransactionReceipt" => {
