@@ -1,5 +1,14 @@
 # APAS progress
 
+## 2026-11-19 (forty-eighth round) — Spec: outbound HTTP safeguards and the private engine origin boundary
+
+- In step at `e39f954a`; whitepaper unchanged; no new answers.
+- Specification step (comparison item 11, book lines 262–279). New change `specify-outbound-http-safeguards`: 8 requirements and 29 scenarios. They cover origin validation, the development exception, origins as advertised endpoints, the per-origin DNS-pinned client with no proxies or redirects, the exact public-address predicate, the loopback administration listener, the private engine origin, and TLS ingress. Overlapping rules are referenced, not restated: commercial-terms advertised origin, managed-engine launch, offer discovery, funding-settlement chain RPC, version policy and reputation.
+- The review removed statements stronger than the book (funding/listener timing, HTTP 401, literal-IP admin client, double engine check, a misquoted firewall sentence) into design decision 10. It confirmed `safe_http_client` matches line 268 exactly and listed every `reqwest` client.
+- Two code differences recorded as tasks 2.1 (a development `localhost` origin accepts non-loopback DNS answers) and 2.2 (credential export derives `base_url` without the origin validator). Acceptance tasks 3.x cite existing tests and name the gaps.
+- Report entry with two nonblocking questions: should chain RPC ignore environment proxies, and does the origin rule govern `policy_url`?
+- Checks: `openspec validate specify-outbound-http-safeguards --strict` passes. No code changed; the focused tests behind the coverage table passed when run on 2026-11-19 (task 1.3).
+
 ## 2026-11-19 (forty-seventh round) — Code: pin the `policy_url` query refusal (version-policy 2.6)
 
 - In step at `113259e8`; whitepaper unchanged; no new answers.
@@ -471,7 +480,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: outbound-http-safeguards 2.1 and 2.2; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 12–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

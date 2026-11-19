@@ -389,3 +389,22 @@ Questions:
 Separately, the spec records four code differences, not questions: malformed submissions get axum's plain-text 415, 400 or 422 instead of `invalid_feedback`, and a valid submission followed by trailing content is accepted (comparison item 6); store faults are answered `feedback_conflict` with database text; the native client reports every catalog answer, including a catalog outage, as "Provider operation failed"; and an RPC identity mismatch or a receipt that contradicts the signed transaction counts as a rejected payment, so revalidation marks votes ineligible and serves a snapshot instead of 503 (tasks 2.1–2.4).
 
 Nonblocking: no requirement or task waits on these answers; option (b) of either question would add one task, and option (b) of question 1 a store migration.
+
+## 2026-11-19 — Outbound HTTP safeguards: chain RPC proxies, and whether the origin rule governs the policy source
+
+Status: open
+
+Where: `docs/chiral-book.md`, *HTTP origins and trust boundaries* (lines 262–279), and the configuration rows for `network.rpc_url` (line 458) and `policy_url` (line 460). Spec: the new change `specify-outbound-http-safeguards` (capability `outbound-http-safeguards`), design *Authority and scope* and open questions 1 and 2. Code: `src-tauri/src/rpc_client.rs:11–19`, `src-tauri/src/network.rs:66–72` and `110–131`, `src-tauri/src/consumer.rs:775–788`.
+
+What it says now: the current runtime's outbound HTTP boundary is now specified (comparison item 11). It has eight requirements: origin validation, the development exception, origins as advertised endpoints, the per-origin DNS-pinned client with no proxies or redirects, the exact public-address predicate, the loopback administration listener, the private engine origin, and TLS ingress. Line 264 names provider and catalog origins. Line 268 disables environment proxies for them, and line 275 disables them for the private engine. Line 458 gives the chain RPC only a scheme rule, and line 460 gives the policy source the profile's endpoint rules.
+
+Questions:
+
+1. **Should the chain RPC client ignore environment proxies?** Today `rpc_client` honours them. With a literal-loopback `http://` RPC URL and `HTTP_PROXY` set, every JSON-RPC request goes to the proxy in cleartext, including the `rpc_bearer_file` bearer. Options: (a) keep honouring proxies, since an operator may need one to reach a remote HTTPS node; (b) ignore environment proxies for all chain RPC, as for provider and catalog origins; (c) ignore them at least for literal-loopback HTTP RPC. Proposed default (what the spec adopts): (a). The new capability does not cover the chain RPC client; if (b) or (c) is chosen, it belongs to `inference-funding-settlement` *Chain RPC transport is bounded*.
+2. **Does the provider/catalog origin rule also govern the version-policy source?** The code fetches the policy through the pinned client of its origin, so a policy source must already be public HTTPS on port 443 (or loopback in development). Profile load, however, accepts any HTTPS URL with a path. Options: (a) make the origin rule and the pinned client normative for the policy source, as a change to `client-version-policy` *Policies come only from configured sources*; (b) leave it as current behaviour without a requirement. Proposed default (what the spec adopts): (b).
+
+Separately, the spec records two code differences, not questions (tasks 2.1 and 2.2):
+- a development `localhost` origin accepts a non-loopback DNS answer and pins it (`offer_registry.rs:216–217`), so a resolver that answers `localhost` with a remote address receives cleartext HTTP;
+- credential export derives the SDK `base_url` without the origin validator (`consumer.rs:2222–2226`), so an account saved under rules that no longer validate it still returns its API secret with a `base_url` that every native request would refuse.
+
+Nonblocking: no requirement or task waits on these answers; option (b) or (c) of question 1, or option (a) of question 2, would add one task to another change.
