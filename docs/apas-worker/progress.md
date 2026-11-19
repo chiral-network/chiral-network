@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-19 (forty-sixth round) — Code: catalog, policy-source and snapshot failures no longer blame the provider
+
+- In step at `bd4b6f80`; whitepaper unchanged; no new answers.
+- Code step (reputation 2.5, offer-discovery 2.5, version-policy 2.5; book line 443).
+  - The relay's snapshot path now reports store and clock faults with a catalog message, with detail only in operator logs.
+  - The consumer decodes `/api/offers` pages with an offer-catalog table, and `policy_url` responses with a policy-source table, sharing one `source_bytes` helper with the reputation reads. Provider endpoints keep the provider table (the review classified every decode in `consumer.rs`).
+  - Fail-closed version behaviour and the discovery pagination bounds are unchanged.
+  - Three new regressions fail without their changes. Displayed text changes on Marketplace discovery errors and funding, top-up and inference policy errors; no layout changed.
+- Checks: full headless suite under `caffeinate` 536 passed, 2 ignored, 0 failed across 26 targets.
+- Recorded from the review as unchecked version-policy task 2.6: `policy_url` accepts a query string, which requirement 9 forbids.
+
 ## 2026-11-19 (forty-fifth round) — Failing check: frozen mock chain timestamps made owner-control tests fail after host sleep
 
 - In step at `a8ac7774`; whitepaper unchanged; no new answers.
@@ -454,7 +465,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: reputation 2.5, offer-discovery 2.5, version-policy 2.5 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: version-policy 2.6 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

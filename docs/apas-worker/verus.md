@@ -188,3 +188,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## 2026-11-19 — owner-control mock chain timestamps
 
 - The round-45 change edits only the `TopupRecoveryRpc` and `SafeOpeningRpc` fixtures in `inference_owner_control_test.rs` (block timestamps follow the wall clock). No test was added or removed, so there is no new judgment; the existing owner-control tests stay **not replaceable** (HTTP fixtures, SQLite ledgers and async consumers).
+
+## Judged 2026-11-19 — non-provider error attribution regressions
+
+- `rating_api::tests::snapshot_store_fault_is_the_catalogs_not_the_providers` — **not replaceable**: axum, SQLite locking and an RPC fixture.
+- `consumer::tests::offer_catalog_errors_are_the_catalogs_not_a_providers`, `policy_source_errors_name_no_provider_and_still_fail_closed` — **not replaceable**: async HTTP fixtures and protected files.

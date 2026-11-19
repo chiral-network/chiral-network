@@ -317,16 +317,35 @@ async fn response_bytes(response: Response) -> Result<Vec<u8>, String> {
     }
     Ok(body)
 }
-/// Reputation catalog responses are classified with the catalog's own codes and reported
-/// as the catalog's answer: a catalog or RPC outage is never attributed to the provider.
-async fn catalog_bytes(response: Response) -> Result<Vec<u8>, String> {
+/// An answer from a source that is not the provider (a catalog or the version-policy
+/// source) is classified with that source's own table and reported as its answer, so a
+/// catalog, RPC or policy-server outage is never attributed to a provider (book line 443).
+/// The source's own text is never echoed.
+async fn source_bytes(
+    response: Response,
+    source: &str,
+    classify: fn(u16, &Value) -> (&'static str, &'static str),
+) -> Result<Vec<u8>, String> {
     let (status, body) = bounded_body(response).await?;
     if !status.is_success() {
         let error = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
-        let (code, message) = catalog_error(status.as_u16(), &error);
-        return Err(format!("{code}: {message} (catalog HTTP {})", status.as_u16()));
+        let (code, message) = classify(status.as_u16(), &error);
+        return Err(format!("{code}: {message} ({source} HTTP {})", status.as_u16()));
     }
     Ok(body)
+}
+/// Reputation catalog responses are classified with the catalog's own codes and reported
+/// as the catalog's answer: a catalog or RPC outage is never attributed to the provider.
+async fn catalog_bytes(response: Response) -> Result<Vec<u8>, String> {
+    source_bytes(response, "catalog", catalog_error).await
+}
+/// Offer catalog pages (`/api/offers`) are the catalog's answer, never a provider's.
+async fn offer_catalog_bytes(response: Response) -> Result<Vec<u8>, String> {
+    source_bytes(response, "catalog", offer_catalog_error).await
+}
+/// The configured `policy_url` is the version-policy source, never a provider.
+async fn policy_source_bytes(response: Response) -> Result<Vec<u8>, String> {
+    source_bytes(response, "policy source", policy_source_error).await
 }
 /// Fixed messages naming the catalog and the remedy; catalog-supplied text is never echoed.
 fn catalog_error(status: u16, value: &Value) -> (&'static str, &'static str) {
@@ -345,6 +364,29 @@ fn catalog_error(status: u16, value: &Value) -> (&'static str, &'static str) {
         "invalid_wallet" => ("invalid_wallet", "The reputation catalog refused the provider wallet as not canonical"),
         "internal_error" => ("internal_error", "The reputation catalog failed internally; retry later. This says nothing about the provider"),
         _ => ("catalog_error", "Reputation catalog error; this says nothing about the provider"),
+    }
+}
+/// The relay's own `/api/offers` codes, then the status: a rate limit or an outage of the
+/// catalog (or of a proxy in front of it) is the catalog's. No message names a provider.
+fn offer_catalog_error(status: u16, value: &Value) -> (&'static str, &'static str) {
+    match value["error"]["code"].as_str().unwrap_or("") {
+        "invalid_page" => return ("invalid_page", "The offer catalog refused the page request as out of range"),
+        "invalid_model" => return ("invalid_model", "The offer catalog refused the model filter; use an exact model ID of 1 to 256 bytes"),
+        _ => {}
+    }
+    match status {
+        429 => ("catalog_busy", "The offer catalog is rate limiting discovery; retry later"),
+        500..=599 => ("catalog_unavailable", "The offer catalog is unavailable; retry later or configure another catalog"),
+        _ => ("catalog_error", "The offer catalog answered with an error; discovery returned no offers"),
+    }
+}
+/// The version-policy source is classified by status alone. No message names a provider.
+fn policy_source_error(status: u16, _value: &Value) -> (&'static str, &'static str) {
+    match status {
+        404 | 410 => ("policy_source_not_found", "The configured version policy source has no policy at this URL; check the profile's policy_url"),
+        429 => ("policy_source_busy", "The configured version policy source is rate limiting requests; retry later"),
+        500..=599 => ("policy_source_unavailable", "The configured version policy source is unavailable; retry later"),
+        _ => ("policy_source_error", "The configured version policy source refused the request"),
     }
 }
 fn safe_error(value: &Value) -> (&'static str, &'static str) {
@@ -743,7 +785,8 @@ impl Consumer {
                 .send()
                 .await
                 .map_err(|_| "configured version policy unavailable")?;
-            let policy: crate::version::VersionPolicy = decode(&response_bytes(response).await?)?;
+            let policy: crate::version::VersionPolicy =
+                decode(&policy_source_bytes(response).await?)?;
             if policy.valid_until != 0 && policy.valid_until <= protocol::now()? {
                 return Err("configured version policy is expired".into());
             }
@@ -928,7 +971,7 @@ impl Consumer {
                     offers: Vec<Value>,
                     next_offset: Option<usize>,
                 }
-                let page: Page = decode(&response_bytes(response).await?)?;
+                let page: Page = decode(&offer_catalog_bytes(response).await?)?;
                 if page.offers.len() > 50 {
                     return Err("catalog exceeded requested page size".into());
                 }
@@ -5187,5 +5230,219 @@ mod tests {
         assert_eq!(catalog_error(503, &body("chain_unavailable")).0, "chain_unavailable");
         assert_eq!(catalog_error(400, &body("funding_pending")).0, "catalog_error");
         assert_eq!(catalog_error(413, &Value::Null).0, "feedback_too_large");
+        // The offer catalog and the policy source have their own tables.
+        assert_eq!(offer_catalog_error(429, &body("rate_limit")).0, "catalog_busy");
+        assert_eq!(offer_catalog_error(400, &body("invalid_page")).0, "invalid_page");
+        assert_eq!(policy_source_error(503, &body("engine_unavailable")).0, "policy_source_unavailable");
+    }
+    /// A loopback origin serving one fixed answer per catalog page (page `n` at offset
+    /// `50 n`) and a version policy, recording every query and counting every other
+    /// request, which would be a provider contact.
+    struct SourceFixture {
+        pages: std::sync::Mutex<Vec<(u16, String, &'static str)>>,
+        queries: std::sync::Mutex<Vec<String>>,
+        policy: std::sync::Mutex<(u16, String, &'static str)>,
+        policy_requests: std::sync::atomic::AtomicU64,
+        other_requests: std::sync::atomic::AtomicU64,
+    }
+    fn fixed_answer((status, body, content_type): (u16, String, &'static str)) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        (
+            axum::http::StatusCode::from_u16(status).unwrap(),
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            body,
+        )
+            .into_response()
+    }
+    async fn source_fixture() -> (String, Arc<SourceFixture>, tokio::task::JoinHandle<()>) {
+        use axum::extract::{RawQuery, State};
+        use std::sync::atomic::Ordering;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let state = Arc::new(SourceFixture {
+            pages: std::sync::Mutex::new(Vec::new()),
+            queries: std::sync::Mutex::new(Vec::new()),
+            policy: std::sync::Mutex::new((503, "Service Unavailable".into(), "text/plain")),
+            policy_requests: std::sync::atomic::AtomicU64::new(0),
+            other_requests: std::sync::atomic::AtomicU64::new(0),
+        });
+        let app = axum::Router::new()
+            .route(
+                "/api/offers",
+                axum::routing::get(
+                    |State(state): State<Arc<SourceFixture>>, RawQuery(query): RawQuery| async move {
+                        let query = query.unwrap_or_default();
+                        state.queries.lock().unwrap().push(query.clone());
+                        let offset = query
+                            .split('&')
+                            .find_map(|pair| pair.strip_prefix("offset="))
+                            .and_then(|offset| offset.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let answer = state.pages.lock().unwrap().get(offset / 50).cloned();
+                        fixed_answer(answer.unwrap_or((404, "{}".into(), "application/json")))
+                    },
+                ),
+            )
+            .route(
+                "/policy",
+                axum::routing::get(|State(state): State<Arc<SourceFixture>>| async move {
+                    state.policy_requests.fetch_add(1, Ordering::SeqCst);
+                    let answer = state.policy.lock().unwrap().clone();
+                    fixed_answer(answer)
+                }),
+            )
+            .fallback(|State(state): State<Arc<SourceFixture>>| async move {
+                state.other_requests.fetch_add(1, Ordering::SeqCst);
+                fixed_answer((404, "{}".into(), "application/json"))
+            })
+            .with_state(state.clone());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (origin, state, task)
+    }
+    fn page(offers: Vec<Value>, next_offset: Option<usize>) -> (u16, String, &'static str) {
+        (200, json!({"offers":offers,"next_offset":next_offset}).to_string(), "application/json")
+    }
+    /// A source's error: its own code, a message naming the source, no provider wording
+    /// and none of the source's own text.
+    #[track_caller]
+    fn assert_source_answer(error: &str, code: &str, source: &str, status: u16, suffix: &str) {
+        assert!(error.starts_with(&format!("{code}: ")), "{error}");
+        assert!(error.contains(source), "{error}");
+        assert!(error.ends_with(&format!("({suffix} HTTP {status})")), "{error}");
+        assert!(!error.to_ascii_lowercase().contains("provider"), "{error}");
+        assert!(!error.contains(CATALOG_TEXT), "{error}");
+    }
+    #[tokio::test]
+    async fn offer_catalog_errors_are_the_catalogs_not_a_providers() {
+        // inference-offer-discovery requirements 13 and 14, task 2.5: book line 443.
+        let directory = tempfile::tempdir().unwrap();
+        let (origin, state, task) = source_fixture().await;
+        let mut config = configuration(directory.path());
+        config.development = true;
+        config.catalog_url = Some(origin.clone());
+        let consumer = Consumer::new(config).unwrap();
+        consumer.wallet_create().unwrap();
+        let error_answer = |status: u16, code: &str| {
+            (
+                status,
+                json!({"error":{"message":CATALOG_TEXT,"type":"server_error","param":null,"code":code}})
+                    .to_string(),
+                "application/json",
+            )
+        };
+        // 429 and 503 from the catalog, or from a proxy in front of it, in JSON (with
+        // codes the provider table knows) and plain text.
+        for (answer, code) in [
+            (error_answer(429, "rate_limit"), "catalog_busy"),
+            ((429, CATALOG_TEXT.into(), "text/plain"), "catalog_busy"),
+            (error_answer(503, "upstream_failure"), "catalog_unavailable"),
+            ((503, CATALOG_TEXT.into(), "text/plain"), "catalog_unavailable"),
+            (error_answer(400, "invalid_page"), "invalid_page"),
+            (error_answer(400, "invalid_model"), "invalid_model"),
+            (error_answer(418, "teapot"), "catalog_error"),
+        ] {
+            let status = answer.0;
+            *state.pages.lock().unwrap() = vec![answer];
+            let error = consumer.discover(None).await.unwrap_err();
+            assert_source_answer(&error, code, "offer catalog", status, "catalog");
+        }
+        // A catalog failure on a later page fails discovery and returns no offers.
+        let key = wallet::generate_private_key();
+        let (offer, _) = funding_terms(&consumer, &key, &origin, false, false);
+        let first = serde_json::to_value(&offer).unwrap();
+        *state.pages.lock().unwrap() = vec![
+            page(vec![first.clone()], Some(50)),
+            error_answer(503, "upstream_failure"),
+        ];
+        let error = consumer.discover(None).await.unwrap_err();
+        assert_source_answer(&error, "catalog_unavailable", "offer catalog", 503, "catalog");
+        // Successful pages are unchanged: an undecodable entry is skipped and both pages
+        // are read with the same queries.
+        let other = wallet::generate_private_key();
+        let (second, _) = funding_terms(&consumer, &other, &origin, false, false);
+        *state.pages.lock().unwrap() = vec![
+            page(vec![json!({"not":"an offer"}), first.clone()], Some(50)),
+            page(vec![serde_json::to_value(&second).unwrap()], None),
+        ];
+        state.queries.lock().unwrap().clear();
+        let mut found: Vec<_> = consumer
+            .discover(Some("model-a"))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|offer| offer.payload.provider_wallet)
+            .collect();
+        found.sort();
+        let mut expected = vec![offer.payload.provider_wallet.clone(), second.payload.provider_wallet.clone()];
+        expected.sort();
+        assert_eq!(found, expected);
+        assert_eq!(
+            *state.queries.lock().unwrap(),
+            ["offset=0&limit=50&model=model-a", "offset=50&limit=50&model=model-a"]
+        );
+        // The pagination bounds are unchanged.
+        *state.pages.lock().unwrap() = vec![page(vec![first.clone()], Some(0))];
+        assert_eq!(consumer.discover(None).await.unwrap_err(), "invalid catalog pagination");
+        *state.pages.lock().unwrap() = vec![page(vec![json!({}); 51], None)];
+        assert_eq!(
+            consumer.discover(None).await.unwrap_err(),
+            "catalog exceeded requested page size"
+        );
+        *state.pages.lock().unwrap() = (0..=100)
+            .map(|n| page(vec![first.clone(); 50], Some((n + 1) * 50)))
+            .collect();
+        assert_eq!(
+            consumer.discover(None).await.unwrap_err(),
+            "catalog exceeds bounded discovery limit; narrow the model filter"
+        );
+        assert_eq!(state.other_requests.load(std::sync::atomic::Ordering::SeqCst), 0);
+        task.abort();
+    }
+    #[tokio::test]
+    async fn policy_source_errors_name_no_provider_and_still_fail_closed() {
+        // client-version-policy requirements 9 and 11, task 2.5: book line 443.
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let (origin, state, task) = source_fixture().await;
+        let mut config = configuration(directory.path());
+        config.development = true;
+        config.network.policy_url = Some(format!("{origin}/policy"));
+        let consumer = Consumer::new(config).unwrap();
+        consumer.wallet_create().unwrap();
+        for (answer, code) in [
+            ((503, CATALOG_TEXT.to_string(), "text/plain"), "policy_source_unavailable"),
+            ((503, catalog_error_body("upstream_failure"), "application/json"), "policy_source_unavailable"),
+            ((429, catalog_error_body("rate_limit"), "application/json"), "policy_source_busy"),
+            ((404, catalog_error_body("not_found"), "application/json"), "policy_source_not_found"),
+            ((403, catalog_error_body("unauthorized"), "application/json"), "policy_source_error"),
+        ] {
+            let status = answer.0;
+            *state.policy.lock().unwrap() = answer;
+            let error = consumer.version_status().await.unwrap_err();
+            assert_source_answer(&error, code, "version policy source", status, "policy source");
+        }
+        // Fail-closed behaviour is unchanged: with the source answering 503, funding,
+        // top-ups and inference are refused with the policy-source error before any
+        // provider is contacted or any account file is written.
+        *state.policy.lock().unwrap() = (503, "Service Unavailable".into(), "text/plain");
+        let refused = |error: String| {
+            assert_source_answer(&error, "policy_source_unavailable", "version policy source", 503, "policy source");
+        };
+        let key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &key, &origin, false, false);
+        let id = quote.payload.id.clone();
+        refused(consumer.fund(&offer, &quote).await.unwrap_err());
+        let path = consumer.account_path(&id).unwrap();
+        assert!(!path.exists());
+        consumer.save_account(&saved_funding(offer, quote)).unwrap();
+        let before = fs::read(&path).unwrap();
+        refused(consumer.topup(&id, "10").await.unwrap_err());
+        let chat = json!({"model":"model-a","messages":[{"role":"user","content":"hi"}],"max_tokens":8});
+        refused(consumer.infer(&id, "chat", chat.clone()).await.unwrap_err());
+        refused(consumer.stream_kind(&id, "chat", chat).await.err().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(state.other_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(state.policy_requests.load(Ordering::SeqCst), 9);
+        task.abort();
     }
 }

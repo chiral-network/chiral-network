@@ -18,6 +18,17 @@ use axum::{
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+/// Fixed public messages for the catalog's own faults (book line 443).
+const RECORD_FAULT: &str = "the reputation catalog could not record this feedback; retry later";
+const SNAPSHOT_FAULT: &str =
+    "the reputation catalog could not compute this snapshot; retry later";
+/// A store or clock fault is the reputation catalog's failure, never the provider's:
+/// HTTP 500 `internal_error` with a fixed catalog message. The detail (SQLite, file-system
+/// or clock text) goes to the operator's log only, never into the response.
+fn catalog_fault(message: &'static str, detail: impl std::fmt::Display) -> ApiError {
+    eprintln!("reputation catalog fault: {detail}");
+    ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+}
 pub struct RatingState {
     pub chain: Arc<ChainClient>,
     pub store: Arc<RatingStore>,
@@ -53,13 +64,14 @@ impl RatingState {
         Ok(payment.value_wei)
     }
     async fn refresh(&self, wallet: &str) -> Result<Vec<ReputationEvent>, ApiError> {
-        let mut events = self.store.events(wallet).map_err(ApiError::internal)?;
+        let fault = |detail: String| catalog_fault(SNAPSHOT_FAULT, detail);
+        let mut events = self.store.events(wallet).map_err(fault)?;
         for event in &mut events {
             // Stored evidence is reverified, including its provider and payer signatures.
             if reputation::validate_submission(
                 &event.submission,
                 self.chain.identity(),
-                protocol::now().map_err(ApiError::internal)?,
+                protocol::now().map_err(fault)?,
             )
             .is_err()
             {
@@ -79,7 +91,7 @@ impl RatingState {
             }
             self.store
                 .set_eligible(&event.submission.feedback.payload.quote_id, event.eligible)
-                .map_err(ApiError::internal)?;
+                .map_err(fault)?;
         }
         Ok(events)
     }
@@ -160,7 +172,7 @@ async fn admit(
             "feedback verifier is busy",
         )
     })?;
-    let now = protocol::now().map_err(ApiError::internal)?;
+    let now = protocol::now().map_err(|detail| catalog_fault(RECORD_FAULT, detail))?;
     reputation::validate_submission(&submission, state.chain.identity(), now)
         .map_err(|e| ApiError::bad_request("invalid_feedback", e))?;
     if now.saturating_sub(submission.feedback.payload.issued_at) > 300 {
@@ -209,14 +221,7 @@ async fn admit(
             }
             // A store fault is the catalog's failure, never a conflict, and its detail
             // (SQLite or file-system text) never enters the response.
-            UpsertError::Fault(detail) => {
-                eprintln!("feedback store fault: {detail}");
-                ApiError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "the reputation catalog could not record this feedback; retry later",
-                )
-            }
+            UpsertError::Fault(detail) => catalog_fault(RECORD_FAULT, detail),
         })?;
     Ok(Json(
         serde_json::json!({"accepted":true,"quote_id":submission.feedback.payload.quote_id,"revision":submission.feedback.payload.revision,"experimental_testnet":true}),
@@ -247,7 +252,7 @@ async fn snapshot(
         &events,
         state.chain.identity(),
         &wallet,
-        protocol::now().map_err(ApiError::internal)?,
+        protocol::now().map_err(|detail| catalog_fault(SNAPSHOT_FAULT, detail))?,
     )))
 }
 /// Revalidate incrementally even without HTTP readers; no stale vote is served on
@@ -658,6 +663,62 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].submission.feedback.payload.score, 100);
         assert_eq!(events[0].amount_wei, FUNDING);
+        task.abort();
+    }
+    async fn get_snapshot(state: &Arc<RatingState>, wallet: &str) -> (StatusCode, Value) {
+        let request = axum::http::Request::builder()
+            .uri(format!("/api/ratings/{wallet}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = router(state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+    /// A snapshot-path fault answers 500 `internal_error` with the catalog's fixed wording:
+    /// no provider wording and no store, SQL or decoder text.
+    #[track_caller]
+    fn assert_catalog_fault(status: StatusCode, error: &Value) {
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{error}");
+        assert_eq!(error["error"]["code"], "internal_error", "{error}");
+        assert_eq!(error["error"]["message"], SNAPSHOT_FAULT, "{error}");
+        let text = error.to_string().to_ascii_lowercase();
+        for leaked in ["provider", "locked", "sqlite", "database", "busy", "expected", "column"] {
+            assert!(!text.contains(leaked), "{leaked}: {text}");
+        }
+    }
+    #[tokio::test]
+    async fn snapshot_store_fault_is_the_catalogs_not_the_providers() {
+        // payment-gated-reputation requirements 7, 9 and 12, task 2.5: book line 443.
+        let directory = tempfile::tempdir().unwrap();
+        let (rpc, url, task) = rpc_fixture().await;
+        let now = protocol::now().unwrap();
+        let (paid, receipt) = paid_submission(now);
+        *rpc.receipt.lock().unwrap() = receipt;
+        let wallet = paid.feedback.payload.provider_wallet.clone();
+        let state = state_at(directory.path(), paid.feedback.payload.network.clone(), url);
+        state.store.upsert(&paid, FUNDING, now).unwrap();
+        let database = directory.path().join("ratings.sqlite");
+        // Another connection holds the write lock beyond the store's 5-second busy timeout,
+        // so recording the revalidated eligibility fails.
+        let holder = exclusive_lock(&database);
+        let (status, error) = get_snapshot(&state, &wallet).await;
+        drop(holder);
+        assert!(rpc.requests.load(Ordering::SeqCst) > 0, "the payment was revalidated first");
+        assert_catalog_fault(status, &error);
+        // The released store serves the snapshot.
+        let (status, snapshot) = get_snapshot(&state, &wallet).await;
+        assert_eq!(status, StatusCode::OK, "{snapshot}");
+        assert_eq!(snapshot["vote_count"], 1, "{snapshot}");
+        // A stored record that no longer decodes is also the catalog's fault.
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute("UPDATE feedback SET evidence='not evidence'", [])
+            .unwrap();
+        let (status, error) = get_snapshot(&state, &wallet).await;
+        assert_catalog_fault(status, &error);
         task.abort();
     }
 }
