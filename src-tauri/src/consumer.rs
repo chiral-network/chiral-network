@@ -5399,6 +5399,30 @@ mod tests {
         task.abort();
     }
     #[tokio::test]
+    async fn policy_url_with_a_query_is_refused_at_profile_load_before_any_request() {
+        // client-version-policy requirement 9 (task 2.6): no credentials, query or fragment.
+        // Enforced at profile load by network::validate_endpoint for every endpoint.
+        use std::sync::atomic::Ordering;
+        let directory = tempfile::tempdir().unwrap();
+        let (origin, state, task) = source_fixture().await;
+        for policy_url in [
+            format!("{origin}/policy?network=71"),
+            format!("{origin}/policy?"),
+            format!("{origin}/policy#fragment"),
+            origin.replacen("http://", "http://user:secret@", 1) + "/policy",
+        ] {
+            let mut config = configuration(directory.path());
+            config.development = true;
+            config.network.policy_url = Some(policy_url.clone());
+            let error = Consumer::new(config).err().expect(&policy_url);
+            assert_eq!(error, "endpoint credentials, queries and fragments are forbidden; use a bearer file", "{policy_url}");
+            assert!(!error.contains("secret"), "{policy_url}");
+        }
+        assert_eq!(state.policy_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(state.other_requests.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+    #[tokio::test]
     async fn policy_source_errors_name_no_provider_and_still_fail_closed() {
         // client-version-policy requirements 9 and 11, task 2.5: book line 443.
         use std::sync::atomic::Ordering;

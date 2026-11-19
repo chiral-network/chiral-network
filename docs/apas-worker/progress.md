@@ -1,5 +1,11 @@
 # APAS progress
 
+## 2026-11-19 (forty-seventh round) — Code: pin the `policy_url` query refusal (version-policy 2.6)
+
+- In step at `113259e8`; whitepaper unchanged; no new answers.
+- Code step (version-policy 2.6). No product change was needed. Round 46 recorded that `policy_url` accepts a query, but that was a false positive: `network::validate_endpoint`, which runs for every endpoint when a profile loads, already refuses credentials, queries and fragments, so `Consumer::new` fails before any request. A first draft added a redundant query check to `version_status`; it was removed when the new test showed the load-time refusal. The regression `policy_url_with_a_query_is_refused_at_profile_load_before_any_request` pins the refusal and fails when the query check is removed from `validate_endpoint`.
+- Checks: `--lib` 275 passed, 2 ignored; `--bins` builds; `npm run check` 0 errors; `npm test` 70/70; `npm run build` ok; Python compile and unit tests ok. The full integration suite was not re-run: the only change is a `#[cfg(test)]` unit test, which integration targets and binaries do not compile, and round 46's full run (536 passed) covers the same non-test code byte for byte.
+
 ## 2026-11-19 (forty-sixth round) — Code: catalog, policy-source and snapshot failures no longer blame the provider
 
 - In step at `bd4b6f80`; whitepaper unchanged; no new answers.
@@ -465,7 +471,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: version-policy 2.6 (reputation 2.4 shares funding-settlement 2.4's open question). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 11–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

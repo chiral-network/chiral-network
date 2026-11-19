@@ -193,3 +193,7 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `rating_api::tests::snapshot_store_fault_is_the_catalogs_not_the_providers` — **not replaceable**: axum, SQLite locking and an RPC fixture.
 - `consumer::tests::offer_catalog_errors_are_the_catalogs_not_a_providers`, `policy_source_errors_name_no_provider_and_still_fail_closed` — **not replaceable**: async HTTP fixtures and protected files.
+
+## Judged 2026-11-19 — policy URL query refusal
+
+- `consumer::tests::policy_url_with_a_query_is_refused_at_profile_load_before_any_request` — **not replaceable** as written: it checks that no request reaches an async HTTP fixture. The refusal predicate itself (`network::validate_endpoint`) is pure URL logic that a future Verus lemma could cover, but no verified URL model exists in `verified/`.
