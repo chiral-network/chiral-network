@@ -20,9 +20,11 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    convert::Infallible,
     pin::Pin,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
@@ -197,6 +199,30 @@ fn validate_id(id: &str) -> Result<(), ApiError> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b':' | b'-'))
     {
         return Err(ApiError::bad_request("invalid_request_id", "Request identifiers allow 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens"));
+    }
+    Ok(())
+}
+/// Dimension reduction is not offered: an embedding request may name only the native
+/// dimension that readiness measured for the deployment, and none while no value is
+/// recorded. Refused as an unsupported option, before tokenization and reservation.
+fn check_dimensions(
+    provider: &ProviderState,
+    request: &backend::PreparedRequest,
+    model_id: &str,
+) -> Result<(), ApiError> {
+    let Some(requested) = request.body.get("dimensions").filter(|_| request.endpoint == Endpoint::Embeddings) else {
+        return Ok(());
+    };
+    let native = provider
+        .embedding_dimensions
+        .read()
+        .ok()
+        .and_then(|recorded| recorded.get(model_id).copied());
+    if native.is_none_or(|native| requested.as_u64() != Some(native)) {
+        return Err(ApiError::bad_request(
+            "unsupported_parameter",
+            "This deployment does not produce the requested embedding dimensions; omit dimensions or request its native dimension",
+        ));
     }
     Ok(())
 }
@@ -526,6 +552,7 @@ async fn infer(
             "Contracted model has not passed current readiness and inference qualification",
         ));
     }
+    check_dimensions(&gateway.provider, &request, &engine.config.model.id)?;
     // Queue length is deliberately zero: every operation, including private
     // tokenization, must acquire a model slot or fail before making a reservation.
     let permit = runtime.slots.clone().try_acquire_owned().map_err(|_| {
@@ -575,6 +602,8 @@ async fn infer(
             "Model qualification was withdrawn before reservation",
         ));
     }
+    // Readiness may have measured again while the input was tokenized.
+    check_dimensions(&gateway.provider, &request, &engine.config.model.id)?;
     let reservation = match gateway.provider.ledger.reserve(
         &context.account.contract_id,
         &context.credential_id,
@@ -670,6 +699,7 @@ async fn execute(
     };
     if client_stream {
         let (sender, receiver) = mpsc::channel::<Bytes>(4);
+        let failed = Arc::new(AtomicBool::new(false));
         let spec = StreamSpec {
             endpoint,
             model,
@@ -677,13 +707,13 @@ async fn execute(
             output: request.max_output_tokens,
             include_usage: request.include_usage,
         };
-        if reply.send(with_id(event_stream(receiver), &id)).is_err() {
+        if reply.send(with_id(event_stream(receiver, failed.clone()), &id)).is_err() {
             // The client left before its event stream could start.
             let _ = settlement.finish("disconnected");
             return;
         }
         // Only bounded chunks and, for echo, the bounded prompt reach the response body.
-        stream_worker(response, spec, settlement, cancel, sender, deadline).await;
+        stream_worker(response, spec, settlement, cancel, sender, failed, deadline).await;
     } else if endpoint != Endpoint::Embeddings {
         let spec = StreamSpec {
             endpoint, model, prompt: request.prompt_tokens,
@@ -740,12 +770,24 @@ fn answer(settlement: Settlement, reply: oneshot::Sender<Response>, response: Re
     let _ = reply.send(with_id(response, &id));
 }
 
-fn event_stream(receiver: mpsc::Receiver<Bytes>) -> Response {
-    let body = futures_util::stream::unfold(receiver, |mut receiver| async {
-        receiver
-            .recv()
-            .await
-            .map(|bytes| (Ok::<Bytes, Infallible>(bytes), receiver))
+/// The public SSE body drains the bounded queue. When the worker failed without
+/// queueing its error event (`failed`, set before its sender is dropped), the body
+/// ends with an error instead of cleanly, so that an HTTP/1 chunked response is
+/// not terminated like a completed stream.
+fn event_stream(receiver: mpsc::Receiver<Bytes>, failed: Arc<AtomicBool>) -> Response {
+    let body = futures_util::stream::unfold(Some(receiver), move |receiver| {
+        let failed = failed.clone();
+        async move {
+            let mut receiver = receiver?;
+            match receiver.recv().await {
+                Some(bytes) => Some((Ok(bytes), Some(receiver))),
+                None if failed.load(Ordering::Acquire) => Some((
+                    Err(std::io::Error::other("inference stream failed after its output began")),
+                    None,
+                )),
+                None => None,
+            }
+        }
     });
     let mut response = Body::from_stream(body).into_response();
     response.headers_mut().insert(
@@ -828,6 +870,7 @@ async fn stream_worker(
     mut settlement: Settlement,
     mut cancel: watch::Receiver<bool>,
     sender: mpsc::Sender<Bytes>,
+    failed: Arc<AtomicBool>,
     deadline: Instant,
 ) {
     let result = stream_inner(
@@ -846,8 +889,12 @@ async fn stream_worker(
             "data: {}\n\ndata: [DONE]\n\n",
             json!({"error":{"message":error.message,"type":"server_error","param":null,"code":error.code}})
         ));
-        // Never retain engine resources waiting for a slow/disconnected caller.
-        let _ = sender.try_send(bytes);
+        // Never retain engine resources waiting for a slow/disconnected caller. When
+        // the error event cannot be queued, the body ends abnormally instead, never
+        // like a completed stream; the flag is set before the sender is dropped.
+        if sender.try_send(bytes).is_err() {
+            failed.store(true, Ordering::Release);
+        }
     }
 }
 fn output_event(value: &Value) -> bool {
@@ -1043,6 +1090,7 @@ async fn stream_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::convert::Infallible;
     use tower::Service;
 
     #[test]
@@ -1067,6 +1115,13 @@ mod tests {
     }
 
     fn ingress_fixture() -> (tempfile::TempDir, Arc<ProviderState>, String) {
+        ingress_fixture_for(|_| {})
+    }
+
+    /// `ingress_fixture` whose offer model, deployed and agreed, is first changed by `edit`.
+    fn ingress_fixture_for(
+        edit: impl FnOnce(&mut protocol::ModelSpec),
+    ) -> (tempfile::TempDir, Arc<ProviderState>, String) {
         use crate::{
             billing_store::BillingStore,
             chain_client::ChainClient,
@@ -1076,7 +1131,8 @@ mod tests {
         };
         use std::sync::atomic::AtomicBool;
         let directory = tempfile::tempdir().unwrap();
-        let offer = crate::offer_registry::tests::offer().payload;
+        let mut offer = crate::offer_registry::tests::offer().payload;
+        edit(&mut offer.model);
         let key = "11".repeat(32);
         let now = protocol::now().unwrap();
         let price = protocol::PriceSchedule {
@@ -1163,6 +1219,7 @@ mod tests {
             accepting: AtomicBool::new(true),
             funding_ready: AtomicBool::new(true),
             qualified_models: std::sync::RwLock::new(Default::default()),
+            embedding_dimensions: std::sync::RwLock::new(Default::default()),
         });
         (directory, state, bearer)
     }
@@ -1832,5 +1889,277 @@ mod tests {
         assert_eq!(fixture.engine_event().await, "dropped");
         // One miss does not latch withdrawal.
         fixture.assert_still_qualified();
+    }
+    async fn serve_engine(engine: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        (base, tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() }))
+    }
+
+    fn keyed(path: &str, bearer: &str, key: &'static str, body: Value) -> Request {
+        let mut request = inference_request(path, Some(bearer), Body::from(body.to_string()));
+        request.headers_mut().insert("idempotency-key", HeaderValue::from_static(key));
+        request
+    }
+
+    async fn request_status_of(app: &mut Router, bearer: &str, id: &str) -> Value {
+        let response = app.call(Request::builder().uri(format!("/v1/requests/{id}"))
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 16_384).await.unwrap()).unwrap()
+    }
+
+    /// public-inference-api requirements 6 and 10 (task 2.2, design code difference 2): an
+    /// embedding request naming dimensions the deployment does not produce is refused as an
+    /// unsupported option before tokenization and reservation, and the engine is not asked
+    /// for it. The native dimension is the one readiness measured; while none is recorded,
+    /// any `dimensions` is refused. Requests without `dimensions` are unaffected.
+    #[tokio::test]
+    async fn unproducible_embedding_dimensions_are_refused_before_tokenization_and_reservation() {
+        use axum::routing::post;
+        use base64::Engine as _;
+        use std::sync::atomic::AtomicUsize;
+        let (_directory, mut state, bearer) = ingress_fixture_for(|model| {
+            model.capabilities = vec!["embeddings".into()];
+            model.max_output_tokens = 0;
+        });
+        let tokenize_calls = Arc::new(AtomicUsize::new(0));
+        let embedding_calls = Arc::new(AtomicUsize::new(0));
+        let (tokenized, embedded) = (tokenize_calls.clone(), embedding_calls.clone());
+        let props = json!({"build_info":"b1-cd959ba","total_slots":1,"model_alias":"model",
+            "default_generation_settings":{"n_ctx":4096}});
+        // Two-dimensional vectors whatever `dimensions` asks for.
+        let engine = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/v1/models", get(|| async { Json(json!({"data":[{"id":"model"}]})) }))
+            .route("/props", get(move || async move { Json(props) }))
+            .route("/tokenize", post(move || {
+                tokenized.fetch_add(1, Ordering::SeqCst);
+                async { Json(json!({"tokens":[1,2]})) }
+            }))
+            .route("/v1/embeddings", post(move |Json(body): Json<Value>| {
+                embedded.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let inputs = body["input"].as_array().cloned().unwrap_or_default();
+                    let tokens: usize = inputs.iter().map(|i| i.as_array().map_or(0, Vec::len)).sum();
+                    let embedding = if body["encoding_format"] == "base64" {
+                        json!(base64::engine::general_purpose::STANDARD
+                            .encode([0.5f32.to_le_bytes(), 0.25f32.to_le_bytes()].concat()))
+                    } else {
+                        json!([0.5, 0.25])
+                    };
+                    let data: Vec<_> = (0..inputs.len()).map(|index| json!({"index":index,
+                        "object":"embedding","embedding":embedding})).collect();
+                    Json(json!({"model":body["model"],"object":"list","data":data,
+                        "usage":{"prompt_tokens":tokens,"total_tokens":tokens}}))
+                }
+            }));
+        let (base, engine_task) = serve_engine(engine).await;
+        let inner = Arc::get_mut(&mut state).unwrap();
+        Arc::get_mut(&mut inner.config).unwrap().models[0].engine_url = base;
+        let mut app = router(state.clone());
+        let contract = state.ledger.authenticate(&bearer, protocol::now().unwrap()).unwrap()
+            .account.contract_id;
+        let request = |key: &'static str, dimensions: Option<u64>| {
+            let mut body = json!({"model":"model","input":["a","b"]});
+            if let Some(dimensions) = dimensions {
+                body["dimensions"] = json!(dimensions);
+            }
+            keyed("/v1/embeddings", &bearer, key, body)
+        };
+        let calls = || (tokenize_calls.load(Ordering::SeqCst), embedding_calls.load(Ordering::SeqCst));
+        let unknown_usage = || state.ledger.list_requests().unwrap().iter()
+            .filter(|r| r.contract_id == contract && r.status.ends_with("unknown_usage")).count();
+
+        // Ready, but no dimension recorded: any `dimensions` is refused.
+        state.qualified_models.write().unwrap().insert("model".into());
+        let before = calls();
+        let response = app.call(request("unrecorded", Some(2))).await.unwrap();
+        assert_api_error(response, StatusCode::BAD_REQUEST, "unsupported_parameter", &bearer).await;
+        assert_eq!(calls(), before);
+        assert!(state.ledger.request_view(&contract, "unrecorded").is_err());
+
+        // Readiness's real embedding probes measure and record the native dimension.
+        let health = backend::model_health(&state).await;
+        assert!(health[0].ready, "{health:?}");
+        state.record_readiness(&health).unwrap();
+        assert_eq!(*state.embedding_dimensions.read().unwrap(), HashMap::from([("model".to_owned(), 2)]));
+
+        let account = serde_json::to_value(state.ledger.account(&contract).unwrap()).unwrap();
+        let before = calls();
+        let response = app.call(request("reduced", Some(1))).await.unwrap();
+        assert_api_error(response, StatusCode::BAD_REQUEST, "unsupported_parameter", &bearer).await;
+        // No `/tokenize` or `/v1/embeddings` call, no request record, no account change.
+        assert_eq!(calls(), before);
+        assert!(state.ledger.request_view(&contract, "reduced").is_err());
+        assert_eq!(unknown_usage(), 0);
+        assert_eq!(serde_json::to_value(state.ledger.account(&contract).unwrap()).unwrap(), account);
+
+        for (key, dimensions) in [("unnamed", None), ("native", Some(2)), ("recorded-default", None)] {
+            let response = app.call(request(key, dimensions)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{key}");
+            let value: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES).await.unwrap()).unwrap();
+            let data = value["data"].as_array().unwrap();
+            assert_eq!(data.len(), 2, "{key}");
+            assert!(data.iter().all(|item| item["embedding"].as_array().unwrap().len() == 2), "{key}");
+            assert_eq!(state.ledger.request_view(&contract, key).unwrap().status, "completed", "{key}");
+        }
+        assert_eq!(unknown_usage(), 0);
+        engine_task.abort();
+    }
+
+    /// A chat engine that streams six output events, each with one token ID. For the
+    /// prompt `finish` it then finishes with exact usage and `[DONE]`; otherwise its
+    /// stream stays open, so only the gateway can end the request.
+    fn six_event_engine() -> Router {
+        use axum::routing::post;
+        Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/apply-template", post(|| async { Json(json!({"prompt":"rendered"})) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens":[10,11]})) }))
+            .route("/v1/chat/completions", post(|Json(body): Json<Value>| async move {
+                let chunk = |choices: Value| json!({"id":"engine-response","object":"chat.completion.chunk",
+                    "model":"model","created":1,"choices":choices});
+                let mut events: Vec<Value> = (0..6).map(|index| chunk(json!([{"index":0,
+                    "delta":{"content":format!("t{index}")},"finish_reason":null,
+                    "logprobs":{"content":[{"id":40 + index,"token":format!("t{index}"),
+                        "bytes":[116],"logprob":-0.5,"top_logprobs":[]}]}}]))).collect();
+                let finish = body["messages"][0]["content"] == "finish";
+                if finish {
+                    events.push(chunk(json!([{"index":0,"delta":{},"finish_reason":"stop"}])));
+                    let mut usage = chunk(json!([]));
+                    usage["usage"] = json!({"prompt_tokens":2,"completion_tokens":6,"total_tokens":8});
+                    events.push(usage);
+                }
+                let mut text: String = events.iter().map(|event| format!("data: {event}\n\n")).collect();
+                if finish {
+                    text.push_str("data: [DONE]\n\n");
+                }
+                let head = futures_util::stream::once(async move { Ok::<_, Infallible>(Bytes::from(text)) });
+                let body = if finish {
+                    Body::from_stream(head)
+                } else {
+                    Body::from_stream(head.chain(futures_util::stream::pending()))
+                };
+                ([(header::CONTENT_TYPE, "text/event-stream")], body)
+            }))
+    }
+
+    /// Reads a response body to its end: its text, and whether it ended with an error
+    /// rather than cleanly.
+    async fn read_to_end(response: Response) -> (String, bool) {
+        let mut body = response.into_body().into_data_stream();
+        let mut text = String::new();
+        while let Some(frame) = tokio::time::timeout(Duration::from_secs(10), body.next())
+            .await
+            .expect("the body neither ended nor failed")
+        {
+            match frame {
+                Ok(bytes) => text.push_str(std::str::from_utf8(&bytes).unwrap()),
+                Err(_) => return (text, true),
+            }
+        }
+        (text, false)
+    }
+
+    /// public-inference-api requirement 6 (task 2.3, design code difference 3): a stream
+    /// that fails after its output began does not end like a completed stream, even when
+    /// the client stopped reading and the bounded queue was full when it failed. The
+    /// router runs in-process, so no socket buffer drains the queue.
+    #[tokio::test]
+    async fn a_stream_that_fails_while_the_client_is_not_reading_does_not_end_cleanly() {
+        let (base, engine_task) = serve_engine(six_event_engine()).await;
+        let streaming = |content: &str| json!({"model":"model","messages":[{"role":"user","content":content}],
+            "stream":true,"max_tokens":8});
+
+        // Control: polled promptly against an engine that finishes, the stream ends with
+        // `[DONE]` and a clean end, and the request is completed.
+        let (_control_directory, mut state, bearer) = ingress_fixture();
+        let inner = Arc::get_mut(&mut state).unwrap();
+        Arc::get_mut(&mut inner.config).unwrap().models[0].engine_url = base.clone();
+        inner.qualified_models.write().unwrap().insert("model".into());
+        let mut app = router(state);
+        let response = app.call(keyed("/v1/chat/completions", &bearer, "finishes", streaming("finish"))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let id = response.headers()["x-request-id"].to_str().unwrap().to_owned();
+        let (text, ended_abnormally) = read_to_end(response).await;
+        assert!(!ended_abnormally, "{text}");
+        assert!(text.ends_with("data: [DONE]\n\n"), "{text}");
+        assert!((0..6).all(|index| text.contains(&format!("\"t{index}\""))), "{text}");
+        assert_eq!(request_status_of(&mut app, &bearer, &id).await["status"], "completed");
+
+        // The engine streams six events and stays open; the generation deadline is 1 s.
+        let (_directory, mut state, bearer) = ingress_fixture();
+        let inner = Arc::get_mut(&mut state).unwrap();
+        let config = &mut Arc::get_mut(&mut inner.config).unwrap().models[0];
+        config.engine_url = base;
+        config.request_timeout_secs = 1;
+        inner.qualified_models.write().unwrap().insert("model".into());
+        let mut app = router(state);
+        let response = app.call(keyed("/v1/chat/completions", &bearer, "stalled", streaming("hold"))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let id = response.headers()["x-request-id"].to_str().unwrap().to_owned();
+        // The body is not polled: four events fill the queue, and the fifth waits until
+        // the deadline fails the request.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = request_status_of(&mut app, &bearer, &id).await["status"].clone();
+            if status == "timed_out_unknown_usage" {
+                break;
+            }
+            assert_eq!(status, "reserved");
+            assert!(Instant::now() < deadline, "the request never reached its deadline");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (text, ended_abnormally) = read_to_end(response).await;
+        assert!((0..4).all(|index| text.contains(&format!("\"t{index}\""))), "{text}");
+        assert!(
+            ended_abnormally || text.contains("\"code\":\"engine_timeout\""),
+            "the failed stream ended cleanly with only output events: {text}"
+        );
+        engine_task.abort();
+    }
+
+    /// public-inference-api requirement 6 (task 2.4, design code difference 4): a
+    /// completion prompt that the engine prepares into no tokens is refused before
+    /// reservation as invalid input, not as a context overflow.
+    #[tokio::test]
+    async fn a_prompt_prepared_into_no_tokens_is_refused_as_invalid_input_before_reservation() {
+        use axum::routing::post;
+        use std::sync::atomic::AtomicUsize;
+        let (_directory, mut state, bearer) =
+            ingress_fixture_for(|model| model.capabilities = vec!["completions".into()]);
+        let generations = Arc::new(AtomicUsize::new(0));
+        let generated = generations.clone();
+        let engine = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens":[]})) }))
+            .route("/v1/completions", post(move || {
+                generated.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::INTERNAL_SERVER_ERROR }
+            }));
+        let (base, engine_task) = serve_engine(engine).await;
+        let inner = Arc::get_mut(&mut state).unwrap();
+        Arc::get_mut(&mut inner.config).unwrap().models[0].engine_url = base;
+        inner.qualified_models.write().unwrap().insert("model".into());
+        let mut app = router(state.clone());
+        let contract = state.ledger.authenticate(&bearer, protocol::now().unwrap()).unwrap()
+            .account.contract_id;
+        for stream in [false, true] {
+            let key = if stream { "empty-streamed" } else { "empty" };
+            let response = app.call(keyed("/v1/completions", &bearer, key,
+                json!({"model":"model","prompt":"","max_tokens":1,"stream":stream}))).await.unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{key}");
+            let error: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+            assert_eq!(error["error"]["code"], "unsupported_parameter", "{key}");
+            assert!(!error["error"]["message"].as_str().unwrap().contains("context"), "{error}");
+            assert!(state.ledger.request_view(&contract, key).is_err(), "{key}");
+        }
+        assert_eq!(generations.load(Ordering::SeqCst), 0);
+        assert!(state.ledger.list_requests().unwrap().is_empty());
+        engine_task.abort();
     }
 }

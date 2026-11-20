@@ -594,7 +594,12 @@ impl Backend {
         })).await?;
         let tokens = value.get_mut("tokens").and_then(Value::as_array_mut)
             .ok_or_else(upstream_error)?;
-        if tokens.is_empty() || tokens.len() as u64 > self.config.model.context_length {
+        // An input the engine prepares into no tokens is invalid input, as an empty
+        // embedding input is in `prepare`; only a longer list is a context overflow.
+        if tokens.is_empty() {
+            return Err(invalid("Input is prepared into no tokens; supply non-empty input"));
+        }
+        if tokens.len() as u64 > self.config.model.context_length {
             return Err(ApiError::bad_request("context_length_exceeded", "Tokenized prompt exceeds the advertised context"));
         }
         if tokens.iter().any(|token| token.as_u64().is_none_or(|id| id > i32::MAX as u64)) {
@@ -688,7 +693,11 @@ impl Backend {
         }
         Ok(response)
     }
-    async fn qualification_probe(&self, probe_inference: bool) -> Result<(), ApiError> {
+    /// Readiness for one model. With `probe_inference`, also runs real inference
+    /// for every advertised capability and returns the native embedding dimension
+    /// its embedding probes measured; `None` for a model without `embeddings`, or
+    /// when no inference ran.
+    async fn qualification_probe(&self, probe_inference: bool) -> Result<Option<u64>, ApiError> {
         self.ready().await?;
         if self.config.model.serving.is_some() {
             let path = self.config.qualification_evidence_file.as_ref().ok_or_else(upstream_error)?;
@@ -735,7 +744,18 @@ impl Backend {
                 return Err(upstream_error());
             }
         }
-        if !probe_inference { return Ok(()); }
+        // Every advertised capability needs a probe on an endpoint the model serves:
+        // `streaming` is exercised by the streamed chat or completion probes below,
+        // `tools` and `structured_output` by chat probes. Checked here so that it does
+        // not depend on the probe order or on whether inference is repeated.
+        let advertises = |name: &str| self.config.model.capabilities.iter().any(|c| c == name);
+        if (advertises("streaming") && !advertises("chat") && !advertises("completions"))
+            || ((advertises("tools") || advertises("structured_output")) && !advertises("chat"))
+        {
+            return Err(upstream_error());
+        }
+        if !probe_inference { return Ok(None); }
+        let mut embedding_dimensions = None;
         for endpoint in [Endpoint::Chat, Endpoint::Completions, Endpoint::Embeddings] {
             if !self
                 .config
@@ -757,11 +777,16 @@ impl Backend {
                     json!({"model":self.config.model.id,"input":["A","MiXeD case"],"encoding_format":"float"})
                 }
             };
-            self.probe(body.clone(), endpoint).await?;
+            let dimensions = self.probe(body.clone(), endpoint).await?;
             if endpoint == Endpoint::Embeddings {
                 let mut encoded = body;
                 encoded["encoding_format"] = json!("base64");
-                self.probe(encoded, endpoint).await?;
+                // Both encodings must agree on the one native dimension that later
+                // requests naming `dimensions` are checked against.
+                if dimensions.is_none() || self.probe(encoded, endpoint).await? != dimensions {
+                    return Err(upstream_error());
+                }
+                embedding_dimensions = dimensions;
             } else {
                 let mut streaming = body;
                 streaming["stream"] = json!(true);
@@ -792,9 +817,11 @@ impl Backend {
             body["stream"] = json!(true);
             self.probe(body, Endpoint::Chat).await?;
         }
-        Ok(())
+        Ok(embedding_dimensions)
     }
-    async fn probe(&self, body: Value, endpoint: Endpoint) -> Result<(), ApiError> {
+    /// One readiness request. Returns the vectors' common length for an embedding
+    /// probe, and `None` otherwise.
+    async fn probe(&self, body: Value, endpoint: Endpoint) -> Result<Option<u64>, ApiError> {
         let mut request = prepare(body, endpoint, &self.config.model)?;
         self.tokenize(&mut request).await?;
         let response = self
@@ -838,7 +865,7 @@ impl Backend {
                                 && serde_json::from_str::<Value>(&content).ok() != Some(json!({})) {
                                 return Err(upstream_error());
                             }
-                            return Ok(());
+                            return Ok(None);
                         }
                         let value = serde_json::from_slice(&data).map_err(|_| upstream_error())?;
                         for mut value in normalization.events(value, endpoint)?.into_iter().flatten() {
@@ -863,7 +890,7 @@ impl Backend {
         }
         let mut value = read_json(response, MAX_RESPONSE_BYTES).await?;
         normalize_embedding_usage(&mut value, endpoint)?;
-        let usage = validate_response(&value, &request)?;
+        let (usage, dimensions) = validate_response_dimensions(&value, &request)?;
         validate_authorized_usage(&usage, request.prompt_tokens, request.max_output_tokens)?;
         if request.body.get("tools").is_some() {
             let choice = &value["choices"][0];
@@ -895,7 +922,7 @@ impl Backend {
                 return Err(upstream_error());
             }
         }
-        Ok(())
+        Ok(dimensions)
     }
 }
 
@@ -1093,6 +1120,13 @@ pub fn validate_authorized_usage(
     Ok(())
 }
 pub fn validate_response(value: &Value, request: &PreparedRequest) -> Result<TokenUsage, ApiError> {
+    validate_response_dimensions(value, request).map(|(usage, _)| usage)
+}
+/// `validate_response`, also returning an embedding batch's common vector length.
+pub(crate) fn validate_response_dimensions(
+    value: &Value,
+    request: &PreparedRequest,
+) -> Result<(TokenUsage, Option<u64>), ApiError> {
     if value.get("error").is_some()
         || value.get("model").and_then(Value::as_str)
             != request.body.get("model").and_then(Value::as_str)
@@ -1107,6 +1141,7 @@ pub fn validate_response(value: &Value, request: &PreparedRequest) -> Result<Tok
     if value.get("object").and_then(Value::as_str) != Some(expected) {
         return Err(upstream_error());
     }
+    let mut batch_dimensions = None;
     if request.endpoint == Endpoint::Embeddings {
         let data = value
             .get("data")
@@ -1119,7 +1154,6 @@ pub fn validate_response(value: &Value, request: &PreparedRequest) -> Result<Tok
             .and_then(Value::as_str)
             .unwrap_or("float");
         let requested_dimensions = request.body.get("dimensions").and_then(Value::as_u64);
-        let mut batch_dimensions = None;
         for (index, item) in data.iter().enumerate() {
             if item.get("index").and_then(Value::as_u64) != Some(index as u64)
                 || item.get("object").and_then(Value::as_str) != Some("embedding")
@@ -1202,7 +1236,8 @@ pub fn validate_response(value: &Value, request: &PreparedRequest) -> Result<Tok
             return Err(upstream_error());
         }
     }
-    parse_usage(value.get("usage").ok_or_else(upstream_error)?)
+    let usage = parse_usage(value.get("usage").ok_or_else(upstream_error)?)?;
+    Ok((usage, batch_dimensions.map(|dimensions: usize| dimensions as u64)))
 }
 
 /// Incremental SSE framing shared by live responses and readiness probes.
@@ -1348,6 +1383,10 @@ pub struct ModelHealth {
     pub model_id: String,
     pub ready: bool,
     pub detail: String,
+    /// The native embedding dimension this pass's embedding probes measured.
+    /// Private readiness state: never reported, listed or signed.
+    #[serde(skip)]
+    pub embedding_dimensions: Option<u64>,
 }
 /// Parent caches publication readiness; this performs real inference, not a TCP probe.
 pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth> {
@@ -1369,11 +1408,11 @@ pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth>
 
 async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> ModelHealth {
     if !state.engine_alive(&model.model.id) {
-        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Managed engine exited".into() };
+        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Managed engine exited".into(), embedding_dimensions: None };
     }
     let permit = state.model_slots[&model.model.id].clone().try_acquire_many_owned(model.max_concurrency).ok();
     if permit.is_none() && state.qualified_model(&model.model).is_none() {
-        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Initial qualification awaits idle engine capacity".into() };
+        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Initial qualification awaits idle engine capacity".into(), embedding_dimensions: None };
     }
     let result = match Backend::new(model) {
         Ok(backend) => tokio::time::timeout(
@@ -1393,6 +1432,7 @@ async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> 
         } else {
             "Not ready: private engine, tokenizer/template, capability probe or usage accounting failed".into()
         },
+        embedding_dimensions: result.ok().flatten(),
     }
 }
 
@@ -1715,7 +1755,90 @@ mod tests {
         }).unwrap();
         let mut request = prepare(json!({"model":"model","prompt":"A ".repeat(128),"max_tokens":1}),
             Endpoint::Completions, &bounded).unwrap();
-        assert!(backend.tokenize(&mut request).await.is_err());
+        let error = backend.tokenize(&mut request).await.unwrap_err();
+        assert_eq!((error.status, error.code.as_str()), (StatusCode::BAD_REQUEST, "context_length_exceeded"));
+        server.abort();
+    }
+    /// public-inference-api requirement 6 (task 2.4, design code difference 4): an empty
+    /// completion prompt that the engine prepares into no tokens is invalid input, not a
+    /// context overflow; one that it prepares into a beginning-of-sequence token is valid.
+    #[tokio::test]
+    async fn an_input_prepared_into_no_tokens_is_invalid_input_not_a_context_overflow() {
+        use axum::{routing::post, Json, Router};
+        for tokens in [json!([]), json!([1])] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let prepared = json!({"tokens": tokens});
+            let routes = Router::new().route("/tokenize", post(move || async move { Json(prepared) }));
+            let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+            let backend = Backend::new(&ModelConfig {
+                model: model(),
+                price: crate::protocol::PriceSchedule { input_wei_per_1k:"1".into(), output_wei_per_1k:"2".into() },
+                engine_url: base, engine_api_key_file: None, max_concurrency:1,
+                request_timeout_secs:5, qualification_evidence_file:None, runtime:None,
+            }).unwrap();
+            let mut request = prepare(json!({"model":"model","prompt":"","max_tokens":1}),
+                Endpoint::Completions, &model()).unwrap();
+            let result = backend.tokenize(&mut request).await;
+            if tokens == json!([]) {
+                let error = result.unwrap_err();
+                assert_eq!(error.status, StatusCode::BAD_REQUEST);
+                assert_ne!(error.code, "context_length_exceeded");
+                assert_eq!(error.code, "unsupported_parameter");
+                assert!(!error.message.contains("context"), "{}", error.message);
+            } else {
+                result.unwrap();
+                assert_eq!(request.prompt_tokens, 1);
+                assert_eq!(request.body["prompt"], json!([1]));
+            }
+            server.abort();
+        }
+    }
+    /// public-inference-api requirement 8 (task 2.1, design code difference 1): the rule
+    /// that every advertised capability has a probe on an endpoint the model serves is
+    /// checked before any inference probe, so a busy re-check that repeats no inference
+    /// applies it too; chat and completion models that advertise `streaming`, `tools` or
+    /// `structured_output` beside their endpoint stay eligible.
+    #[tokio::test]
+    async fn every_advertised_capability_needs_a_probe_on_the_model_endpoints() {
+        use axum::{routing::get, Json, Router};
+        let template = "{{ messages }}";
+        let props = json!({"build_info":"b1-cd959ba","total_slots":1,"model_alias":"model",
+            "default_generation_settings":{"n_ctx":4096},"chat_template":template});
+        let routes = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/v1/models", get(|| async { Json(json!({"data":[{"id":"model"}]})) }))
+            .route("/props", get(move || async move { Json(props) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        for (capabilities, eligible) in [
+            (&["chat", "completions", "streaming"][..], true),
+            (&["completions", "streaming"], true),
+            (&["chat", "streaming"], true),
+            (&["chat", "completions", "tools", "structured_output", "streaming"], true),
+            (&["embeddings"], true),
+            (&["embeddings", "streaming"], false),
+            (&["streaming"], false),
+            (&["completions", "streaming", "tools"], false),
+            (&["completions", "structured_output"], false),
+            (&["embeddings", "tools"], false),
+            (&["embeddings", "structured_output"], false),
+        ] {
+            let mut spec = model();
+            spec.chat_template_sha256 = hex::encode(Sha256::digest(template.as_bytes()));
+            spec.capabilities = capabilities.iter().map(|c| c.to_string()).collect();
+            let backend = Backend::new(&ModelConfig {
+                model: spec,
+                price: crate::protocol::PriceSchedule { input_wei_per_1k:"1".into(), output_wei_per_1k:"2".into() },
+                engine_url: base.clone(), engine_api_key_file: None, max_concurrency:1,
+                request_timeout_secs:5, qualification_evidence_file:None, runtime:None,
+            }).unwrap();
+            // Without inference: the identity checks pass, so only the rule decides.
+            let result = backend.qualification_probe(false).await;
+            assert_eq!(result.as_ref().map_err(|error| error.code.as_str()).copied(),
+                if eligible { Ok(None) } else { Err("engine_error") }, "{capabilities:?}");
+        }
         server.abort();
     }
 }

@@ -1901,6 +1901,7 @@ async fn fee_recheck_time_advances_after_unavailable_and_faulted_outcomes() {
         accepting: AtomicBool::new(true),
         funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(Default::default()),
+        embedding_dimensions: std::sync::RwLock::new(Default::default()),
     });
     let checked = |id: &str| -> Option<u64> {
         ledger
@@ -2281,6 +2282,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
         qualified_models: std::sync::RwLock::new(
             [q.payload.model.id.clone()].into_iter().collect(),
         ),
+        embedding_dimensions: std::sync::RwLock::new(Default::default()),
     });
     // Force sealing a batch so maintenance actually attempts a gas-starved send.
     ledger.prepare_fee_batches(now, true).unwrap();
@@ -3065,6 +3067,7 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
         accepting: AtomicBool::new(true),
         funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(Default::default()),
+        embedding_dimensions: std::sync::RwLock::new(Default::default()),
     });
     state.qualified_models.write().unwrap().insert(q.payload.model.id.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

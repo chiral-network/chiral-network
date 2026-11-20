@@ -46,6 +46,11 @@ pub struct ProviderState {
     pub accepting: AtomicBool,
     pub funding_ready: AtomicBool,
     pub qualified_models: std::sync::RwLock<HashSet<String>>,
+    /// The native embedding dimension of each ready embedding model, measured by its
+    /// last readiness embedding probe and removed when the model stops being ready.
+    /// A request naming other `dimensions` is refused before reservation; never
+    /// signed or listed.
+    pub embedding_dimensions: std::sync::RwLock<std::collections::HashMap<String, u64>>,
     /// Shared by all public routers and readiness probes; no hidden engine concurrency.
     pub model_slots: std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>,
     pub managed_engines: std::collections::HashMap<String, Arc<crate::engine_runtime::ManagedEngine>>,
@@ -59,6 +64,28 @@ impl ProviderState {
         config.models.iter().map(|model| (
             model.model.id.clone(), Arc::new(tokio::sync::Semaphore::new(model.max_concurrency as usize)),
         )).collect()
+    }
+    /// Applies one readiness pass: the ready set, and each ready embedding model's
+    /// measured native dimension. A model that is not ready keeps no dimension; a
+    /// busy, already ready model whose pass repeated no inference keeps its value.
+    pub fn record_readiness(&self, health: &[ModelHealth]) -> Result<(), &'static str> {
+        let mut qualified = self
+            .qualified_models
+            .write()
+            .map_err(|_| "model qualification lock unavailable")?;
+        let mut dimensions = self
+            .embedding_dimensions
+            .write()
+            .map_err(|_| "model qualification lock unavailable")?;
+        qualified.clear();
+        for model in health.iter().filter(|model| model.ready) {
+            qualified.insert(model.model_id.clone());
+            if let Some(native) = model.embedding_dimensions {
+                dimensions.insert(model.model_id.clone(), native);
+            }
+        }
+        dimensions.retain(|id, _| qualified.contains(id));
+        Ok(())
     }
     pub fn qualified_model(&self, agreement: &protocol::ModelSpec) -> Option<&protocol::ModelSpec> {
         let current = &self.config.models.iter()
@@ -170,6 +197,7 @@ impl ProviderRuntime {
             accepting: AtomicBool::new(false),
             funding_ready: AtomicBool::new(false),
             qualified_models: std::sync::RwLock::new(HashSet::new()),
+            embedding_dimensions: std::sync::RwLock::new(Default::default()),
         });
         let runtime = Arc::new(Self {
             state,
@@ -202,6 +230,9 @@ impl ProviderRuntime {
                 if failed.is_empty() { continue; }
                 if let Ok(mut qualified) = runtime.state.qualified_models.write() {
                     for id in &failed { qualified.remove(id); }
+                }
+                if let Ok(mut dimensions) = runtime.state.embedding_dimensions.write() {
+                    for id in &failed { dimensions.remove(id); }
                 }
                 runtime.state.accepting.store(false, Ordering::Release);
                 runtime.state.funding_ready.store(false, Ordering::Release);
@@ -259,20 +290,7 @@ impl ProviderRuntime {
     async fn refresh_inner(&self) -> Result<usize, String> {
         self.state.funding_ready.store(false, Ordering::Release);
         let health = inference_backend::model_health(&self.state).await;
-        {
-            let mut qualified = self
-                .state
-                .qualified_models
-                .write()
-                .map_err(|_| "model qualification lock unavailable")?;
-            qualified.clear();
-            qualified.extend(
-                health
-                    .iter()
-                    .filter(|model| model.ready)
-                    .map(|model| model.model_id.clone()),
-            );
-        }
+        self.state.record_readiness(&health)?;
         let (chain_ready, chain_error) = match self.state.chain.status().await {
             Ok(status)
                 if status
@@ -846,6 +864,172 @@ mod tests {
 
         runtime.dht.stop().await;
         for server in engines.into_iter().chain([rpc_server, unavailable]) {
+            server.abort();
+        }
+    }
+
+    /// A non-development provider whose only model, `model`, is an external embedding
+    /// deployment with `capabilities`, served by `embeddings_engine` while `healthy`
+    /// (503 otherwise); a free account for it; and the servers to abort.
+    async fn embedding_provider(
+        directory: &std::path::Path,
+        capabilities: &[&str],
+        healthy: Arc<AtomicBool>,
+    ) -> (Arc<ProviderRuntime>, String, Vec<tokio::task::JoinHandle<()>>) {
+        let (mut config, unavailable) = unavailable_provider(directory).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = capabilities.iter().map(|c| c.to_string()).collect();
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        let engine = embeddings_engine(model.model.clone()).layer(middleware::from_fn(
+            move |request: Request, next: Next| {
+                let healthy = healthy.clone();
+                async move {
+                    if healthy.load(Ordering::Acquire) {
+                        next.run(request).await
+                    } else {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    }
+                }
+            },
+        ));
+        let (engine, engine_server) = serve(engine).await;
+        model.engine_url = engine;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let state = &runtime.state;
+        let now = protocol::now().unwrap();
+        let quote = protocol::sign(protocol::QUOTE_DOMAIN, Quote {
+            id: protocol::random_id(), network: state.config.network.identity.clone(),
+            offer_id: protocol::random_id(), provider_wallet: state.wallet.clone(),
+            consumer_wallet: wallet::address_from_private_key(&"22".repeat(32)).unwrap(),
+            model: state.config.models[0].model.clone(),
+            price: PriceSchedule { input_wei_per_1k: "0".into(), output_wei_per_1k: "0".into() },
+            funding_wei: "0".into(), platform_wallet: state.config.platform_wallet.clone(),
+            fee_bps: 50, max_concurrency: 1, nonce: protocol::random_id(),
+            issued_at: now, expires_at: now + 300,
+        }, &state.private_key).unwrap();
+        state.ledger.store_quote(&quote, now).unwrap();
+        let bearer = state.ledger.open_account(&quote, None, now).unwrap().credential.unwrap().bearer;
+        (runtime, bearer, vec![engine_server, rpc_server, unavailable])
+    }
+
+    /// `GET /admin/offers` and `GET /v1/models` with `bearer`: the published offers'
+    /// advertised capabilities, and the listed model identifiers.
+    async fn offers_and_listing(runtime: &Arc<ProviderRuntime>, bearer: &str) -> (Vec<Value>, Vec<Value>) {
+        use tower::ServiceExt;
+        let read = |response: Response| async move {
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        };
+        let offers = read(runtime.admin_router().oneshot(Request::builder().uri("/admin/offers")
+            .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap()).await;
+        let listing = read(runtime.public_router().oneshot(Request::builder().uri("/v1/models")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap()).await;
+        (
+            offers["offers"].as_array().unwrap().iter()
+                .map(|offer| offer["payload"]["model"]["capabilities"].clone()).collect(),
+            listing["data"].as_array().unwrap().iter().map(|model| model["id"].clone()).collect(),
+        )
+    }
+
+    /// public-inference-api requirement 8 (task 2.1, design code difference 1): a model whose
+    /// advertised capability has no probe on its endpoints is not ready, so it is neither
+    /// admitted, listed nor published, although its embedding probes succeed. `streaming`
+    /// without `chat` or `completions` is the case that was ready before; `tools` and
+    /// `structured_output` without `chat` are refused by the same rule.
+    #[tokio::test]
+    async fn a_capability_without_a_probe_on_the_model_endpoints_is_not_ready_or_published() {
+        for capabilities in [
+            &["embeddings", "streaming"][..],
+            &["embeddings", "tools"],
+            &["embeddings", "structured_output"],
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let (runtime, bearer, servers) =
+                embedding_provider(directory.path(), capabilities, Arc::new(AtomicBool::new(true))).await;
+            let health = runtime.health.read().await.clone();
+            assert_eq!(health.len(), 1);
+            assert!(!health[0].ready, "{capabilities:?}: {health:?}");
+            assert!(runtime.state.qualified_model(&runtime.state.config.models[0].model).is_none());
+            assert!(runtime.state.embedding_dimensions.read().unwrap().is_empty());
+            assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{capabilities:?}");
+            assert_eq!(runtime.dht.status().await["published_offers"], 0, "{capabilities:?}");
+            assert_eq!(offers_and_listing(&runtime, &bearer).await, (vec![], vec![]), "{capabilities:?}");
+            runtime.dht.stop().await;
+            for server in servers {
+                server.abort();
+            }
+        }
+        // Control: the same deployment advertising only `embeddings` is ready and published.
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        assert!(runtime.health.read().await[0].ready);
+        assert!(runtime.state.funding_ready.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        assert_eq!(offers_and_listing(&runtime, &bearer).await, (vec![json!(["embeddings"])], vec![json!("model")]));
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// public-inference-api requirement 10 (task 2.2): readiness records the native
+    /// embedding dimension that its embedding probes measured, a busy re-check that runs no
+    /// inference keeps it, a pass in which the model is not ready removes it, and the next
+    /// ready pass records it again. The value is
+    /// private: it is not in the status or the signed offer.
+    #[tokio::test]
+    async fn readiness_records_the_native_embedding_dimension_only_while_the_model_is_ready() {
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let healthy = Arc::new(AtomicBool::new(true));
+        let (runtime, bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], healthy.clone()).await;
+        let recorded = || runtime.state.embedding_dimensions.read().unwrap().clone();
+        // `embeddings_engine` answers one-dimensional vectors.
+        let native = std::collections::HashMap::from([("model".to_owned(), 1)]);
+        assert_eq!(recorded(), native);
+        let status = runtime.admin_router().oneshot(Request::builder().uri("/admin/status")
+            .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        let status = axum::body::to_bytes(status.into_body(), 1 << 20).await.unwrap();
+        assert!(!std::str::from_utf8(&status).unwrap().contains("dimension"));
+
+        // A busy re-check (every slot held) repeats no inference and measures nothing:
+        // the model stays ready and keeps the value its last probe measured.
+        let busy = runtime.state.model_slots["model"].clone()
+            .try_acquire_many_owned(runtime.state.config.models[0].max_concurrency).unwrap();
+        runtime.refresh().await.unwrap();
+        assert!(runtime.health.read().await[0].ready);
+        assert_eq!(recorded(), native);
+        drop(busy);
+
+        healthy.store(false, Ordering::Release);
+        runtime.refresh().await.unwrap();
+        assert!(!runtime.health.read().await[0].ready);
+        assert!(runtime.state.qualified_models.read().unwrap().is_empty());
+        assert!(recorded().is_empty());
+        assert_eq!(offers_and_listing(&runtime, &bearer).await, (vec![], vec![]));
+
+        healthy.store(true, Ordering::Release);
+        runtime.refresh().await.unwrap();
+        assert!(runtime.health.read().await[0].ready);
+        assert_eq!(recorded(), native);
+        let (offers, listing) = offers_and_listing(&runtime, &bearer).await;
+        assert_eq!(listing, vec![json!("model")]);
+        assert_eq!(offers.len(), 1);
+        let published = runtime.state.offers.get(runtime.published.lock().await.iter().next().unwrap()).unwrap();
+        assert!(!serde_json::to_string(&published).unwrap().contains("dimension"));
+        runtime.dht.stop().await;
+        for server in servers {
             server.abort();
         }
     }

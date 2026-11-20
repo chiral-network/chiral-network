@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-19 (fifty-third round) — Code: unprobed capabilities, embedding dimensions, failed streams, empty tokenization
+
+- In step at `3a9611f1`; whitepaper unchanged; no new answers.
+- Code step (public-inference-api 2.1–2.4).
+  - Readiness fails a model advertising `streaming` without `chat` or `completions`, or `tools`/`structured_output` without `chat`.
+  - Readiness records the native embedding dimension from its probes (float and base64 must agree), keeps it on a busy re-check, and clears it when the model stops being ready. Nothing is signed or listed. `infer` refuses an embedding request whose `dimensions` differs from it, or names any while none is recorded, as 400 `unsupported_parameter` before tokenization and reservation. Before, such a request reached the engine, failed as 502 `engine_error` and was settled as unknown usage at the provider's loss.
+  - A failed stream whose error event cannot be queued, because the client stopped reading, now ends with a body error instead of a clean chunked end. Successful streams still end with `[DONE]`.
+  - An input the engine tokenizes to nothing is 400 `unsupported_parameter` instead of `context_length_exceeded`.
+  - The review added two regressions for untested behaviours: a busy re-check keeping the dimension, and qualified streaming models staying eligible.
+  - Regressions fail without their changes.
+- Changed public answers: (a) empty tokenization and (b) unproducible dimensions now get 400 `unsupported_parameter`; (c) a stream failing behind a stalled client ends abnormally.
+- Recorded follow-up task 2.5: the operator sees only a generic health detail for a capability set that can never become ready.
+- Checks: full headless suite under `caffeinate` 555 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; `npm test` 70/70; `npm run check` 0 errors; strict validation passes.
+
 ## 2026-11-19 (fifty-second round) — Spec: the public OpenAI-compatible API and per-capability qualification
 
 - In step at `80334be3`; whitepaper unchanged; no new answers.
@@ -551,7 +565,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: public-inference-api 2.1–2.4; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: public-inference-api 2.5; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

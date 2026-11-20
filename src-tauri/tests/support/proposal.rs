@@ -114,6 +114,7 @@ impl PreparedProvider {
             offers, accepting: AtomicBool::new(true), funding_ready: AtomicBool::new(true),
             // Unprofiled development model admitted as a prerequisite, not measured qualification.
             qualified_models: RwLock::new([offer.payload.model.id.clone()].into_iter().collect()),
+            embedding_dimensions: RwLock::new(Default::default()),
         });
         Self { state, offer, offer_id, ledger_path }
     }

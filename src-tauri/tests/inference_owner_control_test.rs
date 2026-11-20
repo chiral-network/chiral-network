@@ -2357,6 +2357,7 @@ async fn free_account_final_slot(ledger_wide: bool) {
         accepting: AtomicBool::new(source.accepting.load(Ordering::Acquire)),
         funding_ready: AtomicBool::new(source.funding_ready.load(Ordering::Acquire)),
         qualified_models: std::sync::RwLock::new(source.qualified_models.read().unwrap().clone()),
+        embedding_dimensions: std::sync::RwLock::new(source.embedding_dimensions.read().unwrap().clone()),
         model_slots: source.model_slots.clone(), managed_engines: source.managed_engines.clone(),
     });
     let barrier = Arc::new(tokio::sync::Barrier::new(2));

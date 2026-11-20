@@ -164,6 +164,7 @@ fn reopened_router(fixture: &Fixture, private_key: &str) -> axum::Router {
         accepting: AtomicBool::new(original.accepting.load(Ordering::Acquire)),
         funding_ready: AtomicBool::new(original.funding_ready.load(Ordering::Acquire)),
         qualified_models: RwLock::new(original.qualified_models.read().unwrap().clone()),
+        embedding_dimensions: RwLock::new(original.embedding_dimensions.read().unwrap().clone()),
         model_slots: original.model_slots.clone(), managed_engines: original.managed_engines.clone(),
     });
     contracts::router(state)

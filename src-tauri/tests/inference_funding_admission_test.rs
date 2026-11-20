@@ -1577,6 +1577,7 @@ async fn independent_authenticated_writers_compete_for_the_final_paid_lease() {
         config: Arc::new(config), private_key: source.private_key.clone(), wallet: source.wallet.clone(),
         offers: source.offers.clone(), accepting: AtomicBool::new(true), funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(source.qualified_models.read().unwrap().clone()),
+        embedding_dimensions: std::sync::RwLock::new(source.embedding_dimensions.read().unwrap().clone()),
         model_slots: source.model_slots.clone(), managed_engines: source.managed_engines.clone(),
     });
     let rpc_app = Router::new().route("/", post(rpc_reply)).with_state(second_rpc.clone());
