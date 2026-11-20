@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-20 (sixty-fourth round) — Acceptance: pinned outbound client, private engine origin, ingress and preflight
+
+- In step at `3140f4ee`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-outbound-http-safeguards` 3.4, 3.7 and 3.8). With round 63, every acceptance task of this change is ticked; 4.1 (deployment evidence), 4.2 and 4.3 remain.
+  - 3.4: empty, oversized (33) or partly private answer sets build no client; resolution is refused after exactly 5 s (paused time); a pinned client abandons a stalled connection after exactly 10 s and connects only to its answers; a provider or catalog answering 302 to every consumer request kind (inspection, discovery, quote, signed controls, bearer requests, feedback and the hidden-default check of `credential_issue`) is a failure of that origin, and the redirect target records no connection; provider, catalog, engine and administration clients ignore `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` (three tests in `outbound_proxy_environment_test`); an HTTPS client sends the origin's server name and refuses an untrusted certificate before sending anything (added by the review, with a public-only self-signed fixture certificate and no new dependency).
+  - 3.7: engine origins accepted and refused in both modes through `validate`, `load`, `ProviderRuntime::start` and `Backend::new`, at every private-range edge (the review added these after narrowing 172.16/12 or fc00::/7 passed); an engine redirect is an engine failure and its target never sees the key or prompt; the engine origin and its error text appear in no signed offer or public answer.
+  - 3.8: the generated Caddyfile forwards only public-router paths to `127.0.0.1:9419` and nothing to 9421, 8000 or a file server; the preflight private-route probe, factored into `check_private_routes` with unchanged behaviour, fails on any answer other than a refusal and names the route; `check_listeners` fails private ports on wildcard or LAN addresses in Linux, macOS and Windows formats.
+- No product behaviour changed; the Rust changes are test code or `#[cfg(test)]` (resolver delay and silence for the deadline test). No code difference was found.
+- Recorded weaknesses: hostname matching after a trusted chain is not executed (no trusted localhost certificate can exist in a test); it holds by construction (rustls default verifier, no custom verifier). The 3.7 advertisement test uses a loopback engine, with `10.0.0.5` only in its error text.
+- Checks: `--lib` 355 passed, 12 ignored (helpers), 0 failed; `outbound_proxy_environment_test` 3/3; bins build and `cargo check --tests` pass; Python compile and `unittest discover -s scripts` 63 OK; strict validation passes. The rest of the integration suite was not rerun: every Rust product-file change is `#[cfg(test)]` code, which integration targets and binaries do not compile, and the changed integration target was run.
+
 ## 2026-11-20 (sixty-third round) — Acceptance: origins before any request, the development exception, the public address predicate, the administration listener
 
 - In step at `850f8e5b`; whitepaper unchanged; no new answers.
@@ -702,7 +713,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards 3.4, 3.7 and 3.8, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

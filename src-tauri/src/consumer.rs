@@ -6004,4 +6004,175 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), [format!("GET /admin/status Bearer {token}")]);
         task.abort();
     }
+    /// `redirecting`'s state: where it redirects, the terms its owner challenges bind, and
+    /// each request it received as `METHOD path`, marked ` signed` when the request carried
+    /// an owner signature and ` bearer` when it carried `Authorization`.
+    struct Redirecting {
+        target: String,
+        network: NetworkIdentity,
+        provider_wallet: String,
+        seen: std::sync::Mutex<Vec<String>>,
+    }
+    /// A development provider and catalog that answers an owner challenge for the account's
+    /// terms, so that the signed control request itself is sent, and a signed credential
+    /// list with an empty list, so that issuance checks the stored default at `/v1/models`;
+    /// it answers every other request with `302` and a `Location` naming the same path and
+    /// query on `target`.
+    async fn redirecting(
+        axum::extract::State(state): axum::extract::State<Arc<Redirecting>>,
+        method: axum::http::Method,
+        uri: axum::http::Uri,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let credential = if headers.contains_key("x-chiral-signature") {
+            " signed"
+        } else if headers.contains_key(axum::http::header::AUTHORIZATION) {
+            " bearer"
+        } else {
+            ""
+        };
+        state.seen.lock().unwrap().push(format!("{method} {}{credential}", uri.path()));
+        if method == axum::http::Method::GET && credential == " signed" && uri.path().ends_with("/credentials") {
+            return axum::Json(json!([])).into_response();
+        }
+        if uri.path() == "/v1/auth/challenge" {
+            let request: ChallengeRequest = decode(&body).unwrap();
+            let payload = crate::auth::AuthPayload {
+                network: state.network.clone(),
+                provider_wallet: state.provider_wallet.clone(),
+                wallet: request.wallet,
+                method: request.method,
+                path: request.path,
+                body_hash: request.body_hash,
+                nonce: uuid::Uuid::new_v4().to_string(),
+                expires_at: protocol::now().unwrap() + 120,
+            };
+            let challenge = Challenge {
+                nonce: payload.nonce.clone(),
+                expires_at: payload.expires_at,
+                payload_hex: format!(
+                    "0x{}",
+                    hex::encode(crate::auth::challenge_payload(&payload).unwrap())
+                ),
+            };
+            return axum::Json(serde_json::to_value(challenge).unwrap()).into_response();
+        }
+        (
+            axum::http::StatusCode::FOUND,
+            [(axum::http::header::LOCATION, format!("{}{uri}", state.target))],
+        )
+            .into_response()
+    }
+    /// outbound-http-safeguards requirement 4 scenario "A redirect is not followed" (task
+    /// 3.4). A development loopback provider, which is also the profile's catalog, answers
+    /// every request but the owner challenge with `302` and a `Location` naming a second
+    /// loopback listener. Inspection reports the provider reachable but neither live nor
+    /// ready, and its reputation read unavailable; discovery, quoting, the owner-signed
+    /// control requests (`usage`, `funding`, `credential_revoke`), the bearer requests
+    /// (`request_status`, `cancel_request`, `infer`, `stream_kind`) and feedback each fail with
+    /// their source's classification of HTTP 302. Credential issuance, whose signed list
+    /// omits the stored default, checks that default with its bearer at `/v1/models`, the
+    /// one provider request outside these paths that builds its own client; the redirect
+    /// leaves the default unchecked and nothing is issued. The provider received each
+    /// request, signed or with the account bearer where expected; the second listener
+    /// accepted no connection, so no bearer, signed request, credential or body reached it.
+    #[tokio::test]
+    async fn a_redirect_is_the_answer_of_the_origin_that_sent_it_and_its_target_is_never_contacted() {
+        use std::sync::atomic::Ordering;
+        let (target, target_connections, target_task) = connection_recorder().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = configuration(directory.path());
+        config.development = true;
+        config.catalog_url = Some(origin.clone());
+        let consumer = Consumer::new(config).unwrap();
+        consumer.wallet_create().unwrap();
+        let key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &key, &origin, false, false);
+        let id = quote.payload.id.clone();
+        let state = Arc::new(Redirecting {
+            target: format!("http://{target}"),
+            network: offer.payload.network.clone(),
+            provider_wallet: offer.payload.provider_wallet.clone(),
+            seen: Default::default(),
+        });
+        let app = axum::Router::new().fallback(redirecting).with_state(state.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // A saved account with a stored credential and the funding evidence that feedback cites.
+        let secret = "sk-chiral-redirect-secret-0123456789abcdef";
+        let mut saved = saved_funding(offer.clone(), quote.clone());
+        saved.raw_transaction = Some("0x01".into());
+        saved.tx_hash = Some(format!("0x{}", "44".repeat(32)));
+        let credential = Credential {
+            id: "credential-a".into(),
+            bearer: secret.into(),
+            contract_id: id.clone(),
+            expires_at: protocol::now().unwrap() + 3600,
+        };
+        consumer.store_credential(&mut saved, credential, true).unwrap();
+        consumer.save_account(&saved).unwrap();
+
+        let info = consumer.provider_info(&offer).await.unwrap();
+        assert_eq!(info["health"], json!({"reachable": true, "http_status": 302, "live": false}));
+        assert_eq!(info["readiness"], json!({"reachable": true, "http_status": 302, "ready": false}));
+        let catalog = "catalog_error: Reputation catalog error; this says nothing about the provider (catalog HTTP 302)";
+        assert_eq!(info["reputation"], json!({"available": false, "error": catalog}));
+        assert_eq!(
+            consumer.discover(None).await.unwrap_err(),
+            "catalog_error: The offer catalog answered with an error; discovery returned no offers (catalog HTTP 302)"
+        );
+        let provider = "provider_error: Provider operation failed; inspect account and request status before retrying (HTTP 302)";
+        let chat = json!({"model":"model-a","messages":[{"role":"user","content":"redirected prompt"}],"max_tokens":8});
+        for (operation, error) in [
+            ("quote", consumer.quote(&offer, "100").await.unwrap_err()),
+            ("usage", consumer.usage(&id).await.unwrap_err()),
+            ("funding", consumer.funding(&id).await.unwrap_err()),
+            ("credential_revoke", consumer.credential_revoke(&id, "credential-a").await.unwrap_err()),
+            ("request_status", consumer.request_status(&id, "request-a").await.unwrap_err()),
+            ("cancel_request", consumer.cancel_request(&id, "request-a").await.unwrap_err()),
+            ("infer", consumer.infer(&id, "chat", chat.clone()).await.unwrap_err()),
+            ("stream_kind", consumer.stream_kind(&id, "chat", chat.clone()).await.err().unwrap()),
+        ] {
+            assert_eq!(error, provider, "{operation}");
+        }
+        assert_eq!(consumer.feedback(&id, 80, 1).await.unwrap_err(), catalog);
+        assert_eq!(
+            consumer.credential_issue(&id, credential_options(&["infer"])).await.unwrap_err(),
+            "the default credential could not be checked at its provider; no credential was issued and the default is unchanged"
+        );
+        assert_eq!(consumer.credential_export(&id, None).unwrap()["api_key"], secret);
+        // Every request reached the provider and catalog origin itself.
+        let wallet = &offer.payload.provider_wallet;
+        let mut expected = vec![
+            "GET /healthz".to_string(),
+            "GET /readyz".into(),
+            format!("GET /api/ratings/{wallet}"),
+            "GET /api/offers".into(),
+            "POST /v1/contracts/propose".into(),
+            "POST /v1/auth/challenge".into(),
+            format!("GET /v1/contracts/{id}/requests signed"),
+            "POST /v1/auth/challenge".into(),
+            format!("GET /v1/contracts/{id}/funding signed"),
+            "POST /v1/auth/challenge".into(),
+            format!("DELETE /v1/contracts/{id}/credentials/credential-a signed"),
+            "GET /v1/requests/request-a bearer".into(),
+            "POST /v1/requests/request-a/cancel bearer".into(),
+            "POST /v1/chat/completions bearer".into(),
+            "POST /v1/chat/completions bearer".into(),
+            "POST /api/ratings/feedback".into(),
+            "POST /v1/auth/challenge".into(),
+            format!("GET /v1/contracts/{id}/credentials signed"),
+            "GET /v1/models bearer".into(),
+        ];
+        let mut seen = state.seen.lock().unwrap().clone();
+        expected.sort();
+        seen.sort();
+        assert_eq!(seen, expected);
+        assert_eq!(target_connections.load(Ordering::SeqCst), 0, "a redirect target was contacted");
+        server.abort();
+        target_task.abort();
+    }
 }

@@ -211,18 +211,22 @@ fn check_resolved_answers(
     }
     Ok(())
 }
-/// Test-only resolver seam (outbound-http-safeguards tasks 3.1, 3.2 and 3.5). Inside
+/// Test-only resolver seam (outbound-http-safeguards tasks 3.1, 3.2, 3.4 and 3.5). Inside
 /// `TEST_RESOLVER.scope(..)`, `safe_http_client` records every host it is about to resolve
 /// and takes that host's answers from `answers` instead of the system resolver; a host that
 /// `answers` does not name fails to resolve. A scoped test therefore sends no DNS query, and
 /// its `queries` show whether resolution was reached at all. Compiled only into this
 /// crate's own tests: no production path can reach it, and it replaces only the resolver,
-/// never validation, the answer check or pinning.
+/// never validation, the resolution deadline, the answer check or pinning.
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct TestResolver {
     pub(crate) answers: std::collections::HashMap<String, Vec<IpAddr>>,
     pub(crate) queries: std::sync::Mutex<Vec<String>>,
+    /// How long the resolver takes to answer (task 3.4, under paused tokio time).
+    pub(crate) delay: Duration,
+    /// A resolver that never answers (task 3.4, under paused tokio time).
+    pub(crate) silent: bool,
 }
 #[cfg(test)]
 tokio::task_local! {
@@ -234,6 +238,12 @@ async fn resolve(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
     #[cfg(test)]
     if let Ok(resolver) = TEST_RESOLVER.try_with(std::sync::Arc::clone) {
         resolver.queries.lock().unwrap().push(host.to_owned());
+        if resolver.silent {
+            std::future::pending::<()>().await;
+        }
+        if !resolver.delay.is_zero() {
+            tokio::time::sleep(resolver.delay).await;
+        }
         return resolver
             .answers
             .get(host)
@@ -704,7 +714,7 @@ pub(crate) mod tests {
                 .iter()
                 .map(|(host, ips)| (host.to_string(), ips.iter().map(|ip| ip.parse().unwrap()).collect()))
                 .collect(),
-            queries: Default::default(),
+            ..Default::default()
         })
     }
     /// outbound-http-safeguards requirement 5 scenario "Literal and resolved addresses use one
@@ -808,39 +818,41 @@ pub(crate) mod tests {
             assert!(resolver.queries.lock().unwrap().is_empty(), "{origin}/{development}");
         }
     }
+    /// Counts the connections `listener` accepts and closes each unanswered.
+    fn record(listener: tokio::net::TcpListener) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = count.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        count
+    }
+    /// Two listeners on one port, at `127.0.0.1` and at `[::1]`.
+    async fn loopback_pair() -> (tokio::net::TcpListener, tokio::net::TcpListener) {
+        for _ in 0..100 {
+            let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = v4.local_addr().unwrap().port();
+            if let Ok(v6) = tokio::net::TcpListener::bind(("::1", port)).await {
+                return (v4, v6);
+            }
+        }
+        panic!("no port free on both 127.0.0.1 and [::1]; this test needs IPv6 loopback");
+    }
     /// outbound-http-safeguards requirement 2 scenario "A localhost origin that resolves to a
     /// remote address is refused", its last clause (task 3.2): a development `localhost`
     /// client built from loopback answers is pinned to them. Two recorders listen on one port,
     /// at `127.0.0.1` and at `[::1]`, and the system resolver answers `localhost` with both;
     /// a client built from one answer connects only to that answer's recorder, so an unpinned
     /// client fails one of the two cases whichever address the system prefers. Loopback only,
-    /// no DNS query. (Pinning of public answers, the deadline, the connect timeout, proxies
-    /// and redirects remain task 3.4's evidence.)
+    /// no DNS query. (The answer bounds, the deadline, the connect timeout, proxies and
+    /// redirects are task 3.4's evidence.)
     #[tokio::test]
     async fn a_development_localhost_client_connects_only_to_its_loopback_answers() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-        fn record(listener: tokio::net::TcpListener) -> Arc<AtomicUsize> {
-            let count = Arc::new(AtomicUsize::new(0));
-            let counter = count.clone();
-            tokio::spawn(async move {
-                while let Ok((stream, _)) = listener.accept().await {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    drop(stream);
-                }
-            });
-            count
-        }
-        let mut pair = None;
-        for _ in 0..100 {
-            let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = v4.local_addr().unwrap().port();
-            if let Ok(v6) = tokio::net::TcpListener::bind(("::1", port)).await {
-                pair = Some((v4, v6));
-                break;
-            }
-        }
-        let (v4, v6) = pair.expect("no port free on both 127.0.0.1 and [::1]; this test needs IPv6 loopback");
+        use std::sync::atomic::Ordering;
+        let (v4, v6) = loopback_pair().await;
         let origin = format!("http://localhost:{}", v4.local_addr().unwrap().port());
         let (v4, v6) = (record(v4), record(v6));
         for (answer, pinned, other) in [("127.0.0.1", &v4, &v6), ("::1", &v6, &v4)] {
@@ -856,6 +868,279 @@ pub(crate) mod tests {
             assert_eq!(pinned.load(Ordering::SeqCst), before.0 + 1, "pinned to {answer}");
             assert_eq!(other.load(Ordering::SeqCst), before.1, "pinned to {answer}");
         }
+    }
+    /// Whether `safe_http_client(endpoint, development)` builds a client while the test
+    /// resolver answers `host` with `answers`, and the hosts that reached resolution.
+    async fn built_from(
+        endpoint: &str,
+        development: bool,
+        host: &str,
+        answers: &[String],
+    ) -> (Result<(), String>, Vec<String>) {
+        let answers: Vec<&str> = answers.iter().map(String::as_str).collect();
+        let resolver = test_resolver(&[(host, &answers)]);
+        let built = TEST_RESOLVER
+            .scope(resolver.clone(), safe_http_client(endpoint, development))
+            .await;
+        let queries = resolver.queries.lock().unwrap().clone();
+        (built.map(drop), queries)
+    }
+    /// outbound-http-safeguards requirement 4 scenario "An empty, oversized or partly
+    /// disallowed answer set is refused" (task 3.4), through `safe_http_client` with resolver
+    /// answers that the test controls, with and without development (a remote origin keeps
+    /// the public rule in development). No answer, 33 or 40 public answers, and 31 public
+    /// answers with `10.0.0.5` (last or first) build no client after one resolution; 32
+    /// public answers, IPv4 or mixed with IPv6, build it. A resolution error refuses the
+    /// origin too, and every client resolves and judges its answers again: a second build
+    /// resolves a second time, and a later answer set with a private address is refused.
+    /// No built client is used, so no public address is contacted; that a built client
+    /// connects only to its answers is shown on loopback answers by
+    /// `a_development_localhost_client_connects_only_to_its_loopback_answers`.
+    #[tokio::test]
+    async fn answer_sets_that_are_empty_oversized_or_partly_disallowed_build_no_client() {
+        let (origin, host) = ("https://provider.example", "provider.example");
+        let refused: Result<(), String> = Err("endpoint resolves to forbidden addresses".into());
+        let public: Vec<String> = (1..=40).map(|n| format!("93.184.216.{n}")).collect();
+        let private_last = [&public[..31], &["10.0.0.5".to_string()]].concat();
+        let private_first = [&["10.0.0.5".to_string()], &public[..31]].concat();
+        let mixed = [&public[..31], &["2606:4700:4700::1111".to_string()]].concat();
+        for development in [false, true] {
+            for (case, answers, expected) in [
+                ("no answer", Vec::new(), refused.clone()),
+                ("33 public answers", public[..33].to_vec(), refused.clone()),
+                ("40 public answers", public.clone(), refused.clone()),
+                ("31 public answers and 10.0.0.5", private_last.clone(), refused.clone()),
+                ("10.0.0.5 and 31 public answers", private_first.clone(), refused.clone()),
+                ("32 public answers", public[..32].to_vec(), Ok(())),
+                ("31 public IPv4 answers and one IPv6", mixed.clone(), Ok(())),
+            ] {
+                let (built, queries) = built_from(origin, development, host, &answers).await;
+                assert_eq!(built, expected, "{case}/{development}");
+                assert_eq!(queries, [host], "{case}/{development}: resolved once");
+            }
+        }
+        // A resolution error refuses the origin.
+        let resolver = test_resolver(&[]);
+        let built = TEST_RESOLVER.scope(resolver.clone(), safe_http_client(origin, false)).await;
+        assert_eq!(built.map(drop), Err("test resolver has no answer for provider.example".into()));
+        assert_eq!(*resolver.queries.lock().unwrap(), [host]);
+        // No client or answer set is reused: each build resolves and judges again.
+        let resolver = test_resolver(&[(host, &["93.184.216.34"])]);
+        for _ in 0..2 {
+            TEST_RESOLVER.scope(resolver.clone(), safe_http_client(origin, false)).await.unwrap();
+        }
+        assert_eq!(*resolver.queries.lock().unwrap(), [host, host]);
+        let later = ["93.184.216.34".to_string(), "10.0.0.5".to_string()];
+        assert_eq!(built_from(origin, false, host, &later).await, (refused, vec![host.to_string()]));
+    }
+    /// outbound-http-safeguards requirement 4 scenario "Slow resolution is refused" (task 3.4),
+    /// under paused tokio time with a resolver that the test controls: a resolver that never
+    /// answers, or answers after 6 seconds, is abandoned 5 seconds after resolution starts
+    /// with "DNS resolution timeout", and no client is built, so nothing can connect. An answer
+    /// at 4.999 seconds still builds the client, so the deadline is neither shorter nor longer
+    /// than 5 seconds.
+    #[tokio::test(start_paused = true)]
+    async fn resolution_that_has_not_answered_after_five_seconds_is_refused() {
+        let origin = "https://provider.example";
+        let resolver = |delay: Duration, silent: bool| {
+            std::sync::Arc::new(TestResolver {
+                answers: [("provider.example".to_string(), vec!["93.184.216.34".parse().unwrap()])].into(),
+                delay,
+                silent,
+                ..Default::default()
+            })
+        };
+        let start = tokio::time::Instant::now();
+        let early = resolver(Duration::from_millis(4_999), false);
+        let built = TEST_RESOLVER.scope(early.clone(), safe_http_client(origin, false)).await;
+        assert_eq!(built.map(drop), Ok(()));
+        assert_eq!(start.elapsed(), Duration::from_millis(4_999));
+        for (case, late) in [
+            ("a resolver that never answers", resolver(Duration::ZERO, true)),
+            ("an answer after 6 seconds", resolver(Duration::from_secs(6), false)),
+        ] {
+            let start = tokio::time::Instant::now();
+            let built = tokio::time::timeout(
+                Duration::from_secs(60),
+                TEST_RESOLVER.scope(late.clone(), safe_http_client(origin, false)),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{case}: resolution was not abandoned within 60 seconds"));
+            assert_eq!(built.map(drop), Err("DNS resolution timeout".into()), "{case}");
+            let elapsed = start.elapsed();
+            assert!(
+                (Duration::from_secs(5)..=Duration::from_millis(5_001)).contains(&elapsed),
+                "{case}: refused after {elapsed:?}"
+            );
+            assert_eq!(*late.queries.lock().unwrap(), ["provider.example"], "{case}");
+        }
+    }
+    /// outbound-http-safeguards requirement 4, task 3.4: the pinned client gives up a
+    /// connection that has not completed after 10 seconds (the connect timeout; reqwest's
+    /// connect phase includes the TLS handshake), and it connects only to the answer it was
+    /// built from. A development `https://localhost` client is built from the answer
+    /// `127.0.0.1`, where a listener accepts the TCP connection and never answers the TLS
+    /// handshake, while a recorder listens on the same port at `[::1]`, which the system
+    /// resolver also gives for `localhost`. Real time runs until the pinned address has
+    /// accepted the connection; then tokio time is paused, so the deadline is measured
+    /// exactly. The client sets no other timeout, and the caller adds none here.
+    #[tokio::test]
+    async fn a_pinned_client_abandons_a_stalled_connection_after_ten_seconds() {
+        use std::sync::atomic::Ordering;
+        let (v4, v6) = loopback_pair().await;
+        let port = v4.local_addr().unwrap().port();
+        let other = record(v6);
+        let accepted = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notify = accepted.clone();
+        let stalled = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = v4.accept().await {
+                held.push(stream);
+                notify.notify_one();
+            }
+        });
+        let origin = format!("https://localhost:{port}");
+        let resolver = test_resolver(&[("localhost", &["127.0.0.1"])]);
+        let client = TEST_RESOLVER
+            .scope(resolver.clone(), safe_http_client(&origin, true))
+            .await
+            .unwrap();
+        assert_eq!(*resolver.queries.lock().unwrap(), ["localhost"]);
+        let request = tokio::spawn(async move {
+            let start = tokio::time::Instant::now();
+            let result = client.get(format!("{origin}/healthz")).send().await;
+            (start.elapsed(), result)
+        });
+        tokio::time::timeout(Duration::from_secs(10), accepted.notified())
+            .await
+            .expect("the pinned answer 127.0.0.1 received no connection");
+        tokio::time::pause();
+        let (elapsed, result) = tokio::time::timeout(Duration::from_secs(60), request)
+            .await
+            .expect("the stalled connection was not abandoned within 60 seconds")
+            .unwrap();
+        let error = result.unwrap_err();
+        assert!(error.is_connect() && error.is_timeout(), "{error:?}");
+        assert!(
+            (Duration::from_secs(10)..Duration::from_millis(10_500)).contains(&elapsed),
+            "abandoned after {elapsed:?}"
+        );
+        assert_eq!(other.load(Ordering::SeqCst), 0, "the client contacted [::1], which it was not built from");
+        stalled.abort();
+    }
+    /// A self-signed P-256 certificate for `localhost` (`CA:FALSE`, valid from 2000 to 9999,
+    /// so no clock makes it expired or not yet valid). It is the only thing the TLS fixture
+    /// below presents; its private key was discarded when it was made, because the fixture
+    /// stops before any step that would need one.
+    const SELF_SIGNED_LOCALHOST: &str = concat!(
+        "3082019230820138a003020102021420f113a116200a90d8ec2d2b94aeb02ef1507da4300a06082a8648ce3d04030230",
+        "143112301006035504030c096c6f63616c686f73743020170d3030303130313030303030305a180f3939393931323331",
+        "3233353935395a30143112301006035504030c096c6f63616c686f73743059301306072a8648ce3d020106082a8648ce",
+        "3d0301070342000477d4e87c1bc05f02a201ecaa2f77830b89ec2edde46cbe6b919b472b872f1a8687bbde80a70b10b4",
+        "10a0acc3f2e1195df03d9844bed9c87c226231e475c8d581a3663064301d0603551d0e0416041484b253b4ff090b70a6",
+        "25e9a1fa9df0faa12b3974301f0603551d2304183016801484b253b4ff090b70a625e9a1fa9df0faa12b397430140603",
+        "551d11040d300b82096c6f63616c686f7374300c0603551d130101ff04023000300a06082a8648ce3d04030203480030",
+        "450221008d6aaecb6c69034e5d6fdf1404cb999e750239c5c7e133d1a99b59e4725a2caf022032b9bd71a2b329d2a03c",
+        "fc090f4fe9ed73ffc4b8a2830aab1a7886c5da0b924f",
+    );
+    /// The server name of a TLS ClientHello handshake message, if it carries one.
+    fn client_hello_server_name(hello: &[u8]) -> Option<String> {
+        let u16_at = |at: usize| Some(u16::from_be_bytes([*hello.get(at)?, *hello.get(at + 1)?]) as usize);
+        // Handshake type and length (4), legacy version (2) and random (32).
+        let mut at = 38;
+        at += 1 + *hello.get(at)? as usize; // session ID
+        at += 2 + u16_at(at)?; // cipher suites
+        at += 1 + *hello.get(at)? as usize; // compression methods
+        let end = at + 2 + u16_at(at)?;
+        at += 2;
+        while at + 4 <= end {
+            let (kind, length) = (u16_at(at)?, u16_at(at + 2)?);
+            if kind == 0 {
+                // server_name: list length (2), name type (1), name length (2), name.
+                let name = hello.get(at + 9..at + 9 + u16_at(at + 7)?)?;
+                return String::from_utf8(name.to_vec()).ok();
+            }
+            at += 4 + length;
+        }
+        None
+    }
+    /// outbound-http-safeguards requirement 4, task 3.4: "HTTPS SHALL keep its normal
+    /// certificate and hostname verification against the origin's hostname". A development
+    /// `https://localhost` client, built from the answer `127.0.0.1` (no DNS), meets a
+    /// loopback TLS fixture that answers its ClientHello with a TLS 1.2 flight presenting
+    /// `SELF_SIGNED_LOCALHOST` and a key exchange whose signature is never valid. The
+    /// ClientHello names `localhost`, the origin's hostname, as its server name (not the
+    /// pinned address); the client refuses the certificate as issued by an unknown issuer,
+    /// so it verified the chain against its default roots (a client that accepted any
+    /// certificate goes on to send its key exchange and then times out, and one that trusted
+    /// this certificate would fail on the signature instead); and it answers with nothing
+    /// but an alert, so neither the request nor its bearer is sent. Hostname matching itself
+    /// cannot be reached past an untrusted chain without a trusted certificate for
+    /// `localhost`; with `rustls-tls` reqwest has no builder option that turns it off.
+    #[tokio::test]
+    async fn a_pinned_https_client_verifies_the_origin_certificate() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn record(stream: &mut tokio::net::TcpStream) -> Option<(u8, Vec<u8>)> {
+            let mut header = [0u8; 5];
+            stream.read_exact(&mut header).await.ok()?;
+            let mut body = vec![0; u16::from_be_bytes([header[3], header[4]]) as usize];
+            stream.read_exact(&mut body).await.ok()?;
+            Some((header[0], body))
+        }
+        fn handshake(kind: u8, body: &[u8]) -> Vec<u8> {
+            [&[kind][..], &(body.len() as u32).to_be_bytes()[1..], body].concat()
+        }
+        let certificate = hex::decode(SELF_SIGNED_LOCALHOST).unwrap();
+        let length = |bytes: &[u8]| (bytes.len() as u32).to_be_bytes()[1..].to_vec();
+        let chain = [length(&certificate), certificate.clone()].concat();
+        let flight = [
+            // ServerHello: TLS 1.2, a random without the downgrade sentinel, no session ID,
+            // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, no compression, no extensions.
+            handshake(2, &[&[3, 3][..], &[7; 32], &[0], &[0xc0, 0x2b], &[0]].concat()),
+            handshake(11, &[length(&chain), chain].concat()),
+            // ServerKeyExchange: x25519 with an arbitrary point, and an arbitrary
+            // ecdsa_secp256r1_sha256 signature.
+            handshake(12, &[&[3, 0, 0x1d, 32][..], &[9; 32], &[4, 3, 0, 64], &[1; 64]].concat()),
+            handshake(14, &[]),
+        ]
+        .concat();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (kind, hello) = record(&mut stream).await.expect("no ClientHello");
+            assert_eq!((kind, hello.first()), (22, Some(&1)), "the client's first record is not a ClientHello");
+            let reply = [&[22, 3, 3][..], &(flight.len() as u16).to_be_bytes(), &flight].concat();
+            stream.write_all(&reply).await.unwrap();
+            let mut later = Vec::new();
+            while let Some((kind, _)) = record(&mut stream).await {
+                later.push(kind);
+            }
+            (client_hello_server_name(&hello), later)
+        });
+        let origin = format!("https://localhost:{port}");
+        let resolver = test_resolver(&[("localhost", &["127.0.0.1"])]);
+        let client = TEST_RESOLVER
+            .scope(resolver.clone(), safe_http_client(&origin, true))
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.get(format!("{origin}/v1/models")).bearer_auth("sk-chiral-verified-0123456789").send(),
+        )
+        .await
+        .expect("the TLS fixture's flight got no answer")
+        .unwrap_err();
+        let detail = format!("{error:?}");
+        assert!(error.is_connect(), "{detail}");
+        assert!(detail.contains("UnknownIssuer"), "the certificate was not refused for its issuer: {detail}");
+        let (server_name, later) = tokio::time::timeout(Duration::from_secs(10), fixture)
+            .await
+            .expect("the client kept the refused connection open")
+            .unwrap();
+        assert_eq!(server_name.as_deref(), Some("localhost"));
+        assert!(later.iter().all(|kind| *kind == 21), "the client sent more than an alert: {later:?}");
+        assert_eq!(*resolver.queries.lock().unwrap(), ["localhost"]);
     }
     #[test]
     fn expired_watermarks_can_be_evicted_without_replaying_old_signatures() {

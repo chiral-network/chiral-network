@@ -1891,4 +1891,76 @@ mod tests {
         }
         server.abort();
     }
+    /// outbound-http-safeguards requirement 7 scenario "An engine redirect is not followed"
+    /// (task 3.7). An engine that answers every request with `302` and a `Location` naming a
+    /// second loopback listener: the readiness probe reports the engine unavailable, and
+    /// template rendering (the tokenization path) and an inference dispatch fail as engine
+    /// failures. The engine received each request with its key; the second listener accepted
+    /// no connection, so neither the engine key nor any request content reached it.
+    #[tokio::test]
+    async fn an_engine_redirect_is_an_engine_failure_and_its_target_is_never_contacted() {
+        use std::io::Write;
+        use std::sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex};
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_address = target.local_addr().unwrap();
+        let target_connections = Arc::new(AtomicUsize::new(0));
+        let counter = target_connections.clone();
+        let target_task = tokio::spawn(async move {
+            while let Ok((stream, _)) = target.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = seen.clone();
+        let engine = axum::Router::new().fallback(
+            move |method: axum::http::Method, uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                let recorded = recorded.clone();
+                async move {
+                    let authorization = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    recorded.lock().unwrap().push(format!("{method} {} {authorization}", uri.path()));
+                    (
+                        StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, format!("http://{target_address}{uri}"))],
+                    )
+                }
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let key = "engine-redirect-key-0123456789abcdef0123";
+        let key_file = directory.path().join("engine.token");
+        crate::wallet::create_secret_file(&key_file).unwrap().write_all(key.as_bytes()).unwrap();
+        let backend = Backend::new(&ModelConfig {
+            model: model(),
+            price: crate::protocol::PriceSchedule { input_wei_per_1k:"1".into(), output_wei_per_1k:"2".into() },
+            engine_url: base, engine_api_key_file: Some(key_file), max_concurrency:1,
+            request_timeout_secs:5, qualification_evidence_file:None, runtime:None,
+        }).unwrap();
+        let ready = backend.ready().await.unwrap_err();
+        assert_eq!((ready.status, ready.code.as_str()), (StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable"));
+        let body = json!({"model":"model","messages":[{"role":"user","content":"redirected engine prompt"}],"max_tokens":1});
+        let mut request = PreparedRequest {
+            endpoint: Endpoint::Chat, body, stream: false, include_usage: false, max_output_tokens: 1,
+            prompt_tokens: 0, embedding_count: 0, logprobs: None, echo_prompt: None,
+        };
+        let tokenized = backend.tokenize(&mut request).await.unwrap_err();
+        assert_eq!((tokenized.status, tokenized.code.as_str()), (StatusCode::BAD_GATEWAY, "engine_error"));
+        let dispatched = backend.dispatch(&request, "request-a").await.err().unwrap();
+        assert_eq!((dispatched.status, dispatched.code.as_str()), (StatusCode::BAD_GATEWAY, "engine_error"));
+        assert_eq!(*seen.lock().unwrap(), [
+            format!("GET /health Bearer {key}"),
+            format!("POST /apply-template Bearer {key}"),
+            format!("POST /v1/chat/completions Bearer {key}"),
+        ]);
+        assert_eq!(target_connections.load(Ordering::SeqCst), 0, "the redirect target was contacted");
+        server.abort();
+        target_task.abort();
+    }
 }

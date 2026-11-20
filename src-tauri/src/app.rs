@@ -2962,4 +2962,164 @@ mod tests {
         runtime.dht.stop().await;
         server.abort();
     }
+
+    /// `method path` on the public router, with `bearer` and the JSON `body` when given: the
+    /// status, and the response's headers and body as one text.
+    async fn public_text(
+        runtime: &Arc<ProviderRuntime>,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, String) {
+        use tower::ServiceExt;
+        let mut request = Request::builder().method(method).uri(path);
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        if body.is_some() {
+            request = request.header(header::CONTENT_TYPE, "application/json").header("idempotency-key", protocol::random_id());
+        }
+        let body = body.map_or_else(axum::body::Body::empty, |body| axum::body::Body::from(body.to_string()));
+        let response = runtime.public_router().oneshot(request.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        let headers = format!("{:?}", response.headers());
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, format!("{headers}\n{}", String::from_utf8_lossy(&bytes)))
+    }
+
+    /// outbound-http-safeguards requirement 7 scenario "The engine origin is never advertised"
+    /// (task 3.7). A non-development provider with `public_endpoint` `https://provider.example`
+    /// serves one embeddings model from a loopback engine fixture. (A provider probes its
+    /// engine when it starts, so an engine at the scenario's `http://10.0.0.5:8080` would need
+    /// LAN traffic; the fixture's own origin is the private `engine_url` here, and the failing
+    /// engine names `http://10.0.0.5:8080`, its own origin and a private marker in its error
+    /// body and in a header.) The published signed offer advertises exactly
+    /// `https://provider.example`; `/healthz`, `/readyz`, `/v1/models`,
+    /// `/api/version-policy`, a signed quote for that offer, an embedding request that succeeds, one whose dispatch the engine
+    /// fails (502 `engine_error`), one whose engine readiness check before tokenization the
+    /// engine fails (503 `engine_unavailable`), and `/readyz` after the failing engine
+    /// made the model not ready contain no part of the engine origin, no loopback address,
+    /// no `10.0.0.5` and nothing of the engine's error.
+    #[tokio::test]
+    async fn the_engine_origin_is_never_advertised_or_echoed() {
+        const MARKER: &str = "engine-private-detail";
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://provider.example".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        // 0 serves; 1 fails `/v1/embeddings`, the dispatch; 2 fails every request, so the
+        // engine readiness check before tokenization fails.
+        let mode = Arc::new(AtomicU8::new(0));
+        let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (engine_mode, engine_failures) = (mode.clone(), failures.clone());
+        let engine = embeddings_engine(model.model.clone()).layer(middleware::from_fn(
+            move |request: Request, next: Next| {
+                let (mode, failures) = (engine_mode.clone(), engine_failures.clone());
+                async move {
+                    let mode = mode.load(Ordering::Acquire);
+                    if mode == 2 || (mode == 1 && request.uri().path() == "/v1/embeddings") {
+                        failures.fetch_add(1, Ordering::SeqCst);
+                        let host = request.headers().get(header::HOST)
+                            .and_then(|host| host.to_str().ok()).unwrap_or("").to_string();
+                        let detail = format!("{MARKER}: engine http://{host} (http://10.0.0.5:8080) failed");
+                        (StatusCode::INTERNAL_SERVER_ERROR, [("x-engine-detail", detail.clone())],
+                            Json(json!({"error": {"code": "engine_error", "message": detail}}))).into_response()
+                    } else {
+                        next.run(request).await
+                    }
+                }
+            },
+        ));
+        let (engine_url, engine_server) = serve(engine).await;
+        model.engine_url = engine_url.clone();
+        let engine_authority = engine_url.trim_start_matches("http://").to_string();
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let (_, bearer) = free_account(&runtime.state, "22");
+        let leaks = |text: &str| -> Vec<String> {
+            [engine_url.as_str(), engine_authority.as_str(), "127.0.0.1", "10.0.0.5", MARKER]
+                .into_iter()
+                .filter(|part| text.contains(part))
+                .map(str::to_string)
+                .collect()
+        };
+
+        // The signed offer advertises only the public endpoint.
+        let (status, offers) = admin(&runtime, "GET", "/admin/offers").await;
+        assert_eq!(status, StatusCode::OK);
+        let mut offers = offers["offers"].as_array().unwrap().clone();
+        assert_eq!(offers.len(), 1);
+        // The registry the DHT announces from holds the same signed offer.
+        let registry = runtime.state.offers.list();
+        assert_eq!(registry.len(), 1);
+        offers.push(serde_json::to_value(&registry[0]).unwrap());
+        for offer in &offers {
+            assert_eq!(offer["payload"]["endpoint"], "https://provider.example");
+            assert!(leaks(&offer.to_string()).is_empty(), "{offer}");
+        }
+
+        let mut answers = Vec::new();
+        for (method, path, credential) in [
+            ("GET", "/healthz", None),
+            ("GET", "/readyz", None),
+            ("GET", "/v1/models", Some(bearer.as_str())),
+            ("GET", "/api/version-policy", None),
+        ] {
+            answers.push((format!("{method} {path}"), public_text(&runtime, method, path, credential, None).await));
+        }
+        // A quote for the published offer is a signed public answer too. A new ledger spends
+        // its first minute of quote-signing work when it initializes, so the first proposal
+        // is refused (429); the test then moves that spent minute into the past.
+        let proposal = json!({"offer_id": protocol::offer_id(&registry[0].payload).unwrap(),
+            "consumer_wallet": wallet::address_from_private_key(&"22".repeat(32)).unwrap(), "funding_wei": "1000"});
+        let refused = public_text(&runtime, "POST", "/v1/contracts/propose", None, Some(proposal.clone())).await;
+        answers.push(("POST /v1/contracts/propose on a new ledger".into(), refused));
+        let ledger = ledger_connection(&runtime);
+        let minute: u64 = ledger.query_row("SELECT window FROM rate_limits WHERE bucket='quote-work:global'",
+            [], |row| row.get(0)).unwrap();
+        ledger.execute("UPDATE rate_limits SET window=?1 WHERE bucket='quote-work:global'", [minute - 1]).unwrap();
+        ledger.execute("UPDATE metadata SET value=?1 WHERE key='quote_work_minute'", [(minute - 1).to_string()]).unwrap();
+        let quote = public_text(&runtime, "POST", "/v1/contracts/propose", None, Some(proposal)).await;
+        assert!(quote.1.contains(r#""signature""#), "{}", quote.1);
+        answers.push(("POST /v1/contracts/propose".into(), quote));
+        let embedding = json!({"model": "model", "input": "hello"});
+        for engine_mode in [0, 1, 2] {
+            mode.store(engine_mode, Ordering::Release);
+            let answer = public_text(&runtime, "POST", "/v1/embeddings", Some(&bearer), Some(embedding.clone())).await;
+            answers.push((format!("POST /v1/embeddings in engine mode {engine_mode}"), answer));
+        }
+        assert_eq!(failures.load(Ordering::SeqCst), 2, "the engine failed the dispatch and the readiness check");
+        // The failing engine makes the model not ready at the next pass.
+        let _ = runtime.refresh().await;
+        answers.push(("GET /readyz after the engine failed".into(), public_text(&runtime, "GET", "/readyz", None, None).await));
+        let statuses: Vec<_> = answers.iter().map(|(request, (status, _))| (request.as_str(), status.as_u16())).collect();
+        assert_eq!(statuses, [
+            ("GET /healthz", 200),
+            ("GET /readyz", 200),
+            ("GET /v1/models", 200),
+            ("GET /api/version-policy", 200),
+            ("POST /v1/contracts/propose on a new ledger", 429),
+            ("POST /v1/contracts/propose", 200),
+            ("POST /v1/embeddings in engine mode 0", 200),
+            ("POST /v1/embeddings in engine mode 1", 502),
+            ("POST /v1/embeddings in engine mode 2", 503),
+            ("GET /readyz after the engine failed", 503),
+        ]);
+        // The provider's own fixed classification, not the engine's text.
+        assert!(answers[7].1 .1.contains(r#""code":"engine_error""#), "{}", answers[7].1 .1);
+        assert!(answers[8].1 .1.contains(r#""code":"engine_unavailable""#), "{}", answers[8].1 .1);
+        for (request, (_, text)) in &answers {
+            assert!(leaks(text).is_empty(), "{request} exposes {:?}: {text}", leaks(text));
+        }
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
 }

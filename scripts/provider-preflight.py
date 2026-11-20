@@ -35,6 +35,26 @@ def check_rpc_gateway_bearer(base='http://127.0.0.1:8547'):
         raise RuntimeError('chain RPC gateway answered a request without its bearer with HTTP %d, not 401' % status)
 
 
+PRIVATE_ROUTES = ('/admin/status', '/admin/runtime', '/tokenize', '/apply-template', '/metrics', '/api/headless/wallet')
+
+
+def status(url):
+    """The HTTP status of `GET url`, through a client without proxies or redirects."""
+    try:
+        with qualifier.OPENER.open(url, timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def check_private_routes(public_endpoint):
+    """Provider ingress must not reach a private or retired route: each must be refused
+    (401, 403, 404 or 405) at the public endpoint. A redirect is not followed and fails."""
+    for path in PRIVATE_ROUTES:
+        if status(public_endpoint + path) not in (401, 403, 404, 405):
+            raise RuntimeError('private or retired route exposed: ' + path)
+
+
 def live_runtime_observation(rows):
     """The one managed engine's launcher observation from `GET /admin/runtime`. That route
     reports process liveness as `alive` (null for an operator-owned engine) and keeps readiness
@@ -160,12 +180,6 @@ def main():
             raise RuntimeError('live runtime differs from validated configuration')
         if profile:
             qualifier.inspect_runtime(argparse.Namespace(admin_url=admin_url, admin_key_file=args.deployment / 'secrets/admin.token', engine_url=served['engine_url'], artifact_root=args.model_dir), advertised)
-        def status(url):
-            try:
-                with qualifier.OPENER.open(url, timeout=10) as response:
-                    return response.status
-            except urllib.error.HTTPError as error:
-                return error.code
         for path in ('/healthz', '/readyz'):
             if status(config['public_endpoint'] + path) != 200:
                 raise RuntimeError('provider is not healthy/ready')
@@ -173,9 +187,7 @@ def main():
             if status(url) != 200:
                 raise RuntimeError('relay or chain readiness unavailable')
         check_rpc_gateway_bearer()
-        for path in ('/admin/status', '/admin/runtime', '/tokenize', '/apply-template', '/metrics', '/api/headless/wallet'):
-            if status(config['public_endpoint'] + path) not in (401, 403, 404, 405):
-                raise RuntimeError('private or retired route exposed: ' + path)
+        check_private_routes(config['public_endpoint'])
         check_listeners()
     print('Preflight prerequisites satisfied; paid inference and release qualification not exercised.')
 

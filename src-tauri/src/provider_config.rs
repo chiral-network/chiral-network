@@ -511,4 +511,120 @@ mod tests {
             assert_eq!(admission(&config).await, Ok(()), "{development}");
         }
     }
+
+    /// outbound-http-safeguards requirement 7 scenarios "Private literal addresses and exact
+    /// localhost are accepted" and "DNS names, public addresses and non-origins are refused"
+    /// (task 3.7), for an external embedding engine in both modes (so that no other rule
+    /// decides): `validate`, `ProviderConfig::load` and `ProviderRuntime::start` (nothing
+    /// created) accept the five origins and refuse the ten with the engine rule's error, and
+    /// `Backend::new`, which builds the engine client on paths that run no configuration
+    /// validation, refuses the same ten (as an engine failure) and builds the five. Loopback
+    /// variants of the refused shapes, a recorder's own port behind a path, user information,
+    /// another scheme, a root-dot `localhost.` and the mapped `::ffff:127.0.0.1`, are refused
+    /// alike, and the recorder accepts no connection. No accepted engine is contacted.
+    /// Beyond the scenarios, the requirement's own ranges and origin shape: the edges of
+    /// `172.16.0.0/12` and `192.168.0.0/16`, both halves of `fc00::/7`, HTTPS on a literal
+    /// and a trailing `/` are accepted; the neighbours of those ranges, `fe00::1`, the
+    /// unspecified addresses, a `localhost` subdomain, a password, a query and a fragment are
+    /// refused.
+    #[tokio::test]
+    async fn an_engine_origin_is_a_private_literal_or_exact_localhost() {
+        use crate::inference_backend::Backend;
+        let (recorder, connections) = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = count.clone();
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    drop(stream);
+                }
+            });
+            (address, count)
+        };
+        let port = recorder.port();
+        let not_private = "engine endpoints require a literal private/loopback IP or localhost";
+        let not_origin = "endpoint must be an origin without credentials, path, query or fragment";
+        let not_http = "engine endpoint must use HTTP or HTTPS";
+        let refused: Vec<(String, &str)> = [
+            ("http://engine.internal:8080", not_private),
+            ("http://localhost.:8000", not_private),
+            ("http://8.8.8.8:8000", not_private),
+            ("http://169.254.169.254", not_private),
+            ("http://100.64.0.1:8000", not_private),
+            ("http://[fe80::1]:8000", not_private),
+            ("http://[::ffff:10.0.0.1]:8000", not_private),
+            ("http://127.0.0.1:8000/v1", not_origin),
+            ("http://user@127.0.0.1:8000", not_origin),
+            ("ftp://127.0.0.1", not_http),
+        ]
+        .into_iter()
+        .map(|(origin, error)| (origin.to_string(), error))
+        .chain([
+            (format!("http://127.0.0.1:{port}/v1"), not_origin),
+            (format!("http://user@127.0.0.1:{port}"), not_origin),
+            (format!("ftp://127.0.0.1:{port}"), not_http),
+            (format!("http://localhost.:{port}"), not_private),
+            (format!("http://[::ffff:127.0.0.1]:{port}"), not_private),
+        ])
+        .chain(
+            [
+                ("http://172.15.255.255:8000", not_private),
+                ("http://172.32.0.1:8000", not_private),
+                ("http://192.167.255.255:8000", not_private),
+                ("http://192.169.0.1:8000", not_private),
+                ("http://11.0.0.1:8000", not_private),
+                ("http://126.255.255.255:8000", not_private),
+                ("http://0.0.0.0:8000", not_private),
+                ("http://[::]:8000", not_private),
+                ("http://[fe00::1]:8000", not_private),
+                ("http://[fbff::1]:8000", not_private),
+                ("http://engine.localhost:8000", not_private),
+                ("http://:secret@127.0.0.1:8000", not_origin),
+                ("http://127.0.0.1:8000/?model=other", not_origin),
+                ("http://127.0.0.1:8000/#health", not_origin),
+            ]
+            .map(|(origin, error)| (origin.to_string(), error)),
+        )
+        .collect();
+        let accepted = [
+            "http://127.0.0.1:8000",
+            "http://10.0.0.5:8080",
+            "https://[fd00::1]:8443",
+            "http://[::1]:8000",
+            "http://localhost:8000",
+            // The requirement's other ranges and origin shapes.
+            "http://127.255.255.254:8000",
+            "http://10.255.255.255:8000",
+            "http://172.16.0.1:8000",
+            "http://172.31.255.254:8000",
+            "http://192.168.0.1:8000",
+            "http://192.168.255.254:8000",
+            "http://[fc00::1]:8000",
+            "http://[fdff:ffff::1]:8000",
+            "https://127.0.0.1:8443",
+            "http://localhost:8000/",
+        ];
+        for development in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut config = provider(directory.path(), development);
+            for origin in accepted {
+                config.models[0].engine_url = origin.into();
+                assert_eq!(admission(&config).await, Ok(()), "{origin}/{development}");
+                assert!(Backend::new(&config.models[0]).is_ok(), "{origin}");
+            }
+            for (origin, error) in &refused {
+                config.models[0].engine_url = origin.clone();
+                assert_eq!(admission(&config).await, Err(error.to_string()), "{origin}/{development}");
+                let backend = Backend::new(&config.models[0]).err().unwrap_or_else(|| panic!("{origin}: engine client built"));
+                assert_eq!(
+                    (backend.status, backend.code.as_str()),
+                    (axum::http::StatusCode::BAD_GATEWAY, "engine_error"),
+                    "{origin}"
+                );
+            }
+        }
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
 }
