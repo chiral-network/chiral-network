@@ -471,6 +471,44 @@ fn request_ids_are_scoped_and_terminal_usage_is_idempotent() {
     );
 }
 
+/// account-credentials requirement 1: the options body is one JSON object. The four
+/// values listed by position, another JSON type, or a repeated member are not it.
+#[test]
+fn credential_options_decode_only_from_one_object_without_repeated_members() {
+    for body in [
+        br#"[1000,null,1,["read"]]"#.as_slice(),
+        br#""x""#.as_slice(),
+        b"null".as_slice(),
+        br#"{"expires_at":1000,"spend_cap_wei":null,"max_concurrency":1,"scopes":["read"],"scopes":["infer"]}"#
+            .as_slice(),
+    ] {
+        assert!(
+            serde_json::from_slice::<CredentialIssueRequest>(body).is_err(),
+            "{}",
+            String::from_utf8_lossy(body)
+        );
+    }
+    let options: CredentialIssueRequest = serde_json::from_slice(
+        br#"{"expires_at":1000,"spend_cap_wei":"900","max_concurrency":2,"scopes":["infer","read"]}"#,
+    )
+    .unwrap();
+    assert_eq!(options.expires_at, 1000);
+    assert_eq!(options.spend_cap_wei.as_deref(), Some("900"));
+    assert_eq!(options.max_concurrency, 2);
+    assert_eq!(options.scopes, ["infer", "read"]);
+    // The native consumer decodes the same type from a JSON value.
+    assert!(serde_json::from_value::<CredentialIssueRequest>(json!([1000, null, 1, ["read"]])).is_err());
+    let encoded = serde_json::to_value(&options).unwrap();
+    assert_eq!(
+        encoded,
+        json!({"expires_at":1000,"spend_cap_wei":"900","max_concurrency":2,"scopes":["infer","read"]})
+    );
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<CredentialIssueRequest>(encoded.clone()).unwrap()).unwrap(),
+        encoded
+    );
+}
+
 #[test]
 fn caps_concurrency_revocation_and_scope_are_atomic() {
     let store = memory();

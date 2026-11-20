@@ -202,3 +202,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `offer_registry::tests::development_localhost_origin_requires_every_answer_to_be_loopback` — **replaceable in principle**: `check_resolved_answers` is a pure function of an address list and two flags, so a Verus lemma over an IP-address model could prove the rule (a refusal when the set is empty, has more than 32 answers, or has any answer outside loopback or outside the public predicate). It is not replaced: Verus is unavailable on this machine (report entry of 2026-11-15) and `verified/` has no IP-address model.
 - `consumer::tests::credential_export_refuses_a_saved_origin_that_no_longer_validates`, `credential_export_base_url_is_the_validated_origin_plus_v1` — **not replaceable**: protected files, the credential store and byte-identity of the account file.
+
+## Judged 2026-11-19 — credential options shape and hidden-default check
+
+- `billing_store::tests::credential_options_decode_only_from_one_object_without_repeated_members` — **not replaceable**: it tests serde decoding, which Verus does not model.
+- `inference_owner_control_test::credential_mutations_refuse_positional_options_after_consuming_owner_proof`, `consumer::tests::native_credential_options_refuse_a_positional_array_before_any_provider_request` and the five `inference_owner_consumer_test::native_issue_*` tests — **not replaceable**: axum routers, SQLite ledgers, protected files and HTTP fixtures. The probe-answer classification in `default_still_infers` is a small decision over (status, code, body shape) that a lemma could state, but it sits inside async HTTP code with no pure seam.

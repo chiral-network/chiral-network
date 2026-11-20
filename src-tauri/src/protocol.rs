@@ -9,7 +9,7 @@ use std::{fmt, marker::PhantomData};
 
 // Require an object while retaining the derived field decoder's duplicate,
 // unknown and missing-field checks. Do not buffer through serde_json::Value.
-fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

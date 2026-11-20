@@ -1,5 +1,6 @@
 //! Native owner-proof acceptance against the production control router on isolated loopback.
-//! Adversarial middleware changes challenge replies or loses one committed opening response; no funds.
+//! Adversarial middleware changes challenge replies, loses one committed opening response, or
+//! replaces the production model list's answer to a credential check; no funds.
 #[path = "support/proposal.rs"]
 mod proposal;
 
@@ -13,17 +14,17 @@ use axum::{
 };
 use chiral_network::{
     auth::{self, AuthPayload},
-    billing_store::BillingStore,
+    billing_store::{BillingStore, CredentialIssueRequest},
     chain_client::ChainClient,
     consumer::{Consumer, ConsumerConfig},
-    contracts,
+    contracts, inference_gateway,
     protocol::{self, Quote, Signed, AUTH_DOMAIN, QUOTE_DOMAIN},
     wallet,
 };
 use proposal::PreparedProvider;
 use rusqlite::Connection;
 use serde_json::{json, Value};
-use std::{path::Path, sync::{Arc, Mutex}};
+use std::{path::{Path, PathBuf}, sync::{atomic::Ordering, Arc, Mutex}};
 use tiny_keccak::{Hasher, Keccak};
 use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 
@@ -262,8 +263,50 @@ impl Drop for Fixture {
     }
 }
 
+/// What the isolated loopback server does with `GET /v1/models`. `Honest` runs the
+/// production handler. The others replace its answer, after it has run, with a lost body
+/// or with the given status and error code.
+#[derive(Clone, Copy, Debug)]
+enum ModelsReply {
+    Honest,
+    Interrupted,
+    Status(StatusCode, &'static str),
+}
+
+async fn models_reply(State(reply): State<Arc<Mutex<ModelsReply>>>, request: Request, next: Next) -> Response {
+    if request.uri().path() != "/v1/models" { return next.run(request).await; }
+    let reply = *reply.lock().unwrap();
+    let response = next.run(request).await;
+    match reply {
+        ModelsReply::Honest => response,
+        ModelsReply::Interrupted => {
+            let (mut parts, _) = response.into_parts();
+            parts.headers.remove(header::CONTENT_LENGTH);
+            Response::from_parts(parts, Body::from_stream(futures_util::stream::once(async {
+                Err::<Bytes, _>(std::io::Error::new(std::io::ErrorKind::ConnectionReset,
+                    "isolated model-list response loss"))
+            })))
+        }
+        ModelsReply::Status(status, code) => {
+            let mut replaced = Response::new(Body::from(serde_json::to_vec(
+                &json!({"error": {"message": "isolated replacement", "code": code}})).unwrap()));
+            *replaced.status_mut() = status;
+            replaced
+        }
+    }
+}
+
 impl Fixture {
     async fn new(directory: &Path, case: u64, mode: Reply) -> Self {
+        Self::start(directory, case, mode, None).await
+    }
+
+    /// The production control and inference routers on one isolated loopback endpoint.
+    async fn serving(directory: &Path, case: u64, models: Arc<Mutex<ModelsReply>>) -> Self {
+        Self::start(directory, case, Reply::Honest, Some(models)).await
+    }
+
+    async fn start(directory: &Path, case: u64, mode: Reply, models: Option<Arc<Mutex<ModelsReply>>>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let admin = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = PreparedProvider::new(directory, case, "0", "0",
@@ -271,7 +314,12 @@ impl Fixture {
         let observations = Arc::new(Mutex::new(Observations::default()));
         let peer = Arc::new(Counterparty { mode, ledger: provider.state.ledger.clone(),
             observations: observations.clone() });
-        let app = contracts::router(provider.state.clone()).layer(from_fn_with_state(peer, intercept));
+        let app = match models {
+            None => contracts::router(provider.state.clone()),
+            Some(models) => contracts::router(provider.state.clone())
+                .merge(inference_gateway::router(provider.state.clone()))
+                .layer(from_fn_with_state(models, models_reply)),
+        }.layer(from_fn_with_state(peer, intercept));
         let (shutdown, stopped) = oneshot::channel();
         let server = tokio::spawn(async move {
             axum::serve(listener, app).with_graceful_shutdown(async { let _ = stopped.await; })
@@ -911,4 +959,260 @@ async fn native_lost_free_opening_recovers_without_issuing_or_rotating_credentia
     fixture.stop().await;
     rpc_server.abort();
     assert!(rpc_server.await.unwrap_err().is_cancelled());
+}
+
+/// The native default that a native free opening stored: its first-opening root.
+struct HiddenDefault {
+    id: String,
+    original: Value,
+    account_path: PathBuf,
+}
+
+/// Opens a free account natively, then pushes its root out of the provider's bounded
+/// credential list with 100 issued and revoked credentials. The 100 records are ledger
+/// prerequisites, not 100 native operations; the root itself is untouched.
+async fn hidden_default(fixture: &Fixture, case: u64, directory: &Path) -> HiddenDefault {
+    let id = fixture.quote.payload.id.clone();
+    let opened = fixture.consumer.fund(&fixture.provider.offer, &fixture.quote).await.unwrap();
+    assert_eq!(opened.status, "free");
+    let original = fixture.consumer.credential_export(&id, None).unwrap();
+    let ledger = &fixture.provider.state.ledger;
+    let listed = ledger.credentials(&id).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].root && !listed[0].revoked);
+    assert_eq!(listed[0].id, original["credential_id"].as_str().unwrap());
+    assert_eq!(listed[0].scopes, ["infer", "read"]);
+    let now = protocol::now().unwrap();
+    for _ in 0..100 {
+        let issued = ledger.issue_credential(&id, &CredentialIssueRequest { expires_at: now + 3600,
+            spend_cap_wei: None, max_concurrency: 1, scopes: vec!["infer".into(), "read".into()] }, now).unwrap();
+        ledger.revoke_credential(&id, &issued.id).unwrap();
+    }
+    let listed = ledger.credentials(&id).unwrap();
+    assert_eq!(listed.len(), 100);
+    assert!(listed.iter().all(|credential| credential.revoked && credential.id != original["credential_id"]),
+        "the bounded list no longer shows the still-valid root");
+    let context = ledger.authenticate(original["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, original["credential_id"].as_str().unwrap());
+    let network = &fixture.provider.state.config.network;
+    let owner = fixture.consumer.address().unwrap();
+    let account_path = network.scoped_dir(&directory.join(format!("consumer-{case}")))
+        .join("consumer").join(&owner).join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    assert_eq!(saved_account(&account_path)["active_credential"], original["credential_id"]);
+    clear_observations(fixture);
+    HiddenDefault { id, original, account_path }
+}
+
+fn saved_account(path: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn clear_observations(fixture: &Fixture) {
+    let mut observed = fixture.observations.lock().unwrap();
+    observed.challenges.clear();
+    observed.controls.clear();
+}
+
+fn issue_options() -> Value {
+    json!({"expires_at": protocol::now().unwrap() + 600, "spend_cap_wei": null,
+        "max_concurrency": 1, "scopes": ["infer", "read"]})
+}
+
+/// The provider requests of one native issuance, in order, as method, target, status
+/// and whether an owner proof was attached.
+fn issuance_exchange(fixture: &Fixture) -> Vec<(String, String, Option<StatusCode>, bool)> {
+    fixture.observations.lock().unwrap().controls.iter()
+        .map(|control| (control.method.clone(), control.target.clone(), control.status, control.owner.is_some()))
+        .collect()
+}
+
+fn checked_issuance(id: &str, probe: StatusCode) -> Vec<(String, String, Option<StatusCode>, bool)> {
+    vec![("GET".into(), format!("/v1/contracts/{id}/credentials"), Some(StatusCode::OK), true),
+        ("GET".into(), "/v1/models".into(), Some(probe), false),
+        ("POST".into(), format!("/v1/contracts/{id}/credentials"), Some(StatusCode::OK), true)]
+}
+
+/// `inference-funding-settlement` (Fund and resume recover the saved agreement without
+/// rotating credentials) and account-credentials task 2.2: explicit issuance never
+/// replaces a valid native default, even when the provider's bounded credential list
+/// no longer shows it.
+#[tokio::test]
+async fn native_issue_keeps_a_valid_default_that_the_bounded_credential_list_omits() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 900;
+    let fixture = Fixture::serving(directory.path(), case,
+        Arc::new(Mutex::new(ModelsReply::Honest))).await;
+    let hidden = hidden_default(&fixture, case, directory.path()).await;
+    let id = &hidden.id;
+    let issued = fixture.consumer.credential_issue(id, issue_options()).await.unwrap();
+    assert!(issued.get("bearer").is_none() && issued.get("api_key").is_none());
+    assert_eq!(fixture.consumer.credential_export(id, None).unwrap(), hidden.original);
+    let ledger = &fixture.provider.state.ledger;
+    let context = ledger.authenticate(hidden.original["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, hidden.original["credential_id"].as_str().unwrap());
+    let stored = fixture.consumer.credential_export(id, issued["id"].as_str()).unwrap();
+    assert_eq!(stored["credential_id"], issued["id"]);
+    assert!(stored["api_key"] != hidden.original["api_key"]);
+    let context = ledger.authenticate(stored["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, issued["id"].as_str().unwrap());
+    assert_eq!(context.scopes, ["infer", "read"]);
+    let saved = saved_account(&hidden.account_path);
+    assert_eq!(saved["active_credential"], hidden.original["credential_id"]);
+    let ids: Vec<_> = saved["credentials"].as_array().unwrap().iter().map(|c| c["id"].clone()).collect();
+    assert_eq!(ids, [hidden.original["credential_id"].clone(), issued["id"].clone()]);
+    // The default was kept because its provider authenticated it, not by default.
+    assert_eq!(issuance_exchange(&fixture), checked_issuance(id, StatusCode::OK));
+    fixture.stop().await;
+}
+
+/// The same issuance needs no admission state (account-credentials requirement 6): a
+/// provider that is not accepting, has lost funding readiness, has no qualified model
+/// and has exhausted its quote budgets still issues, and the valid default is kept.
+#[tokio::test]
+async fn native_issue_keeps_a_hidden_valid_default_while_the_provider_admits_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 901;
+    let fixture = Fixture::serving(directory.path(), case,
+        Arc::new(Mutex::new(ModelsReply::Honest))).await;
+    let hidden = hidden_default(&fixture, case, directory.path()).await;
+    let id = &hidden.id;
+    let state = &fixture.provider.state;
+    {
+        // Restored exhaustion is a resource prerequisite, not 600 observed issuances.
+        let mut db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let minute = protocol::now().unwrap() / 60 + 10;
+        let tx = db.transaction().unwrap();
+        for (bucket, watermark) in [("quote:global", "quote_committed_minute"),
+            ("quote-work:global", "quote_work_minute")] {
+            assert_eq!(tx.execute("UPDATE rate_limits SET window=?1,count=600 WHERE bucket=?2",
+                rusqlite::params![minute, bucket]).unwrap(), 1);
+            assert_eq!(tx.execute("UPDATE metadata SET value=?1 WHERE key=?2",
+                rusqlite::params![minute, watermark]).unwrap(), 1);
+        }
+        tx.commit().unwrap();
+    }
+    let http = reqwest::Client::new();
+    let endpoint = &fixture.provider.offer.payload.endpoint;
+    let refused = http.post(format!("{endpoint}/v1/contracts/propose")).json(&json!({
+        "offer_id": fixture.provider.offer_id, "consumer_wallet": fixture.quote.payload.consumer_wallet,
+        "funding_wei": "0"})).send().await.unwrap();
+    assert_eq!(refused.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(refused.json::<Value>().await.unwrap()["error"]["code"], "rate_limit");
+    state.accepting.store(false, Ordering::Release);
+    state.funding_ready.store(false, Ordering::Release);
+    state.qualified_models.write().unwrap().clear();
+    // What the probe relies on: the production model list authenticates the stored
+    // bearer and answers 200, with no model, when the provider serves nothing new.
+    let listed = http.get(format!("{endpoint}/v1/models"))
+        .bearer_auth(hidden.original["api_key"].as_str().unwrap()).send().await.unwrap();
+    assert_eq!(listed.status(), reqwest::StatusCode::OK);
+    assert_eq!(listed.json::<Value>().await.unwrap(), json!({"object": "list", "data": []}));
+    clear_observations(&fixture);
+    let account = serde_json::to_value(state.ledger.account(id).unwrap()).unwrap();
+
+    let issued = fixture.consumer.credential_issue(id, issue_options()).await.unwrap();
+    assert_eq!(fixture.consumer.credential_export(id, None).unwrap(), hidden.original);
+    assert_eq!(fixture.consumer.credential_export(id, issued["id"].as_str()).unwrap()["credential_id"], issued["id"]);
+    assert_eq!(saved_account(&hidden.account_path)["active_credential"], hidden.original["credential_id"]);
+    assert_eq!(serde_json::to_value(state.ledger.account(id).unwrap()).unwrap(), account);
+    assert!(!state.accepting.load(Ordering::Acquire) && !state.funding_ready.load(Ordering::Acquire));
+    assert_eq!(issuance_exchange(&fixture), checked_issuance(id, StatusCode::OK));
+    fixture.stop().await;
+}
+
+/// Control case: once the hidden default is revoked at the provider, the probe's 401
+/// shows it unusable, and the same issuance makes the new credential the default.
+#[tokio::test]
+async fn native_issue_restores_a_hidden_default_revoked_at_the_provider() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 902;
+    let fixture = Fixture::serving(directory.path(), case,
+        Arc::new(Mutex::new(ModelsReply::Honest))).await;
+    let hidden = hidden_default(&fixture, case, directory.path()).await;
+    let id = &hidden.id;
+    let ledger = &fixture.provider.state.ledger;
+    ledger.revoke_credential(id, hidden.original["credential_id"].as_str().unwrap()).unwrap();
+    let issued = fixture.consumer.credential_issue(id, issue_options()).await.unwrap();
+    let exported = fixture.consumer.credential_export(id, None).unwrap();
+    assert_eq!(exported["credential_id"], issued["id"]);
+    assert!(exported["api_key"] != hidden.original["api_key"]);
+    let context = ledger.authenticate(exported["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, issued["id"].as_str().unwrap());
+    assert_eq!(saved_account(&hidden.account_path)["active_credential"], issued["id"]);
+    assert!(ledger.authenticate(hidden.original["api_key"].as_str().unwrap(), protocol::now().unwrap()).is_err());
+    // The provider's own 401 for the stored bearer, not its absence from the list, cleared it.
+    assert_eq!(issuance_exchange(&fixture), checked_issuance(id, StatusCode::UNAUTHORIZED));
+    fixture.stop().await;
+}
+
+/// Control case for the other definite answer: a probe answered 403 `credential_scope`
+/// shows the hidden default unable to infer, so the same issuance makes the new
+/// credential the default. The old credential stays stored, exportable only by name.
+#[tokio::test]
+async fn native_issue_restores_a_hidden_default_its_provider_reports_without_infer() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 904;
+    let models = Arc::new(Mutex::new(ModelsReply::Status(StatusCode::FORBIDDEN, "credential_scope")));
+    let fixture = Fixture::serving(directory.path(), case, models).await;
+    let hidden = hidden_default(&fixture, case, directory.path()).await;
+    let id = &hidden.id;
+    let issued = fixture.consumer.credential_issue(id, issue_options()).await.unwrap();
+    let exported = fixture.consumer.credential_export(id, None).unwrap();
+    assert_eq!(exported["credential_id"], issued["id"]);
+    assert_eq!(saved_account(&hidden.account_path)["active_credential"], issued["id"]);
+    assert_eq!(fixture.consumer.credential_export(id, hidden.original["credential_id"].as_str()).unwrap(),
+        hidden.original);
+    assert_eq!(issuance_exchange(&fixture), checked_issuance(id, StatusCode::FORBIDDEN));
+    fixture.stop().await;
+}
+
+/// A probe that gives no evidence about the hidden default, because its answer is lost
+/// or is not a model list, 401 `invalid_api_key` or 403 `credential_scope`, fails the
+/// issuance before any credential is created, and the default and local account are unchanged.
+#[tokio::test]
+async fn native_issue_fails_unchanged_when_a_hidden_default_cannot_be_checked() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 903;
+    let models = Arc::new(Mutex::new(ModelsReply::Honest));
+    let fixture = Fixture::serving(directory.path(), case, models.clone()).await;
+    let hidden = hidden_default(&fixture, case, directory.path()).await;
+    let id = &hidden.id;
+    let ledger = &fixture.provider.state.ledger;
+    let local = std::fs::read(&hidden.account_path).unwrap();
+    let rows = || -> u64 {
+        Connection::open(&fixture.provider.ledger_path).unwrap()
+            .query_row("SELECT COUNT(*) FROM credentials", [], |row| row.get(0)).unwrap()
+    };
+    let before = rows();
+    for reply in [ModelsReply::Interrupted,
+        // A 200 whose body is an error document, not a model list.
+        ModelsReply::Status(StatusCode::OK, "provider_draining"),
+        ModelsReply::Status(StatusCode::TOO_MANY_REQUESTS, "rate_limit_exceeded"),
+        ModelsReply::Status(StatusCode::UPGRADE_REQUIRED, "upgrade_required"),
+        ModelsReply::Status(StatusCode::SERVICE_UNAVAILABLE, "provider_draining"),
+        ModelsReply::Status(StatusCode::INTERNAL_SERVER_ERROR, "ledger_unavailable"),
+        ModelsReply::Status(StatusCode::FORBIDDEN, "account_forbidden"),
+        ModelsReply::Status(StatusCode::UNAUTHORIZED, "upgrade_required"),
+        ModelsReply::Status(StatusCode::NOT_FOUND, "not_found")] {
+        *models.lock().unwrap() = reply;
+        clear_observations(&fixture);
+        let error = fixture.consumer.credential_issue(id, issue_options()).await.unwrap_err();
+        assert!(error.contains("could not be checked"), "{reply:?}: {error}");
+        assert!(!error.contains(hidden.original["api_key"].as_str().unwrap()));
+        let exchange = issuance_exchange(&fixture);
+        assert_eq!(exchange.len(), 2, "{reply:?}: {exchange:?}");
+        assert_eq!(exchange[..], checked_issuance(id, exchange[1].2.unwrap())[..2], "{reply:?}");
+        assert_eq!(std::fs::read(&hidden.account_path).unwrap(), local, "{reply:?}");
+        assert_eq!(rows(), before, "{reply:?} created a credential");
+        assert_eq!(fixture.consumer.credential_export(id, None).unwrap(), hidden.original);
+    }
+    *models.lock().unwrap() = ModelsReply::Honest;
+    clear_observations(&fixture);
+    let issued = fixture.consumer.credential_issue(id, issue_options()).await.unwrap();
+    assert_eq!(issuance_exchange(&fixture), checked_issuance(id, StatusCode::OK));
+    assert_eq!(rows(), before + 1);
+    assert_eq!(fixture.consumer.credential_export(id, None).unwrap(), hidden.original);
+    assert!(fixture.consumer.credential_export(id, issued["id"].as_str()).is_ok());
+    assert!(ledger.authenticate(hidden.original["api_key"].as_str().unwrap(), protocol::now().unwrap()).is_ok());
+    fixture.stop().await;
 }

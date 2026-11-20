@@ -2119,19 +2119,27 @@ impl Consumer {
                 .await?,
         )?;
         let now = protocol::now()?;
-        let valid_default = saved.active_credential.as_ref().is_some_and(|active| {
+        let stored_default = saved.active_credential.as_ref().and_then(|active| {
             saved
                 .credentials
                 .iter()
-                .any(|c| &c.id == active && c.expires_at > now)
-                && views.iter().any(|c| {
-                    &c.id == active
-                        && c.contract_id == id
-                        && !c.revoked
-                        && c.expires_at > now
-                        && c.scopes.iter().any(|scope| scope == "infer")
-                })
+                .find(|c| &c.id == active && c.expires_at > now)
         });
+        // Issuing restores a missing usable default without replacing a valid one (book
+        // line 495). The provider's list is bounded, so a default missing from it is
+        // checked directly instead of being treated as revoked.
+        let valid_default = match stored_default {
+            None => false,
+            Some(stored) => match views.iter().find(|c| c.id == stored.id) {
+                Some(view) => {
+                    view.contract_id == id
+                        && !view.revoked
+                        && view.expires_at > now
+                        && view.scopes.iter().any(|scope| scope == "infer")
+                }
+                None => self.default_still_infers(&saved, stored).await?,
+            },
+        };
         if !valid_default {
             saved.active_credential = None;
         }
@@ -2150,6 +2158,42 @@ impl Consumer {
         self.store_credential(&mut saved, credential, activate)?;
         self.save_account(&saved)?;
         Ok(metadata)
+    }
+    /// Whether the stored default, absent from the provider's bounded credential list,
+    /// still authorizes inference. The stored bearer goes only to its own provider, over
+    /// the same validated transport as inference, on the `infer`-scoped model list. That
+    /// route authenticates first and then answers 200 even when the provider is not
+    /// accepting, funding is not ready or no model is qualified, so it depends on no
+    /// admission state (account-credentials requirement 6). Only 401 `invalid_api_key`
+    /// (unknown, revoked or expired) and 403 `credential_scope` (no `infer`) show the
+    /// default unusable. A transport failure or any other answer is no evidence either
+    /// way: the issuance fails before a credential is created, and the default is kept.
+    async fn default_still_infers(
+        &self,
+        saved: &SavedAccount,
+        credential: &Credential,
+    ) -> Result<bool, String> {
+        const UNCHECKED: &str = "the default credential could not be checked at its provider; no credential was issued and the default is unchanged";
+        if credential.contract_id != saved.quote.payload.id {
+            return Ok(false);
+        }
+        let base = &saved.offer.payload.endpoint;
+        let client = transport(base, self.config.development).await?;
+        let response = client
+            .get(endpoint_url(base, &["v1", "models"], self.config.development)?)
+            .bearer_auth(&credential.bearer)
+            .header("X-Chiral-Client-Version", crate::version::CURRENT_VERSION)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|_| UNCHECKED)?;
+        let (status, body) = bounded_body(response).await.map_err(|_| UNCHECKED)?;
+        let document = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        match (status.as_u16(), document["error"]["code"].as_str()) {
+            (200, _) if document["object"] == "list" && document["data"].is_array() => Ok(true),
+            (401, Some("invalid_api_key")) | (403, Some("credential_scope")) => Ok(false),
+            _ => Err(UNCHECKED.into()),
+        }
     }
     pub async fn credential_revoke(&self, id: &str, credential_id: &str) -> Result<Value, String> {
         let _guard = self.mutation.lock().await;
@@ -2945,6 +2989,8 @@ mod tests {
         credited_topups: std::sync::Mutex<std::collections::HashMap<String, u128>>,
         /// The wallet balance `eth_getBalance` reports; zero makes cancellation gas unaffordable.
         balance: std::sync::Mutex<u128>,
+        /// Every provider control request received, challenges included, as method and path.
+        controls: std::sync::Mutex<Vec<String>>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3047,6 +3093,7 @@ mod tests {
     ) -> (axum::http::StatusCode, axum::Json<Value>) {
         use axum::http::StatusCode;
         use std::sync::atomic::Ordering;
+        state.controls.lock().unwrap().push(format!("{method} {}", uri.path()));
         if uri.path() == "/v1/auth/challenge" {
             let request: ChallengeRequest = decode(&body).unwrap();
             let payload = crate::auth::AuthPayload {
@@ -3389,6 +3436,7 @@ mod tests {
             credentials: std::sync::Mutex::new(Vec::new()),
             credited_topups: std::sync::Mutex::new(std::collections::HashMap::new()),
             balance: std::sync::Mutex::new(u128::MAX),
+            controls: std::sync::Mutex::new(Vec::new()),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -3603,6 +3651,54 @@ mod tests {
             assert_eq!(exported["credential_id"], "credential-a", "{endpoint}");
             assert_eq!(exported["contract_id"], id.as_str(), "{endpoint}");
         }
+    }
+    /// account-credentials requirement 1: native issuance and rotation decode their
+    /// options as one JSON object and refuse the positional form before any provider request.
+    #[tokio::test]
+    async fn native_credential_options_refuse_a_positional_array_before_any_provider_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, true).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let original = consumer.credential_export(id, None).unwrap();
+        let original_id = original["credential_id"].as_str().unwrap().to_string();
+        let account = private_read(&consumer.account_path(id).unwrap()).unwrap();
+        let provider_credentials = state.credentials.lock().unwrap().len();
+        state.controls.lock().unwrap().clear();
+        let positional = json!([protocol::now().unwrap() + 3600, null, 1, ["read"]]);
+        assert_eq!(
+            consumer.credential_issue(id, positional.clone()).await.unwrap_err(),
+            "invalid credential options"
+        );
+        assert_eq!(
+            consumer
+                .credential_rotate(id, &original_id, positional)
+                .await
+                .unwrap_err(),
+            "invalid credential options"
+        );
+        let controls = state.controls.lock().unwrap().clone();
+        assert!(controls.is_empty(), "{controls:?}");
+        assert_eq!(state.credentials.lock().unwrap().len(), provider_credentials);
+        assert_eq!(private_read(&consumer.account_path(id).unwrap()).unwrap(), account);
+        assert_eq!(consumer.credential_export(id, None).unwrap(), original);
+        // The object form of the same options is the request the provider receives.
+        let issued = consumer
+            .credential_issue(id, credential_options(&["read"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            *state.controls.lock().unwrap(),
+            [
+                "POST /v1/auth/challenge".to_string(),
+                format!("GET /v1/contracts/{id}/credentials"),
+                "POST /v1/auth/challenge".to_string(),
+                format!("POST /v1/contracts/{id}/credentials"),
+            ]
+        );
+        assert!(consumer.credential_export(id, issued["id"].as_str()).is_ok());
+        assert_eq!(consumer.credential_export(id, None).unwrap(), original);
+        task.abort();
     }
     #[tokio::test]
     async fn explicit_credential_issue_recovers_default_without_rotating_on_resume() {

@@ -40,13 +40,35 @@ pub struct CredentialContext {
     pub scopes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The credential options body of issuance and rotation (book line 345). It decodes
+/// only from one JSON object, like `OpenRequest` and `TopupRequest`: a derived decoder
+/// would also accept the four members as a positional array.
+#[derive(Debug, Clone, Serialize)]
 pub struct CredentialIssueRequest {
     pub expires_at: u64,
     pub spend_cap_wei: Option<String>,
     pub max_concurrency: u32,
     pub scopes: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for CredentialIssueRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            expires_at: u64,
+            spend_cap_wei: Option<String>,
+            max_concurrency: u32,
+            scopes: Vec<String>,
+        }
+        let fields: Fields = protocol::deserialize_object(deserializer)?;
+        Ok(Self {
+            expires_at: fields.expires_at,
+            spend_cap_wei: fields.spend_cap_wei,
+            max_concurrency: fields.max_concurrency,
+            scopes: fields.scopes,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

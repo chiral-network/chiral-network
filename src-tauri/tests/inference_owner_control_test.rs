@@ -790,6 +790,44 @@ async fn credential_business_refusals_consume_proof_without_partial_mutations() 
     }
 }
 
+/// account-credentials requirement 1 and task 2.1: the options body is one JSON object.
+/// Owner-proved issuance and rotation bodies that list the same four values by
+/// position are malformed, create no credential and keep the rotated one usable.
+#[tokio::test]
+async fn credential_mutations_refuse_positional_options_after_consuming_owner_proof() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, mutation) in [CredentialMutation::Issue, CredentialMutation::Rotate].into_iter().enumerate() {
+        let mut fixture = Fixture::new(directory.path(), 1850 + index as u64);
+        let accounts = fixture.accounts().await;
+        let id = &accounts.target.account.contract_id;
+        // Complete credential rows read through an independent ledger connection.
+        let ledger_path = fixture.provider.ledger_path.clone();
+        let rows = || ledger_snapshot(&Connection::open(&ledger_path).unwrap())[1].clone();
+        let before_rows = rows();
+        let before = fixture.credential_state(id);
+        let positional = json!([protocol::now().unwrap() + 3600, null, 1, ["read"]]);
+        let (method, path, body) = mutation.request(id, &accounts.read.id, &positional);
+        assert_eq!(body, serde_json::to_vec(&positional).unwrap());
+        let proof = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let response = fixture.send(method, &path, &proof.headers, body.clone()).await;
+        assert_eq!(response.1["error"]["code"], "invalid_request", "{mutation:?}: {}", response.1);
+        denied(response, StatusCode::BAD_REQUEST);
+        fixture.consumed(&proof);
+        assert_eq!(rows(), before_rows, "{mutation:?} changed a credential row");
+        assert_eq!(fixture.credential_state(id), before);
+        fixture.credentials_usable(&[accounts.target.credential.as_ref().unwrap(), &accounts.read,
+            &accounts.infer, accounts.other.credential.as_ref().unwrap()]);
+        denied(fixture.send(method, &path, &proof.headers, body).await, StatusCode::UNAUTHORIZED);
+
+        let (method, path, body) = mutation.request(id, &accounts.read.id, &credential_options());
+        let fresh = fixture.proof(OWNER_KEY, method, &path, &body).await;
+        let (status, value) = fixture.send(method, &path, &fresh.headers, body).await;
+        assert_eq!(status, StatusCode::OK, "{mutation:?}: {value}");
+        fixture.check_mutation(mutation, &accounts.read, value);
+        assert_eq!(rows().len(), before_rows.len() + 1);
+    }
+}
+
 #[tokio::test]
 async fn opening_request_schema_rejects_invalid_shapes_before_owner_consumption() {
     let directory = tempfile::tempdir().unwrap();

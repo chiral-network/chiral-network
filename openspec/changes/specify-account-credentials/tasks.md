@@ -29,7 +29,7 @@
 
 ## 2. Close code differences
 
-- [ ] 2.1 Accept the options body only as a JSON object (requirement 1, design code difference 1).
+- [x] 2.1 Accept the options body only as a JSON object (requirement 1, design code difference 1).
   - Change: in `src-tauri/src/billing_store.rs`, give `CredentialIssueRequest` a `Deserialize` implementation that decodes a private `#[serde(deny_unknown_fields)]` field struct through `protocol::deserialize_object`, exactly as `OpenRequest` and `TopupRequest` do (protocol.rs:692–725). Make `deserialize_object` `pub(crate)`. Keep `Serialize` and the field types unchanged. The issuance and rotation routes then refuse a non-object body as 400 `invalid_request`, and native `credential_issue` and `credential_rotate` refuse non-object options with "invalid credential options" before any provider request.
   - Unit regression: `serde_json::from_slice::<CredentialIssueRequest>` refuses `[1000,null,1,["read"]]`, `"x"`, `null` and an object with a repeated `scopes` member, and accepts the object form.
   - Router regression in `inference_owner_control_test`, reusing the credential-mutation fixture:
@@ -39,7 +39,14 @@
     - the object form with a fresh proof then succeeds.
   - Native regression in `consumer::tests` with the funding fixture: `credential_issue(id, json!([...]))` fails and the fixture records no control request.
   - All three regressions fail without the change.
-- [ ] 2.2 Keep a valid native default when explicit issuance cannot see it in the bounded list (`inference-funding-settlement` *Fund and resume recover the saved agreement without rotating credentials*; design code difference 2).
+
+  Done 2026-11-19: `CredentialIssueRequest` (`billing_store.rs:43–72`) decodes a private `deny_unknown_fields` field struct through `protocol::deserialize_object`, now `pub(crate)` (`protocol.rs:12`). `Serialize`, the field types and the decoding of an omitted `spend_cap_wei` as `null` (open question 1) are unchanged. Regressions:
+  - unit `billing_store::tests::credential_options_decode_only_from_one_object_without_repeated_members`: the array, `"x"`, `null` and a repeated `scopes` are refused, also from a `serde_json::Value`; the object form decodes and re-encodes unchanged;
+  - router `credential_mutations_refuse_positional_options_after_consuming_owner_proof` (`inference_owner_control_test`): issuance and rotation answer 400 `invalid_request` and consume the proof. The complete credential rows are unchanged through an independent connection, and the rotation's named credential and the account's other credentials still authenticate. The object form with a fresh proof then succeeds;
+  - native `consumer::tests::native_credential_options_refuse_a_positional_array_before_any_provider_request`: `credential_issue` and `credential_rotate` fail with "invalid credential options". The funding fixture's new `controls` recorder sees no request, and the account file, the provider's credentials and the default are unchanged. The object form then sends exactly challenge, list, challenge and issuance.
+
+  With the derived `Deserialize` restored, all three fail. The unit test fails at its first assertion, because the array decodes. The native test fails because the issuance succeeds, and the router test because the issuance answers 200 instead of `invalid_request`. The repeated-member case already passed before the change, because serde's derived decoder refuses duplicate members; it stays as a guard. Restored file compared byte-identical (`cmp`).
+- [x] 2.2 Keep a valid native default when explicit issuance cannot see it in the bounded list (`inference-funding-settlement` *Fund and resume recover the saved agreement without rotating credentials*; design code difference 2).
   - Change: in `src-tauri/src/consumer.rs` `credential_issue`, decide whether the stored default is valid from evidence that the 100-entry list bound cannot hide, for example:
     - when the default is absent from the list, check that credential directly at its provider: send the stored bearer to an `infer`-scoped route, where 401 means revoked or expired and 403 `credential_scope` means not inference-capable;
     - or, after open question 3, have the provider list every credential that can still authenticate.
@@ -51,6 +58,22 @@
     - then `credential_export(id, None)` returns the original credential identifier and secret, the original still authenticates, and the new credential is stored but not the default.
   - Control case: after the default is revoked at the provider, the same issuance makes the new credential the default.
   - The regression fails without the change.
+
+  Done 2026-11-19: when the stored, locally unexpired default is in the provider's list, native `credential_issue` still decides from that entry. When it is absent, `default_still_infers` (`consumer.rs:2162–2197`) sends the stored bearer to the account's own provider, over the same validated transport as inference, on `GET /v1/models`. Then:
+  - a 200 model list keeps the default;
+  - 401 `invalid_api_key` (unknown, revoked or expired) or 403 `credential_scope` (no `infer`) clears it, and an `infer` issuance becomes the default;
+  - a transport or body failure, and any other answer (a 401 or 403 with another code included), fails the issuance before any credential is created. The default and the account file are unchanged.
+
+  Why this approach: it needs no answer to open question 3 and changes no provider route or wire contract. No owner-authenticated read of one credential exists, and the credential list is the only credential read. The probe also keeps requirement 6. `/v1/models` (`inference_gateway.rs:242–259`) authenticates the bearer and its `infer` scope before anything else. It then answers 200, with an empty `data`, when the provider is not accepting, the account is not active or no model is qualified, and it reads no funding readiness, offer, quote budget or engine. So "credential invalid" and "provider not serving" never share an answer. An answer outside the three definite ones is no evidence, so it neither clears the default nor issues on a guess. Regressions in `inference_owner_consumer_test`, with a native consumer against the production control and inference routers. In each, a native free opening makes the root the default, and 100 ledger issue-and-revoke records then push the root out of the list while it still authenticates:
+  - `native_issue_keeps_a_valid_default_that_the_bounded_credential_list_omits`: after an `infer`+`read` issuance, `credential_export(id, None)` returns the original identifier and secret, and the original still authenticates. The new credential is stored and authenticates with both scopes, but it is not the default. The exchange is list, probe (200, no owner proof) and issuance;
+  - `native_issue_keeps_a_hidden_valid_default_while_the_provider_admits_nothing` (requirement 6): quote budgets are exhausted (`propose` answers 429 `rate_limit`). `accepting` and `funding_ready` are false, and no model is qualified. The production `/v1/models` then answers `{"object":"list","data":[]}` for the stored bearer. Issuance succeeds and keeps the default, and the account view is unchanged;
+  - control `native_issue_restores_a_hidden_default_revoked_at_the_provider`: after a provider-side revocation, the probe gets 401, and the same issuance makes the new credential the default;
+  - control `native_issue_restores_a_hidden_default_its_provider_reports_without_infer`: a probe answered 403 `credential_scope` makes the same issuance's credential the default, and the old one stays exportable by its identifier;
+  - `native_issue_fails_unchanged_when_a_hidden_default_cannot_be_checked`: a lost probe body, a 200 whose body is not a model list, 429 `rate_limit_exceeded`, 426 `upgrade_required`, 503 `provider_draining`, 500 `ledger_unavailable`, 403 `account_forbidden`, 401 `upgrade_required` and 404 each fail the issuance. No issuance request is sent, no credential row is added, and the account file and the default are unchanged. An honest probe then issues and keeps the default.
+
+  With the previous rule restored (absence from the list means invalid), all five tests fail. The regression and the requirement-6 case fail at `credential_export(id, None)`, which returns the new credential. In the probe-failure case, the issuance succeeds. The two control cases pass every behavioural assertion and fail only at their last assertion, which requires the provider's 401 or 403 to the probe. Restored file compared byte-identical (`cmp`). Rotation is unchanged: it selects its default from the rotated identifier, not from the list.
+
+  Adversarial review, 2026-11-19: the product change was confirmed and not changed. The four original tests still passed when the probe's verdict was weakened to "any 200 keeps the default" and "403 `credential_scope` is no evidence". The 403 control case and the 200-not-a-list, 429 and 426 answers were added, and both weakened rules now fail (the control case at the issuance, the probe-failure case because the 200 issues). Restored file compared byte-identical (`cmp`). `/v1/models` calls no rate limit, body-reader slot or ledger write and creates no request record. Neither the 120-per-minute window nor a paused or frozen account affects it, and the stored bearer goes only to the saved offer's origin through the pinned client, which follows no redirect and uses no proxy.
 
 ## 3. Acceptance evidence per requirement
 

@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-19 (fifty-first round) — Code: credential options only as an object; issuance keeps a valid hidden default
+
+- In step at `984513a9`; whitepaper unchanged; no new answers.
+- Code step (account-credentials 2.1 and 2.2).
+  - `CredentialIssueRequest` now decodes only from one JSON object through `protocol::deserialize_object`. Positional arrays get 400 `invalid_request` on the issuance and rotation routes; natively they get "invalid credential options" before any provider request. The type is never persisted, so no stored data is affected.
+  - Native `credential_issue` no longer treats a default missing from the provider's 100-record list as invalid. It probes the stored bearer on its own provider's `GET /v1/models` over the pinned transport. A model list keeps the default; only a definite 401 `invalid_api_key` or 403 `credential_scope` clears it. Any other answer or a transport failure fails the issuance with the account unchanged.
+  - `/v1/models` authenticates before any serving gate, creates no request or reservation, and answers an empty list when the provider admits nothing, so requirement 6 holds (tested with every gate closed).
+  - The review found that two claimed probe behaviours were untested and added a 403 control and three ambiguous answers.
+  - Nine regressions fail without their changes.
+- Checks: full headless suite under `caffeinate` 548 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; `npm test` 70/70; strict validation passes.
+
 ## 2026-11-19 (fiftieth round) — Spec: account credential issuance and secret storage
 
 - In step at `572cd32d`; whitepaper unchanged; no new answers.
@@ -510,7 +521,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: account-credentials 2.1 and 2.2; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 13, 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 13, 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
