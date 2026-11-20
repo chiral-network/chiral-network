@@ -371,6 +371,8 @@ Separately, the spec records three code differences, not questions:
 
 These are tasks 2.1–2.3.
 
+A fourth code difference was found on 2026-11-20 by the device-observation tests of task 3.7: a device selector listed twice by the engine, or two `nvidia-smi` rows with one PCI bus ID, were accepted by taking the first match, where the spec requires ambiguous output to fail the launch. It was fixed the same day (design code difference 4).
+
 Nonblocking: no requirement or task waits on these answers; option (b) of either question would add one task.
 
 ## 2026-11-18 — Payment-gated reputation: a provider can pre-empt its consumer's vote, and snapshots cannot revalidate many votes in 30 seconds

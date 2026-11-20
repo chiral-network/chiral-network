@@ -1,6 +1,7 @@
 //! Process tests of `chiral_daemon` with a development configuration whose CPU managed runtime's
 //! `llama-server` is a full copy of this test binary, inventoried (`managed-engine-runtime`
-//! requirements 6 and 11, tasks 2.1 and 2.3; `provider-daemon-lifecycle` requirement 11, task 2.2).
+//! requirements 2, 6 and 11, tasks 2.1, 2.3 and 3.2; `provider-daemon-lifecycle` requirement 11,
+//! task 2.2).
 //!
 //! This target has `harness = false` (Cargo.toml): libtest would reject the launcher's
 //! `llama-server` arguments, so `main` acts as the stub engine when it runs under that name: it
@@ -17,9 +18,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::process::ExitStatus;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
 const ENGINE: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
@@ -55,6 +54,8 @@ fn main() {
     let mut tests: Vec<(&str, fn(&Runtime))> = vec![
         ("check_refuses_an_engine_key_that_repeats_another_credential", check_refuses_an_engine_key_that_repeats_another_credential),
         ("start_refuses_an_engine_key_that_repeats_another_credential_before_any_engine_starts", start_refuses_an_engine_key_that_repeats_another_credential_before_any_engine_starts),
+        ("check_and_start_refuse_an_altered_inventory_before_any_engine_starts", check_and_start_refuse_an_altered_inventory_before_any_engine_starts),
+        ("check_and_start_verify_every_managed_model", check_and_start_verify_every_managed_model),
     ];
     #[cfg(unix)]
     tests.extend([
@@ -156,29 +157,7 @@ impl Runtime {
             "engine_version": ENGINE_VERSION, "source_revision": SOURCE_REVISION, "executable": ENGINE,
             "files": { ENGINE: { "sha256": hex::encode(Sha256::digest(&engine)), "size_bytes": engine.len() } }
         }));
-        let template = b"{{ messages }}";
-        let gguf = b"GGUF-test-inventory-bytes";
-        std::fs::write(artifact.join("model-Q4_K_M.gguf"), gguf).unwrap();
-        std::fs::write(artifact.join("chiral-chat-template.jinja"), template).unwrap();
-        let model = json!({
-            "id": "test/repo/model-Q4_K_M.gguf", "revision": "ab".repeat(20),
-            "tokenizer_revision": "ab".repeat(20), "chat_template_sha256": hex::encode(Sha256::digest(template)),
-            "quantization": "Q4_K_M", "context_length": 512, "max_output_tokens": 64,
-            "capabilities": ["chat", "completions"], "serving": null
-        });
-        write_canonical(&artifact.join("chiral-model.json"), &model);
-        write_canonical(&artifact.join("chiral-artifact-sha256.json"), &json!({
-            "schema": "chiral-gguf-artifact-v1",
-            "model": { "repo_id": "test/repo", "revision": model["revision"], "license": "test" },
-            "task": "generation", "quantization": "Q4_K_M", "context_length": 512, "max_output_tokens": 64,
-            "capabilities": model["capabilities"], "chat_template_name": "default", "model_file": "model-Q4_K_M.gguf",
-            "files": {
-                "model-Q4_K_M.gguf": { "sha256": hex::encode(Sha256::digest(gguf)), "size_bytes": gguf.len(),
-                    "upstream_repo": "test/repo", "upstream_path": "model-Q4_K_M.gguf", "upstream_digest": "ab".repeat(32) },
-                "chiral-chat-template.jinja": { "sha256": hex::encode(Sha256::digest(template)), "size_bytes": template.len(),
-                    "upstream_repo": null, "upstream_path": null, "upstream_digest": null }
-            }
-        }));
+        let model = write_artifact(&artifact, "Q4_K_M", "ab", b"GGUF-test-inventory-bytes");
         Self { root, model }
     }
 
@@ -249,6 +228,36 @@ impl Provider {
     fn helper(&self) -> Option<u32> {
         std::fs::read_to_string(self.directory.join(HELPER_PID)).ok()?.trim().parse().ok()
     }
+}
+
+/// Writes an inventoried chat artifact of model `test/repo/model-<quantization>.gguf`, whose
+/// revision repeats `revision` and whose GGUF holds `gguf`, into the existing `artifact`; returns
+/// its ModelSpec.
+fn write_artifact(artifact: &Path, quantization: &str, revision: &str, gguf: &[u8]) -> Value {
+    let template = b"{{ messages }}";
+    let file = format!("model-{quantization}.gguf");
+    std::fs::write(artifact.join(&file), gguf).unwrap();
+    std::fs::write(artifact.join("chiral-chat-template.jinja"), template).unwrap();
+    let model = json!({
+        "id": format!("test/repo/{file}"), "revision": revision.repeat(20),
+        "tokenizer_revision": revision.repeat(20), "chat_template_sha256": hex::encode(Sha256::digest(template)),
+        "quantization": quantization, "context_length": 512, "max_output_tokens": 64,
+        "capabilities": ["chat", "completions"], "serving": null
+    });
+    write_canonical(&artifact.join("chiral-model.json"), &model);
+    write_canonical(&artifact.join("chiral-artifact-sha256.json"), &json!({
+        "schema": "chiral-gguf-artifact-v1",
+        "model": { "repo_id": "test/repo", "revision": model["revision"], "license": "test" },
+        "task": "generation", "quantization": quantization, "context_length": 512, "max_output_tokens": 64,
+        "capabilities": model["capabilities"], "chat_template_name": "default", "model_file": file,
+        "files": {
+            file.as_str(): { "sha256": hex::encode(Sha256::digest(gguf)), "size_bytes": gguf.len(),
+                "upstream_repo": "test/repo", "upstream_path": file, "upstream_digest": revision.repeat(32) },
+            "chiral-chat-template.jinja": { "sha256": hex::encode(Sha256::digest(template)), "size_bytes": template.len(),
+                "upstream_repo": null, "upstream_path": null, "upstream_digest": null }
+        }
+    }));
+    model
 }
 
 fn write_canonical(path: &Path, value: &Value) {
@@ -338,7 +347,6 @@ fn logs(provider: &Provider) -> String {
     format!("stdout: {}\nstderr: {}", read("daemon.stdout"), read("daemon.stderr"))
 }
 
-#[cfg(unix)]
 fn wait(daemon: &mut Child, timeout: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -367,6 +375,141 @@ fn start_refuses_an_engine_key_that_repeats_another_credential_before_any_engine
         assert_no_secret(case, &report);
         assert!(provider.helper().is_none(), "{case}: an engine child was started\n{report}");
     }
+}
+
+/// Gives `provider` its own copy of the shared runtime and artifact, the engine hard-linked (so
+/// that it is the same runnable stub), and points its configuration at them. `alter` then changes
+/// the copy.
+fn own_inventory(runtime: &Runtime, provider: &Provider, alter: fn(&Path, &Path)) {
+    let (runtime_copy, artifact_copy) = (provider.directory.join("runtime"), provider.directory.join("model"));
+    for (source, copy) in [(runtime.root.path().join("runtime"), &runtime_copy), (runtime.root.path().join("model"), &artifact_copy)] {
+        std::fs::create_dir(copy).unwrap();
+        for entry in std::fs::read_dir(&source).unwrap() {
+            let path = entry.unwrap().path();
+            let target = copy.join(path.file_name().unwrap());
+            if path.file_name() == Some(std::ffi::OsStr::new(ENGINE)) { std::fs::hard_link(&path, &target).unwrap(); } else { std::fs::copy(&path, &target).unwrap(); }
+        }
+    }
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&provider.config).unwrap()).unwrap();
+    config["models"][0]["runtime"]["runtime_dir"] = json!(runtime_copy);
+    config["models"][0]["runtime"]["artifact_dir"] = json!(artifact_copy);
+    std::fs::write(&provider.config, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+    alter(&runtime_copy, &artifact_copy);
+}
+
+/// Rewrites the canonical JSON file at `path` after `change`.
+fn edit_json(path: &Path, change: impl FnOnce(&mut Value)) {
+    let mut value: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    change(&mut value);
+    write_canonical(path, &value);
+}
+
+/// Task 3.2 (requirement 2), with task 3.1's floating identity: `chiral_daemon --check` and a
+/// daemon start each refuse an altered inventory with its error and exit nonzero, and the
+/// inventoried stub engine, which records its process id whenever it runs, never starts. The
+/// control: the same copy unaltered validates, and a daemon start runs the stub.
+fn check_and_start_refuse_an_altered_inventory_before_any_engine_starts(runtime: &Runtime) {
+    let cases: [(&str, fn(&Path, &Path), &str); 5] = [
+        ("source revision master", |runtime, _| edit_json(&runtime.join("chiral-runtime.json"), |m| m["source_revision"] = json!("master")),
+            "runtime platform, backend, or pinned upstream identity mismatch"),
+        ("the engine's digest", |runtime, _| edit_json(&runtime.join("chiral-runtime.json"), |m| m["files"][ENGINE]["sha256"] = json!("00".repeat(32))),
+            "inventory file digest mismatch"),
+        ("an unlisted library", |runtime, _| std::fs::write(runtime.join("unlisted.dll"), b"untrusted loader input").unwrap(), "unexpected file in immutable inventory"),
+        ("one GGUF byte", |_, artifact| {
+            let path = artifact.join("model-Q4_K_M.gguf");
+            let mut bytes = std::fs::read(&path).unwrap();
+            bytes[0] ^= 1;
+            std::fs::write(path, bytes).unwrap();
+        }, "inventory file digest mismatch"),
+        ("the template removed", |_, artifact| std::fs::remove_file(artifact.join("chiral-chat-template.jinja")).unwrap(), "immutable inventory file is missing"),
+    ];
+    for (index, (case, alter, error)) in cases.into_iter().enumerate() {
+        let provider = runtime.provider(&format!("altered-{index}"), "engine.token", None);
+        own_inventory(runtime, &provider, alter);
+        let output = provider.daemon(true).output().unwrap();
+        let report = describe(&output);
+        assert!(!output.status.success(), "{case}: --check succeeded\n{report}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(error), "{case}: --check\n{report}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("validated"), "{case}: --check\n{report}");
+        assert_no_secret(case, &report);
+        assert!(provider.helper().is_none(), "{case}: --check started the engine");
+
+        let mut run = spawn(&provider);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            assert!(provider.helper().is_none(), "{case}: an engine child was started\n{}", logs(&provider));
+            if let Some(status) = run.daemon.try_wait().unwrap() { break status; }
+            assert!(Instant::now() < deadline, "{case}: the daemon kept starting\n{}", logs(&provider));
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let report = logs(&provider);
+        assert!(!status.success(), "{case}: {status:?}\n{report}");
+        assert!(report.contains(error), "{case}: {report}");
+        assert!(!report.contains("Chiral provider public="), "{case}: the daemon served\n{report}");
+        assert_no_secret(case, &report);
+        assert!(provider.helper().is_none(), "{case}: an engine child was started\n{report}");
+    }
+    // The control: the same kind of copy, unaltered, validates, and a start runs the stub engine.
+    let provider = runtime.provider("altered-control", "engine.token", None);
+    own_inventory(runtime, &provider, |_, _| {});
+    let output = provider.daemon(true).output().unwrap();
+    assert!(output.status.success(), "the unaltered copy: {}", describe(&output));
+    let mut run = spawn(&provider);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while provider.helper().is_none() {
+        assert!(run.daemon.try_wait().unwrap().is_none(), "the daemon exited before its engine started\n{}", logs(&provider));
+        assert!(Instant::now() < deadline, "the stub engine did not start\n{}", logs(&provider));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Task 3.2 (requirement 2): verification runs for every managed model, not only the first. A
+/// provider serves a second managed model, `test/repo/model-Q8_0.gguf`, with its own artifact.
+/// Unaltered, `--check` validates both. With one byte of the second GGUF changed, `--check`
+/// refuses with that error, and a daemon start launches and readies the first model's stub engine,
+/// then refuses the second model, exits nonzero without serving, and leaves no engine running.
+fn check_and_start_verify_every_managed_model(runtime: &Runtime) {
+    let provider = runtime.provider("two-models", "engine.token", None);
+    std::fs::write(provider.directory.join(SERVES_HEALTH), b"").unwrap();
+    let artifact = provider.directory.join("model-q8");
+    std::fs::create_dir(&artifact).unwrap();
+    let second = write_artifact(&artifact, "Q8_0", "cd", b"GGUF-second-test-inventory-bytes");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&provider.config).unwrap()).unwrap();
+    let mut model = config["models"][0].clone();
+    model["model"] = second;
+    model["engine_url"] = json!(format!("http://127.0.0.1:{}", free_port()));
+    model["runtime"]["artifact_dir"] = json!(artifact);
+    config["models"].as_array_mut().unwrap().push(model);
+    std::fs::write(&provider.config, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+    let output = provider.daemon(true).output().unwrap();
+    assert!(output.status.success(), "two unaltered models: {}", describe(&output));
+
+    let gguf = artifact.join("model-Q8_0.gguf");
+    let mut bytes = std::fs::read(&gguf).unwrap();
+    bytes[0] ^= 1;
+    std::fs::write(&gguf, bytes).unwrap();
+    let output = provider.daemon(true).output().unwrap();
+    let report = describe(&output);
+    assert!(!output.status.success(), "--check succeeded\n{report}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("inventory file digest mismatch"), "--check\n{report}");
+    assert!(provider.helper().is_none(), "--check started an engine");
+
+    let mut run = spawn(&provider);
+    let status = wait(&mut run.daemon, Duration::from_secs(120)).unwrap_or_else(|| panic!("the daemon kept running\n{}", logs(&provider)));
+    let report = logs(&provider);
+    assert!(!status.success(), "{status:?}\n{report}");
+    assert!(report.contains("inventory file digest mismatch"), "{report}");
+    assert!(!report.contains("Chiral provider public="), "the daemon served\n{report}");
+    // The first model's engine had started; it does not outlive the refused start.
+    let first = provider.helper().unwrap_or_else(|| panic!("the first model's engine never started\n{report}"));
+    #[cfg(unix)]
+    {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while exists(first) && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(20)); }
+        assert!(!exists(first), "the first model's engine outlived the refused start\n{report}");
+    }
+    #[cfg(not(unix))]
+    let _ = first;
 }
 
 /// Whether a process exists and is not merely a zombie awaiting its reaper.

@@ -882,3 +882,1137 @@ async fn engine_key_files_must_hold_one_protected_literal_token() {
     config.engine_api_key_file = Some(key);
     assert!(validate_inventory(&config).is_ok());
 }
+
+// Shared by the tests of tasks 3.1, 3.2, 3.4 and 3.7.
+
+/// Rewrites `config`'s runtime manifest, `chiral-runtime.json`, after `change`.
+fn edit_runtime_manifest(config: &ModelConfig, change: impl FnOnce(&mut Value)) {
+    let path = config.runtime.as_ref().unwrap().runtime_dir.join("chiral-runtime.json");
+    let mut manifest = read_json(&path).unwrap();
+    change(&mut manifest);
+    std::fs::write(&path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+}
+
+/// Rewrites `config`'s artifact inventory, `chiral-artifact-sha256.json`, after `change`.
+fn edit_artifact_manifest(config: &ModelConfig, change: impl FnOnce(&mut Value)) {
+    let path = config.runtime.as_ref().unwrap().artifact_dir.join("chiral-artifact-sha256.json");
+    let mut manifest = read_json(&path).unwrap();
+    change(&mut manifest);
+    std::fs::write(&path, protocol::canonical_json(&manifest).unwrap()).unwrap();
+}
+
+/// An inventory entry that binds exactly `bytes`.
+fn inventory_entry(bytes: &[u8]) -> Value { json!({"sha256": hex::encode(Sha256::digest(bytes)), "size_bytes": bytes.len()}) }
+
+/// The engine of `fixture` on a CUDA runtime: the manifest backend is `cuda` and `devices` are
+/// selected with a 256 MiB reserve.
+fn cuda_fixture(devices: &[&str]) -> (tempfile::TempDir, ModelConfig) {
+    let (directory, mut config) = fixture();
+    edit_runtime_manifest(&config, |manifest| manifest["backend"] = json!("cuda"));
+    accelerated(&mut config, "cuda", devices, 256);
+    (directory, config)
+}
+
+const RTX_4060: &str = "NVIDIA GeForce RTX 4060";
+
+/// A serving profile that signs `config`'s verified runtime and artifact, its settings and, for
+/// each selected device in order, an RTX 4060 with 8,188 MiB and driver `550.54.14`.
+fn profile_of(config: &ModelConfig) -> crate::protocol::ServingProfile {
+    let mut unprofiled = config.clone();
+    unprofiled.model.serving = None;
+    let validated = validate_inventory(&unprofiled).unwrap();
+    let runtime = config.runtime.as_ref().unwrap();
+    let mut profile = crate::performance::test_profile();
+    (profile.hf_repo, profile.tokenizer_repo) = ("test/repo".into(), "test/repo".into());
+    (profile.engine, profile.engine_version) = ("llama.cpp".into(), ENGINE_VERSION.into());
+    (profile.runtime_sha256, profile.artifact_manifest_sha256) = (validated.runtime_sha256, validated.artifact_manifest_sha256);
+    (profile.platform, profile.backend) = (platform().into(), runtime.backend.clone());
+    profile.memory_kind = match runtime.backend.as_str() { "cpu" => "system", "metal" => "unified", _ => "dedicated" }.into();
+    profile.devices = runtime.device_ids.iter().enumerate().map(|(index, selector)| EngineDevice {
+        id: format!("GPU-0000000{index}-aaaa-bbbb-cccc-dddddddddddd"), name: RTX_4060.into(), memory_mib: 8188,
+        driver_version: "550.54.14".into(), engine_device: selector.clone() }).collect();
+    profile.memory_reserve_mib = runtime.memory_reserve_mib;
+    (profile.gpu_layers, profile.split_mode, profile.tensor_split) = (runtime.gpu_layers, runtime.split_mode.clone(), runtime.tensor_split.clone());
+    (profile.cache_type_k, profile.cache_type_v, profile.flash_attention) = (runtime.cache_type_k.clone(), runtime.cache_type_v.clone(), runtime.flash_attention);
+    (profile.batch_size, profile.ubatch_size, profile.max_concurrency) = (runtime.batch_size, runtime.ubatch_size, config.max_concurrency);
+    profile
+}
+
+/// A loopback port with no listener when this returns.
+fn unused_port() -> u16 { std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port() }
+
+/// Whether `pid` is gone (reaped) within five seconds.
+#[cfg(unix)]
+async fn gone_within_five_seconds(pid: u32) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while unsafe { libc::kill(pid as i32, 0) } == 0 && tokio::time::Instant::now() < deadline { tokio::time::sleep(Duration::from_millis(20)).await; }
+    unsafe { libc::kill(pid as i32, 0) == -1 }
+}
+
+/// Waits, at most five seconds, until `engine`'s child has exited; the launcher sees the exit
+/// from then on (tokio keeps the exit status).
+fn wait_for_exit(engine: &ManagedEngine) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while engine.child.lock().unwrap().try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the helper child did not exit");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+// managed-engine-runtime task 3.1: a managed deployment runs only the pinned llama-server as a
+// private Rust-supervised child (requirement 1).
+
+const IDENTITY: &str = "runtime platform, backend, or pinned upstream identity mismatch";
+const ENTRY_POINT: &str = "runtime entry point must be native llama-server";
+const NOT_NATIVE: &str = "runtime entry point is not a native executable for this platform";
+
+/// A runtime manifest of another engine release, source revision, schema, platform,
+/// architecture or backend than the pin, this host and the configuration is refused by
+/// inventory verification, the first step of `ManagedEngine::start`.
+#[tokio::test]
+async fn a_runtime_of_another_release_platform_architecture_or_backend_is_refused() {
+    let (_directory, mut config) = fixture();
+    let manifest_path = config.runtime.as_ref().unwrap().runtime_dir.join("chiral-runtime.json");
+    let original = std::fs::read(&manifest_path).unwrap();
+    let mut cases: Vec<(String, &str, Value)> = vec![
+        ("engine version v0.8.0".into(), "engine_version", json!("v0.8.0")),
+        ("engine version 0.9.0".into(), "engine_version", json!("0.9.0")),
+        ("engine version v0.9.1".into(), "engine_version", json!("v0.9.1")),
+        ("source revision master".into(), "source_revision", json!("master")),
+        ("an abbreviated source revision".into(), "source_revision", json!(&SOURCE_REVISION[..7])),
+        ("an upper-case source revision".into(), "source_revision", json!(SOURCE_REVISION.to_uppercase())),
+        ("schema v2".into(), "schema", json!("chiral-llama-runtime-v2")),
+        ("platform darwin".into(), "platform", json!("darwin")),
+        ("architecture arm64".into(), "architecture", json!("arm64")),
+        ("architecture amd64".into(), "architecture", json!("amd64")),
+        ("backend cuda".into(), "backend", json!("cuda")),
+        ("backend metal".into(), "backend", json!("metal")),
+        ("backend vulkan".into(), "backend", json!("vulkan")),
+    ];
+    for other in ["linux", "macos", "windows"].into_iter().filter(|os| *os != platform()) {
+        cases.push((format!("platform {other}"), "platform", json!(other)));
+    }
+    for other in ["x86_64", "aarch64"].into_iter().filter(|arch| *arch != std::env::consts::ARCH) {
+        cases.push((format!("architecture {other}"), "architecture", json!(other)));
+    }
+    for (name, field, value) in cases {
+        edit_runtime_manifest(&config, |manifest| manifest[field] = value);
+        assert_eq!(validate_inventory(&config).err().as_deref(), Some(IDENTITY), "{name}");
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(IDENTITY), "{name}: ManagedEngine::start");
+        std::fs::write(&manifest_path, &original).unwrap();
+    }
+    assert!(validate_inventory(&config).is_ok());
+    // The configured backend differs from the runtime's: a CUDA configuration of a CPU runtime.
+    accelerated(&mut config, "cuda", &["CUDA0"], 256);
+    assert_eq!(validate_inventory(&config).err().as_deref(), Some(IDENTITY), "a CUDA configuration of a CPU runtime");
+    edit_runtime_manifest(&config, |manifest| manifest["backend"] = json!("cuda"));
+    assert!(validate_inventory(&config).is_ok(), "a CUDA configuration of a CUDA runtime");
+}
+
+/// Replaces `config`'s runtime entry point with an inventoried file `name` holding `bytes`
+/// (executable on Unix).
+fn install_entry_point(config: &ModelConfig, name: &str, bytes: &[u8]) {
+    let runtime = &config.runtime.as_ref().unwrap().runtime_dir;
+    let previous = read_json(&runtime.join("chiral-runtime.json")).unwrap()["executable"].as_str().unwrap().to_owned();
+    std::fs::remove_file(runtime.join(&previous)).unwrap();
+    std::fs::write(runtime.join(name), bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(runtime.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    edit_runtime_manifest(config, |manifest| {
+        manifest["executable"] = json!(name);
+        manifest["files"] = json!({name: inventory_entry(bytes)});
+    });
+}
+
+/// The first `len` bytes of an executable header: `prefix`, then zeros.
+fn header(prefix: &[u8], len: usize) -> Vec<u8> { let mut bytes = prefix.to_vec(); bytes.resize(len, 0); bytes }
+
+/// Only an inventoried `llama-server` with a native header for this host is accepted. An
+/// entry point named `run.sh`, a `llama-server` that is a shell script padded to 4,096 bytes,
+/// and native headers of other platforms and architectures are refused by inventory
+/// verification, and the file is never executed: the scripts would create a marker file.
+#[tokio::test]
+async fn only_an_inventoried_native_llama_server_entry_point_is_accepted_and_nothing_else_runs() {
+    let (directory, mut config) = fixture();
+    config.engine_url = format!("http://127.0.0.1:{}", unused_port());
+    let engine_name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let native = std::fs::read(config.runtime.as_ref().unwrap().runtime_dir.join(engine_name)).unwrap();
+    let marker = directory.path().join("entry-point-executed");
+    // `#!/bin/sh\n`, a command that leaves the marker, padded with newlines to 4,096 bytes.
+    let script = header(format!("#!/bin/sh\necho executed > '{}'\n", marker.display()).as_bytes(), 4096)
+        .into_iter().map(|byte| if byte == 0 { b'\n' } else { byte }).collect::<Vec<_>>();
+    assert!(script.starts_with(b"#!/bin/sh\n") && script.len() == 4096);
+    let macho = |cpu: u32| header(&[b"\xcf\xfa\xed\xfe".as_slice(), &cpu.to_le_bytes()].concat(), 4096);
+    let elf = |machine: u16| { let mut bytes = header(b"\x7fELF\x02\x01", 4096); bytes[18..20].copy_from_slice(&machine.to_le_bytes()); bytes };
+    let pe = |machine: u16| {
+        let mut bytes = header(b"MZ", 4096);
+        bytes[60..64].copy_from_slice(&128u32.to_le_bytes());
+        bytes[128..132].copy_from_slice(b"PE\0\0");
+        bytes[132..134].copy_from_slice(&machine.to_le_bytes());
+        bytes
+    };
+    let other_name = if cfg!(windows) { "llama-server" } else { "llama-server.exe" };
+    let refused: Vec<(&str, &str, Vec<u8>, &str)> = vec![
+        ("run.sh with this host's native header", "run.sh", native.clone(), ENTRY_POINT),
+        ("run.sh, a shell script", "run.sh", script.clone(), ENTRY_POINT),
+        ("the other platforms' engine name", other_name, native.clone(), ENTRY_POINT),
+        ("llama-server-wrapper", "llama-server-wrapper", native.clone(), ENTRY_POINT),
+        ("llama-server, a shell script of 4,096 bytes", engine_name, script.clone(), NOT_NATIVE),
+        ("an empty llama-server", engine_name, Vec::new(), NOT_NATIVE),
+    ];
+    for (name, file, bytes, error) in refused {
+        install_entry_point(&config, file, &bytes);
+        assert_eq!(validate_inventory(&config).err().as_deref(), Some(error), "{name}");
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(error), "{name}: ManagedEngine::start");
+        assert!(!marker.exists(), "{name}: the entry point was executed");
+    }
+    // Native headers: accepted only for this host's platform and architecture.
+    let headers = [("Mach-O arm64", "macos", "aarch64", macho(0x0100_000c)), ("Mach-O x86_64", "macos", "x86_64", macho(0x0100_0007)),
+        ("ELF aarch64", "linux", "aarch64", elf(183)), ("ELF x86-64", "linux", "x86_64", elf(62)),
+        ("PE arm64", "windows", "aarch64", pe(0xaa64)), ("PE x86-64", "windows", "x86_64", pe(0x8664)),
+        ("32-bit ELF", "none", "none", header(b"\x7fELF\x01\x01", 4096)), ("32-bit Mach-O", "none", "none", header(b"\xce\xfa\xed\xfe\x0c\x00\x00\x00", 4096))];
+    let mut accepted = 0;
+    for (name, os, arch, bytes) in headers {
+        install_entry_point(&config, engine_name, &bytes);
+        if os == platform() && arch == std::env::consts::ARCH {
+            assert!(validate_inventory(&config).is_ok(), "{name} on this host");
+            accepted += 1;
+        } else {
+            assert_eq!(validate_inventory(&config).err().as_deref(), Some(NOT_NATIVE), "{name}");
+        }
+    }
+    assert_eq!(accepted, usize::from(["macos", "linux", "windows"].contains(&platform()) && ["aarch64", "x86_64"].contains(&std::env::consts::ARCH)));
+    // The marker detects execution: running the script directly leaves it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let control = directory.path().join("control.sh");
+        std::fs::write(&control, &script).unwrap();
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(std::process::Command::new(&control).status().unwrap().success());
+        assert!(marker.exists(), "the control script left no marker");
+    }
+}
+
+// managed-engine-runtime task 3.2: runtime and artifact inventories are verified before every
+// launch (requirement 2).
+
+const MISSING: &str = "immutable inventory file is missing";
+const SIZE: &str = "inventory file size mismatch";
+const DIGEST: &str = "inventory file digest mismatch";
+const UNEXPECTED: &str = "unexpected file in immutable inventory";
+const ENTRY_GGUF: &str = "GGUF entry point is not inventoried";
+const ALIAS: &str = "model API alias differs from selected GGUF identity";
+const PROFILE: &str = "managed launch settings differ from immutable serving terms";
+
+type InventoryCase = (&'static str, Box<dyn Fn(&mut ModelConfig)>, &'static str);
+
+fn inventory_case(name: &'static str, change: impl Fn(&mut ModelConfig) + 'static, error: &'static str) -> InventoryCase {
+    (name, Box::new(change), error)
+}
+
+fn runtime_dir(config: &ModelConfig) -> PathBuf { config.runtime.as_ref().unwrap().runtime_dir.clone() }
+fn artifact_dir(config: &ModelConfig) -> PathBuf { config.runtime.as_ref().unwrap().artifact_dir.clone() }
+
+/// Writes `config.model`, with model identifier `id`, as the artifact's ModelSpec too.
+fn rename_model(config: &mut ModelConfig, id: &str) {
+    config.model.id = id.into();
+    std::fs::write(artifact_dir(config).join("chiral-model.json"), protocol::canonical_json(&config.model).unwrap()).unwrap();
+}
+
+/// A removed, resized or uninventoried file, and a model identifier other than
+/// `<repository>/<GGUF file name>`, are each refused, with the same error from
+/// `ManagedEngine::start`.
+#[tokio::test]
+async fn removed_resized_or_uninventoried_files_and_another_model_identifier_are_refused() {
+    let engine_name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let gguf = |config: &ModelConfig| artifact_dir(config).join("model-Q4_K_M.gguf");
+    let cases = vec![
+        // An inventoried file removed.
+        inventory_case("the runtime executable removed", move |c| std::fs::remove_file(runtime_dir(c).join(engine_name)).unwrap(), MISSING),
+        inventory_case("the GGUF removed", move |c| std::fs::remove_file(gguf(c)).unwrap(), MISSING),
+        inventory_case("the template removed", |c| std::fs::remove_file(artifact_dir(c).join("chiral-chat-template.jinja")).unwrap(), MISSING),
+        inventory_case("the artifact ModelSpec removed", |c| std::fs::remove_file(artifact_dir(c).join("chiral-model.json")).unwrap(), MISSING),
+        // A file whose size differs from its entry: bytes added or removed, or the entry's size
+        // changed while the bytes, and so their digest, are unchanged.
+        inventory_case("a byte appended to the GGUF", move |c| { let mut bytes = std::fs::read(gguf(c)).unwrap(); bytes.push(b'X'); std::fs::write(gguf(c), bytes).unwrap(); }, SIZE),
+        inventory_case("the GGUF truncated by a byte", move |c| { let bytes = std::fs::read(gguf(c)).unwrap(); std::fs::write(gguf(c), &bytes[..bytes.len() - 1]).unwrap(); }, SIZE),
+        inventory_case("the GGUF entry one byte larger", |c| edit_artifact_manifest(c, |m| { let size = m["files"]["model-Q4_K_M.gguf"]["size_bytes"].as_u64().unwrap(); m["files"]["model-Q4_K_M.gguf"]["size_bytes"] = json!(size + 1); }), SIZE),
+        inventory_case("the executable entry one byte smaller", move |c| edit_runtime_manifest(c, |m| { let size = m["files"][engine_name]["size_bytes"].as_u64().unwrap(); m["files"][engine_name]["size_bytes"] = json!(size - 1); }), SIZE),
+        // A changed byte and an unlisted file (the existing regressions, here with their errors).
+        inventory_case("one GGUF byte changed", move |c| { let mut bytes = std::fs::read(gguf(c)).unwrap(); bytes[0] ^= 1; std::fs::write(gguf(c), bytes).unwrap(); }, DIGEST),
+        inventory_case("an unlisted library", |c| std::fs::write(runtime_dir(c).join("unlisted.dll"), b"untrusted loader input").unwrap(), UNEXPECTED),
+        inventory_case("an unlisted GGUF", |c| std::fs::write(artifact_dir(c).join("model-Q8_0.gguf"), b"GGUF").unwrap(), UNEXPECTED),
+        // A `model_file` that the inventory does not list, or that is not a GGUF.
+        inventory_case("model_file not in the inventory", |c| edit_artifact_manifest(c, |m| m["model_file"] = json!("model-Q5_K_M.gguf")), ENTRY_GGUF),
+        inventory_case("model_file in an uninventoried directory", |c| edit_artifact_manifest(c, |m| m["model_file"] = json!("sub/model-Q4_K_M.gguf")), ENTRY_GGUF),
+        inventory_case("model_file naming the template", |c| edit_artifact_manifest(c, |m| m["model_file"] = json!("chiral-chat-template.jinja")), ENTRY_GGUF),
+        // A model API identifier other than `test/repo/model-Q4_K_M.gguf`, in the configuration
+        // and the artifact ModelSpec alike.
+        inventory_case("identifier without the .gguf suffix", |c| rename_model(c, "test/repo/model-Q4_K_M"), ALIAS),
+        inventory_case("identifier with another letter case", |c| rename_model(c, "test/repo/model-q4_k_m.gguf"), ALIAS),
+        inventory_case("identifier of another repository", |c| rename_model(c, "other/repo/model-Q4_K_M.gguf"), ALIAS),
+        inventory_case("identifier without the repository", |c| rename_model(c, "model-Q4_K_M.gguf"), ALIAS),
+        inventory_case("identifier of another file", |c| rename_model(c, "test/repo/model-Q8_0.gguf"), ALIAS),
+        inventory_case("the artifact of another repository", |c| edit_artifact_manifest(c, |m| m["model"]["repo_id"] = json!("test/other")), ALIAS),
+    ];
+    for (name, change, error) in cases {
+        let (_directory, mut config) = fixture();
+        assert!(validate_inventory(&config).is_ok(), "{name}: the unaltered fixture");
+        change(&mut config);
+        assert_eq!(validate_inventory(&config).err().as_deref(), Some(error), "{name}");
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(error), "{name}: ManagedEngine::start");
+    }
+}
+
+/// A serving profile must equal the verified runtime and artifact and every launch setting:
+/// each difference is refused, and the matching profile is accepted.
+#[test]
+fn a_serving_profile_must_equal_every_verified_identity_and_launch_setting() {
+    let (_directory, mut config) = cuda_fixture(&["CUDA0", "CUDA1"]);
+    let runtime = runtime_of(&mut config);
+    (runtime.tensor_split, runtime.flash_attention, runtime.cache_type_k, runtime.cache_type_v) = (vec![3, 1], true, "q8_0".into(), "q4_0".into());
+    (runtime.batch_size, runtime.ubatch_size) = (512, 256);
+    let profile = profile_of(&config);
+    config.model.serving = Some(profile.clone());
+    assert!(validate_inventory(&config).is_ok(), "the matching profile");
+    let other_platform = if platform() == "linux" { "macos" } else { "linux" };
+    let cases: Vec<(&str, Box<dyn Fn(&mut crate::protocol::ServingProfile)>)> = vec![
+        ("memory_reserve_mib", Box::new(|p| p.memory_reserve_mib = 512)),
+        ("gpu_layers", Box::new(|p| p.gpu_layers = 998)),
+        ("split_mode", Box::new(|p| p.split_mode = "row".into())),
+        ("tensor_split", Box::new(|p| p.tensor_split = vec![1, 3])),
+        ("cache_type_k", Box::new(|p| p.cache_type_k = "f16".into())),
+        ("cache_type_v", Box::new(|p| p.cache_type_v = "q8_0".into())),
+        ("flash_attention", Box::new(|p| p.flash_attention = false)),
+        ("batch_size", Box::new(|p| p.batch_size = 1024)),
+        ("ubatch_size", Box::new(|p| p.ubatch_size = 128)),
+        ("max_concurrency", Box::new(|p| p.max_concurrency = 3)),
+        ("device selectors in another order", Box::new(|p| p.devices.swap(0, 1))),
+        ("one device selector fewer", Box::new(|p| { p.devices.pop(); })),
+        ("another device selector", Box::new(|p| p.devices[1].engine_device = "CUDA2".into())),
+        ("runtime_sha256", Box::new(|p| p.runtime_sha256 = "00".repeat(32))),
+        ("artifact_manifest_sha256", Box::new(|p| p.artifact_manifest_sha256 = "00".repeat(32))),
+        ("engine", Box::new(|p| p.engine = "vllm".into())),
+        ("engine_version", Box::new(|p| p.engine_version = "v0.8.0".into())),
+        ("hf_repo", Box::new(|p| p.hf_repo = "other/repo".into())),
+        ("tokenizer_repo", Box::new(|p| p.tokenizer_repo = "other/repo".into())),
+        ("platform", Box::new(move |p| p.platform = other_platform.into())),
+        ("backend", Box::new(|p| p.backend = "vulkan".into())),
+    ];
+    for (name, change) in cases {
+        let mut differing = profile.clone();
+        change(&mut differing);
+        config.model.serving = Some(differing);
+        assert_eq!(validate_inventory(&config).err().as_deref(), Some(PROFILE), "{name}");
+    }
+    // The scenario: the profile states batch size 512 and the runtime configuration 256.
+    config.model.serving = Some(profile);
+    runtime_of(&mut config).batch_size = 256;
+    assert_eq!(validate_inventory(&config).err().as_deref(), Some(PROFILE), "runtime batch size 256 under a profile of 512");
+}
+
+/// Two runtime packages of the same upstream commit whose inventories differ only in one
+/// library's digest have different runtime identities, the SHA-256 of the canonical manifest,
+/// and a profile that signs one is refused when the other is installed.
+#[test]
+fn a_repackaged_runtime_has_another_identity() {
+    let library = if cfg!(windows) { "ggml-base.dll" } else if cfg!(target_os = "macos") { "libggml-base.dylib" } else { "libggml-base.so" };
+    let package = |bytes: &'static [u8]| {
+        let (directory, config) = fixture();
+        std::fs::write(runtime_dir(&config).join(library), bytes).unwrap();
+        edit_runtime_manifest(&config, |manifest| manifest["files"][library] = inventory_entry(bytes));
+        (directory, config)
+    };
+    let (_first_directory, first) = package(b"ggml base library, build A");
+    let (_second_directory, second) = package(b"ggml base library, build B");
+    let manifests = [&first, &second].map(|config| read_json(&runtime_dir(config).join("chiral-runtime.json")).unwrap());
+    // Only that digest differs.
+    let mut aligned = manifests[0].clone();
+    assert_ne!(aligned, manifests[1]);
+    aligned["files"][library]["sha256"] = manifests[1]["files"][library]["sha256"].clone();
+    assert_eq!(aligned, manifests[1]);
+    let (one, other) = (validate_inventory(&first).unwrap(), validate_inventory(&second).unwrap());
+    assert_ne!(one.runtime_sha256, other.runtime_sha256);
+    assert_eq!(one.artifact_manifest_sha256, other.artifact_manifest_sha256);
+    for (validated, manifest) in [(&one, &manifests[0]), (&other, &manifests[1])] {
+        assert_eq!(validated.runtime_sha256, hex::encode(Sha256::digest(protocol::canonical_json(manifest).unwrap())));
+    }
+    let signed_first = profile_of(&first);
+    let mut installed_second = second.clone();
+    installed_second.model.serving = Some(signed_first.clone());
+    assert_eq!(validate_inventory(&installed_second).err().as_deref(), Some(PROFILE));
+    let mut installed_first = first.clone();
+    installed_first.model.serving = Some(signed_first);
+    assert!(validate_inventory(&installed_first).is_ok());
+}
+
+/// `ManagedEngine::start` on an altered inventory returns the inventory error before it touches
+/// the endpoint: the port stays unbound, and a listener there is neither reported as occupying it
+/// nor disturbed. The unaltered fixture reaches the port check and the spawn.
+#[tokio::test]
+async fn an_altered_inventory_refuses_the_launch_before_the_port_or_any_process() {
+    let engine_name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let alterations = vec![
+        inventory_case("an unlisted library", |c| std::fs::write(runtime_dir(c).join("unlisted.dll"), b"untrusted loader input").unwrap(), UNEXPECTED),
+        inventory_case("one GGUF byte changed", |c| { let path = artifact_dir(c).join("model-Q4_K_M.gguf"); let mut bytes = std::fs::read(&path).unwrap(); bytes[0] ^= 1; std::fs::write(path, bytes).unwrap(); }, DIGEST),
+        inventory_case("the template removed", |c| std::fs::remove_file(artifact_dir(c).join("chiral-chat-template.jinja")).unwrap(), MISSING),
+        inventory_case("the executable's digest", move |c| edit_runtime_manifest(c, |m| m["files"][engine_name]["sha256"] = json!("00".repeat(32))), DIGEST),
+        inventory_case("source revision master", |c| edit_runtime_manifest(c, |m| m["source_revision"] = json!("master")), IDENTITY),
+    ];
+    for (name, change, error) in alterations {
+        let (_directory, mut config) = fixture();
+        let port = unused_port();
+        config.engine_url = format!("http://127.0.0.1:{port}");
+        change(&mut config);
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(error), "{name}");
+        // Nothing listens on the endpoint, and the launcher holds nothing there.
+        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(), "{name}: the port was left bound");
+        let listener = foreign_listener(format!("127.0.0.1:{port}").parse().unwrap(), false).await;
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(error), "{name}: with a listener on the port");
+        assert_still_accepts(&listener, format!("127.0.0.1:{port}").parse().unwrap()).await;
+        // On a CUDA runtime, no device observer runs either, the engine's enumeration included.
+        let (_directory, mut cuda) = cuda_fixture(&["CUDA0"]);
+        cuda.engine_url = config.engine_url.clone();
+        change(&mut cuda);
+        let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+        assert_eq!(ManagedEngine::start_observed(&cuda, &recorded).await.err().as_deref(), Some(error), "{name}: CUDA");
+        assert!(recorded.runs().is_empty(), "{name}: a device observer ran: {:?}", recorded.runs());
+    }
+    // The control: unaltered, the same launch reaches the port check, and then the spawn.
+    let (_directory, mut config) = fixture();
+    let listener = foreign_listener("127.0.0.1:0".parse().unwrap(), false).await;
+    config.engine_url = format!("http://{}", listener.local_addr().unwrap());
+    assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(OCCUPIED_ENGINE_PORT));
+    drop(listener);
+    config.engine_url = format!("http://127.0.0.1:{}", unused_port());
+    let error = ManagedEngine::start(&config).await.err().unwrap();
+    assert!(failed_after_port_check(&error), "{error}");
+    // Unaltered on CUDA, the observers run before the port check and the spawn.
+    let (_directory, mut cuda) = cuda_fixture(&["CUDA0"]);
+    cuda.engine_url = format!("http://127.0.0.1:{}", unused_port());
+    let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+    let error = ManagedEngine::start_observed(&cuda, &recorded).await.err().unwrap();
+    assert!(failed_after_port_check(&error), "{error}");
+    assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+}
+
+/// An inventoried library in the runtime's subdirectory `lib`.
+const NESTED_LIBRARY: &str = if cfg!(windows) { "lib/ggml-base.dll" } else if cfg!(target_os = "macos") { "lib/libggml-base.dylib" } else { "lib/libggml-base.so" };
+
+/// Adds `NESTED_LIBRARY` to `config`'s runtime and its inventory.
+fn add_nested_library(config: &ModelConfig) {
+    let bytes = b"nested ggml base library";
+    std::fs::create_dir(runtime_dir(config).join("lib")).unwrap();
+    std::fs::write(runtime_dir(config).join(NESTED_LIBRARY), bytes).unwrap();
+    edit_runtime_manifest(config, |manifest| manifest["files"][NESTED_LIBRARY] = inventory_entry(bytes));
+}
+
+/// Pads the JSON file at `path` with trailing newlines, which JSON ignores, to `len` bytes.
+fn pad_to(path: &Path, len: usize) {
+    let mut bytes = std::fs::read(path).unwrap();
+    assert!(bytes.len() <= len);
+    bytes.resize(len, b'\n');
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// Moves `path` to `outside` and leaves a symbolic link to it, so that the bytes reached through
+/// `path` are unchanged.
+#[cfg(unix)]
+fn link_to_moved(path: &Path, outside: &Path) {
+    std::fs::rename(path, outside).unwrap();
+    std::os::unix::fs::symlink(outside, path).unwrap();
+}
+
+type TreeCase = (&'static str, Box<dyn Fn(&ModelConfig, &Path)>, &'static str);
+
+fn tree_case(name: &'static str, change: impl Fn(&ModelConfig, &Path) + 'static, error: &'static str) -> TreeCase {
+    (name, Box::new(change), error)
+}
+
+/// Task 3.2 (requirement 2), found missing by adversarial review: every level of an inventory is
+/// verified. A file in a subdirectory is bound like a top-level one, and an unlisted file in any
+/// subdirectory is refused. A symbolic link is refused wherever it is, even when the bytes it
+/// reaches are the inventoried ones: an inventoried file, a subdirectory, the inventory root or
+/// a manifest. Each manifest is a regular file of at most 4 MiB, and each inventory path a safe,
+/// unreserved relative path with a lower-case SHA-256. `ManagedEngine::start` returns the same
+/// error, and on this CUDA runtime no device observer runs.
+#[tokio::test]
+async fn every_level_of_an_inventory_is_verified_and_no_symbolic_link_or_unbounded_manifest_is_followed() {
+    const SYMLINK: &str = "inventory symlinks are forbidden";
+    const ROOT: &str = "invalid inventory directory or file count";
+    const METADATA: &str = "runtime metadata must be a bounded regular file";
+    const UNSAFE: &str = "inventory path is not a safe relative path";
+    const ENTRY: &str = "invalid inventory digest or reserved filename";
+    const BOUND: usize = 4 * 1024 * 1024;
+    let nested = |c: &ModelConfig| runtime_dir(c).join(NESTED_LIBRARY);
+    #[allow(unused_mut)]
+    let mut cases = vec![
+        tree_case("a nested library byte changed", move |c, _| { let mut bytes = std::fs::read(nested(c)).unwrap(); bytes[0] ^= 1; std::fs::write(nested(c), bytes).unwrap(); }, DIGEST),
+        tree_case("a nested library removed", move |c, _| std::fs::remove_file(nested(c)).unwrap(), MISSING),
+        tree_case("an unlisted library beside the nested one", |c, _| std::fs::write(runtime_dir(c).join("lib/unlisted.so"), b"untrusted loader input").unwrap(), UNEXPECTED),
+        tree_case("an unlisted library in a new runtime subdirectory", |c, _| { std::fs::create_dir_all(runtime_dir(c).join("backends/cuda")).unwrap(); std::fs::write(runtime_dir(c).join("backends/cuda/libggml-cuda.so"), b"untrusted backend").unwrap(); }, UNEXPECTED),
+        tree_case("an unlisted GGUF in a new artifact subdirectory", |c, _| { std::fs::create_dir(artifact_dir(c).join("extra")).unwrap(); std::fs::write(artifact_dir(c).join("extra/model-Q8_0.gguf"), b"GGUF").unwrap(); }, UNEXPECTED),
+        tree_case("the runtime manifest one byte above 4 MiB", |c, _| pad_to(&runtime_dir(c).join("chiral-runtime.json"), BOUND + 1), METADATA),
+        tree_case("the artifact manifest one byte above 4 MiB", |c, _| pad_to(&artifact_dir(c).join("chiral-artifact-sha256.json"), BOUND + 1), METADATA),
+        tree_case("the artifact ModelSpec one byte above 4 MiB", |c, _| {
+            // Inventory verification passes, so the ModelSpec read is what refuses it.
+            pad_to(&artifact_dir(c).join("chiral-model.json"), BOUND + 1);
+        }, METADATA),
+        tree_case("the runtime manifest a directory", |c, _| { std::fs::remove_file(runtime_dir(c).join("chiral-runtime.json")).unwrap(); std::fs::create_dir(runtime_dir(c).join("chiral-runtime.json")).unwrap(); }, METADATA),
+        tree_case("an inventory path through ..", |c, _| edit_runtime_manifest(c, |m| m["files"]["lib/../llama-server"] = inventory_entry(b"x")), UNSAFE),
+        tree_case("an absolute inventory path", |c, _| edit_runtime_manifest(c, |m| m["files"]["/etc/hosts"] = inventory_entry(b"x")), UNSAFE),
+        tree_case("a backslash inventory path", |c, _| edit_runtime_manifest(c, |m| m["files"]["lib\\libggml-base.so"] = inventory_entry(b"x")), UNSAFE),
+        tree_case("an inventory path with a drive or stream colon", |c, _| edit_runtime_manifest(c, |m| m["files"]["C:llama-server"] = inventory_entry(b"x")), UNSAFE),
+        tree_case("an inventory entry naming the runtime manifest", |c, _| edit_runtime_manifest(c, |m| m["files"]["chiral-runtime.json"] = inventory_entry(b"x")), ENTRY),
+        tree_case("an inventory entry naming the artifact ModelSpec", |c, _| edit_artifact_manifest(c, |m| m["files"]["chiral-model.json"] = inventory_entry(b"x")), ENTRY),
+        tree_case("an upper-case digest", |c, _| edit_runtime_manifest(c, |m| { let digest = m["files"][NESTED_LIBRARY]["sha256"].as_str().unwrap().to_uppercase(); m["files"][NESTED_LIBRARY]["sha256"] = json!(digest); }), ENTRY),
+        tree_case("a 63-character digest", |c, _| edit_runtime_manifest(c, |m| { let digest = m["files"][NESTED_LIBRARY]["sha256"].as_str().unwrap()[1..].to_owned(); m["files"][NESTED_LIBRARY]["sha256"] = json!(digest); }), ENTRY),
+        tree_case("an empty runtime inventory", |c, _| edit_runtime_manifest(c, |m| m["files"] = json!({})), ROOT),
+    ];
+    #[cfg(unix)]
+    cases.extend([
+        tree_case("the inventoried GGUF a link to its own bytes outside the artifact", |c, outside| link_to_moved(&artifact_dir(c).join("model-Q4_K_M.gguf"), &outside.join("model-Q4_K_M.gguf")), SYMLINK),
+        tree_case("the runtime executable a link to its own bytes outside the runtime", |c, outside| link_to_moved(&runtime_dir(c).join("llama-server"), &outside.join("llama-server")), SYMLINK),
+        tree_case("the nested library a link to its own bytes outside the runtime", move |c, outside| link_to_moved(&nested(c), &outside.join("library")), SYMLINK),
+        tree_case("the library directory a link to itself moved outside the runtime", |c, outside| link_to_moved(&runtime_dir(c).join("lib"), &outside.join("lib")), SYMLINK),
+        tree_case("alias.gguf, a link to the inventoried GGUF", |c, _| std::os::unix::fs::symlink("model-Q4_K_M.gguf", artifact_dir(c).join("alias.gguf")).unwrap(), SYMLINK),
+        tree_case("the artifact ModelSpec a link to its own bytes outside the artifact", |c, outside| link_to_moved(&artifact_dir(c).join("chiral-model.json"), &outside.join("chiral-model.json")), SYMLINK),
+        tree_case("the runtime manifest a link to its own bytes outside the runtime", |c, outside| link_to_moved(&runtime_dir(c).join("chiral-runtime.json"), &outside.join("chiral-runtime.json")), METADATA),
+        tree_case("the artifact manifest a link to its own bytes outside the artifact", |c, outside| link_to_moved(&artifact_dir(c).join("chiral-artifact-sha256.json"), &outside.join("chiral-artifact-sha256.json")), METADATA),
+        tree_case("the runtime directory a link to itself moved elsewhere", |c, outside| link_to_moved(&runtime_dir(c), &outside.join("runtime")), ROOT),
+        tree_case("the artifact directory a link to itself moved elsewhere", |c, outside| link_to_moved(&artifact_dir(c), &outside.join("artifact")), ROOT),
+    ]);
+    let fresh = || {
+        let (directory, mut config) = cuda_fixture(&["CUDA0"]);
+        add_nested_library(&config);
+        config.engine_url = format!("http://127.0.0.1:{}", unused_port());
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        (directory, config, outside)
+    };
+    for (name, change, error) in cases {
+        let (_directory, config, outside) = fresh();
+        assert!(validate_inventory(&config).is_ok(), "{name}: the unaltered fixture");
+        change(&config, &outside);
+        assert_eq!(validate_inventory(&config).err().as_deref(), Some(error), "{name}");
+        let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+        assert_eq!(ManagedEngine::start_observed(&config, &recorded).await.err().as_deref(), Some(error), "{name}: ManagedEngine::start");
+        assert!(recorded.runs().is_empty(), "{name}: a device observer ran: {:?}", recorded.runs());
+    }
+    // Accepted: manifests of exactly 4 MiB, the bound itself.
+    let (_directory, config, _outside) = fresh();
+    pad_to(&runtime_dir(&config).join("chiral-runtime.json"), BOUND);
+    pad_to(&artifact_dir(&config).join("chiral-artifact-sha256.json"), BOUND);
+    pad_to(&artifact_dir(&config).join("chiral-model.json"), BOUND);
+    assert!(validate_inventory(&config).is_ok(), "manifests of exactly 4 MiB");
+    // The control: with the nested library, the launch observes both devices and reaches the spawn.
+    let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+    let error = ManagedEngine::start_observed(&config, &recorded).await.err().unwrap();
+    assert!(failed_after_port_check(&error), "{error}");
+    assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+}
+
+// managed-engine-runtime task 3.4: the engine listens only on its literal-loopback endpoint, and
+// an occupied port is refused (requirement 4).
+
+const ENDPOINT: &str = "managed engine requires HTTP on an explicit literal loopback address and port";
+const ORIGIN: &str = "endpoint must be an origin without credentials, path, query or fragment";
+const PRIVATE_OR_LOOPBACK: &str = "engine endpoints require a literal private/loopback IP or localhost";
+
+/// The managed endpoint is `http://` with a literal loopback IP and an explicit nonzero port,
+/// without credentials, path, query or fragment: refused by `validate` and by configuration
+/// loading otherwise. Configuration loading of a non-private address stops at the general engine
+/// endpoint rule first.
+#[test]
+fn a_managed_endpoint_is_literal_loopback_with_an_explicit_nonzero_port() {
+    let (directory, mut config) = fixture();
+    let cases = [
+        ("http://localhost:18080", ENDPOINT, ENDPOINT),
+        ("http://192.168.1.2:18080", ENDPOINT, ENDPOINT),
+        ("http://10.0.0.1:18080", ENDPOINT, ENDPOINT),
+        ("http://[fd00::1]:18080", ENDPOINT, ENDPOINT),
+        ("https://127.0.0.1:18080", ENDPOINT, ENDPOINT),
+        ("http://127.0.0.1", ENDPOINT, ENDPOINT),
+        ("http://127.0.0.1:0", ENDPOINT, ENDPOINT),
+        ("http://[::1]", ENDPOINT, ENDPOINT),
+        ("http://[::1]:0", ENDPOINT, ENDPOINT),
+        ("http://0.0.0.0:18080", ENDPOINT, PRIVATE_OR_LOOPBACK),
+        ("http://[::]:18080", ENDPOINT, PRIVATE_OR_LOOPBACK),
+        ("http://engine:secret@127.0.0.1:18080", ORIGIN, ORIGIN),
+        ("http://127.0.0.1:18080/v1", ORIGIN, ORIGIN),
+        ("http://127.0.0.1:18080/?model=other", ORIGIN, ORIGIN),
+        ("http://127.0.0.1:18080/#health", ORIGIN, ORIGIN),
+    ];
+    for (endpoint, validated, loaded) in cases {
+        config.engine_url = endpoint.into();
+        assert_eq!(config.runtime.as_ref().unwrap().validate(&config).err().as_deref(), Some(validated), "{endpoint}");
+        assert_eq!(load_provider(directory.path(), &provider_json(&config)).err().as_deref(), Some(loaded), "{endpoint}: configuration loading");
+    }
+    for endpoint in ["http://127.0.0.1:18080", "http://127.0.0.1:18080/", "http://[::1]:18080", "http://127.0.0.1:65535"] {
+        config.engine_url = endpoint.into();
+        assert_eq!(config.runtime.as_ref().unwrap().validate(&config), Ok(()), "{endpoint}");
+        let loaded = load_provider(directory.path(), &provider_json(&config)).unwrap_or_else(|error| panic!("{endpoint}: {error}"));
+        assert_eq!(loaded.models[0].engine_url, endpoint);
+    }
+}
+
+/// Whether a connection to `endpoint` completes within one second. A listening socket accepts
+/// at once; a port with no listener refuses, and on macOS a port whose socket is bound without
+/// listening drops the connection request, so the attempt does not complete.
+async fn connects(endpoint: std::net::SocketAddr) -> bool {
+    matches!(tokio::time::timeout(Duration::from_secs(1), tokio::net::TcpStream::connect(endpoint)).await, Ok(Ok(_)))
+}
+
+/// The wildcard half of the occupied-port check is bound but does not listen: no connection to
+/// the port completes. The control: a wildcard socket that listens accepts one at once.
+#[tokio::test]
+async fn the_occupied_port_check_listens_on_no_wildcard_address() {
+    let mut endpoints = vec![std::net::SocketAddr::from(([127, 0, 0, 1], unused_port()))];
+    if let Ok(listener) = std::net::TcpListener::bind("[::1]:0") {
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        endpoints.push(std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)));
+    }
+    for endpoint in endpoints {
+        let wildcard: std::net::IpAddr = if endpoint.is_ipv4() { std::net::Ipv4Addr::UNSPECIFIED.into() } else { std::net::Ipv6Addr::UNSPECIFIED.into() };
+        let probe = wildcard_port_probe(endpoint).unwrap();
+        assert_eq!(probe.local_addr().unwrap(), std::net::SocketAddr::new(wildcard, endpoint.port()));
+        assert!(!connects(endpoint).await, "{endpoint}: the wildcard probe accepted a connection");
+        drop(probe);
+        let listening = foreign_listener(std::net::SocketAddr::new(wildcard, endpoint.port()), false).await;
+        assert!(connects(endpoint).await, "{endpoint}: the control listener accepted no connection");
+        drop(listening);
+    }
+}
+
+/// Serves `GET /health` with 200, as a loaded engine does, after running `on_health`: the URL
+/// and the server task.
+async fn health_server(on_health: impl Fn() + Clone + Send + Sync + 'static) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().route("/health", axum::routing::get(move || {
+        let on_health = on_health.clone();
+        async move { on_health(); axum::Json(json!({"status": "ok"})) }
+    }));
+    (url, tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); }))
+}
+
+/// Another process's `/health` answer is not readiness once the launcher's own child has
+/// exited: when the child exits while the 200 answer is on its way, and when it exited before
+/// the first probe, `await_health` fails. While the child lives, the same answer is readiness.
+#[tokio::test]
+async fn a_health_answer_after_the_child_exited_is_not_readiness() {
+    use std::sync::atomic::AtomicUsize;
+    // The child exits while the probe waits for the answer, which then arrives with 200.
+    let engine = Arc::new(child());
+    engine.ready.store(false, Ordering::Release);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (url, server) = health_server({
+        let (engine, requests) = (engine.clone(), requests.clone());
+        move || { requests.fetch_add(1, Ordering::SeqCst); engine.kill_for_test(); wait_for_exit(&engine); }
+    }).await;
+    let result = engine.await_health(&url, FIXTURE_KEY, Duration::from_secs(10)).await;
+    assert_eq!(result.err().as_deref(), Some("managed engine exited before readiness"));
+    assert_eq!(requests.load(Ordering::SeqCst), 1, "the 200 answer was not given, or the probe was repeated");
+    assert!(!engine.is_alive());
+    server.abort();
+
+    // The child exited before the first probe: the endpoint is not even asked.
+    let exited = child();
+    exited.ready.store(false, Ordering::Release);
+    exited.kill_for_test();
+    wait_for_exit(&exited);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (url, server) = health_server({ let requests = requests.clone(); move || { requests.fetch_add(1, Ordering::SeqCst); } }).await;
+    assert_eq!(exited.await_health(&url, FIXTURE_KEY, Duration::from_secs(10)).await.err().as_deref(), Some("managed engine exited before readiness"));
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+
+    // The control: the same answer while the child lives.
+    let living = child();
+    living.ready.store(false, Ordering::Release);
+    assert_eq!(living.await_health(&url, FIXTURE_KEY, Duration::from_secs(10)).await, Ok(()));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    living.stop().await;
+    server.abort();
+
+    // Nor is an answer that is not a success, from the living child: llama-server answers
+    // `/health` with 503 while it loads the model, and only the 200 that follows is readiness
+    // (adversarial review: accepting any status passed every case above).
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().route("/health", axum::routing::get({
+        let requests = requests.clone();
+        move || {
+            let loading = requests.fetch_add(1, Ordering::SeqCst) < 2;
+            async move {
+                if loading { (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}))) }
+                else { (axum::http::StatusCode::OK, axum::Json(json!({"status": "ok"}))) }
+            }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let loading = child();
+    loading.ready.store(false, Ordering::Release);
+    assert_eq!(loading.await_health(&url, FIXTURE_KEY, Duration::from_secs(10)).await, Ok(()));
+    assert_eq!(requests.load(Ordering::SeqCst), 3, "a 503 answer was taken as readiness");
+    loading.stop().await;
+    server.abort();
+}
+
+// managed-engine-runtime task 3.7: physical devices are observed independently, and headroom is
+// enforced before startup and after loading (requirement 7).
+
+const ABSENT: &str = "selected device is absent from pinned engine enumeration";
+const ENGINE_HEADROOM: &str = "selected engine device lacks required memory headroom";
+const CUDA_INVALID: &str = "invalid CUDA platform observation";
+const CUDA_DISAGREE: &str = "CUDA engine and platform device observations disagree";
+const CUDA_UNAVAILABLE: &str = "CUDA physical identity unavailable";
+const ENGINE_AMBIGUOUS: &str = "selected device is listed more than once by pinned engine enumeration";
+const CUDA_AMBIGUOUS: &str = "CUDA physical identity is ambiguous";
+const APPLE_SILICON: &str = "unified Metal observation requires Apple silicon; discrete Metal memory is not qualified";
+const UNIFIED_HEADROOM: &str = "Apple unified memory lacks required headroom";
+const VULKAN_SHARED: &str = "Vulkan unified/system memory observation is unsupported; use native Metal or CPU";
+const VULKAN_AMBIGUOUS: &str = "Vulkan physical identity is absent or ambiguous";
+const PROFILE_DEVICES: &str = "observed physical devices differ from qualified serving inventory";
+const CHANGED: &str = "runtime device identity changed during startup";
+const OBSERVATION_FAILED: &str = "platform device observation failed or timed out";
+
+/// What one observer run yields: recorded output, or output computed when the observer runs.
+enum Reply { Output(Result<String, String>), Then(Box<dyn FnOnce() -> Result<String, String> + Send>) }
+
+/// Device observers that replay recorded output in order and record each run as
+/// `<program> <arguments>`, the engine's enumeration as `engine`.
+struct Recorded { replies: Mutex<std::collections::VecDeque<Reply>>, runs: Mutex<Vec<String>>, engines: Mutex<Vec<PathBuf>> }
+
+impl Recorded {
+    fn new<S: Into<String>>(outputs: impl IntoIterator<Item = S>) -> Self {
+        Self::replies(outputs.into_iter().map(|output| Reply::Output(Ok(output.into()))))
+    }
+    fn replies(replies: impl IntoIterator<Item = Reply>) -> Self {
+        Self { replies: Mutex::new(replies.into_iter().collect()), runs: Mutex::default(), engines: Mutex::default() }
+    }
+    fn runs(&self) -> Vec<String> { self.runs.lock().unwrap().clone() }
+}
+
+impl DeviceObservers for Recorded {
+    fn output<'a>(&'a self, observer: Observer<'a>, args: &'a [&'a str]) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a {
+        let program = match observer {
+            Observer::Engine(executable) => { self.engines.lock().unwrap().push(executable.to_owned()); "engine" }
+            Observer::Tool(name) => name,
+        };
+        self.runs.lock().unwrap().push(std::iter::once(program).chain(args.iter().copied()).collect::<Vec<_>>().join(" "));
+        let reply = self.replies.lock().unwrap().pop_front().unwrap_or_else(|| panic!("no recorded output for {program} {args:?}"));
+        std::future::ready(match reply { Reply::Output(output) => output, Reply::Then(compute) => compute() })
+    }
+}
+
+const LIST_DEVICES: &str = "engine --list-devices";
+const NVIDIA_SMI: &str = "nvidia-smi --query-gpu=pci.bus_id,uuid,name,memory.total,driver_version,memory.free --format=csv,noheader,nounits";
+const ARM64: &str = "sysctl -n hw.optional.arm64";
+const IOREG: &str = "ioreg -rd1 -c IOPlatformExpertDevice";
+const MEMSIZE: &str = "sysctl -n hw.memsize";
+const VM_STAT: &str = "vm_stat";
+const SW_VERS: &str = "sw_vers -productVersion";
+const VULKANINFO: &str = "vulkaninfo --summary";
+
+/// `llama-server --list-devices` output (the pinned engine prints `  <selector>: <description>
+/// (<total> MiB, <free> MiB free)` under a heading) listing `lines`.
+fn listed(lines: &[&str]) -> String {
+    std::iter::once("Available devices:".to_owned()).chain(lines.iter().map(|line| format!("  {line}"))).map(|line| line + "\n").collect()
+}
+
+/// One `nvidia-smi` row in `NVIDIA_QUERY` order.
+fn smi_row(bus: &str, uuid: &str, name: &str, total: u64, driver: &str, free: u64) -> String {
+    format!("{bus}, {uuid}, {name}, {total}, {driver}, {free}\n")
+}
+
+const GPU_A: &str = "GPU-00000000-aaaa-bbbb-cccc-dddddddddddd";
+const GPU_B: &str = "GPU-00000001-aaaa-bbbb-cccc-dddddddddddd";
+
+fn selectors(names: &[&str]) -> Vec<String> { names.iter().map(|name| name.to_string()).collect() }
+
+fn device(selector: &str, id: &str, name: &str, memory_mib: u64, driver: &str) -> EngineDevice {
+    EngineDevice { id: id.into(), name: name.into(), memory_mib, driver_version: driver.into(), engine_device: selector.into() }
+}
+
+/// The engine's enumeration gives each selected device's name, total and free memory: free
+/// memory of at least the reserve (inclusive) and total memory above it, in selector order.
+#[test]
+fn the_engine_enumeration_gives_each_selected_device_with_inclusive_headroom() {
+    let one = |line: &str, reserve: u64| engine_devices(&listed(&[line]), &selectors(&["CUDA0"]), reserve);
+    let rtx = |total: u64| ("CUDA0".to_owned(), RTX_4060.to_owned(), total);
+    // The recorded line with 255 MiB free is refused at a 256 MiB reserve; 256 MiB free is enough.
+    assert_eq!(one("CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 255 MiB free)", 256), Err(ENGINE_HEADROOM.into()));
+    assert_eq!(one("CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 256 MiB free)", 256), Ok(vec![rtx(8188)]));
+    // Total memory must be above the reserve: equal is refused.
+    assert_eq!(one("CUDA0: NVIDIA GeForce RTX 4060 (256 MiB, 256 MiB free)", 256), Err(ENGINE_HEADROOM.into()));
+    assert_eq!(one("CUDA0: NVIDIA GeForce RTX 4060 (257 MiB, 256 MiB free)", 256), Ok(vec![rtx(257)]));
+    // A selector absent from the enumeration, including one that is only a prefix of a listed one.
+    assert_eq!(engine_devices(&listed(&["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]), &selectors(&["CUDA1"]), 256), Err(ABSENT.into()));
+    assert_eq!(engine_devices(&listed(&["CUDA10: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]), &selectors(&["CUDA1"]), 256), Err(ABSENT.into()));
+    assert_eq!(engine_devices("", &selectors(&["CUDA0"]), 256), Err(ABSENT.into()));
+    // A selector listed twice is ambiguous, whichever line comes first and even when both agree.
+    for lines in [["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)", "CUDA0: NVIDIA GeForce RTX 4070 (12282 MiB, 12000 MiB free)"],
+        ["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 200 MiB free)", "CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"],
+        ["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)", "CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]] {
+        assert_eq!(engine_devices(&listed(&lines), &selectors(&["CUDA0"]), 256), Err(ENGINE_AMBIGUOUS.into()), "{lines:?}");
+    }
+    // Several devices, in selector order whatever the listing order; a description may hold
+    // parentheses; the devices that are not selected are not checked.
+    let several = listed(&["Vulkan2: AMD Radeon 780M (512 MiB, 0 MiB free)", "Vulkan1: NVIDIA GeForce RTX 4060 Laptop GPU (rev 2) (8188 MiB, 7000 MiB free)",
+        "Vulkan0: NVIDIA RTX A4000 (16376 MiB, 16000 MiB free)"]);
+    assert_eq!(engine_devices(&several, &selectors(&["Vulkan0", "Vulkan1"]), 256), Ok(vec![
+        ("Vulkan0".into(), "NVIDIA RTX A4000".into(), 16376), ("Vulkan1".into(), "NVIDIA GeForce RTX 4060 Laptop GPU (rev 2)".into(), 8188)]));
+    assert_eq!(engine_devices(&several, &selectors(&["Vulkan1", "Vulkan2"]), 256), Err(ENGINE_HEADROOM.into()));
+    assert_eq!(engine_devices(&listed(&["MTL0: Apple M4 Pro (18432 MiB, 18431 MiB free)"]), &selectors(&["MTL0"]), 4096), Ok(vec![("MTL0".into(), "Apple M4 Pro".into(), 18432)]));
+    // Unparsable lines.
+    for (line, error) in [("CUDA0: NVIDIA GeForce RTX 4060", "invalid engine device observation"), ("CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB)", "invalid engine device memory"),
+        ("CUDA0: NVIDIA GeForce RTX 4060 (8 GiB, 7900 MiB free)", "invalid engine device memory"), ("CUDA0: NVIDIA GeForce RTX 4060 (-1 MiB, 7900 MiB free)", "invalid engine device capacity"),
+        ("CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 GiB free)", "invalid engine device free memory")] {
+        assert_eq!(one(line, 256), Err(error.into()), "{line}");
+    }
+}
+
+/// `nvidia-smi`: the selector `CUDA<n>` is the `n`th GPU in PCI bus order, whose name equals the
+/// engine's and whose free memory is at least the reserve; a row without six columns is refused.
+#[test]
+fn cuda_selectors_are_the_gpus_in_pci_bus_order_with_the_engines_names_and_free_memory() {
+    let engine = |selectors: &[(&str, &str)]| -> Vec<ListedDevice> { selectors.iter().map(|(selector, name)| (selector.to_string(), name.to_string(), 8188)).collect() };
+    let rtx = engine(&[("CUDA0", RTX_4060)]);
+    let row = |name: &str, free: u64| smi_row("00000000:01:00.0", GPU_A, name, 8188, "550.54.14", free);
+    assert_eq!(cuda_devices(&row(RTX_4060, 7900), rtx.clone(), 256), Ok(vec![device("CUDA0", GPU_A, RTX_4060, 8188, "550.54.14")]));
+    // A name that differs from the engine's, and free memory below the reserve (inclusive).
+    assert_eq!(cuda_devices(&row("NVIDIA GeForce RTX 4070", 7900), rtx.clone(), 256), Err(CUDA_DISAGREE.into()));
+    assert_eq!(cuda_devices(&row(RTX_4060, 255), rtx.clone(), 256), Err(CUDA_DISAGREE.into()));
+    assert_eq!(cuda_devices(&row(RTX_4060, 256), rtx.clone(), 256).map(|devices| devices.len()), Ok(1));
+    // Rows without exactly six columns, anywhere in the output.
+    for data in ["00000000:01:00.0, GPU-a, NVIDIA GeForce RTX 4060, 8188, 550.54.14\n".to_owned(),
+        "00000000:01:00.0, GPU-a, NVIDIA GeForce RTX 4060, 8188, 550.54.14, 7900, 1\n".to_owned(),
+        format!("{}\n{}", row(RTX_4060, 7900), "No devices were found")] {
+        assert_eq!(cuda_devices(&data, rtx.clone(), 256), Err(CUDA_INVALID.into()), "{data}");
+    }
+    // Unparsable numbers, a selector beyond the listed GPUs, and no GPU at all.
+    assert_eq!(cuda_devices(&smi_row("00000000:01:00.0", GPU_A, RTX_4060, 0, "550.54.14", 7900).replace(" 0,", " [N/A],"), rtx.clone(), 256), Err("invalid CUDA memory observation".into()));
+    assert_eq!(cuda_devices(&smi_row("00000000:01:00.0", GPU_A, RTX_4060, 8188, "550.54.14", 0).replace(" 0\n", " [N/A]\n"), rtx.clone(), 256), Err("invalid CUDA free memory".into()));
+    assert_eq!(cuda_devices(&row(RTX_4060, 7900), engine(&[("CUDA1", RTX_4060)]), 256), Err(CUDA_UNAVAILABLE.into()));
+    assert_eq!(cuda_devices("", rtx, 256), Err(CUDA_UNAVAILABLE.into()));
+    // Three identical GPUs listed out of PCI bus order: each selector maps by bus ID, so `CUDA1`
+    // is the second-lowest and `CUDA2` the highest bus ID (hexadecimal, `09` < `0A` < `41`).
+    let data = [smi_row("00000000:41:00.0", "GPU-41", RTX_4060, 8188, "550.54.14", 7000), smi_row("00000000:09:00.0", "GPU-09", RTX_4060, 8188, "550.54.14", 7100),
+        smi_row("00000000:0A:00.0", "GPU-0A", RTX_4060, 8188, "550.54.14", 7200)].concat();
+    let three = engine(&[("CUDA0", RTX_4060), ("CUDA1", RTX_4060), ("CUDA2", RTX_4060)]);
+    assert_eq!(cuda_devices(&data, three, 256), Ok(vec![device("CUDA0", "GPU-09", RTX_4060, 8188, "550.54.14"),
+        device("CUDA1", "GPU-0A", RTX_4060, 8188, "550.54.14"), device("CUDA2", "GPU-41", RTX_4060, 8188, "550.54.14")]));
+    let data = [smi_row("00000000:41:00.0", GPU_B, "NVIDIA RTX A4000", 16376, "550.54.14", 16000), smi_row("00000000:01:00.0", GPU_A, RTX_4060, 8188, "550.54.14", 7900)].concat();
+    assert_eq!(cuda_devices(&data, engine(&[("CUDA1", "NVIDIA RTX A4000")]), 256), Ok(vec![device("CUDA1", GPU_B, "NVIDIA RTX A4000", 16376, "550.54.14")]));
+    assert_eq!(cuda_devices(&data, engine(&[("CUDA1", RTX_4060)]), 256), Err(CUDA_DISAGREE.into()));
+    // Two rows with the same PCI bus ID leave the position of each GPU ambiguous.
+    let data = [smi_row("00000000:01:00.0", GPU_A, RTX_4060, 8188, "550.54.14", 7900), smi_row("00000000:01:00.0", GPU_B, RTX_4060, 8188, "550.54.14", 7900)].concat();
+    for selector in ["CUDA0", "CUDA1"] {
+        assert_eq!(cuda_devices(&data, engine(&[(selector, RTX_4060)]), 256), Err(CUDA_AMBIGUOUS.into()), "{selector}");
+    }
+}
+
+/// Recorded `ioreg -rd1 -c IOPlatformExpertDevice` output, shortened, with a synthetic identity.
+const IOREG_OUTPUT: &str = "+-o J000AP  <class IOPlatformExpertDevice, id 0x100000000, registered, matched, active, busy 0 (1 ms), retain 30>\n    {\n      \"IOPolledInterface\" = \"AppleARMWatchdogTimerHibernateHandler is not serializable\"\n      \"manufacturer\" = <\"Apple Inc.\">\n      \"model\" = <\"Mac00,00\">\n      \"IOPlatformSerialNumber\" = \"SYNTHETIC00\"\n      \"IOPlatformUUID\" = \"00000000-1111-2222-3333-444444444444\"\n    }\n";
+
+/// Recorded `vm_stat` output: 16 KiB pages, with `free`, `inactive` and `speculative` pages.
+fn vm_stat(free: u64, inactive: u64, speculative: u64) -> String {
+    format!("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                               {free:>9}.\nPages active:                              483823.\nPages inactive:                           {inactive:>9}.\nPages speculative:                        {speculative:>9}.\nPages throttled:                                0.\nPages wired down:                          236718.\n\"Translation faults\":                 21701332587.\nPages stored in compressor:                701041.\nSwapouts:                                45709918.\n")
+}
+
+/// Apple: Metal is observed only on Apple silicon, as one device whose memory is the machine's,
+/// counted once, with available memory (free, inactive and speculative pages, capped at physical
+/// memory) of at least the reserve.
+#[test]
+fn unified_memory_is_apple_silicon_with_available_memory_of_at_least_the_reserve() {
+    assert_eq!(apple_silicon("1\n"), Ok(()));
+    for intel in ["0\n", "", "1 1\n"] { assert_eq!(apple_silicon(intel), Err(APPLE_SILICON.into()), "{intel:?}"); }
+    assert_eq!(apple_hardware_id(IOREG_OUTPUT), Ok("00000000-1111-2222-3333-444444444444"));
+    assert_eq!(apple_hardware_id(&IOREG_OUTPUT.replace("IOPlatformUUID", "IOPlatformUUIDs")), Err("Apple physical hardware identity unavailable".into()));
+    assert_eq!(apple_memory_mib("25769803776\n"), Ok(24576));
+    assert_eq!(apple_memory_mib("24 GB\n"), Err("invalid Apple unified memory observation".into()));
+    // Bytes become whole MiB rounded down, so that physical memory one byte short of the reserve
+    // is not counted as reaching it (adversarial review: rounding up passed every case above).
+    assert_eq!(apple_memory_mib("4294967295\n"), Ok(4095));
+    assert_eq!(apple_memory_mib("4294967296\n"), Ok(4096));
+    assert_eq!(apple_available_mib(&vm_stat(512_000, 0, 0), apple_memory_mib("4294967295\n").unwrap(), 4096), Err(UNIFIED_HEADROOM.into()));
+    // 262,144 pages of 16 KiB are 4,096 MiB: one page fewer is refused at a 4,096 MiB reserve.
+    assert_eq!(apple_available_mib(&vm_stat(100_000, 150_000, 12_143), 24576, 4096), Err(UNIFIED_HEADROOM.into()));
+    assert_eq!(apple_available_mib(&vm_stat(100_000, 150_000, 12_144), 24576, 4096), Ok(4096));
+    // Each of the three kinds counts.
+    for (free, inactive, speculative) in [(262_144, 0, 0), (0, 262_144, 0), (0, 0, 262_144)] {
+        assert_eq!(apple_available_mib(&vm_stat(free, inactive, speculative), 24576, 4096), Ok(4096));
+    }
+    // Capped at physical memory: 8,000 MiB available on a 4,095 MiB machine is not enough.
+    assert_eq!(apple_available_mib(&vm_stat(512_000, 0, 0), 4095, 4096), Err(UNIFIED_HEADROOM.into()));
+    assert_eq!(apple_available_mib(&vm_stat(512_000, 0, 0), 4096, 4096), Ok(4096));
+    // The recorded output of a 24 GiB machine: 20,635 + 478,508 + 4,542 pages are 7,870 MiB.
+    assert_eq!(apple_available_mib(&vm_stat(20_635, 478_508, 4_542), 24576, 4096), Ok(7870));
+    // Unparsable output.
+    let vm = vm_stat(1, 1, 1);
+    assert_eq!(apple_available_mib(&vm.replacen("page size of 16384", "page size of many", 1), 24576, 0), Err("Apple VM page size unavailable".into()));
+    assert_eq!(apple_available_mib(&vm.replace("Pages speculative", "Pages speculated"), 24576, 0), Err("Apple available memory observation unavailable".into()));
+    assert_eq!(apple_available_mib(&vm_stat(u64::MAX, 1, 0), 24576, 0), Err("Apple memory observation overflow".into()));
+    assert_eq!(apple_available_mib(&vm_stat(u64::MAX / 16384 + 1, 0, 0), 24576, 0), Err("Apple memory observation overflow".into()));
+}
+
+/// Recorded `vulkaninfo --summary` output, shortened: instance sections before the devices, a
+/// discrete NVIDIA GPU, and a CPU (llvmpipe) device.
+const VULKANINFO_OUTPUT: &str = "==========\nVULKANINFO\n==========\n\nVulkan Instance Version: 1.3.275\n\n\nInstance Extensions: count = 23\n-------------------------------\nVK_KHR_surface                         : extension revision 25\n\nInstance Layers: count = 3\n--------------------------\nVK_LAYER_MESA_device_select Linux device selection layer 1.3.211  version 1\n\nDevices:\n========\nGPU0:\n\tapiVersion         = 1.3.277\n\tdriverVersion      = 550.54.14.0\n\tvendorID           = 0x10de\n\tdeviceID           = 0x2882\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = NVIDIA GeForce RTX 4060\n\tdriverID           = DRIVER_ID_NVIDIA_PROPRIETARY\n\tdriverName         = NVIDIA\n\tdriverInfo         = 550.54.14\n\tconformanceVersion = 1.3.7.2\n\tdeviceUUID         = 5e8d6b1c-0000-1111-2222-333344445555\n\tdriverUUID         = 00000000-0000-0000-0000-000000000000\nGPU1:\n\tapiVersion         = 1.3.274\n\tdriverVersion      = 24.0.9\n\tvendorID           = 0x10005\n\tdeviceID           = 0x0000\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 17.0.6, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n\tdriverName         = llvmpipe\n\tdriverInfo         = Mesa 24.0.9-0ubuntu0.1 (LLVM 17.0.6)\n\tdeviceUUID         = 6d657361-3234-2e30-2e39-2d3075627500\n";
+
+/// Vulkan: each engine device is the one discrete GPU of that name, with the engine's memory;
+/// an integrated or CPU device, and two devices of the same name, are refused.
+#[test]
+fn vulkan_devices_are_the_one_discrete_gpu_of_that_name() {
+    let engine = |name: &str| vec![("Vulkan0".to_owned(), name.to_owned(), 8188)];
+    let rtx = device("Vulkan0", "5e8d6b1c-0000-1111-2222-333344445555", RTX_4060, 8188, "550.54.14");
+    assert_eq!(vulkan_devices(VULKANINFO_OUTPUT, engine(RTX_4060)), Ok(vec![rtx.clone()]));
+    // The integrated GPU of a shared-memory machine, and the CPU device.
+    let integrated = VULKANINFO_OUTPUT.replace("PHYSICAL_DEVICE_TYPE_DISCRETE_GPU", "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU");
+    assert_eq!(vulkan_devices(&integrated, engine(RTX_4060)), Err(VULKAN_SHARED.into()));
+    assert_eq!(vulkan_devices(&VULKANINFO_OUTPUT.replace("\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n", ""), engine(RTX_4060)), Err(VULKAN_SHARED.into()));
+    assert_eq!(vulkan_devices(VULKANINFO_OUTPUT, engine("llvmpipe (LLVM 17.0.6, 256 bits)")), Err(VULKAN_SHARED.into()));
+    // Two devices with the same name, and a name that is not listed.
+    let twins = VULKANINFO_OUTPUT.replace("llvmpipe (LLVM 17.0.6, 256 bits)", RTX_4060).replace("PHYSICAL_DEVICE_TYPE_CPU", "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU");
+    assert_eq!(vulkan_devices(&twins, engine(RTX_4060)), Err(VULKAN_AMBIGUOUS.into()));
+    assert_eq!(vulkan_devices(VULKANINFO_OUTPUT, engine("NVIDIA GeForce RTX 4070")), Err(VULKAN_AMBIGUOUS.into()));
+    // Identity: `driverVersion` when `driverInfo` is absent; no UUID is refused.
+    let without_info = VULKANINFO_OUTPUT.replace("\tdriverInfo         = 550.54.14\n", "");
+    assert_eq!(vulkan_devices(&without_info, engine(RTX_4060)), Ok(vec![EngineDevice { driver_version: "550.54.14.0".into(), ..rtx }]));
+    assert_eq!(vulkan_devices(&VULKANINFO_OUTPUT.replace("\tdeviceUUID         = 5e8d6b1c-0000-1111-2222-333344445555\n", ""), engine(RTX_4060)), Err("Vulkan UUID unavailable".into()));
+}
+
+/// `observe_devices` runs the observers one after another, each only after the previous output
+/// passed its checks: none for a CPU runtime, which observes memory kind `system`.
+#[tokio::test]
+async fn devices_are_observed_by_the_engine_and_platform_tools_in_order() {
+    let executable = Path::new("/verified/runtime/llama-server");
+    let config = |backend: &str, devices: &[&str], reserve: u64| {
+        let (_directory, mut model) = fixture();
+        if backend != "cpu" { accelerated(&mut model, backend, devices, reserve); }
+        model.runtime.unwrap()
+    };
+    // CPU: no observer runs.
+    let recorded = Recorded::new(Vec::<String>::new());
+    assert_eq!(observe_devices(&config("cpu", &[], 0), executable, &recorded).await, Ok(("system".into(), vec![])));
+    assert!(recorded.runs().is_empty());
+    // CUDA: the engine's enumeration, then `nvidia-smi`.
+    let cuda = config("cuda", &["CUDA0"], 256);
+    let recorded = Recorded::new([listed(&["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]), smi_row("00000000:01:00.0", GPU_A, RTX_4060, 8188, "550.54.14", 7900)]);
+    assert_eq!(observe_devices(&cuda, executable, &recorded).await, Ok(("dedicated".into(), vec![device("CUDA0", GPU_A, RTX_4060, 8188, "550.54.14")])));
+    assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+    assert_eq!(*recorded.engines.lock().unwrap(), [executable]);
+    // Insufficient headroom on the engine's enumeration: `nvidia-smi` does not run.
+    let recorded = Recorded::new([listed(&["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 200 MiB free)"])]);
+    assert_eq!(observe_devices(&cuda, executable, &recorded).await, Err(ENGINE_HEADROOM.into()));
+    assert_eq!(recorded.runs(), [LIST_DEVICES]);
+    // A failed observer fails the observation.
+    let recorded = Recorded::replies([Reply::Output(Ok(listed(&["CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]))), Reply::Output(Err(OBSERVATION_FAILED.into()))]);
+    assert_eq!(observe_devices(&cuda, executable, &recorded).await, Err(OBSERVATION_FAILED.into()));
+    // Metal: the engine, then the Apple tools; the memory is the machine's, not the engine's.
+    let mut metal = config("cuda", &["CUDA0"], 256);
+    (metal.backend, metal.device_ids, metal.memory_reserve_mib) = ("metal".into(), selectors(&["MTL0"]), 4096);
+    let apple = |arm64: &str, vm: String| Recorded::new([listed(&["MTL0: Apple M4 Pro (18432 MiB, 18431 MiB free)"]), arm64.to_owned(), IOREG_OUTPUT.to_owned(), "25769803776\n".to_owned(), vm, "27.0.1\n".to_owned()]);
+    let recorded = apple("1\n", vm_stat(20_635, 478_508, 4_542));
+    assert_eq!(observe_devices(&metal, executable, &recorded).await, Ok(("unified".into(), vec![device("MTL0", "00000000-1111-2222-3333-444444444444", "Apple M4 Pro", 24576, "27.0.1")])));
+    assert_eq!(recorded.runs(), [LIST_DEVICES, ARM64, IOREG, MEMSIZE, VM_STAT, SW_VERS]);
+    // Not Apple silicon: nothing after `sysctl`. Below the reserve: no `sw_vers`.
+    let recorded = apple("0\n", vm_stat(20_635, 478_508, 4_542));
+    assert_eq!(observe_devices(&metal, executable, &recorded).await, Err(APPLE_SILICON.into()));
+    assert_eq!(recorded.runs(), [LIST_DEVICES, ARM64]);
+    let recorded = apple("1\n", vm_stat(100_000, 150_000, 12_143));
+    assert_eq!(observe_devices(&metal, executable, &recorded).await, Err(UNIFIED_HEADROOM.into()));
+    assert_eq!(recorded.runs(), [LIST_DEVICES, ARM64, IOREG, MEMSIZE, VM_STAT]);
+    // Vulkan: the engine, then `vulkaninfo --summary`; the memory is the engine's.
+    let vulkan = config("vulkan", &["Vulkan0"], 256);
+    let recorded = Recorded::new([listed(&["Vulkan0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]), VULKANINFO_OUTPUT.to_owned()]);
+    assert_eq!(observe_devices(&vulkan, executable, &recorded).await, Ok(("dedicated".into(), vec![device("Vulkan0", "5e8d6b1c-0000-1111-2222-333344445555", RTX_4060, 8188, "550.54.14")])));
+    assert_eq!(recorded.runs(), [LIST_DEVICES, VULKANINFO]);
+    let recorded = Recorded::new([listed(&["Vulkan0: NVIDIA GeForce RTX 4060 (8188 MiB, 7900 MiB free)"]), VULKANINFO_OUTPUT.replace("PHYSICAL_DEVICE_TYPE_DISCRETE_GPU", "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU")]);
+    assert_eq!(observe_devices(&vulkan, executable, &recorded).await, Err(VULKAN_SHARED.into()));
+}
+
+/// The recorded CUDA observation of one RTX 4060 with `free` MiB free and driver `driver`.
+fn rtx_4060(free: u64, driver: &str) -> [String; 2] {
+    [listed(&[&format!("CUDA0: NVIDIA GeForce RTX 4060 (8188 MiB, {free} MiB free)")]), smi_row("00000000:01:00.0", GPU_A, RTX_4060, 8188, driver, free)]
+}
+
+/// `ManagedEngine::start` with recorded observations: devices that differ from the serving
+/// profile, a driver update among them, or that lack headroom, refuse the launch before the port
+/// check and the spawn; only the observation before startup ran.
+#[tokio::test]
+async fn observed_devices_that_differ_from_the_profile_or_lack_headroom_refuse_the_launch_before_spawning() {
+    let (_directory, mut config) = cuda_fixture(&["CUDA0"]);
+    let profile = profile_of(&config);
+    assert_eq!(profile.devices, [device("CUDA0", GPU_A, RTX_4060, 8188, "550.54.14")]);
+    config.model.serving = Some(profile.clone());
+    config.engine_url = format!("http://127.0.0.1:{}", unused_port());
+    // The signed driver: the launch passes the observation and fails only at the spawn of the
+    // fixture's header-only executable.
+    let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+    let error = ManagedEngine::start_observed(&config, &recorded).await.err().unwrap();
+    assert!(failed_after_port_check(&error), "{error}");
+    assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+    // A driver update, and with a listener on the endpoint: still the device error, not the
+    // occupied port, so the launch stopped before the port check and the spawn.
+    let listener = foreign_listener("127.0.0.1:0".parse().unwrap(), false).await;
+    let occupied = { let mut config = config.clone(); config.engine_url = format!("http://{}", listener.local_addr().unwrap()); config };
+    for config in [&config, &occupied] {
+        let recorded = Recorded::new(rtx_4060(7900, "555.42.02"));
+        assert_eq!(ManagedEngine::start_observed(config, &recorded).await.err().as_deref(), Some(PROFILE_DEVICES), "{}", config.engine_url);
+        assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+    }
+    // Every observed field of the signed device, and the memory kind.
+    let changes: [(&str, fn(&mut crate::protocol::ServingProfile)); 5] = [
+        ("physical identifier", |p| p.devices[0].id = GPU_B.into()), ("name", |p| p.devices[0].name = "NVIDIA GeForce RTX 4070".into()),
+        ("physical memory", |p| p.devices[0].memory_mib = 8192), ("driver", |p| p.devices[0].driver_version = "555.42.02".into()),
+        ("memory kind", |p| p.memory_kind = "unified".into())];
+    for (name, change) in changes {
+        let mut changed = config.clone();
+        change(changed.model.serving.as_mut().unwrap());
+        let recorded = Recorded::new(rtx_4060(7900, "550.54.14"));
+        assert_eq!(ManagedEngine::start_observed(&changed, &recorded).await.err().as_deref(), Some(PROFILE_DEVICES), "{name}");
+    }
+    // Without a profile, the same driver update reaches the spawn.
+    let mut unprofiled = config.clone();
+    unprofiled.model.serving = None;
+    let error = ManagedEngine::start_observed(&unprofiled, &Recorded::new(rtx_4060(7900, "555.42.02"))).await.err().unwrap();
+    assert!(failed_after_port_check(&error), "{error}");
+    // Insufficient headroom before startup: `CUDA0` reports 200 MiB free at a 256 MiB reserve.
+    for config in [&unprofiled, &occupied] {
+        let recorded = Recorded::new(rtx_4060(200, "550.54.14"));
+        assert_eq!(ManagedEngine::start_observed(config, &recorded).await.err().as_deref(), Some(ENGINE_HEADROOM));
+        assert_eq!(recorded.runs(), [LIST_DEVICES]);
+    }
+    assert_still_accepts(&listener, listener.local_addr().unwrap()).await;
+}
+
+/// After the engine reports health the devices are observed again. Lost headroom, a changed
+/// device and an exited child each fail the launch and stop the child, which the helper child
+/// stands in for; an unchanged observation with headroom makes the engine ready.
+#[tokio::test]
+async fn a_post_load_observation_that_loses_headroom_or_changes_stops_the_child() {
+    let (_directory, mut config) = cuda_fixture(&["CUDA0"]);
+    runtime_of(&mut config).startup_timeout_secs = 5;
+    let (url, server) = health_server(|| {}).await;
+    config.engine_url = url;
+    let executable = Path::new("/verified/runtime/llama-server");
+    // Before startup: a CUDA runtime reserving 256 MiB whose device had 4,000 MiB free.
+    let before = observe_devices(config.runtime.as_ref().unwrap(), executable, &Recorded::new(rtx_4060(4000, "550.54.14"))).await.unwrap();
+    let launched = || {
+        let mut engine = child();
+        engine.ready.store(false, Ordering::Release);
+        (engine.observation.memory_kind, engine.observation.devices) = before.clone();
+        Arc::new(engine)
+    };
+    let cases: Vec<(&str, [String; 2], &str)> = vec![
+        ("100 MiB free on the engine's enumeration", [rtx_4060(100, "550.54.14")[0].clone(), rtx_4060(4000, "550.54.14")[1].clone()], ENGINE_HEADROOM),
+        ("100 MiB free on nvidia-smi", [rtx_4060(4000, "550.54.14")[0].clone(), rtx_4060(100, "550.54.14")[1].clone()], CUDA_DISAGREE),
+        ("a driver update", rtx_4060(4000, "555.42.02"), CHANGED),
+        ("another physical device", [rtx_4060(4000, "550.54.14")[0].clone(), smi_row("00000000:01:00.0", GPU_B, RTX_4060, 8188, "550.54.14", 4000)], CHANGED),
+    ];
+    for (name, after, error) in cases {
+        let engine = launched();
+        let pid = engine.observation.pid;
+        let recorded = Recorded::new(after);
+        assert_eq!(engine.await_loaded(&config, executable, &recorded).await.err().as_deref(), Some(error), "{name}");
+        assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI][..recorded.runs().len()], "{name}");
+        #[cfg(unix)]
+        assert!(gone_within_five_seconds(pid).await, "{name}: the engine child was not stopped");
+        #[cfg(not(unix))]
+        let _ = pid;
+    }
+    // The child exits while the devices are observed again: the observation is unchanged, but
+    // the launch fails.
+    let engine = launched();
+    let watched = engine.clone();
+    let [list, smi] = rtx_4060(4000, "550.54.14");
+    let recorded = Recorded::replies([Reply::Output(Ok(list)), Reply::Then(Box::new(move || { watched.kill_for_test(); wait_for_exit(&watched); Ok(smi) }))]);
+    assert_eq!(engine.await_loaded(&config, executable, &recorded).await.err().as_deref(), Some(CHANGED), "the child exited");
+    // The control: the same observation with 300 MiB free after loading is ready.
+    let engine = launched();
+    let recorded = Recorded::new(rtx_4060(300, "550.54.14"));
+    let ready = engine.await_loaded(&config, executable, &recorded).await.unwrap();
+    assert!(ready.is_alive());
+    assert_eq!(recorded.runs(), [LIST_DEVICES, NVIDIA_SMI]);
+    ready.stop().await;
+    server.abort();
+}
+
+/// Writes what its mode argument asks for to standard output, for the bounds of `capture`.
+#[test]
+#[ignore = "device-observer helper, run only by device_observation_output_is_bounded_in_size_and_time"]
+fn device_observer_helper() {
+    use std::io::Write as _;
+    if !probing() { return; }
+    let mode = std::env::args().find_map(|arg| arg.strip_prefix("observer-mode=").map(str::to_owned)).unwrap_or_default();
+    let mut stdout = std::io::stdout().lock();
+    match mode.as_str() {
+        "ok" => writeln!(stdout, "observer-ok").unwrap(),
+        "under" => stdout.write_all(&vec![b'x'; 1024 * 1024 - 4096]).unwrap(),
+        "oversize" => stdout.write_all(&vec![b'x'; 1024 * 1024 + 1]).unwrap(),
+        "not-utf8" => stdout.write_all(b"\xff\xfe observer\n").unwrap(),
+        "fails" => { writeln!(stdout, "observer-ok").unwrap(); stdout.flush().unwrap(); std::process::exit(3); }
+        "hangs" => { writeln!(stdout, "observer-ok").unwrap(); stdout.flush().unwrap(); std::thread::sleep(Duration::from_secs(60)); }
+        other => panic!("unknown observer mode {other:?}"),
+    }
+}
+
+/// Observation output is bounded in size (1 MiB) and time (10 seconds), and must come from a
+/// successful run as UTF-8; a missing observer or platform tool fails the observation.
+#[tokio::test]
+async fn device_observation_output_is_bounded_in_size_and_time() {
+    let executable = std::env::current_exe().unwrap();
+    let run = |mode: &'static str, timeout: Duration| {
+        let executable = executable.clone();
+        async move {
+            let mut args = helper_args("engine_runtime::tests::device_observer_helper").to_vec();
+            let mode = format!("observer-mode={mode}");
+            args.push(&mode);
+            capture_within(&executable, &args, timeout).await
+        }
+    };
+    assert_eq!(OBSERVER_TIMEOUT, Duration::from_secs(10));
+    assert!(run("ok", OBSERVER_TIMEOUT).await.unwrap().lines().any(|line| line == "observer-ok"));
+    assert!(run("under", OBSERVER_TIMEOUT).await.unwrap().len() > 1024 * 1024 - 4096);
+    for mode in ["oversize", "not-utf8", "fails"] {
+        assert_eq!(run(mode, OBSERVER_TIMEOUT).await.err().as_deref(), Some(OBSERVATION_FAILED), "{mode}");
+    }
+    let started = std::time::Instant::now();
+    assert_eq!(run("hangs", Duration::from_millis(500)).await.err().as_deref(), Some(OBSERVATION_FAILED), "hangs");
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    // A missing observer, and a platform tool absent from the fixed system locations.
+    assert_eq!(capture(&executable.with_file_name("chiral-no-such-observer"), &[]).await.err().as_deref(), Some("platform device observer is unavailable"));
+    assert_eq!(system_tool("chiral-no-such-observer").err().as_deref(), Some("required platform observer chiral-no-such-observer is unavailable"));
+    assert_eq!(SystemObservers.output(Observer::Tool("chiral-no-such-observer"), &[]).await.err().as_deref(), Some("required platform observer chiral-no-such-observer is unavailable"));
+    #[cfg(unix)]
+    assert!(["/usr/bin/sh", "/bin/sh"].contains(&system_tool("sh").unwrap().to_str().unwrap()));
+}
+
+/// The parsers accept this host's own Apple platform tools (macOS only; values not asserted).
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn this_hosts_apple_platform_tools_are_parsed() {
+    let run = |tool: &'static str, args: &'static [&'static str]| SystemObservers.output(Observer::Tool(tool), args);
+    let memory = apple_memory_mib(&run("sysctl", &["-n", "hw.memsize"]).await.unwrap()).unwrap();
+    assert!(memory > 0);
+    let hardware = run("ioreg", &["-rd1", "-c", "IOPlatformExpertDevice"]).await.unwrap();
+    assert_eq!(apple_hardware_id(&hardware).unwrap().len(), 36);
+    let available = apple_available_mib(&run("vm_stat", &[]).await.unwrap(), memory, 0).unwrap();
+    assert!(available <= memory);
+    assert!(!run("sw_vers", &["-productVersion"]).await.unwrap().trim().is_empty());
+    if cfg!(target_arch = "aarch64") { assert_eq!(apple_silicon(&run("sysctl", &["-n", "hw.optional.arm64"]).await.unwrap()), Ok(())); }
+}
+
+/// `ManagedEngine::start` remains a `Send` future after the observer seam (compile-time only).
+#[allow(dead_code)]
+fn start_is_send(model: &ModelConfig) {
+    fn send<T: Send>(_: &T) {}
+    send(&ManagedEngine::start(model));
+}

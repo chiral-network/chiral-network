@@ -285,10 +285,14 @@ pub struct ManagedEngine {
 }
 impl ManagedEngine {
     pub async fn start(model: &ModelConfig) -> Result<Arc<Self>, String> {
+        Self::start_observed(model, &SystemObservers).await
+    }
+    /// `start` with the given device observers: the system's, or recorded output in tests.
+    async fn start_observed(model: &ModelConfig, observers: &impl DeviceObservers) -> Result<Arc<Self>, String> {
         let owned = model.clone();
         let validated = tokio::task::spawn_blocking(move || validate_inventory(&owned)).await.map_err(|_| "inventory worker stopped")??;
         let config = model.runtime.as_ref().ok_or("model is not managed")?;
-        let (memory_kind, devices) = observe_devices(config, &validated.executable).await?;
+        let (memory_kind, devices) = observe_devices(config, &validated.executable, observers).await?;
         if let Some(profile) = &model.model.serving { if profile.memory_kind != memory_kind || profile.devices != devices { return Err("observed physical devices differ from qualified serving inventory".into()); } }
         // Refuse an already occupied endpoint rather than accidentally qualifying an unrelated process.
         let endpoint = parse_origin(&model.engine_url)?;
@@ -308,15 +312,22 @@ impl ManagedEngine {
             #[cfg(windows)]
             _job: job,
         });
+        engine.await_loaded(model, &validated.executable, observers).await
+    }
+    /// The launch after the spawn: the engine's health, then the devices observed again, and only
+    /// then readiness. An error drops `self`, the only reference to the new engine, which stops
+    /// the child (`Drop`).
+    async fn await_loaded(self: Arc<Self>, model: &ModelConfig, executable: &Path, observers: &impl DeviceObservers) -> Result<Arc<Self>, String> {
+        let config = model.runtime.as_ref().ok_or("model is not managed")?;
         let token = read_secret(model.engine_api_key_file.as_ref().ok_or("missing engine key")?)?;
-        engine.await_health(&model.engine_url, &token, Duration::from_secs(config.startup_timeout_secs)).await?;
+        self.await_health(&model.engine_url, &token, Duration::from_secs(config.startup_timeout_secs)).await?;
         // Check free memory after weights and KV buffers have actually been allocated.
-        let (kind, devices) = observe_devices(config, &validated.executable).await?;
-        if kind != engine.observation.memory_kind || devices != engine.observation.devices || !engine.process_alive() {
+        let (kind, devices) = observe_devices(config, executable, observers).await?;
+        if kind != self.observation.memory_kind || devices != self.observation.devices || !self.process_alive() {
             return Err("runtime device identity changed during startup".into());
         }
-        engine.ready.store(true, Ordering::Release);
-        Ok(engine)
+        self.ready.store(true, Ordering::Release);
+        Ok(self)
     }
     async fn await_health(&self, engine_url: &str, token: &str, timeout: Duration) -> Result<(), String> {
         let client = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(2)).build().map_err(|_| "cannot initialize private readiness probe")?;
@@ -385,12 +396,17 @@ impl ManagedEngine {
 
 // Device observation helpers never use configured names, UUIDs, memory sizes or driver claims.
 async fn capture(executable: &Path, args: &[&str]) -> Result<String, String> {
+    capture_within(executable, args, OBSERVER_TIMEOUT).await
+}
+/// How long one device observer may run.
+const OBSERVER_TIMEOUT: Duration = Duration::from_secs(10);
+async fn capture_within(executable: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut command = command(executable);
     command.args(args).stdout(Stdio::piped());
     let mut child = command.spawn().map_err(|_| "platform device observer is unavailable")?;
     let mut stdout = child.stdout.take().ok_or("device observer output unavailable")?;
     use tokio::io::AsyncReadExt;
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
+    let result = tokio::time::timeout(timeout, async {
         let mut bytes = Vec::new();
         (&mut stdout).take(1024 * 1024 + 1).read_to_end(&mut bytes).await.map_err(|_| "device observation read failed")?;
         if bytes.len() > 1024 * 1024 { return Err("device observation exceeded size bound"); }
@@ -407,59 +423,112 @@ fn system_tool(name: &str) -> Result<PathBuf, String> {
     roots.into_iter().map(|root| root.join(if cfg!(windows) { format!("{name}.exe") } else { name.into() })).find(|path| path.is_file()).ok_or_else(|| format!("required platform observer {name} is unavailable"))
 }
 
-async fn observe_devices(config: &EngineRuntimeConfig, executable: &Path) -> Result<(String, Vec<EngineDevice>), String> {
-    if config.backend == "cpu" { return Ok(("system".into(), Vec::new())); }
-    let listed = capture(executable, &["--list-devices"]).await?;
+/// A device observer: the verified engine's own enumeration, or a platform tool at a fixed
+/// system location (`system_tool`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Observer<'a> { Engine(&'a Path), Tool(&'static str) }
+
+/// Runs device observers and returns their standard output. `SystemObservers` runs the real
+/// programs; tests replay recorded output (`managed-engine-runtime` task 3.7).
+trait DeviceObservers: Sync {
+    fn output<'a>(&'a self, observer: Observer<'a>, args: &'a [&'a str]) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a;
+}
+
+struct SystemObservers;
+impl DeviceObservers for SystemObservers {
+    fn output<'a>(&'a self, observer: Observer<'a>, args: &'a [&'a str]) -> impl std::future::Future<Output = Result<String, String>> + Send + 'a {
+        async move {
+            match observer {
+                Observer::Engine(executable) => capture(executable, args).await,
+                Observer::Tool(name) => capture(&system_tool(name)?, args).await,
+            }
+        }
+    }
+}
+
+/// A selected device in the engine's enumeration: its selector, name and total memory in MiB.
+type ListedDevice = (String, String, u64);
+
+/// The selected devices in the engine's `--list-devices` output, in selector order, each listed
+/// once with free memory of at least `reserve` MiB and total memory above it.
+fn engine_devices(listed: &str, selectors: &[String], reserve: u64) -> Result<Vec<ListedDevice>, String> {
     let mut observed = Vec::new();
-    for selector in &config.device_ids {
-        let line = listed.lines().find_map(|line| line.trim().strip_prefix(&format!("{selector}: "))).ok_or("selected device is absent from pinned engine enumeration")?;
+    for selector in selectors {
+        let mut lines = listed.lines().filter_map(|line| line.trim().strip_prefix(&format!("{selector}: ")));
+        let line = lines.next().ok_or("selected device is absent from pinned engine enumeration")?;
+        // Ambiguous output fails the launch (requirement 7); a selector is listed once.
+        if lines.next().is_some() { return Err("selected device is listed more than once by pinned engine enumeration".into()); }
         let (name, memory) = line.rsplit_once(" (").ok_or("invalid engine device observation")?;
         let (total, free) = memory.trim_end_matches(')').split_once(" MiB, ").ok_or("invalid engine device memory")?;
         let total = total.parse::<u64>().map_err(|_| "invalid engine device capacity")?;
         let free = free.trim_end_matches(" MiB free").parse::<u64>().map_err(|_| "invalid engine device free memory")?;
-        if free < config.memory_reserve_mib || total <= config.memory_reserve_mib { return Err("selected engine device lacks required memory headroom".into()); }
+        if free < reserve || total <= reserve { return Err("selected engine device lacks required memory headroom".into()); }
         observed.push((selector.clone(), name.to_owned(), total));
     }
-    if config.backend == "cuda" {
-        let data = capture(&system_tool("nvidia-smi")?, &["--query-gpu=pci.bus_id,uuid,name,memory.total,driver_version,memory.free", "--format=csv,noheader,nounits"]).await?;
-        let mut rows: Vec<_> = data.lines().map(|line| line.split(',').map(str::trim).collect::<Vec<_>>()).collect();
-        if rows.iter().any(|row| row.len() != 6) { return Err("invalid CUDA platform observation".into()); }
-        rows.sort_by(|a, b| a[0].cmp(b[0]));
-        let mut devices = Vec::new();
-        for (selector, name, _) in observed {
-            let index = selector.trim_start_matches("CUDA").parse::<usize>().map_err(|_| "invalid CUDA device index")?;
-            let row = rows.get(index).ok_or("CUDA physical identity unavailable")?;
-            let memory = row[3].parse::<u64>().map_err(|_| "invalid CUDA memory observation")?;
-            if row[2] != name || row[5].parse::<u64>().map_err(|_| "invalid CUDA free memory")? < config.memory_reserve_mib { return Err("CUDA engine and platform device observations disagree".into()); }
-            devices.push(EngineDevice { id: row[1].into(), name, memory_mib: memory, driver_version: row[4].into(), engine_device: selector });
-        }
-        return Ok(("dedicated".into(), devices));
+    Ok(observed)
+}
+
+const NVIDIA_QUERY: [&str; 2] = ["--query-gpu=pci.bus_id,uuid,name,memory.total,driver_version,memory.free", "--format=csv,noheader,nounits"];
+
+/// The CUDA devices from `nvidia-smi` output (`NVIDIA_QUERY`): each selector `CUDA<n>` is the
+/// `n`th row in PCI bus order (no bus ID listed twice), whose name equals the engine's and whose
+/// free memory is at least `reserve` MiB.
+fn cuda_devices(data: &str, observed: Vec<ListedDevice>, reserve: u64) -> Result<Vec<EngineDevice>, String> {
+    let mut rows: Vec<_> = data.lines().map(|line| line.split(',').map(str::trim).collect::<Vec<_>>()).collect();
+    if rows.iter().any(|row| row.len() != 6) { return Err("invalid CUDA platform observation".into()); }
+    rows.sort_by(|a, b| a[0].cmp(b[0]));
+    // Ambiguous output fails the launch (requirement 7): two GPUs on one bus ID have no order.
+    if rows.windows(2).any(|pair| pair[0][0] == pair[1][0]) { return Err("CUDA physical identity is ambiguous".into()); }
+    let mut devices = Vec::new();
+    for (selector, name, _) in observed {
+        let index = selector.trim_start_matches("CUDA").parse::<usize>().map_err(|_| "invalid CUDA device index")?;
+        let row = rows.get(index).ok_or("CUDA physical identity unavailable")?;
+        let memory = row[3].parse::<u64>().map_err(|_| "invalid CUDA memory observation")?;
+        if row[2] != name || row[5].parse::<u64>().map_err(|_| "invalid CUDA free memory")? < reserve { return Err("CUDA engine and platform device observations disagree".into()); }
+        devices.push(EngineDevice { id: row[1].into(), name, memory_mib: memory, driver_version: row[4].into(), engine_device: selector });
     }
-    if config.backend == "metal" {
-        if capture(&system_tool("sysctl")?, &["-n", "hw.optional.arm64"]).await?.trim() != "1" {
-            return Err("unified Metal observation requires Apple silicon; discrete Metal memory is not qualified".into());
-        }
-        let hardware = capture(&system_tool("ioreg")?, &["-rd1", "-c", "IOPlatformExpertDevice"]).await?;
-        let id = hardware.lines().find_map(|line| line.split_once("\"IOPlatformUUID\" = \"").and_then(|(_, value)| value.strip_suffix('"'))).ok_or("Apple physical hardware identity unavailable")?;
-        let memory = capture(&system_tool("sysctl")?, &["-n", "hw.memsize"]).await?.trim().parse::<u64>().map_err(|_| "invalid Apple unified memory observation")? / (1024 * 1024);
-        let vm = capture(&system_tool("vm_stat")?, &[]).await?;
-        let page_size = vm.lines().next().and_then(|line| line.split_once("page size of "))
-            .and_then(|(_, rest)| rest.split_whitespace().next()).and_then(|n| n.parse::<u64>().ok())
-            .ok_or("Apple VM page size unavailable")?;
-        let mut available_pages = 0u64;
-        for field in ["Pages free", "Pages inactive", "Pages speculative"] {
-            let pages = vm.lines().find_map(|line| line.split_once(':').filter(|(key, _)| *key == field)
-                .and_then(|(_, value)| value.trim().trim_end_matches('.').parse::<u64>().ok()))
-                .ok_or("Apple available memory observation unavailable")?;
-            available_pages = available_pages.checked_add(pages).ok_or("Apple memory observation overflow")?;
-        }
-        let available = available_pages.checked_mul(page_size).ok_or("Apple memory observation overflow")? / (1024 * 1024);
-        if available.min(memory) < config.memory_reserve_mib { return Err("Apple unified memory lacks required headroom".into()); }
-        let driver = capture(&system_tool("sw_vers")?, &["-productVersion"]).await?;
-        let (selector, name, _) = observed.into_iter().next().ok_or("Metal device unavailable")?;
-        return Ok(("unified".into(), vec![EngineDevice { id: id.into(), name, memory_mib: memory, driver_version: driver.trim().into(), engine_device: selector }]));
+    Ok(devices)
+}
+
+/// `sysctl -n hw.optional.arm64`: unified Metal memory is observed only on Apple silicon.
+fn apple_silicon(arm64: &str) -> Result<(), String> {
+    if arm64.trim() != "1" {
+        return Err("unified Metal observation requires Apple silicon; discrete Metal memory is not qualified".into());
     }
-    let summary = capture(&system_tool("vulkaninfo")?, &["--summary"]).await?;
+    Ok(())
+}
+
+/// The `IOPlatformUUID` of `ioreg -rd1 -c IOPlatformExpertDevice`.
+fn apple_hardware_id(hardware: &str) -> Result<&str, String> {
+    Ok(hardware.lines().find_map(|line| line.split_once("\"IOPlatformUUID\" = \"").and_then(|(_, value)| value.strip_suffix('"'))).ok_or("Apple physical hardware identity unavailable")?)
+}
+
+/// The physical memory in MiB of `sysctl -n hw.memsize`.
+fn apple_memory_mib(memsize: &str) -> Result<u64, String> {
+    Ok(memsize.trim().parse::<u64>().map_err(|_| "invalid Apple unified memory observation")? / (1024 * 1024))
+}
+
+/// The available memory of `vm_stat`, free, inactive and speculative pages in MiB, capped at
+/// `memory` MiB, which must be at least `reserve` MiB.
+fn apple_available_mib(vm: &str, memory: u64, reserve: u64) -> Result<u64, String> {
+    let page_size = vm.lines().next().and_then(|line| line.split_once("page size of "))
+        .and_then(|(_, rest)| rest.split_whitespace().next()).and_then(|n| n.parse::<u64>().ok())
+        .ok_or("Apple VM page size unavailable")?;
+    let mut available_pages = 0u64;
+    for field in ["Pages free", "Pages inactive", "Pages speculative"] {
+        let pages = vm.lines().find_map(|line| line.split_once(':').filter(|(key, _)| *key == field)
+            .and_then(|(_, value)| value.trim().trim_end_matches('.').parse::<u64>().ok()))
+            .ok_or("Apple available memory observation unavailable")?;
+        available_pages = available_pages.checked_add(pages).ok_or("Apple memory observation overflow")?;
+    }
+    let available = available_pages.checked_mul(page_size).ok_or("Apple memory observation overflow")? / (1024 * 1024);
+    if available.min(memory) < reserve { return Err("Apple unified memory lacks required headroom".into()); }
+    Ok(available.min(memory))
+}
+
+/// The Vulkan devices from `vulkaninfo --summary`: each engine device is the one discrete GPU
+/// of the same name, with the engine's total memory.
+fn vulkan_devices(summary: &str, observed: Vec<ListedDevice>) -> Result<Vec<EngineDevice>, String> {
     let mut records = Vec::<BTreeMap<String, String>>::new();
     for line in summary.lines() {
         if line.trim().starts_with("GPU") && line.trim().ends_with(':') { records.push(BTreeMap::new()); }
@@ -473,7 +542,31 @@ async fn observe_devices(config: &EngineRuntimeConfig, executable: &Path) -> Res
         if row.get("deviceType").is_none_or(|v| v != "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU") { return Err("Vulkan unified/system memory observation is unsupported; use native Metal or CPU".into()); }
         devices.push(EngineDevice { id: row.get("deviceUUID").ok_or("Vulkan UUID unavailable")?.clone(), name, memory_mib: total, driver_version: row.get("driverInfo").or_else(|| row.get("driverVersion")).ok_or("Vulkan driver identity unavailable")?.clone(), engine_device: selector });
     }
-    Ok(("dedicated".into(), devices))
+    Ok(devices)
+}
+
+/// Runs the observers in order, each only after the previous output passed its checks, and
+/// parses their output with the functions above.
+async fn observe_devices(config: &EngineRuntimeConfig, executable: &Path, observers: &impl DeviceObservers) -> Result<(String, Vec<EngineDevice>), String> {
+    if config.backend == "cpu" { return Ok(("system".into(), Vec::new())); }
+    let listed = observers.output(Observer::Engine(executable), &["--list-devices"]).await?;
+    let observed = engine_devices(&listed, &config.device_ids, config.memory_reserve_mib)?;
+    if config.backend == "cuda" {
+        let data = observers.output(Observer::Tool("nvidia-smi"), &NVIDIA_QUERY).await?;
+        return Ok(("dedicated".into(), cuda_devices(&data, observed, config.memory_reserve_mib)?));
+    }
+    if config.backend == "metal" {
+        apple_silicon(&observers.output(Observer::Tool("sysctl"), &["-n", "hw.optional.arm64"]).await?)?;
+        let hardware = observers.output(Observer::Tool("ioreg"), &["-rd1", "-c", "IOPlatformExpertDevice"]).await?;
+        let id = apple_hardware_id(&hardware)?;
+        let memory = apple_memory_mib(&observers.output(Observer::Tool("sysctl"), &["-n", "hw.memsize"]).await?)?;
+        apple_available_mib(&observers.output(Observer::Tool("vm_stat"), &[]).await?, memory, config.memory_reserve_mib)?;
+        let driver = observers.output(Observer::Tool("sw_vers"), &["-productVersion"]).await?;
+        let (selector, name, _) = observed.into_iter().next().ok_or("Metal device unavailable")?;
+        return Ok(("unified".into(), vec![EngineDevice { id: id.into(), name, memory_mib: memory, driver_version: driver.trim().into(), engine_device: selector }]));
+    }
+    let summary = observers.output(Observer::Tool("vulkaninfo"), &["--summary"]).await?;
+    Ok(("dedicated".into(), vulkan_devices(&summary, observed)?))
 }
 
 #[cfg(windows)]

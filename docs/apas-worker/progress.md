@@ -1,5 +1,18 @@
 # APAS progress
 
+## 2026-11-20 (sixty-first round) — Acceptance: pinned private child, inventories before every launch, loopback listener, device observation
+
+- In step at `7f243cb2`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-managed-engine-launch` 3.1, 3.2, 3.4 and 3.7). Twenty new tests in `engine_runtime::tests` and two process tests in `daemon_engine_process_test`:
+  - 3.1: runtime manifests of another release, revision, schema, platform, architecture or backend are refused by `validate_inventory` and `ManagedEngine::start`; only an inventoried native `llama-server` is accepted, and a refused script never runs (marker file).
+  - 3.2: removed, resized or uninventoried files, another model identifier, and any serving-profile field that differs are refused; a repackaged runtime has another identity; an altered inventory refuses the launch before the port is bound or any observer or engine runs, including through `chiral_daemon --check` and a daemon start, for every managed model. The review added a test for nested inventory levels, symbolic links (Unix) and the 4 MiB manifest bound after four fail-open mutations passed every test.
+  - 3.4: managed endpoints must be literal loopback with an explicit non-zero port; the wildcard port probe never listens; a health answer after the child exited is not readiness, and the review added llama-server's 503 "Loading model" answer, which must not count as health.
+  - 3.7: device-output parsing is now pure functions over captured text (`engine_devices`, `cuda_devices`, the Apple parsers and `vulkan_devices`), and `observe_devices`, `start_observed` and `await_loaded` take the observers through a `DeviceObservers` seam (`SystemObservers` in production). Two independent differential runs (21,600 and 30,800 generated outputs) showed the same results and observer sequences as the old code, except for the fix below. Tests cover headroom bounds, PCI bus order, Apple available memory (the review added `hw.memsize` rounding down), Vulkan discrete-GPU identity, observer order, profile mismatches before spawning, post-load loss of headroom stopping the child, and observer size and time bounds.
+- Code fix (design code difference 4, requirement 7 "ambiguous output SHALL fail the launch"): a selector listed twice by `--list-devices`, or two `nvidia-smi` rows with one PCI bus ID, are now refused instead of taking the first match or the sorted position. The new tests failed before the fix. Report entry of 2026-11-18 updated.
+- 3.2 and 3.4 are ticked (macOS runs; Windows symbolic links, junctions and wildcard listeners stay with task 4.1). 3.1 stays open for the no-fallback scenario (task 3.10) and Linux and Windows runs of the ELF and PE branches. 3.7 stays open: its `--list-devices`, `nvidia-smi` and `vulkaninfo` fixtures follow documented formats, not recordings from the pinned engine on CUDA, Apple silicon and Vulkan hosts.
+- 43 author mutations and the review's further mutations each fail the targeted tests; every file was restored and compared with `cmp`.
+- Checks: full headless suite under `caffeinate` 598 passed, 6 ignored (helpers), 0 failed across 26 targets (`daemon_engine_process_test` 10/10); `cargo test --lib desktop::` (desktop feature) 4 passed; `npm test` 70/70; no daemon or engine process left running; strict validation passes.
+
 ## 2026-11-20 (sixtieth round) — Acceptance: managed-engine settings, launch arguments, environment and contract checks
 
 - In step at `3511e419`; whitepaper unchanged; no new answers.
@@ -662,7 +675,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests: `specify-managed-engine-launch` 3.1, 3.2, 3.4, 3.7, 3.9–3.11 (and 3.6 off-host).
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests: `specify-managed-engine-launch` 3.9–3.11 (3.1 needs the 3.10 no-fallback test; 3.1, 3.6 and 3.7 also need Linux, Windows or real-device runs).
 2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
