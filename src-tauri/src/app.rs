@@ -2473,4 +2473,341 @@ mod tests {
             server.abort();
         }
     }
+
+    /// Files named `name` anywhere under `root`.
+    fn files_named(root: &std::path::Path, name: &str) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut pending = vec![root.to_owned()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() { pending.push(path); } else if path.file_name() == Some(std::ffi::OsStr::new(name)) { found.push(path); }
+            }
+        }
+        found
+    }
+
+    /// The process identifiers that `ManagedEngine::recording_helper_for_test` engines have
+    /// logged to `log`, one per engine process started.
+    fn engine_starts(log: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(log).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    /// Kills process `pid`, a helper engine, when the test panics before the helper is known to
+    /// be gone, so that a failed assertion does not leave it running.
+    struct KillOnPanic(u32);
+    impl KillOnPanic {
+        /// Called once the helper is killed or known to be gone, so that a panic afterwards
+        /// never kills another process that reused its identifier.
+        fn disarm(self) {
+            std::mem::forget(self);
+        }
+    }
+    impl Drop for KillOnPanic {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            if std::thread::panicking() {
+                unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
+            }
+            #[cfg(not(unix))]
+            let _ = self.0;
+        }
+    }
+
+    /// Whether process `pid` is gone (reaped) within five seconds.
+    #[cfg(unix)]
+    async fn gone_within_five_seconds(pid: u32) -> bool {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid as i32, 0) } == 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        unsafe { libc::kill(pid as i32, 0) == -1 }
+    }
+
+    /// `managed-engine-runtime` requirement 9 (task 3.9), *One failed model stops the whole
+    /// start*. A ready, non-development provider whose first model runs on a managed engine (the
+    /// recording helper child), and whose second, managed model fails its inventory, does not
+    /// start: `ProviderRuntime::start_with` returns that inventory error after one launch attempt,
+    /// the second model's, which it does not retry; its handle to the first engine is dropped, and
+    /// the first engine process no longer exists within five seconds. No
+    /// offer was signed (the deployment's persisted offer revision, written before any offer is
+    /// signed, does not exist), and the deployment lock is free again. The control: the first
+    /// model alone starts with the same configuration and publishes its offer under revision 1.
+    /// The daemon-level case, where the daemon itself launched and readied the first engine, is
+    /// `daemon_engine_process_test`'s `check_and_start_verify_every_managed_model`.
+    #[tokio::test]
+    async fn a_failed_managed_launch_fails_the_start_and_stops_the_engine_already_running() {
+        const ENGINE_KEY: &str = "private-test-engine-key-of-32-characters";
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let first = &mut config.models[0];
+        first.model.capabilities = vec!["embeddings".into()];
+        first.model.max_output_tokens = 0;
+        first.price.output_wei_per_1k = "0".into();
+        let (engine_url, engine_server) = serve(embeddings_engine(first.model.clone())).await;
+        first.engine_url = engine_url.clone();
+        let first_id = first.model.id.clone();
+        let alone = config.clone();
+        // The second model: a managed CPU runtime whose installed directories hold no inventory.
+        let key_file = directory.path().join("engine-b.key");
+        wallet::create_secret_file(&key_file).unwrap().write_all(ENGINE_KEY.as_bytes()).unwrap();
+        let (runtime_dir, artifact_dir) = (directory.path().join("runtime-b"), directory.path().join("artifact-b"));
+        std::fs::create_dir(&runtime_dir).unwrap();
+        std::fs::create_dir(&artifact_dir).unwrap();
+        let mut second = config.models[0].clone();
+        second.model.id = "embed-b".into();
+        // Held through the test, so that no other test's launch names the same endpoint.
+        let second_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        second.engine_url = format!("http://{}", second_port.local_addr().unwrap());
+        let second_url = second.engine_url.clone();
+        second.engine_api_key_file = Some(key_file);
+        second.runtime = Some(crate::engine_runtime::EngineRuntimeConfig {
+            runtime_dir, artifact_dir, backend: "cpu".into(), device_ids: vec![], memory_reserve_mib: 0, gpu_layers: 0,
+            split_mode: "none".into(), tensor_split: vec![], cache_type_k: "f16".into(), cache_type_v: "f16".into(),
+            flash_attention: false, batch_size: 128, ubatch_size: 64, startup_timeout_secs: 1 });
+        let inventory_error = crate::engine_runtime::validate_inventory(&second).err().unwrap();
+        assert_eq!(inventory_error, "cannot inspect runtime metadata");
+        config.models.push(second);
+        config.validate().unwrap();
+
+        let spawn_log = directory.path().join("engine-spawns");
+        let helper = Arc::new(crate::engine_runtime::ManagedEngine::recording_helper_for_test(&first_id, &engine_url, &spawn_log));
+        let pid = helper.observation.pid;
+        let _cleanup = KillOnPanic(pid);
+        let handle = Arc::downgrade(&helper);
+        within(async { while engine_starts(&spawn_log).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await; } }).await;
+        assert!(helper.is_alive());
+        let attempts = |url: &str| crate::engine_runtime::ManagedEngine::launch_attempts_for_test(url);
+        let before = (attempts(&engine_url), attempts(&second_url));
+        let started = ProviderRuntime::start_with(config, std::collections::HashMap::from([(first_id.clone(), helper)])).await;
+        assert_eq!(started.err(), Some(inventory_error));
+        assert!(handle.upgrade().is_none(), "the failed start kept its handle to the first engine");
+        #[cfg(unix)]
+        assert!(gone_within_five_seconds(pid).await, "the first engine outlived the failed start");
+        _cleanup.disarm();
+        assert_eq!(engine_starts(&spawn_log), [pid.to_string()]);
+        // One launch attempt, the second model's failed one: no retry, and nothing launched the
+        // first model, whose engine was already running.
+        assert_eq!((attempts(&engine_url) - before.0, attempts(&second_url) - before.1), (0, 1));
+        assert!(files_named(&directory.path().join("data"), "offer-revision").is_empty(), "the failed start signed an offer");
+
+        // The control: the first model alone starts, which also shows the deployment lock free.
+        let helper = crate::engine_runtime::ManagedEngine::helper_for_test(&first_id, &engine_url);
+        let runtime = ProviderRuntime::start_with(alone, std::collections::HashMap::from([(first_id, Arc::new(helper))])).await.unwrap();
+        assert!(runtime.state.funding_ready.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        let revisions = files_named(&directory.path().join("data"), "offer-revision");
+        assert_eq!(revisions.len(), 1, "{revisions:?}");
+        assert_eq!(std::fs::read_to_string(&revisions[0]).unwrap().trim(), "1");
+        runtime.dht.stop().await;
+        runtime.stop_engines().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// `managed-engine-runtime` requirement 10 (task 3.10), with requirement 1's no-fallback
+    /// scenario (task 3.1) and the engine-exit cases of `inference-offer-discovery` tasks 3.11
+    /// and 3.15. A ready, non-development provider serves one embeddings model on a managed
+    /// engine: the recording helper child, which logs each start of an engine process, with the
+    /// fixture endpoint answering for it and counting every request that reaches it. The offer is
+    /// published and a request has completed. When the engine process is killed:
+    /// - within one second, admission and new-funding readiness are closed, `GET /admin/runtime`
+    ///   reports the model not ready, `GET /readyz` answers 503 and the model is not admissible;
+    /// - `GET /readyz` answers 503 with `ready` and `funding_ready` false, and the offer is
+    ///   withdrawn from the DHT, from `GET /admin/offers` and from a consumer's discovery;
+    /// - a maintenance refresh, `POST /admin/offers/refresh` and `POST /admin/resume` leave all of
+    ///   that so and publish nothing, and a request for the model is refused before any record;
+    /// - nothing reaches the engine's endpoint after the exit, no engine process starts again,
+    ///   no launch of an engine for that endpoint is even attempted (`ManagedEngine::start` is
+    ///   not called, which the helper's start log alone cannot show, because the model carries no
+    ///   `runtime` from which a launch could spawn), and the provider keeps the exited engine's
+    ///   handle;
+    /// - `GET /admin/status`, `GET /admin/accounts`, `GET /admin/fees` and `GET /admin/requests`
+    ///   answer 200 with the accounts, fee summary and request records unchanged, and the
+    ///   consumer's `GET /v1/requests/<id>` still recovers the completed request.
+    #[tokio::test]
+    async fn a_managed_engine_exit_withdraws_service_and_nothing_restarts_or_replaces_it() {
+        use std::sync::atomic::AtomicUsize;
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        let contacted = Arc::new(AtomicUsize::new(0));
+        let engine = embeddings_engine(model.model.clone()).layer(middleware::from_fn({
+            let contacted = contacted.clone();
+            move |request: Request, next: Next| {
+                let contacted = contacted.clone();
+                async move {
+                    contacted.fetch_add(1, Ordering::SeqCst);
+                    next.run(request).await
+                }
+            }
+        }));
+        let (engine_url, engine_server) = serve(engine).await;
+        model.engine_url = engine_url.clone();
+        let spec = model.model.clone();
+        let spawn_log = directory.path().join("engine-spawns");
+        let helper = crate::engine_runtime::ManagedEngine::recording_helper_for_test(&spec.id, &engine_url, &spawn_log);
+        let pid = helper.observation.pid;
+        let _cleanup = KillOnPanic(pid);
+        let runtime = ProviderRuntime::start_with(config, std::collections::HashMap::from([(spec.id.clone(), Arc::new(helper))])).await.unwrap();
+        within(async { while engine_starts(&spawn_log).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await; } }).await;
+        assert_eq!(engine_starts(&spawn_log), [pid.to_string()]);
+        let (contract, bearer) = free_account(&runtime.state, "22");
+
+        let readiness = || {
+            let runtime = runtime.clone();
+            async move {
+                let response = runtime.public_router().oneshot(Request::builder().uri("/readyz")
+                    .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+            }
+        };
+        let address = format!("{}/p2p/{}",
+            runtime.dht.status().await["listening_addresses"][0].as_str().unwrap(), runtime.dht.peer_id());
+        let network = runtime.state.config.network.identity.clone();
+        let discovered = |name: &'static str| {
+            let (address, network, directory) = (address.clone(), network.clone(), directory.path().to_owned());
+            async move {
+                let consumer = DhtService::start(
+                    provider_config::DhtConfig { listen: "/ip4/127.0.0.1/tcp/0".into(), bootstrap: vec![address], identity_file: directory.join(name) },
+                    network.clone(),
+                    Arc::new(OfferRegistry::new(network, false)),
+                ).await.unwrap();
+                let offers = consumer.discover(None).await.unwrap();
+                consumer.stop().await;
+                offers.len()
+            }
+        };
+
+        // Ready, admitted and published, and one request completes.
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        assert!(runtime.state.funding_ready.load(Ordering::Acquire));
+        assert_eq!(readiness().await, (StatusCode::OK, json!({"ready": true, "funding_ready": true})));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        assert_eq!(admin(&runtime, "GET", "/admin/offers").await.1["offers"].as_array().unwrap().len(), 1);
+        assert_eq!(discovered("consumer-before.key").await, 1);
+        let view = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+        assert_eq!((&view["alive"], &view["ready"]), (&json!(true), &json!(true)), "{view}");
+        let (status, answer) = embed(&runtime, &bearer, "before-exit").await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        let (status, accounts) = admin(&runtime, "GET", "/admin/accounts").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(accounts["accounts"].as_array().unwrap().len(), 1, "{accounts}");
+        let (status, fees) = admin(&runtime, "GET", "/admin/fees").await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, requests) = admin(&runtime, "GET", "/admin/requests").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests["requests"].as_array().unwrap().len(), 1, "{requests}");
+        let request_status = || {
+            let (runtime, bearer) = (runtime.clone(), bearer.clone());
+            async move {
+                let response = runtime.public_router().oneshot(Request::builder().uri("/v1/requests/before-exit")
+                    .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+                    .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+            }
+        };
+        let (status, completed) = request_status().await;
+        assert_eq!((status, &completed["status"]), (StatusCode::OK, &json!("completed")), "{completed}");
+
+        // The engine process exits; nothing has reached its endpoint since.
+        let reached = contacted.load(Ordering::SeqCst);
+        // Launch attempts for the engine's endpoint: the helper was not launched through
+        // `ManagedEngine::start`, and a restart or replacement of any kind would be one.
+        let attempts = crate::engine_runtime::ManagedEngine::launch_attempts_for_test(&engine_url);
+        // The helper is killed next, and the provider's handle collects its exit.
+        _cleanup.disarm();
+        let killed = std::time::Instant::now();
+        runtime.state.managed_engines[&spec.id].kill_for_test();
+        let observed = loop {
+            let view = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+            if !runtime.state.accepting.load(Ordering::Acquire)
+                && !runtime.state.funding_ready.load(Ordering::Acquire)
+                && view["ready"] == false
+                && runtime.state.qualified_model(&spec).is_none()
+                && readiness().await.0 == StatusCode::SERVICE_UNAVAILABLE
+            {
+                break killed.elapsed();
+            }
+            assert!(killed.elapsed() < Duration::from_secs(1), "the engine exit was not observed within one second: {view}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(observed < Duration::from_secs(1), "{observed:?}");
+
+        let withdrawn = |case: &'static str| {
+            let (runtime, readiness, discovered, spawn_log, spec, contract, bearer, engine_url) =
+                (runtime.clone(), &readiness, &discovered, &spawn_log, &spec, &contract, &bearer, &engine_url);
+            async move {
+                assert!(!runtime.state.accepting.load(Ordering::Acquire), "{case}");
+                assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{case}");
+                assert!(runtime.state.qualified_model(spec).is_none(), "{case}");
+                assert_eq!(readiness().await, (StatusCode::SERVICE_UNAVAILABLE, json!({"ready": false, "funding_ready": false})), "{case}");
+                let view = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+                assert_eq!((&view["managed"], &view["alive"], &view["ready"], &view["observation"]["pid"]),
+                    (&json!(true), &json!(false), &json!(false), &json!(pid)), "{case}: {view}");
+                let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+                assert_eq!(status, StatusCode::OK, "{case}");
+                assert_eq!((&view["accepting"], &view["funding_ready"]), (&json!(false), &json!(false)), "{case}: {view}");
+                assert_eq!((&view["models"][0]["ready"], &view["models"][0]["detail"]),
+                    (&json!(false), &json!(inference_backend::ENGINE_EXITED)), "{case}: {view}");
+                assert_eq!(runtime.dht.status().await["published_offers"], 0, "{case}");
+                assert_eq!(admin(&runtime, "GET", "/admin/offers").await, (StatusCode::OK, json!({"offers": []})), "{case}");
+                // No fallback: the request is refused before any record, and no other engine,
+                // runtime or process serves it.
+                let key = format!("after-exit-{}", case.replace(' ', "-"));
+                let (status, answer) = embed(&runtime, bearer, &key).await;
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {answer}");
+                assert_eq!(answer["error"]["code"], "provider_paused", "{case}: {answer}");
+                assert!(runtime.state.ledger.request_view(contract, &key).is_err(), "{case}");
+                // The handle is the exited engine's, and no engine process started again.
+                let engine = &runtime.state.managed_engines[&spec.id];
+                assert_eq!(engine.observation.pid, pid, "{case}");
+                assert!(!engine.is_alive(), "{case}");
+                assert_eq!(engine_starts(spawn_log), [pid.to_string()], "{case}: an engine process started again");
+                assert_eq!(crate::engine_runtime::ManagedEngine::launch_attempts_for_test(engine_url), attempts,
+                    "{case}: an engine launch was attempted again");
+                assert_eq!(discovered(if case == "the exit" { "consumer-exit.key" } else { "consumer-resume.key" }).await, 0, "{case}");
+            }
+        };
+        withdrawn("the exit").await;
+        assert_eq!(runtime.refresh().await, Ok(0));
+        let (status, refreshed) = admin(&runtime, "POST", "/admin/offers/refresh").await;
+        assert_eq!((status, refreshed), (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        let (status, resumed) = admin(&runtime, "POST", "/admin/resume").await;
+        assert_eq!((status, resumed), (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        // Several engine-watcher periods, in which a restart would have logged a start.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        withdrawn("refresh and resume").await;
+        assert_eq!(contacted.load(Ordering::SeqCst), reached, "a request reached the exited engine's endpoint");
+        // Administration and recovery answer, and the accepted account, the fee summary and the
+        // request records are unchanged: the completed request is still recorded, for the
+        // operator and for the consumer's request status.
+        assert_eq!(admin(&runtime, "GET", "/admin/accounts").await, (StatusCode::OK, accounts));
+        assert_eq!(admin(&runtime, "GET", "/admin/fees").await, (StatusCode::OK, fees));
+        assert_eq!(admin(&runtime, "GET", "/admin/requests").await, (StatusCode::OK, requests));
+        assert_eq!(request_status().await, (StatusCode::OK, completed));
+
+        runtime.dht.stop().await;
+        runtime.stop_engines().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
 }

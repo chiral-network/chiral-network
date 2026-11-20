@@ -289,6 +289,8 @@ impl ManagedEngine {
     }
     /// `start` with the given device observers: the system's, or recorded output in tests.
     async fn start_observed(model: &ModelConfig, observers: &impl DeviceObservers) -> Result<Arc<Self>, String> {
+        #[cfg(test)]
+        LAUNCH_ATTEMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(model.engine_url.clone());
         let owned = model.clone();
         let validated = tokio::task::spawn_blocking(move || validate_inventory(&owned)).await.map_err(|_| "inventory worker stopped")??;
         let config = model.runtime.as_ref().ok_or("model is not managed")?;
@@ -369,14 +371,37 @@ impl ManagedEngine {
 }
 impl Drop for ManagedEngine { fn drop(&mut self) { self.terminate(); } }
 
+/// Test seam (`managed-engine-runtime` tasks 3.9 and 3.10): the engine endpoint of every launch
+/// attempt, recorded before the launch checks anything, so that a provider test can show that
+/// nothing attempted to start an engine again, whatever the model's configuration.
+#[cfg(test)]
+static LAUNCH_ATTEMPTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 #[cfg(test)]
 impl ManagedEngine {
+    /// The launch attempts (`start` calls) with `engine_url` so far in this test process.
+    pub(crate) fn launch_attempts_for_test(engine_url: &str) -> usize {
+        LAUNCH_ATTEMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().filter(|url| *url == engine_url).count()
+    }
     /// `managed-engine-runtime` task 3.10's test constructor: this test binary's ignored
     /// `managed_child_helper`, which only sleeps, wrapped as a ready managed engine for
     /// `model_id` at `engine_url`. No inventory, device or health check runs.
     pub(crate) fn helper_for_test(model_id: &str, engine_url: &str) -> Self {
+        Self::helper_running_for_test(model_id, engine_url, &["--exact", "engine_runtime::tests::managed_child_helper", "--ignored", "--nocapture"])
+    }
+    /// `helper_for_test` whose child is `recording_child_helper`: it appends its process id
+    /// to `spawn_log` when it starts, then sleeps, so that a test can count the engine
+    /// processes started for the model (`managed-engine-runtime` task 3.10).
+    pub(crate) fn recording_helper_for_test(model_id: &str, engine_url: &str, spawn_log: &Path) -> Self {
+        let log = format!("spawn-log={}", spawn_log.display());
+        Self::helper_running_for_test(model_id, engine_url, &tests::helper_args("engine_runtime::tests::recording_child_helper").into_iter().chain([log.as_str()]).collect::<Vec<_>>())
+    }
+    /// `helper_for_test` running this test binary with `args`, through the launcher's own
+    /// `command` (process group, Linux parent-death signal, cleared environment) and, on
+    /// Windows, its job object.
+    pub(crate) fn helper_running_for_test(model_id: &str, engine_url: &str, args: &[&str]) -> Self {
         let mut launch = command(&std::env::current_exe().unwrap());
-        launch.args(["--exact", "engine_runtime::tests::managed_child_helper", "--ignored", "--nocapture"]);
+        launch.args(args);
         let child = launch.spawn().unwrap();
         let pid = child.id().unwrap();
         Self { child:Mutex::new(child), ready:AtomicBool::new(true), observation:RuntimeObservation {

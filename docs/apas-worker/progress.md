@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-20 (sixty-second round) — Acceptance: bounded startup, engine exit without restart, shutdown stops owned engines
+
+- In step at `5cd927bc`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-managed-engine-launch` 3.9, 3.10, 3.11 and 3.1's no-fallback scenario). New tests:
+  - 3.9: an engine that exits before readiness fails the launch and is not relaunched (unit test and a `chiral_daemon` process test whose stub logs each start); the health probe carries the engine bearer, follows no 307 or 308 redirect and uses no proxy; `ProviderRuntime::start_with` with a running first model and an uninventoried second model fails, makes exactly one attempt for the second model, stops the first engine within 5 s and publishes nothing.
+  - 3.10 (with 3.1's no-fallback scenario): within 1 s of a managed engine's death, admission, new funding, `/admin/runtime` readiness and `/readyz` are closed and the model is not admissible; the DHT, `/admin/offers` and consumer discovery hold no offer; refresh, offer refresh and resume reopen and republish nothing and attempt no launch; a request is refused before any record; administration routes answer unchanged and request recovery still works.
+  - 3.11: stop and drop kill the engine's whole process group (grandchild gone); on macOS a SIGKILLed parent leaves an orphan that blocks the next start with the occupied-port error (the Linux parent-death branch compiles but did not run here); the shared SIGTERM/SIGHUP serving test now asserts, through `waitid` with `WNOWAIT`, that the engine was gone when the daemon exited.
+- The review found that a watcher, resume or refresh that called `ManagedEngine::start` again passed the 3.10 test, because the fixture model has no runtime and fails before spawning. It added a `#[cfg(test)]` launch-attempt record in `start_observed` and assertions that now fail for all three restart mutations and for a retried start.
+- No product code changed; every change is test code or `#[cfg(test)]`. No code difference was found.
+- 3.9 and 3.10 are ticked. 3.1 now lacks only Linux and Windows runs. 3.11 stays open for the Linux parent-death run (with a `PR_SET_PDEATHSIG` mutation) and a Windows job-object test. Recorded weaknesses: 3.10 compares only zero-valued accounts and fees (a funded fixture needs a chain fixture that answers receipts), and on macOS a daemon without `stop_engines` cannot be told apart from the specified shutdown, because `Drop` still kills the engine before exit.
+- Checks: `--lib` 331 passed, 12 ignored (helpers), 0 failed; `daemon_engine_process_test` 11/11; bins build and `cargo check --tests` pass; no engine, daemon or helper process left running; strict validation passes. The rest of the integration suite was not rerun: the only product-file change is `#[cfg(test)]` code, which integration targets and binaries do not compile.
+
 ## 2026-11-20 (sixty-first round) — Acceptance: pinned private child, inventories before every launch, loopback listener, device observation
 
 - In step at `7f243cb2`; whitepaper unchanged; no new answers.
@@ -675,7 +687,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests: `specify-managed-engine-launch` 3.9–3.11 (3.1 needs the 3.10 no-fallback test; 3.1, 3.6 and 3.7 also need Linux, Windows or real-device runs).
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
 2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

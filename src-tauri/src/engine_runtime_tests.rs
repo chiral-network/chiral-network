@@ -669,7 +669,7 @@ fn launch_command_passes_the_serving_contract_as_explicit_arguments() {
 /// `cargo test -- --ignored`) does nothing.
 const LAUNCH_PROBE: &str = "chiral-launch-environment-probe";
 
-fn helper_args(helper: &'static str) -> [&'static str; 5] { ["--exact", helper, "--ignored", "--nocapture", LAUNCH_PROBE] }
+pub(super) fn helper_args(helper: &'static str) -> [&'static str; 5] { ["--exact", helper, "--ignored", "--nocapture", LAUNCH_PROBE] }
 
 fn probing() -> bool { std::env::args().any(|arg| arg == LAUNCH_PROBE) }
 
@@ -2015,4 +2015,340 @@ async fn this_hosts_apple_platform_tools_are_parsed() {
 fn start_is_send(model: &ModelConfig) {
     fn send<T: Send>(_: &T) {}
     send(&ManagedEngine::start(model));
+}
+
+// managed-engine-runtime task 3.9: startup is bounded, and a failed launch serves and advertises
+// nothing (requirement 9).
+
+/// Exits at once, as an engine that cannot load its model does.
+#[test]
+#[ignore = "exiting engine helper, run only by an_engine_that_exits_before_readiness_fails_the_launch_and_is_not_relaunched"]
+fn exiting_child_helper() {}
+
+/// Requirement 9's exited-before-readiness scenario: an engine child that exits at once, while
+/// its endpoint keeps answering `/health` with 503 "Loading model" as llama-server does while it
+/// loads, fails the launch with the exited-before-readiness error, not after the startup timeout.
+/// Nothing starts it again: the engine keeps its one process identity, whose exit status is
+/// collected, and is never alive. The daemon-level count of engine starts is
+/// `daemon_engine_process_test`'s `an_engine_that_exits_before_readiness_fails_the_start_without_a_second_launch`.
+#[tokio::test]
+async fn an_engine_that_exits_before_readiness_fails_the_launch_and_is_not_relaunched() {
+    use std::sync::atomic::AtomicUsize;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().route("/health", axum::routing::get({
+        let requests = requests.clone();
+        move || {
+            requests.fetch_add(1, Ordering::SeqCst);
+            async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}))) }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let engine = ManagedEngine::helper_running_for_test("test/helper", &url, &helper_args("engine_runtime::tests::exiting_child_helper"));
+    engine.ready.store(false, Ordering::Release);
+    let pid = engine.observation.pid;
+    let result = engine.await_health(&url, FIXTURE_KEY, Duration::from_secs(20)).await;
+    assert_eq!(result.err().as_deref(), Some("managed engine exited before readiness"));
+    assert_eq!(engine.observation.pid, pid);
+    assert!(engine.child.lock().unwrap().try_wait().unwrap().is_some(), "the engine child is still running");
+    assert!(!engine.is_alive());
+    server.abort();
+}
+
+/// The startup health probe presents the engine key, read from the configured key file as
+/// `ManagedEngine::start` reads it, as its bearer: an endpoint that answers 200 only to that
+/// bearer makes the engine ready, and every probe carried it. It follows no redirect: a 307 or
+/// 308 to an endpoint that answers 200 is not readiness and that endpoint is never asked, so the
+/// launch times out and stops the child.
+#[tokio::test]
+async fn the_health_probe_presents_the_engine_key_and_follows_no_redirect() {
+    use std::sync::atomic::AtomicUsize;
+    let seen = Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = axum::Router::new().route("/health", axum::routing::get({
+        let seen = seen.clone();
+        move |headers: axum::http::HeaderMap| {
+            let authorization = headers.get(axum::http::header::AUTHORIZATION).map(|value| value.to_str().unwrap().to_owned());
+            seen.lock().unwrap().push(authorization.clone());
+            async move {
+                if authorization == Some(format!("Bearer {FIXTURE_KEY}")) { (axum::http::StatusCode::OK, axum::Json(json!({"status": "ok"}))) }
+                else { (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({"error": {"code": 401, "message": "Invalid API Key"}}))) }
+            }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let (_directory, mut config) = fixture();
+    assert_eq!(read_secret(config.engine_api_key_file.as_ref().unwrap()).unwrap(), FIXTURE_KEY);
+    config.engine_url = url;
+    runtime_of(&mut config).startup_timeout_secs = 10;
+    let engine = child();
+    engine.ready.store(false, Ordering::Release);
+    // A CPU runtime runs no device observer.
+    let ready = Arc::new(engine).await_loaded(&config, Path::new("/verified/runtime/llama-server"), &Recorded::new(Vec::<String>::new())).await.unwrap();
+    assert!(ready.is_alive());
+    let seen = seen.lock().unwrap().clone();
+    assert!(!seen.is_empty());
+    assert!(seen.iter().all(|authorization| authorization.as_deref() == Some("Bearer test-private-engine-token-32-characters")), "{seen:?}");
+    ready.stop().await;
+    server.abort();
+
+    for status in [307u16, 308] {
+        let target_requests = Arc::new(AtomicUsize::new(0));
+        let (target, target_server) = health_server({ let target_requests = target_requests.clone(); move || { target_requests.fetch_add(1, Ordering::SeqCst); } }).await;
+        let redirects = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route("/health", axum::routing::get({
+            let (redirects, location) = (redirects.clone(), format!("{target}/health"));
+            move || {
+                redirects.fetch_add(1, Ordering::SeqCst);
+                let location = location.clone();
+                async move { (axum::http::StatusCode::from_u16(status).unwrap(), [(axum::http::header::LOCATION, location)]) }
+            }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let engine = child();
+        engine.ready.store(false, Ordering::Release);
+        let result = engine.await_health(&url, FIXTURE_KEY, Duration::from_millis(1500)).await;
+        assert_eq!(result.err().as_deref(), Some("managed engine startup timed out"), "{status}");
+        assert!(redirects.load(Ordering::SeqCst) >= 1, "{status}: the probe never asked the engine's endpoint");
+        assert_eq!(target_requests.load(Ordering::SeqCst), 0, "{status}: the probe followed the redirect");
+        assert!(!engine.is_alive());
+        assert!(engine.child.lock().unwrap().try_wait().unwrap().is_some(), "{status}: the timed-out child was not stopped");
+        server.abort();
+        target_server.abort();
+    }
+}
+
+/// Runs the startup health probe of a helper engine against `health-url=<url>`, in the process
+/// environment its parent test gives it, and prints the result.
+#[tokio::test]
+#[ignore = "health-probe child helper, run only by the_health_probe_uses_no_proxy"]
+async fn health_probe_proxy_helper() {
+    if !probing() { return; }
+    let url = std::env::args().find_map(|arg| arg.strip_prefix("health-url=").map(str::to_owned)).unwrap();
+    let engine = child();
+    engine.ready.store(false, Ordering::Release);
+    let result = engine.await_health(&url, FIXTURE_KEY, Duration::from_secs(5)).await;
+    println!("probe-result\t{result:?}");
+    engine.stop().await;
+}
+
+/// The startup health probe uses no proxy: in a process whose environment names an HTTP proxy
+/// for every scheme and no exception, the probe reaches the engine's endpoint directly and the
+/// proxy receives no connection. The proxy accepts and closes each connection, so a proxied
+/// probe would not be ready.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_health_probe_uses_no_proxy() {
+    use std::sync::atomic::AtomicUsize;
+    let proxied = Arc::new(AtomicUsize::new(0));
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let proxy_server = tokio::spawn({
+        let proxied = proxied.clone();
+        async move { while let Ok((connection, _)) = proxy.accept().await { proxied.fetch_add(1, Ordering::SeqCst); drop(connection); } }
+    });
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (url, server) = health_server({ let requests = requests.clone(); move || { requests.fetch_add(1, Ordering::SeqCst); } }).await;
+    let health = format!("health-url={url}");
+    let mut probe = tokio::process::Command::new(std::env::current_exe().unwrap());
+    probe.args(helper_args("engine_runtime::tests::health_probe_proxy_helper")).arg(&health)
+        .env_remove("NO_PROXY").env_remove("no_proxy").kill_on_drop(true);
+    for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] { probe.env(name, &proxy_url); }
+    let output = tokio::time::timeout(Duration::from_secs(60), probe.output()).await.expect("the probe helper did not finish").unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.lines().any(|line| line == "probe-result\tOk(())"), "{stdout}");
+    assert!(requests.load(Ordering::SeqCst) >= 1);
+    assert_eq!(proxied.load(Ordering::SeqCst), 0, "the probe connected to the proxy");
+    server.abort();
+    proxy_server.abort();
+}
+
+// managed-engine-runtime task 3.10: an engine exit withdraws service, and nothing restarts the
+// engine (requirement 10). The provider-level test is in `app::tests`; this is its engine.
+
+/// Appends this process's identifier and a newline to the file named by `spawn-log=<path>`,
+/// then sleeps: an engine process whose starts a test counts.
+#[test]
+#[ignore = "recording engine helper, run only through ManagedEngine::recording_helper_for_test"]
+fn recording_child_helper() {
+    if !probing() { return; }
+    let log = std::env::args().find_map(|arg| arg.strip_prefix("spawn-log=").map(PathBuf::from)).unwrap();
+    std::fs::OpenOptions::new().create(true).append(true).open(log).unwrap().write_all(format!("{}\n", std::process::id()).as_bytes()).unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+// managed-engine-runtime task 3.11: shutdown and parent termination stop the engines the daemon
+// owns (requirement 11).
+
+/// Kills, when dropped before `disarm`, the processes a failed process test left behind.
+#[cfg(unix)]
+struct Leftovers(Vec<u32>);
+
+#[cfg(unix)]
+impl Leftovers {
+    /// Called once the processes are known to be gone, so that a reused identifier is never killed.
+    fn disarm(mut self) { self.0.clear(); }
+}
+
+#[cfg(unix)]
+impl Drop for Leftovers {
+    fn drop(&mut self) {
+        for pid in &self.0 { unsafe { libc::kill(*pid as i32, libc::SIGKILL); } }
+    }
+}
+
+/// Whether `pid` exists, a zombie included.
+#[cfg(unix)]
+fn exists(pid: u32) -> bool { unsafe { libc::kill(pid as i32, 0) == 0 } }
+
+/// Starts a grandchild, `managed_child_helper`, in this helper's process group (a spawned child's
+/// default), writes its process identifier to the file named by `pid-file=<path>`, then sleeps.
+#[cfg(unix)]
+#[test]
+#[ignore = "process-group child helper, run only by stopping_or_dropping_an_engine_kills_its_whole_process_group"]
+fn process_group_child_helper() {
+    if !probing() { return; }
+    let path = std::env::args().find_map(|arg| arg.strip_prefix("pid-file=").map(PathBuf::from)).unwrap();
+    let grandchild = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "engine_runtime::tests::managed_child_helper", "--ignored"])
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, grandchild.id().to_string()).unwrap();
+    std::fs::rename(temporary, path).unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// Stopping an engine, and dropping its handle, kill its whole process group: the engine child
+/// leads its own group, and a grandchild it started in that group is gone within five seconds
+/// along with it.
+#[cfg(unix)]
+#[tokio::test]
+async fn stopping_or_dropping_an_engine_kills_its_whole_process_group() {
+    for how in ["stop", "drop"] {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("grandchild.pid");
+        let argument = format!("pid-file={}", pid_file.display());
+        let args: Vec<&str> = helper_args("engine_runtime::tests::process_group_child_helper").into_iter().chain([argument.as_str()]).collect();
+        let engine = ManagedEngine::helper_running_for_test("test/helper", "http://127.0.0.1:1", &args);
+        let engine_pid = engine.observation.pid;
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let grandchild = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file).ok().and_then(|pid| pid.trim().parse::<u32>().ok()) { break pid; }
+            assert!(std::time::Instant::now() < deadline, "{how}: the helper started no grandchild");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let leftovers = Leftovers(vec![grandchild]);
+        assert!(exists(grandchild), "{how}");
+        assert_eq!(unsafe { libc::getpgid(engine_pid as i32) }, engine_pid as i32, "{how}: the engine does not lead its own process group");
+        assert_eq!(unsafe { libc::getpgid(grandchild as i32) }, engine_pid as i32, "{how}: the grandchild is not in the engine's process group");
+        if how == "stop" {
+            engine.stop().await;
+            assert!(engine.child.lock().unwrap().try_wait().unwrap().is_some(), "{how}: the engine child is still running");
+            assert!(gone_within_five_seconds(grandchild).await, "{how}: the grandchild outlived the engine");
+            drop(engine);
+        } else {
+            drop(engine);
+            assert!(gone_within_five_seconds(engine_pid).await, "{how}: the engine child outlived its handle");
+            assert!(gone_within_five_seconds(grandchild).await, "{how}: the grandchild outlived the engine");
+        }
+        leftovers.disarm();
+    }
+}
+
+/// Listens on `127.0.0.1:<port>` (`port=<port>`) as a loaded engine does: answers each request
+/// with 200 and appends its request line to the file named by `request-log=<path>`. It ends
+/// itself after 60 seconds, so that an orphan a failed run leaves behind does not stay long.
+#[test]
+#[ignore = "listening engine helper, run only by a_killed_parent_takes_its_engine_with_it_on_linux_and_a_macos_orphan_blocks_the_next_start"]
+fn listening_child_helper() {
+    use std::io::{BufRead, Write as _};
+    if !probing() { return; }
+    let argument = |name: &str| std::env::args().find_map(|arg| arg.strip_prefix(name).map(str::to_owned)).unwrap();
+    let listener = std::net::TcpListener::bind(("127.0.0.1", argument("port=").parse::<u16>().unwrap())).unwrap();
+    let log = PathBuf::from(argument("request-log="));
+    std::thread::spawn(|| { std::thread::sleep(Duration::from_secs(60)); std::process::exit(0); });
+    for mut stream in listener.incoming().flatten() {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut request = String::new();
+        if std::io::BufReader::new(&stream).read_line(&mut request).is_ok_and(|read| read > 0) {
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log) { let _ = file.write_all(request.as_bytes()); }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}");
+        }
+    }
+}
+
+/// Holds a helper engine, `listening_child_helper` with this helper's `port=` and `request-log=`
+/// arguments, started through the launcher's `command` (with, on Linux, its parent-death
+/// signal); prints its process identifier, then sleeps until it is killed.
+#[tokio::test]
+#[ignore = "parent-death parent helper, run only by a_killed_parent_takes_its_engine_with_it_on_linux_and_a_macos_orphan_blocks_the_next_start"]
+async fn parent_death_parent_helper() {
+    if !probing() { return; }
+    let passed: Vec<String> = std::env::args().filter(|arg| arg.starts_with("port=") || arg.starts_with("request-log=")).collect();
+    let args: Vec<&str> = helper_args("engine_runtime::tests::listening_child_helper").into_iter().chain(passed.iter().map(String::as_str)).collect();
+    let engine = ManagedEngine::helper_running_for_test("test/helper", "http://127.0.0.1:1", &args);
+    println!("engine-pid\t{}", engine.observation.pid);
+    std::io::stdout().flush().unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+    drop(engine);
+}
+
+/// Requirement 11's abrupt end of the daemon. A parent helper that started a listening engine
+/// child through the launcher's `command` is killed with `SIGKILL`, so no `Drop` or `stop` runs.
+/// - On Linux the parent-death signal ends the child within five seconds, and a launch on the
+///   same endpoint then passes the occupied-port check.
+/// - macOS has no parent-death signal (*A macOS orphan blocks the next start instead of being
+///   adopted*): the child outlives its parent and keeps listening, and a launch with the same
+///   endpoint fails with the occupied-port error. The orphan is neither used (it logged no
+///   request) nor signalled (it still runs and accepts a connection); the test then removes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_killed_parent_takes_its_engine_with_it_on_linux_and_a_macos_orphan_blocks_the_next_start() {
+    use std::io::BufRead;
+    /// Kills and reaps the parent helper, also after a failed assertion.
+    struct Parent(std::process::Child);
+    impl Drop for Parent {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let request_log = directory.path().join("requests.log");
+    let port = unused_port();
+    let endpoint = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut parent = Parent(std::process::Command::new(std::env::current_exe().unwrap())
+        .args(helper_args("engine_runtime::tests::parent_death_parent_helper"))
+        .arg(format!("port={port}")).arg(format!("request-log={}", request_log.display()))
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap());
+    let mut lines = std::io::BufReader::new(parent.0.stdout.take().unwrap()).lines();
+    let engine = lines.by_ref().map_while(Result::ok).find_map(|line| line.strip_prefix("engine-pid\t").and_then(|pid| pid.parse::<u32>().ok()))
+        .expect("the parent helper printed no engine process identifier");
+    let leftovers = Leftovers(vec![engine]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !connects(endpoint).await {
+        assert!(std::time::Instant::now() < deadline, "the engine child never listened");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(exists(engine), "the engine child is not running");
+    // Abrupt: `SIGKILL`, so the parent runs no `Drop` or `stop`.
+    drop(parent);
+    let (_fixture, mut config) = fixture();
+    config.engine_url = format!("http://{endpoint}");
+    if cfg!(target_os = "linux") {
+        assert!(gone_within_five_seconds(engine).await, "the engine child outlived its killed parent");
+        let error = ManagedEngine::start(&config).await.err().unwrap();
+        assert!(failed_after_port_check(&error), "{error}");
+    } else {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(exists(engine), "the engine child ended with its parent although this platform has no parent-death signal");
+        assert_eq!(ManagedEngine::start(&config).await.err().as_deref(), Some(OCCUPIED_ENGINE_PORT));
+        assert!(exists(engine), "the launch signalled the orphan");
+        assert!(connects(endpoint).await, "the orphan stopped listening");
+        assert_eq!(std::fs::read_to_string(&request_log).unwrap_or_default(), "", "the launch used the orphan");
+        unsafe { libc::kill(engine as i32, libc::SIGKILL); }
+        assert!(gone_within_five_seconds(engine).await, "the orphan was not removed");
+    }
+    leftovers.disarm();
 }

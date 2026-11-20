@@ -1,14 +1,15 @@
 //! Process tests of `chiral_daemon` with a development configuration whose CPU managed runtime's
 //! `llama-server` is a full copy of this test binary, inventoried (`managed-engine-runtime`
-//! requirements 2, 6 and 11, tasks 2.1, 2.3 and 3.2; `provider-daemon-lifecycle` requirement 11,
-//! task 2.2).
+//! requirements 2, 6, 9 and 11, tasks 2.1, 2.3, 3.2, 3.9 and 3.11; `provider-daemon-lifecycle`
+//! requirement 11, task 2.2).
 //!
 //! This target has `harness = false` (Cargo.toml): libtest would reject the launcher's
 //! `llama-server` arguments, so `main` acts as the stub engine when it runs under that name: it
-//! records its process id next to its key file and sleeps without answering health, or, when the
-//! file `SERVES_HEALTH` is next to its key file, answers `GET /health` on its configured address,
-//! so that the daemon starts and serves. Under any other name it runs the tests below in
-//! sequence; a name given on the command line filters them.
+//! records its process id next to its key file, and appends it to the log of engine starts there,
+//! and sleeps without answering health; when the file `SERVES_HEALTH` is next to its key file, it
+//! also answers `GET /health` on its configured address, so that the daemon starts and serves;
+//! when the file `EXITS_AT_ONCE` is there, it exits at once instead. Under any other name it runs
+//! the tests below in sequence; a name given on the command line filters them.
 use chiral_network::{
     engine_runtime::{ENGINE_VERSION, SOURCE_REVISION},
     network::{ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
@@ -25,6 +26,10 @@ const ENGINE: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-serve
 const HELPER_PID: &str = "engine-helper.pid";
 /// Beside the engine key file: the stub engine answers its health check.
 const SERVES_HEALTH: &str = "engine-serves-health";
+/// Beside the engine key file: the stub engine exits at once, as an engine that cannot load does.
+const EXITS_AT_ONCE: &str = "engine-exits-at-once";
+/// Beside the engine key file: one line, the process id, per start of the stub engine.
+const ENGINE_STARTS: &str = "engine-starts.log";
 // Test-only credentials. The signing key has letters, so that letter case matters.
 const SIGNING_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ADMIN_TOKEN: &str = "private-test-operator-token-32-bytes";
@@ -56,6 +61,7 @@ fn main() {
         ("start_refuses_an_engine_key_that_repeats_another_credential_before_any_engine_starts", start_refuses_an_engine_key_that_repeats_another_credential_before_any_engine_starts),
         ("check_and_start_refuse_an_altered_inventory_before_any_engine_starts", check_and_start_refuse_an_altered_inventory_before_any_engine_starts),
         ("check_and_start_verify_every_managed_model", check_and_start_verify_every_managed_model),
+        ("an_engine_that_exits_before_readiness_fails_the_start_without_a_second_launch", an_engine_that_exits_before_readiness_fails_the_start_without_a_second_launch),
     ];
     #[cfg(unix)]
     tests.extend([
@@ -99,6 +105,12 @@ fn engine_stub() {
         let temporary = directory.join(format!("{HELPER_PID}.tmp"));
         if std::fs::write(&temporary, std::process::id().to_string()).is_ok() {
             let _ = std::fs::rename(&temporary, directory.join(HELPER_PID));
+        }
+        if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(directory.join(ENGINE_STARTS)) {
+            let _ = writeln!(log, "{}", std::process::id());
+        }
+        if directory.join(EXITS_AT_ONCE).exists() {
+            std::process::exit(3);
         }
     }
     if directory.is_some_and(|directory| directory.join(SERVES_HEALTH).exists()) {
@@ -227,6 +239,10 @@ impl Provider {
     /// The stub engine's process id, once a launched stub has recorded it.
     fn helper(&self) -> Option<u32> {
         std::fs::read_to_string(self.directory.join(HELPER_PID)).ok()?.trim().parse().ok()
+    }
+    /// The process ids of the stub engine's starts, in order.
+    fn engine_starts(&self) -> Vec<String> {
+        std::fs::read_to_string(self.directory.join(ENGINE_STARTS)).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 }
 
@@ -512,6 +528,28 @@ fn check_and_start_verify_every_managed_model(runtime: &Runtime) {
     let _ = first;
 }
 
+/// Task 3.9 (requirement 9): an engine that exits before its health check succeeds fails the
+/// daemon's start, and nothing starts it again. The stub engine, which logs each of its starts,
+/// exits at once; its endpoint never answers. With a startup timeout of 600 seconds, the daemon
+/// exits nonzero with the exited-before-readiness error, without serving, after exactly one start
+/// of the engine. `--check` started none.
+fn an_engine_that_exits_before_readiness_fails_the_start_without_a_second_launch(runtime: &Runtime) {
+    let provider = runtime.provider("exits-at-once", "engine.token", None);
+    std::fs::write(provider.directory.join(EXITS_AT_ONCE), b"").unwrap();
+    let output = provider.daemon(true).output().unwrap();
+    assert!(output.status.success(), "{}", describe(&output));
+    assert!(provider.engine_starts().is_empty(), "--check started the engine");
+    let mut run = spawn(&provider);
+    let status = wait(&mut run.daemon, Duration::from_secs(120)).unwrap_or_else(|| panic!("the daemon kept starting\n{}", logs(&provider)));
+    let report = logs(&provider);
+    assert!(!status.success(), "{status:?}\n{report}");
+    assert!(report.contains("managed engine exited before readiness"), "{report}");
+    assert!(!report.contains("Chiral provider public="), "the daemon served\n{report}");
+    let starts = provider.engine_starts();
+    assert_eq!(starts.len(), 1, "engine starts {starts:?}\n{report}");
+    assert_eq!(provider.helper().map(|pid| pid.to_string()).as_ref(), starts.first(), "{report}");
+}
+
 /// Whether a process exists and is not merely a zombie awaiting its reaper.
 #[cfg(unix)]
 fn exists(pid: u32) -> bool {
@@ -616,6 +654,9 @@ fn ledgers(provider: &Provider) -> Vec<PathBuf> {
 /// is free, and the deployment's state is kept: the DHT identity is unchanged and the ledger is
 /// still there, and a restart serves the same deployment (the same peer identity), which it then
 /// leaves the same way. The `SIGTERM` case is the control: `SIGHUP` must exit like it.
+/// `managed-engine-runtime` task 3.11 (requirement 11, *Normal shutdown stops the engine*): the
+/// engine process no longer exists at the moment the daemon has exited, observed before the
+/// daemon is reaped, so the daemon stopped and reaped it first.
 #[cfg(unix)]
 fn termination_while_serving_stops_the_engine_and_keeps_the_deployment(runtime: &Runtime, signal: libc::c_int, name: &str) {
     let provider = runtime.provider(name, "engine.token", None);
@@ -638,21 +679,44 @@ fn termination_while_serving_stops_the_engine_and_keeps_the_deployment(runtime: 
 
         let signalled = Instant::now();
         assert_eq!(unsafe { libc::kill(run.daemon.id() as libc::pid_t, signal) }, 0);
-        let status = wait(&mut run.daemon, Duration::from_secs(90));
+        let engine_at_exit = engine_existed_at_exit(&run.daemon, helper, Duration::from_secs(90));
+        let status = wait(&mut run.daemon, Duration::from_secs(5));
         let exited = signalled.elapsed();
         while exists(helper) && signalled.elapsed() < exited + Duration::from_secs(5) { std::thread::sleep(Duration::from_millis(20)); }
         let engine_survived = exists(helper);
         let port_free = std::net::TcpListener::bind(("127.0.0.1", provider.engine)).is_ok();
-        let report = format!("{start}: status {status:?} after {exited:?}, engine survived {engine_survived}, engine port free {port_free}\n{}", logs(&provider));
+        let report = format!("{start}: status {status:?} after {exited:?}, engine existed at the daemon's exit {engine_at_exit:?}, engine survived {engine_survived}, engine port free {port_free}\n{}", logs(&provider));
         // Exited by itself through the shutdown path, not by the signal's default action.
         let status = status.unwrap_or_else(|| panic!("the daemon did not exit\n{report}"));
         assert_eq!(status.code(), Some(0), "{report}");
+        assert_eq!(engine_at_exit, Some(false), "the engine process still existed when the daemon exited\n{report}");
         assert!(!engine_survived, "the engine child outlived the daemon\n{report}");
         assert!(port_free, "the engine port is still occupied\n{report}");
         assert_eq!(std::fs::read(provider.directory.join("dht.key")).unwrap(), state.1, "{report}");
         assert_eq!(ledgers(&provider), state.2, "{report}");
         deployment = Some(state);
     }
+}
+
+/// Waits, at most `timeout`, until `daemon` has exited, without reaping it, and reports whether
+/// process `engine` existed at that moment (`None` when the daemon did not exit in time). The
+/// daemon is then a zombie, so its exit is complete: an engine that it killed but did not reap
+/// would still exist, as a zombie awaiting its new parent, and one it did not kill, alive.
+#[cfg(unix)]
+fn engine_existed_at_exit(daemon: &Child, engine: u32, timeout: Duration) -> Option<bool> {
+    let pid = daemon.id();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let waited = loop {
+            // SAFETY: an all-zero `siginfo_t` is valid output storage for `waitid`, which with
+            // `WNOWAIT` leaves the child waitable for the reaping `wait` that follows.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+            if waited == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { break waited; }
+        };
+        let _ = sender.send((waited == 0).then(|| exists(engine)));
+    });
+    receiver.recv_timeout(timeout).ok().flatten()
 }
 
 #[cfg(unix)]
