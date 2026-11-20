@@ -1,5 +1,22 @@
 # APAS progress
 
+## 2026-11-20 (sixty-eighth round) — Acceptance: stock-client modes, GGUF capability derivation, readiness probes, completion echo, embedding dimensions, tool output as data
+
+- In step at `1a147f92`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-public-inference-api` 3.2 and 3.7–3.11). New tests:
+  - 3.2: both generation routes give one JSON object without `stream` and an SSE stream with it, with only a bearer and no Chiral header; SDK-shaped requests over real HTTP/1 under the origin plus `/v1` reach the listing and both generation routes through the merged public router.
+  - 3.7: `provision-model.py` runs against an injected `huggingface_hub` stand-in (no install, no network): a generation GGUF derives `chat` only from a selected embedded template, an embedding GGUF with a template derives only `embeddings`, a tool-use template and model-card claims add no capability, and only GGUF files prepare or run a model.
+  - 3.8: a new `ProbeEngine` stand-in records each readiness probe; readiness sends the exact probe sequence through the public preparation, requires the engine-reported identifier, alias, context and template digest, fails on any advertised probe fault, keeps a model unadmitted and unpublished until it passes, and withdraws a ready model whose later probe fails (operator-owned and managed).
+  - 3.9: echo returns the exact prompt (the literal `Hello` / `' world'` case and a multibyte prompt), `logprobs: null` on the prompt event, generated-only log-probabilities with offsets after the prompt, in both modes and with or without log-probabilities, billed and timed as generated tokens only; a stop at the full context is accepted only with consistent usage.
+  - 3.10: vectors keep the native dimension; a batch of unequal or unrequested lengths is a failure, not a success.
+  - 3.11: a tool call and generated text are returned as data and never acted on; parallel tool-call fragments are reassembled by their index; remote schema references and non-function tools are refused and nothing is fetched.
+- Two code differences were found and fixed, both low severity:
+  - Difference 5 (task 3.9): the qualification runner's paid echo probe (`probe_completion_echo`, `scripts/qualify-provider.py`) accepted log-probabilities covering the prompt's tokens or offsets from the start of the prompt. It now requires one entry per generated token in each list and a first offset equal to the prompt's length. The Rust gateway was not affected.
+  - Difference 6 (task 3.8, found by the review): readiness accepted a streamed probe that returned none of the log-probabilities it asked for, so such a model was admitted and published. `probe` (inference_backend.rs) now requires at least one generated-token entry before `[DONE]` when the probe asked for them; the public request path is unchanged. Task 4.1 now also asks for pinned-engine evidence that a real chat and completions model still passes.
+- The author ran 27 mutations and the review 14 more; each was caught by an assertion. Mutations that first passed (a runner checking only one list's length, an index-blind tool-call collector, a replaced tool name, echo honoured only with log-probabilities, a larger engine context accepted) were caught after cases were added. The only seam is `inference_backend::tests` becoming `pub(crate)` so `app::tests` can share `ProbeEngine`.
+- 3.7–3.11 are ticked. 3.2 stays open only for the automated runs of `examples/openai_client.py` and `examples/openai-client.mjs`, blocked because the Python and Node `openai` packages are not installed (shared with account-credentials 3.8). Observation, not a difference: with `stream_options.include_usage`, intermediate chunks' `usage` from an engine is forwarded; the pinned llama.cpp is not known to send one (to check in 4.1).
+- Checks: full suite under caffeinate: bins build passes; 28 headless test targets, 677 passed, 12 ignored (helpers), 0 failed (`--lib` 398); desktop `--lib desktop::` 4/4; `npm test` 70/70; `python3 -m unittest discover -s scripts` 68 OK; strict validation passes.
+
 ## 2026-11-20 (sixty-seventh round) — Acceptance: public surface, agreement-scoped listing, capability admission, body handling, honest failures, text-only inference
 
 - In step at `08fcbbd3`; whitepaper unchanged; no new answers.
@@ -753,7 +770,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api 3.2 and 3.7–3.11, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api (3.x done on this host; 3.2 needs the SDK example runs), provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

@@ -475,6 +475,8 @@ Separately, the spec records four code differences, not questions (tasks 2.1–2
 
 Difference 2 depends partly on question 3. The review also notes that the code may hash the raw engine template while provisioning uses the normalized digest; only a pinned-engine run can settle that (task 4.1).
 
+Two more code differences were found on 2026-11-20 by the acceptance tests of tasks 3.8 and 3.9 and fixed the same day (design code differences 5 and 6): the qualification runner's paid echo probe accepted log-probabilities covering the prompt or offsets from the prompt's start, and readiness accepted a streamed probe that returned none of the log-probabilities it asked for. Whether the pinned engine returns them for the probes' one generated token is part of task 4.1.
+
 Nonblocking: no requirement or task waits on these answers. Option (a) of questions 1, 2 or 4, or option (a) or (b) of question 3, would add a task.
 
 ## 2026-11-20 — Provider daemon lifecycle: drain across restarts, reopening after a settlement failure, startup publication, a lost ledger, automatic restarts and hang-up signals

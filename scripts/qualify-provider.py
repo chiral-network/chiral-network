@@ -164,9 +164,16 @@ def probe_completion_echo(args, model, token):
                   "temperature": 0, "echo": True, "logprobs": 0}, token, key) as response:
         value = json.loads(response.read(MAX_BYTES + 1))
         request_id = response.headers.get("X-Request-Id", key)
+    logprobs = value["choices"][0].get("logprobs")
+    generated = value["usage"]["completion_tokens"]
+    # Log-probabilities cover the generated tokens only, and their text offsets start
+    # after the echoed prompt (public-inference-api requirement 9).
     if (not value["choices"][0]["text"].startswith(prompt)
-            or not isinstance(value["choices"][0].get("logprobs"), dict)
-            or value["usage"]["completion_tokens"] != 1):
+            or not isinstance(logprobs, dict)
+            or generated != 1
+            or any(not isinstance(logprobs.get(field), list) or len(logprobs[field]) != generated
+                   for field in ("tokens", "token_logprobs", "top_logprobs", "text_offset"))
+            or logprobs["text_offset"][0] != len(prompt)):
         raise ValueError("public completion echo/logprobs contract failed")
     view = get_json(args.gateway_url, "/v1/requests/" + request_id, token)
     if view["status"] != "completed" or view["usage"] != value["usage"]:

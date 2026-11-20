@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Behavioral regressions for offline GGUF/runtime supply-chain validation."""
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -8,9 +9,12 @@ from pathlib import Path
 import shutil
 import stat
 import struct
+import sys
 import tarfile
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 import zipfile
 
 
@@ -222,6 +226,126 @@ class ArtifactValidation(unittest.TestCase):
         (self.root / model.INVENTORY).write_text('{"schema":1,"schema":2}')
         with self.assertRaisesRegex(ValueError, 'duplicate'):
             model.validate_artifact(self.root)
+
+
+class ProvisioningCapabilities(unittest.TestCase):
+    """public-inference-api requirement 7 (task 3.7): `provision-model.py` itself, run end to
+    end against a stand-in for `huggingface_hub` that serves the GGUF bytes of one pinned
+    commit, derives `completions` for generation, adds `chat` only when an embedded template
+    is selected, derives exactly `embeddings` for the embedding task, and adds no `tools`,
+    `structured_output` or `streaming` because of a model card, a repository or file name or
+    embedded metadata. No network, download or Hub package is used."""
+    REVISION = 'c' * 40
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+
+    def provision(self, files, output, task='generation', template_name=None,
+                  repo='owner/model-GGUF', card=None):
+        """Runs `main()` for `files` (selected name -> GGUF bytes) of `repo` at REVISION and
+        returns the verified base ModelSpec, the task and the inventory manifest."""
+        cache = self.base / ('hub-cache-' + output)
+        siblings = []
+        for name, data in files.items():
+            target = cache / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            siblings.append(types.SimpleNamespace(rfilename=name, blob_id=None,
+                lfs=types.SimpleNamespace(sha256=hashlib.sha256(data).hexdigest())))
+        info = types.SimpleNamespace(sha=self.REVISION, siblings=siblings,
+                                     card_data=dict(card or {}, license='mit'))
+        hub = types.ModuleType('huggingface_hub')
+        hub.HfApi = lambda: types.SimpleNamespace(
+            model_info=lambda repo_id, revision, files_metadata: info)
+        hub.hf_hub_download = lambda repo_id, filename, revision: str(cache / filename)
+        root = self.base / output
+        argv = ['provision-model.py', '--output', str(root), '--repo', repo,
+                '--revision', self.REVISION, '--task', task, '--context-length', '512',
+                '--accept-license', 'mit']
+        for name in files:
+            argv += ['--gguf-file', name]
+        if template_name:
+            argv += ['--chat-template-name', template_name]
+        with patch.dict(sys.modules, {'huggingface_hub': hub}), patch.object(sys, 'argv', argv), \
+                contextlib.redirect_stdout(io.StringIO()):
+            model.main()
+        base, verified_task = model.validate_artifact(root)
+        return base, verified_task, model.load_json(root / model.INVENTORY)
+
+    def test_generation_derives_chat_only_from_a_selected_embedded_template(self):
+        template = '{{ messages }}\n'
+        base, task, manifest = self.provision({'with-template.gguf': gguf_bytes(template=template)}, 'templated')
+        self.assertEqual((task, base['capabilities'], manifest['capabilities']),
+                         ('generation', ['chat', 'completions'], ['chat', 'completions']))
+        self.assertEqual((self.base / 'templated' / 'chiral-chat-template.jinja').read_bytes(), template.encode())
+        self.assertEqual(base['chat_template_sha256'], hashlib.sha256(b'{{ messages }}').hexdigest())
+        # The artifact identity: the full revision, the GGUF inventory, the quantization and
+        # the template hash; the tokenizer revision is the GGUF revision.
+        self.assertEqual((base['revision'], base['tokenizer_revision'], base['quantization']),
+                         (self.REVISION, self.REVISION, 'F32'))
+        self.assertEqual(set(manifest['files']), {'with-template.gguf', 'chiral-chat-template.jinja'})
+
+        base, task, manifest = self.provision({'without-template.gguf': gguf_bytes(template='')}, 'untemplated')
+        self.assertEqual((task, base['capabilities'], manifest['capabilities']),
+                         ('generation', ['completions'], ['completions']))
+        self.assertFalse((self.base / 'untemplated' / 'chiral-chat-template.jinja').exists())
+        self.assertEqual(set(manifest['files']), {'without-template.gguf'})
+        self.assertEqual(manifest['chat_template_name'], None)
+
+    def test_an_embedding_gguf_with_an_embedded_template_derives_only_embeddings(self):
+        embedding = gguf_bytes(extra={'llama.pooling_type': (4, 1), 'llama.attention.causal': (7, 0)},
+                               template='{{ messages }}')
+        base, task, manifest = self.provision({'embed.gguf': embedding}, 'embedding', task='embeddings')
+        self.assertEqual((task, base['capabilities'], base['max_output_tokens']), ('embeddings', ['embeddings'], 0))
+        self.assertEqual(base['chat_template_sha256'], hashlib.sha256(b'').hexdigest())
+        self.assertEqual(set(manifest['files']), {'embed.gguf'})
+        self.assertFalse((self.base / 'embedding' / 'chiral-chat-template.jinja').exists())
+        # Selecting the embedded template for the embedding task is refused, and nothing stays.
+        with self.assertRaisesRegex(ValueError, 'cannot select'):
+            self.provision({'embed.gguf': embedding}, 'embedding-with-template', task='embeddings',
+                           template_name='default')
+        self.assertFalse((self.base / 'embedding-with-template').exists())
+
+    def test_a_tool_use_template_and_model_card_claims_add_no_capability(self):
+        claims = ['function-calling', 'tool-use', 'tools', 'json-mode', 'structured-output', 'streaming']
+        gguf = gguf_bytes(template='', extra={
+            'tokenizer.chat_template.tool_use': (8, '{% for tool in tools %}{{ tool }}{% endfor %}{{ messages }}'),
+            'general.name': (8, 'Tools JSON-Schema Streaming Function-Calling Instruct'),
+            'general.tags': (9, claims)})
+        files = {'tools-json-schema-streaming-function-calling-F32.gguf': gguf}
+        repo = 'owner/Tools-JSON-Streaming-Function-Calling-GGUF'
+        card = {'tags': claims, 'pipeline_tag': 'text-generation', 'library_name': 'transformers'}
+        base, task, manifest = self.provision(files, 'tool-use', template_name='tool_use', repo=repo, card=card)
+        self.assertEqual((task, base['capabilities'], manifest['capabilities']),
+                         ('generation', ['chat', 'completions'], ['chat', 'completions']))
+        for claimed in ('tools', 'structured_output', 'streaming'):
+            self.assertNotIn(claimed, base['capabilities'])
+        self.assertEqual(manifest['chat_template_name'], 'tool_use')
+        self.assertEqual((self.base / 'tool-use' / 'chiral-chat-template.jinja').read_text(),
+                         '{% for tool in tools %}{{ tool }}{% endfor %}{{ messages }}')
+        # Only named templates: one must be selected explicitly; nothing is chosen for it.
+        with self.assertRaisesRegex(ValueError, 'explicit named'):
+            self.provision(files, 'tool-use-unselected', repo=repo, card=card)
+        self.assertFalse((self.base / 'tool-use-unselected').exists())
+
+    def test_only_gguf_files_prepare_or_execute_a_model(self):
+        # No separate tokenizer, safetensors or code path is selectable or accepted.
+        for name in ('model.safetensors', 'tokenizer.json', 'tokenizer.model', 'modeling.py'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'only GGUF'):
+                model.shard_names([name])
+        root = self.base / 'artifact'
+        manifest = make_artifact(root)
+        (root / 'tokenizer.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'missing or unexpected'):
+            model.validate_artifact(root)
+        manifest['files']['tokenizer.json'] = {'sha256': model.sha256_file(root / 'tokenizer.json'),
+            'size_bytes': (root / 'tokenizer.json').stat().st_size, 'upstream_repo': None,
+            'upstream_path': None, 'upstream_digest': None}
+        (root / model.INVENTORY).write_bytes(model.canonical_json(manifest))
+        with self.assertRaisesRegex(ValueError, 'unexpected artifact file'):
+            model.validate_artifact(root)
 
 
 class RuntimeValidation(unittest.TestCase):

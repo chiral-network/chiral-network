@@ -3271,4 +3271,221 @@ mod tests {
             server.abort();
         }
     }
+
+    /// public-inference-api requirement 2 (task 3.2), scenarios "A stock client uses both modes
+    /// with only its bearer" and "The base URL is the origin plus /v1", short of a run of the
+    /// OpenAI SDKs themselves: a started development provider whose chat and completions model
+    /// passed its real readiness probes against `ProbeEngine` serves its merged public router on a
+    /// real HTTP/1 listener. Requests shaped as the OpenAI Python SDK sends them (its base URL is
+    /// the origin plus `/v1`, joined with `/models`, `/chat/completions`, `/completions` and
+    /// `/requests/:id`; its own `Accept`, `User-Agent` and `X-Stainless-*` headers; the exported
+    /// bearer; no `X-Chiral-Client-Version` and no `Idempotency-Key`) reach the listing, both
+    /// generation routes in both modes, and request status. Non-streaming answers are one JSON
+    /// object; streams are `text/event-stream` ending with `[DONE]`, with exactly one usage
+    /// event when `stream_options.include_usage` asks and none otherwise. No answer carries
+    /// engine instrumentation.
+    #[tokio::test]
+    async fn sdk_shaped_requests_under_the_origin_plus_v1_reach_the_listing_and_both_generation_routes() {
+        use crate::inference_backend::tests::{ProbeEngine, PROBE_TEMPLATE};
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["chat".into(), "completions".into()];
+        model.model.chat_template_sha256 = hex::encode(Sha256::digest(PROBE_TEMPLATE));
+        model.request_timeout_secs = 30;
+        let engine = ProbeEngine::start(&model.model, 1).await;
+        model.engine_url = engine.base.clone();
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert!(runtime.health.read().await[0].ready, "{:?}", runtime.health.read().await);
+        let (_, bearer) = free_account(&runtime.state, "22");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let app = runtime.public_router();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let base_url = format!("{origin}/v1");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let sdk = |request: reqwest::RequestBuilder| request
+            .bearer_auth(&bearer)
+            .header("accept", "application/json")
+            .header("user-agent", "OpenAI/Python 1.99.9")
+            .header("x-stainless-lang", "python")
+            .header("x-stainless-package-version", "1.99.9")
+            .header("x-stainless-os", "MacOS")
+            .header("x-stainless-arch", "arm64")
+            .header("x-stainless-runtime", "CPython")
+            .header("x-stainless-runtime-version", "3.12.7")
+            .header("x-stainless-async", "false")
+            .header("x-stainless-retry-count", "0")
+            .header("x-stainless-read-timeout", "120.0");
+        // The answer's status, content type, request identifier and text.
+        let send = |request: reqwest::RequestBuilder| async move {
+            let response = request.send().await.unwrap();
+            let status = response.status().as_u16();
+            let header = |name: &str| response.headers().get(name).map(|value| value.to_str().unwrap().to_owned());
+            let (content_type, id) = (header("content-type"), header("x-request-id"));
+            let text = response.text().await.unwrap();
+            for private in ["token_ids", "timings", "__verbose", "chiral_echo", "n_probs"] {
+                assert!(!text.contains(private), "{private} in an answer: {text}");
+            }
+            (status, content_type, id, text)
+        };
+        let events = |text: &str| -> (Vec<Value>, bool) {
+            let data: Vec<&str> = text.split("\n\n").filter_map(|event| event.strip_prefix("data: ")).collect();
+            (data.iter().filter(|data| **data != "[DONE]").map(|data| serde_json::from_str(data).unwrap()).collect(),
+                data.last() == Some(&"[DONE]"))
+        };
+
+        let (status, _, _, text) = send(sdk(client.get(format!("{base_url}/models")))).await;
+        assert_eq!(status, 200, "{text}");
+        let listing: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((listing["object"].as_str(), listing["data"][0]["id"].as_str()), (Some("list"), Some("model")), "{text}");
+        let mut identifiers = Vec::new();
+        for (route, output) in [("chat/completions", "OK"), ("completions", "B")] {
+            let chat = route == "chat/completions";
+            let mut body = if chat {
+                json!({"model":"model","messages":[{"role":"user","content":"Say OK"}],"max_tokens":4})
+            } else {
+                json!({"model":"model","prompt":"A","max_tokens":4})
+            };
+            let (status, content_type, id, text) = send(sdk(client.post(format!("{base_url}/{route}"))).json(&body)).await;
+            assert_eq!((status, content_type.as_deref()), (200, Some("application/json")), "{route}: {text}");
+            let answer: Value = serde_json::from_str(&text).unwrap();
+            let object = if chat { "chat.completion" } else { "text_completion" };
+            let generated = if chat { &answer["choices"][0]["message"]["content"] } else { &answer["choices"][0]["text"] };
+            assert_eq!((answer["object"].as_str(), generated.as_str()), (Some(object), Some(output)), "{route}: {text}");
+            assert_eq!(answer["usage"], json!({"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}), "{route}");
+            identifiers.push(id.unwrap());
+            for include_usage in [true, false] {
+                body["stream"] = json!(true);
+                body["stream_options"] = json!({"include_usage":include_usage});
+                let (status, content_type, id, text) = send(sdk(client.post(format!("{base_url}/{route}"))).json(&body)).await;
+                assert_eq!((status, content_type.as_deref()), (200, Some("text/event-stream")), "{route}: {text}");
+                let (events, done) = events(&text);
+                assert!(done, "{route}: {text}");
+                let streamed: String = events.iter().filter_map(|event| {
+                    let choice = event["choices"].get(0)?;
+                    if chat { choice["delta"]["content"].as_str() } else { choice["text"].as_str() }
+                }).collect();
+                assert_eq!(streamed, output, "{route}: {text}");
+                let usage: Vec<&Value> = events.iter().filter(|event| !event["usage"].is_null()).collect();
+                assert_eq!(usage.len(), usize::from(include_usage), "{route}, include_usage {include_usage}: {text}");
+                if include_usage {
+                    assert_eq!(events.last().unwrap()["choices"], json!([]), "{route}: {text}");
+                }
+                identifiers.push(id.unwrap());
+            }
+        }
+        for id in identifiers {
+            let (status, _, _, text) = send(sdk(client.get(format!("{base_url}/requests/{id}")))).await;
+            assert_eq!(status, 200, "{text}");
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["status"], "completed", "{text}");
+        }
+        server.abort();
+        runtime.dht.stop().await;
+        unavailable.abort();
+    }
+
+    /// One chat request with `Idempotency-Key: key` through the public router.
+    async fn chat_request(runtime: &Arc<ProviderRuntime>, bearer: &str, key: &str) -> (StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = runtime.public_router().oneshot(Request::builder().method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("idempotency-key", key)
+            .body(axum::body::Body::from(json!({"model":"model","messages":[{"role":"user","content":"hello"}],
+                "max_tokens":4}).to_string()))
+            .unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// Asserts that the only model of `runtime` is not ready: its health entry is not ready, it is
+    /// not qualified and the provider is not new-funding ready; no offer is published (the DHT
+    /// reports none, and `/admin/offers` and the bearer's `GET /v1/models` list none); and a chat
+    /// request is refused before it reaches the engine or is recorded.
+    async fn assert_not_ready_admitted_or_published(runtime: &Arc<ProviderRuntime>,
+        engine: &crate::inference_backend::tests::ProbeEngine, bearer: &str, case: &str) {
+        let key = &case.replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+        let health = runtime.health.read().await.clone();
+        assert!(!health[0].ready && health[0].detail.starts_with("Not ready"), "{key}: {health:?}");
+        assert!(runtime.state.qualified_model(&runtime.state.config.models[0].model).is_none(), "{key}");
+        assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{key}");
+        assert_eq!(runtime.dht.status().await["published_offers"], 0, "{key}");
+        assert_eq!(offers_and_listing(runtime, bearer).await, (vec![], vec![]), "{key}");
+        let seen = engine.requests();
+        let (status, answer) = chat_request(runtime, bearer, key).await;
+        assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("provider_paused")), "{key}: {answer}");
+        assert_eq!(engine.requests(), seen, "{key}: the refused request reached the engine");
+        assert!(runtime.state.ledger.list_requests().unwrap().is_empty(), "{key}: a request was recorded");
+    }
+
+    /// public-inference-api requirement 8 (task 3.8) through the provider, with scenarios "A
+    /// different template is not ready", "A healthy engine whose probe fails is not ready", "A
+    /// tool probe that produces no call" and "A structured-output probe that does not conform".
+    /// A development provider with a ready chain and one qualified (profiled, so DHT-published)
+    /// model advertising `chat`, `tools`, `structured_output` and `streaming`, on `ProbeEngine`:
+    /// - with the fault from the start (a served template of another digest, on an
+    ///   operator-owned and on a managed engine; a tool probe answered with text; a schema probe
+    ///   answered with non-conforming JSON; streams without final usage), the model is not ready,
+    ///   not admitted and not published;
+    /// - once the fault is gone, a refresh makes it ready and publishes one offer advertising
+    ///   those capabilities;
+    /// - when the fault returns while the model is idle, the next refresh withdraws it: it is
+    ///   no longer ready, admitted or listed, and its offer is withdrawn.
+    #[tokio::test]
+    async fn a_failed_readiness_probe_keeps_a_model_unadmitted_and_unpublished_and_withdraws_a_ready_one() {
+        use crate::inference_backend::tests::{ProbeEngine, PROBE_TEMPLATE};
+        use sha2::{Digest, Sha256};
+        for (fault, managed) in [("template", false), ("template", true), ("tool-text", false),
+            ("schema-extra", false), ("no-final-usage", false)] {
+            let case = format!("{fault} on {} engine", if managed { "a managed" } else { "an operator-owned" });
+            let directory = tempfile::tempdir().unwrap();
+            let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+            let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+            config.network.rpc_url = rpc;
+            let (mut model, mut report) = crate::performance::evidence_tests::fixture();
+            model.capabilities = ["chat", "tools", "structured_output", "streaming"].map(String::from).to_vec();
+            model.chat_template_sha256 = hex::encode(Sha256::digest(PROBE_TEMPLATE));
+            let version = crate::engine_runtime::ENGINE_VERSION;
+            model.serving.as_mut().unwrap().engine_version = version.into();
+            report["runtime_observation"]["engine_version"] = json!(version);
+            let evidence = directory.path().join("evidence.json");
+            crate::performance::evidence_tests::persist(&mut model, &mut report, &evidence);
+            let engine = ProbeEngine::start(&model, 1).await;
+            engine.set_fault(fault);
+            let deployment = &mut config.models[0];
+            deployment.model = model.clone();
+            deployment.engine_url = engine.base.clone();
+            deployment.qualification_evidence_file = Some(evidence);
+            deployment.request_timeout_secs = 30;
+            let mut engines = std::collections::HashMap::new();
+            if managed {
+                let helper = crate::engine_runtime::ManagedEngine::helper_for_test(&model.id, &engine.base);
+                engines.insert(model.id.clone(), Arc::new(helper));
+            }
+            let runtime = ProviderRuntime::start_with(config, engines).await.unwrap();
+            let (_, bearer) = free_account(&runtime.state, "22");
+            assert_not_ready_admitted_or_published(&runtime, &engine, &bearer, &format!("{case}: at start")).await;
+
+            engine.set_fault("");
+            assert_eq!(runtime.refresh().await, Ok(1), "{case}");
+            assert!(runtime.health.read().await[0].ready, "{case}");
+            assert!(runtime.state.qualified_model(&model).is_some(), "{case}");
+            assert_eq!(runtime.dht.status().await["published_offers"], 1, "{case}");
+            assert_eq!(offers_and_listing(&runtime, &bearer).await,
+                (vec![json!(["chat", "tools", "structured_output", "streaming"])], vec![json!("model")]), "{case}");
+
+            engine.set_fault(fault);
+            assert_eq!(runtime.refresh().await, Ok(0), "{case}");
+            assert_not_ready_admitted_or_published(&runtime, &engine, &bearer, &format!("{case}: withdrawn")).await;
+            runtime.dht.stop().await;
+            runtime.stop_engines().await;
+            for server in [rpc_server, unavailable] {
+                server.abort();
+            }
+        }
+    }
 }

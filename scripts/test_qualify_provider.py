@@ -195,6 +195,57 @@ class SamplingTests(unittest.TestCase):
         self.assertTrue(measure([[10], [11]], output_tokens=3)['error'])
 
 
+    def test_completion_echo_probe_requires_generated_only_logprobs_after_the_prompt(self):
+        """public-inference-api requirement 9 (task 3.9, design observation 7): the paid echo
+        probe accepts only the exact prompt before the generated text, log-probabilities with
+        one entry per generated token, and text offsets that start after the echoed prompt."""
+        prompt = 'Chiral immutable completion echo protocol.'
+        usage = {'prompt_tokens': 9, 'completion_tokens': 1, 'total_tokens': 10}
+        conforming = {'tokens': [' Yes'], 'token_logprobs': [-0.25], 'top_logprobs': [{}],
+                      'text_offset': [len(prompt)]}
+
+        def probe(logprobs, text=prompt + ' Yes'):
+            sent = []
+            answer = qualifier.canonical({'id': 'cmpl-1', 'object': 'text_completion', 'model': 'model',
+                'choices': [{'index': 0, 'text': text, 'logprobs': logprobs, 'finish_reason': 'length'}],
+                'usage': usage})
+            class Response(io.BytesIO):
+                headers = {'X-Request-Id': 'request-1'}
+            def request(base, path, body=None, token=None, key=None):
+                sent.append((path, body))
+                return Response(answer)
+            view = {'status': 'completed', 'usage': {'prompt_tokens': 9, 'completion_tokens': 1}}
+            args = SimpleNamespace(gateway_url='http://127.0.0.1:9419', journal=[])
+            with patch.object(qualifier, 'request', request), patch.object(qualifier, 'get_json', return_value=view):
+                qualifier.probe_completion_echo(args, {'id': 'model', 'capabilities': ['completions']}, 'not-a-real-credential')
+            return sent
+
+        sent = probe(conforming)
+        self.assertEqual(sent[0][0], '/v1/completions')
+        self.assertEqual((sent[0][1]['prompt'], sent[0][1]['echo'], sent[0][1]['logprobs'], sent[0][1]['max_tokens']),
+                         (prompt, True, 0, 1))
+        refused = {
+            'offsets from the start of the prompt': dict(conforming, text_offset=[0]),
+            'an offset inside the prompt': dict(conforming, text_offset=[len(prompt) - 1]),
+            'prompt tokens covered too': {'tokens': ['Chiral', ' immutable', ' Yes'], 'token_logprobs': [None, -1.0, -0.25],
+                                          'top_logprobs': [None, {}, {}], 'text_offset': [0, 6, len(prompt)]},
+            # Offsets after the prompt, but more entries than the one generated token.
+            'more entries than generated tokens': {'tokens': [' Yes', '!'], 'token_logprobs': [-0.25, -1.0],
+                                                   'top_logprobs': [{}, {}], 'text_offset': [len(prompt), len(prompt) + 4]},
+            'no text offsets': {key: value for key, value in conforming.items() if key != 'text_offset'},
+            'no generated tokens': dict(conforming, tokens=[], token_logprobs=[], top_logprobs=[], text_offset=[]),
+            'no log-probabilities': None,
+        }
+        # Each of the four arrays is checked on its own: one extra entry in any one is refused.
+        extra = {'tokens': '!', 'token_logprobs': -1.0, 'top_logprobs': {}, 'text_offset': len(prompt) + 4}
+        for field, entry in extra.items():
+            refused['an extra entry only in ' + field] = dict(conforming, **{field: conforming[field] + [entry]})
+        for case, logprobs in refused.items():
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, 'echo/logprobs contract'):
+                probe(logprobs)
+        with self.assertRaisesRegex(ValueError, 'echo/logprobs contract'):
+            probe(conforming, text='Chiral echo protocol. Yes')
+
     def test_private_endpoints_reject_dns_and_redirect_capable_origins(self):
         for origin in ('http://localhost:8000', 'http://example.com', 'http://127.0.0.1:8000/path', 'http://user@127.0.0.1'):
             with self.subTest(origin=origin), self.assertRaises(ValueError):

@@ -841,6 +841,8 @@ impl Backend {
             let mut arguments = String::new();
             let expected_echo = request.echo_prompt.as_deref().is_some();
             let mut echo_seen = false;
+            // Requested log-probabilities of generated tokens must arrive (requirement 8).
+            let mut logprobs_seen = false;
             let mut normalization = StreamNormalization::new(request.logprobs, request.echo_prompt.take(), self.config.model.context_length);
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|_| upstream_error())?;
@@ -851,7 +853,8 @@ impl Backend {
                 for byte in chunk {
                     if let Some(data) = decoder.byte(byte)? {
                         if data == b"[DONE]" {
-                            if !validation.finished || !validation.final_usage || (expected_echo && !echo_seen) {
+                            if !validation.finished || !validation.final_usage || (expected_echo && !echo_seen)
+                                || (request.logprobs.is_some() && !logprobs_seen) {
                                 return Err(upstream_error());
                             }
                             if request.body.get("tools").is_some()
@@ -867,6 +870,13 @@ impl Backend {
                         let value = serde_json::from_slice(&data).map_err(|_| upstream_error())?;
                         for mut value in normalization.events(value, endpoint)?.into_iter().flatten() {
                             validation.event(&mut value, &spec)?;
+                            // Public shape: chat `content`, completion `tokens`. The echoed
+                            // prompt's event has `logprobs: null`.
+                            let probabilities = &value["choices"][0]["logprobs"];
+                            if probabilities["content"].as_array().or_else(|| probabilities["tokens"].as_array())
+                                .is_some_and(|entries| !entries.is_empty()) {
+                                logprobs_seen = true;
+                            }
                             if value["chiral_echo"].as_bool() == Some(true) {
                                 echo_seen = value["choices"][0]["text"].as_str() == Some(ECHO_PROBE_PROMPT);
                             }
@@ -1468,7 +1478,7 @@ async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     fn model() -> ModelSpec {
         ModelSpec {
@@ -1962,5 +1972,528 @@ mod tests {
         assert_eq!(target_connections.load(Ordering::SeqCst), 0, "the redirect target was contacted");
         server.abort();
         target_task.abort();
+    }
+
+    /// The served chat template of `ProbeEngine` and of the models probed against it.
+    pub(crate) const PROBE_TEMPLATE: &str = "{{ messages }}";
+
+    /// A private llama.cpp stand-in for one model, on a loopback listener, that passes every
+    /// readiness probe of that model until a fault is set. It records every request it receives,
+    /// with its JSON body. `/props` reports the pinned build, the model's alias, its context,
+    /// the slot count given to `start` and the served template (also as the tool-use template).
+    /// `/tokenize` prepares any input into the token IDs `[1, 2]`. Chat answers `OK`, a tool
+    /// call `ping({})` when tools are offered, and `{}` when a response format is given;
+    /// completions answer the token `B`; embeddings are two-dimensional. Both generation routes
+    /// answer one JSON object, or in a stream one event per token (with log-probabilities and
+    /// the token's ID), a finish event and exact final usage.
+    ///
+    /// Faults (`set_fault`) apply to both modes, or only to streamed requests with the suffix
+    /// `-stream` and only to non-streaming ones with `-json`:
+    /// - identity: `unlisted` (no `/v1/models` entry for the model), `alias`, `context` (half
+    ///   the model's context), `larger-context` (twice the model's context), `template` (another
+    ///   template, of another digest, served as the chat and the tool-use template),
+    ///   `tool-template` (only another `chat_template_tool_use`);
+    /// - inference: `health-and-identity-only` (no inference route answers), `no-final-usage`,
+    ///   `prompt-usage` (one prompt token more than prepared), `excess-output` (one completion
+    ///   token more than authorized), `tool-text` (text instead of a call), `tool-name` (a call
+    ///   of `pong`), `tool-arguments` (`ping({"x":1})`), `schema-text` (`OK`), `schema-extra`
+    ///   (`{"extra":true}`), `merged-finish` (a completion stream whose only event carries its
+    ///   token, finish and usage at once), `malformed-logprobs` (each streamed token keeps its
+    ///   sampled ID, but its log-probability is not a number), `no-logprobs` (streamed tokens
+    ///   carry no log-probabilities, so chat tokens also carry no sampled ID),
+    ///   `embedding-usage` (a total that disagrees with the input count) and
+    ///   `embedding-base64-dimensions` (three dimensions in base64, two as floats).
+    pub(crate) struct ProbeEngine {
+        pub(crate) base: String,
+        fault: std::sync::Arc<std::sync::Mutex<&'static str>>,
+        log: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+    impl Drop for ProbeEngine {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+    impl ProbeEngine {
+        pub(crate) async fn start(spec: &ModelSpec, slots: u32) -> Self {
+            let fault = std::sync::Arc::new(std::sync::Mutex::new(""));
+            let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (active, recorded, spec) = (fault.clone(), log.clone(), spec.clone());
+            let engine = axum::Router::new().fallback(
+                move |method: axum::http::Method, uri: axum::http::Uri, body: axum::body::Bytes| {
+                    let (active, recorded, spec) = (active.clone(), recorded.clone(), spec.clone());
+                    async move {
+                        let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                        recorded.lock().unwrap().push((format!("{method} {}", uri.path()), body.clone()));
+                        let fault = *active.lock().unwrap();
+                        probe_engine_answer(&spec, slots, fault, uri.path(), &body)
+                    }
+                },
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() });
+            Self { base, fault, log, task }
+        }
+        pub(crate) fn set_fault(&self, fault: &'static str) {
+            *self.fault.lock().unwrap() = fault;
+        }
+        /// Every request received so far, as `METHOD path`.
+        pub(crate) fn requests(&self) -> Vec<String> {
+            self.log.lock().unwrap().iter().map(|(request, _)| request.clone()).collect()
+        }
+        /// The bodies of the `POST` requests on `path` received so far.
+        pub(crate) fn bodies(&self, path: &str) -> Vec<Value> {
+            let request = format!("POST {path}");
+            self.log.lock().unwrap().iter().filter(|(seen, _)| *seen == request).map(|(_, body)| body.clone()).collect()
+        }
+        pub(crate) fn clear(&self) {
+            self.log.lock().unwrap().clear();
+        }
+    }
+
+    fn probe_engine_answer(spec: &ModelSpec, slots: u32, fault: &str, path: &str, body: &Value) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let stream = body["stream"] == true;
+        let (name, mode) = fault
+            .rsplit_once('-')
+            .filter(|(_, mode)| matches!(*mode, "stream" | "json"))
+            .unwrap_or((fault, ""));
+        let applies = |candidate: &str| {
+            name == candidate && match mode { "stream" => stream, "json" => !stream, _ => true }
+        };
+        let answer = |value: Value| axum::Json(value).into_response();
+        let events = |events: Vec<Value>| {
+            let mut text: String = events.iter().map(|event| format!("data: {event}\n\n")).collect();
+            text.push_str("data: [DONE]\n\n");
+            ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], text).into_response()
+        };
+        if applies("health-and-identity-only")
+            && matches!(path, "/v1/chat/completions" | "/v1/completions" | "/v1/embeddings")
+        {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        let usage = |completion: usize| {
+            let prompt = 2 + usize::from(applies("prompt-usage"));
+            let completion = if applies("excess-output") {
+                body["max_tokens"].as_u64().unwrap() as usize + 1
+            } else {
+                completion
+            };
+            json!({"prompt_tokens":prompt,"completion_tokens":completion,"total_tokens":prompt + completion})
+        };
+        let probability = |id: usize, token: &str| {
+            if applies("no-logprobs") {
+                return Value::Null;
+            }
+            let logprob = if applies("malformed-logprobs") { json!("-0.25") } else { json!(-0.25) };
+            json!({"content":[{"id":id,"token":token,"bytes":token.as_bytes(),"logprob":logprob,
+                "top_logprobs":[{"id":id,"token":token,"bytes":token.as_bytes(),"logprob":-0.25}]}]})
+        };
+        match path {
+            "/health" => answer(json!({"status":"ok"})),
+            "/v1/models" => {
+                let id = if applies("unlisted") { "another-model" } else { spec.id.as_str() };
+                answer(json!({"object":"list","data":[{"id":id,"object":"model"}]}))
+            }
+            "/props" => {
+                let mut props = json!({"build_info":"b1-cd959ba","total_slots":slots,"model_alias":spec.id,
+                    "default_generation_settings":{"n_ctx":spec.context_length},
+                    "chat_template":PROBE_TEMPLATE,"chat_template_tool_use":PROBE_TEMPLATE});
+                if applies("alias") {
+                    props["model_alias"] = json!("another-model");
+                }
+                if applies("context") {
+                    props["default_generation_settings"]["n_ctx"] = json!(spec.context_length / 2);
+                }
+                if applies("larger-context") {
+                    props["default_generation_settings"]["n_ctx"] = json!(spec.context_length * 2);
+                }
+                if applies("template") {
+                    // Another template served for everything, so that only the digest differs.
+                    props["chat_template"] = json!(format!("{PROBE_TEMPLATE} "));
+                    props["chat_template_tool_use"] = json!(format!("{PROBE_TEMPLATE} "));
+                }
+                if applies("tool-template") {
+                    props["chat_template_tool_use"] = json!("{{ tools }}");
+                }
+                answer(props)
+            }
+            "/apply-template" => answer(json!({"prompt":"rendered"})),
+            "/tokenize" => answer(json!({"tokens":[1,2]})),
+            "/v1/chat/completions" => {
+                let tools = body.get("tools").is_some();
+                let call = tools && !applies("tool-text");
+                let function = if applies("tool-name") { "pong" } else { "ping" };
+                // The generated pieces, one token each: the call's name and its argument
+                // fragments, or the content.
+                let pieces: Vec<&str> = if call {
+                    if applies("tool-arguments") { vec!["{\"x\"", ":1}"] } else { vec!["{", "}"] }
+                } else if tools {
+                    vec!["pong"]
+                } else if body.get("response_format").is_some() {
+                    vec![if applies("schema-text") { "OK" } else if applies("schema-extra") { "{\"extra\":true}" } else { "{}" }]
+                } else {
+                    vec!["OK"]
+                };
+                let finish = if call { "tool_calls" } else { "stop" };
+                let tokens = pieces.len() + usize::from(call);
+                if !stream {
+                    let message = if call {
+                        json!({"role":"assistant","content":null,"tool_calls":[{"id":"call_0","type":"function",
+                            "function":{"name":function,"arguments":pieces.concat()}}]})
+                    } else {
+                        json!({"role":"assistant","content":pieces.concat()})
+                    };
+                    return answer(json!({"id":"probe","object":"chat.completion","created":1,"model":body["model"],
+                        "choices":[{"index":0,"message":message,"finish_reason":finish}],"usage":usage(tokens)}));
+                }
+                let chunk = |choices: Value| json!({"id":"probe","object":"chat.completion.chunk","created":1,
+                    "model":body["model"],"choices":choices});
+                let mut deltas = Vec::new();
+                if call {
+                    deltas.push((json!({"tool_calls":[{"index":0,"id":"call_0","type":"function",
+                        "function":{"name":function,"arguments":""}}]}), function));
+                    for piece in &pieces {
+                        deltas.push((json!({"tool_calls":[{"index":0,"function":{"arguments":piece}}]}), piece));
+                    }
+                } else {
+                    for piece in &pieces {
+                        deltas.push((json!({"content":piece}), piece));
+                    }
+                }
+                let mut output: Vec<Value> = deltas.into_iter().enumerate().map(|(index, (delta, token))| {
+                    chunk(json!([{"index":0,"delta":delta,"finish_reason":null,"logprobs":probability(40 + index, token)}]))
+                }).collect();
+                output.push(chunk(json!([{"index":0,"delta":{},"finish_reason":finish}])));
+                if !applies("no-final-usage") {
+                    let mut last = chunk(json!([]));
+                    last["usage"] = usage(tokens);
+                    output.push(last);
+                }
+                events(output)
+            }
+            "/v1/completions" => {
+                if !stream {
+                    return answer(json!({"id":"probe","object":"text_completion","created":1,"model":body["model"],
+                        "choices":[{"index":0,"text":"B","finish_reason":"length","logprobs":null}],"usage":usage(1)}));
+                }
+                let chunk = |text: &str, finish: Value, tokens: Value| json!({"id":"probe","object":"text_completion",
+                    "created":1,"model":body["model"],"choices":[{"index":0,"text":text,"finish_reason":finish,"logprobs":null}],
+                    "__verbose":{"tokens":tokens,"truncated":false}});
+                let mut output = chunk("B", Value::Null, json!([66]));
+                output["choices"][0]["logprobs"] = probability(66, "B");
+                if applies("merged-finish") {
+                    output["choices"][0]["finish_reason"] = json!("length");
+                    output["usage"] = usage(1);
+                    return events(vec![output]);
+                }
+                let mut finish = chunk("", json!("length"), json!([]));
+                if !applies("no-final-usage") {
+                    finish["usage"] = usage(1);
+                }
+                events(vec![output, finish])
+            }
+            "/v1/embeddings" => {
+                use base64::Engine as _;
+                let inputs = body["input"].as_array().cloned().unwrap_or_default();
+                let tokens: usize = inputs.iter().map(|input| input.as_array().map_or(0, Vec::len)).sum();
+                let embedding = if body["encoding_format"] == "base64" {
+                    let values: &[f32] = if applies("embedding-base64-dimensions") { &[0.5, 0.25, 0.125] } else { &[0.5, 0.25] };
+                    json!(base64::engine::general_purpose::STANDARD
+                        .encode(values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<u8>>()))
+                } else {
+                    json!([0.5, 0.25])
+                };
+                let data: Vec<Value> = (0..inputs.len())
+                    .map(|index| json!({"index":index,"object":"embedding","embedding":embedding}))
+                    .collect();
+                let prompt = tokens + usize::from(applies("prompt-usage"));
+                let total = prompt + usize::from(applies("embedding-usage"));
+                answer(json!({"model":body["model"],"object":"list","data":data,
+                    "usage":{"prompt_tokens":prompt,"total_tokens":total}}))
+            }
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    /// The capabilities of a generation model that advertises everything a chat model can.
+    pub(crate) const EVERY_GENERATION_CAPABILITY: &[&str] =
+        &["chat", "completions", "tools", "structured_output", "streaming"];
+
+    /// `model()` advertising `capabilities`, whose signed template digest is `PROBE_TEMPLATE`'s.
+    fn probe_spec(capabilities: &[&str]) -> ModelSpec {
+        let mut spec = model();
+        spec.chat_template_sha256 = hex::encode(Sha256::digest(PROBE_TEMPLATE.as_bytes()));
+        spec.capabilities = capabilities.iter().map(|c| c.to_string()).collect();
+        spec
+    }
+
+    /// An operator-owned (unmanaged) one-slot deployment of `spec` on `engine`.
+    fn probe_backend(spec: &ModelSpec, engine: &ProbeEngine) -> Backend {
+        Backend::new(&ModelConfig {
+            model: spec.clone(),
+            price: crate::protocol::PriceSchedule { input_wei_per_1k:"1".into(), output_wei_per_1k:"0".into() },
+            engine_url: engine.base.clone(), engine_api_key_file: None, max_concurrency:1,
+            request_timeout_secs:5, qualification_evidence_file:None, runtime:None,
+        }).unwrap()
+    }
+
+    /// public-inference-api requirement 8 (task 3.8): readiness of an operator-owned engine first
+    /// checks the engine's health, its model listing and its properties, then runs real inference
+    /// for every advertised capability, each probe through the public request preparation
+    /// (`prepare`) and the engine's own template rendering and tokenization:
+    /// - chat: a non-streaming request, and a streamed one with log-probabilities;
+    /// - completions: a non-streaming request, a streamed one with log-probabilities, and the
+    ///   streamed echo request, whose input is the echo prompt;
+    /// - tools: a non-streaming and a streamed request offering `ping`, with `tool_choice: auto`;
+    /// - structured output: a non-streaming and a streamed request with a JSON schema;
+    /// - `streaming`: exercised by the streamed chat and completion probes;
+    /// - embeddings: a batch of two inputs in `float` and in `base64`, whose common dimension is
+    ///   returned.
+    ///
+    /// The template endpoint receives exactly the body that generation receives. The completion
+    /// prompt and the embedding inputs are the engine's own token IDs, and no OpenAI-only member
+    /// (`echo`, `logprobs`, `top_logprobs`) reaches the engine.
+    #[tokio::test]
+    async fn readiness_probes_every_advertised_capability_through_the_public_preparation() {
+        let spec = probe_spec(EVERY_GENERATION_CAPABILITY);
+        let engine = ProbeEngine::start(&spec, 1).await;
+        let result = probe_backend(&spec, &engine).qualification_probe(true).await;
+        assert_eq!(result.map_err(|error| error.code), Ok(None));
+        let chat = ["POST /apply-template", "POST /tokenize", "POST /v1/chat/completions"];
+        let completion = ["POST /tokenize", "POST /v1/completions"];
+        let mut expected = vec!["GET /health", "GET /v1/models", "GET /props"];
+        for probe in [&chat[..], &chat, &completion, &completion, &completion, &chat, &chat, &chat, &chat] {
+            expected.extend(probe);
+        }
+        assert_eq!(engine.requests(), expected);
+
+        let chats = engine.bodies("/v1/chat/completions");
+        assert_eq!(engine.bodies("/apply-template"), chats, "the template endpoint received other choices than generation");
+        assert_eq!(chats.iter().map(|body| body["stream"] == true).collect::<Vec<_>>(), [false, true, false, true, false, true]);
+        assert_eq!(chats[0]["messages"][0]["content"], "Reply with OK.");
+        assert_eq!(chats[1]["stream_options"], json!({"include_usage":true}));
+        assert!(chats.iter().all(|body| body["n_probs"] == 1 && body["return_tokens"] == true && body["cache_prompt"] == false));
+        for body in &chats[..2] {
+            assert!(body.get("tools").is_none() && body.get("response_format").is_none(), "{body}");
+        }
+        for body in &chats[2..4] {
+            assert_eq!((body["tools"][0]["function"]["name"].as_str(), body["tool_choice"].as_str()), (Some("ping"), Some("auto")));
+        }
+        for body in &chats[4..] {
+            assert_eq!(body["response_format"]["type"], "json_schema");
+        }
+        let completions = engine.bodies("/v1/completions");
+        assert_eq!(completions.iter().map(|body| (body["stream"] == true, body["n_probs"].clone())).collect::<Vec<_>>(),
+            [(false, json!(0)), (true, json!(1)), (true, json!(1))]);
+        for body in chats.iter().chain(&completions) {
+            for member in ["echo", "logprobs", "top_logprobs"] {
+                assert!(body.get(member).is_none(), "{member} reached the engine: {body}");
+            }
+        }
+        assert!(completions.iter().all(|body| body["prompt"] == json!([1, 2])));
+        let tokenized = engine.bodies("/tokenize");
+        let rendered = json!("rendered");
+        assert_eq!(tokenized.iter().map(|body| body["content"].clone()).collect::<Vec<_>>(), [
+            rendered.clone(), rendered.clone(), json!("A"), json!("A"), json!(ECHO_PROBE_PROMPT),
+            rendered.clone(), rendered.clone(), rendered.clone(), rendered,
+        ]);
+        assert!(tokenized.iter().all(|body| body["add_special"] == true && body["parse_special"] == true));
+
+        let spec = probe_spec(&["embeddings"]);
+        let engine = ProbeEngine::start(&spec, 1).await;
+        let result = probe_backend(&spec, &engine).qualification_probe(true).await;
+        assert_eq!(result.map_err(|error| error.code), Ok(Some(2)));
+        assert_eq!(engine.requests(), ["GET /health", "GET /v1/models", "GET /props", "POST /tokenize", "POST /tokenize",
+            "POST /v1/embeddings", "POST /tokenize", "POST /tokenize", "POST /v1/embeddings"]);
+        let embeddings = engine.bodies("/v1/embeddings");
+        assert_eq!(embeddings.iter().map(|body| body["encoding_format"].clone()).collect::<Vec<_>>(), [json!("float"), json!("base64")]);
+        assert!(embeddings.iter().all(|body| body["input"] == json!([[1, 2], [1, 2]])));
+    }
+
+    /// public-inference-api requirement 8 (task 3.8), and scenario "A different template is not
+    /// ready" at the probe: an operator-owned engine that does not list the model under its API
+    /// identifier, reports another `model_alias`, a smaller or a larger context, a served chat
+    /// template whose digest differs from the signed `chat_template_sha256`, or (for a model
+    /// advertising `tools`) another tool-use template is not ready, both on a full pass and on a busy
+    /// re-check that runs no inference, and no inference probe runs. Controls: the matching
+    /// engine is ready; the tool-use template matters only for a `tools` model, and the template
+    /// only for a `chat` model.
+    #[tokio::test]
+    async fn readiness_requires_the_engine_reported_identifier_context_and_template() {
+        let tools = probe_spec(EVERY_GENERATION_CAPABILITY);
+        let chat = probe_spec(&["chat", "completions"]);
+        let embeddings = probe_spec(&["embeddings"]);
+        // One engine for all three: they share the identifier and context.
+        let engine = ProbeEngine::start(&tools, 1).await;
+        for (fault, spec, ready) in [
+            ("", &tools, true),
+            ("", &embeddings, true),
+            ("unlisted", &tools, false),
+            ("unlisted", &embeddings, false),
+            ("alias", &tools, false),
+            ("alias", &embeddings, false),
+            ("context", &tools, false),
+            ("context", &embeddings, false),
+            ("larger-context", &tools, false),
+            ("larger-context", &embeddings, false),
+            ("template", &tools, false),
+            ("template", &chat, false),
+            ("template", &embeddings, true),
+            ("tool-template", &tools, false),
+            ("tool-template", &chat, true),
+        ] {
+            engine.set_fault(fault);
+            for inference in [true, false] {
+                engine.clear();
+                let result = probe_backend(spec, &engine).qualification_probe(inference).await;
+                let case = format!("{fault:?} for {:?}, inference {inference}", spec.capabilities);
+                assert_eq!(result.is_ok(), ready, "{case}: {:?}", result.err().map(|error| error.code));
+                if !ready {
+                    assert_eq!(result.unwrap_err().code, "engine_error", "{case}");
+                    assert!(engine.requests().iter().all(|request| request.starts_with("GET ")), "{case}: {:?}", engine.requests());
+                }
+            }
+        }
+    }
+
+    /// public-inference-api requirement 8 (task 3.8), and scenarios "A healthy engine whose probe
+    /// fails is not ready", "A tool probe that produces no call" and "A structured-output probe
+    /// that does not conform" at the probe: an engine that answers its health check and reports
+    /// the expected identity and template is not ready when any probe of an advertised capability
+    /// fails, in either mode where a probe has both:
+    /// - it serves no inference at all (a loaded model with a health answer);
+    /// - a stream ends with `[DONE]` but no final usage;
+    /// - usage names other prompt tokens than were prepared, or more completion tokens than were
+    ///   authorized;
+    /// - the tool probe answers text, a call of another function, or other arguments;
+    /// - the structured-output probe answers text that is not JSON, or JSON that does not
+    ///   conform to the schema;
+    /// - the echo probe cannot return the prompt before the output (a completion stream whose
+    ///   only event carries its token, finish and usage);
+    /// - a streamed chat or completion probe, which asks for the generated tokens'
+    ///   log-probabilities, gets a malformed log-probability, or none at all (design code
+    ///   difference 6);
+    /// - the embedding probes' usage disagrees, or their encodings disagree on the dimension.
+    ///
+    /// Controls: the same engine without a fault is ready, and a tool or structured-output
+    /// fault does not affect a model that does not advertise that capability.
+    #[tokio::test]
+    async fn readiness_fails_when_any_advertised_inference_probe_fails() {
+        let every = probe_spec(EVERY_GENERATION_CAPABILITY);
+        let chat = probe_spec(&["chat", "streaming"]);
+        let completions = probe_spec(&["completions", "streaming"]);
+        let embeddings = probe_spec(&["embeddings"]);
+        let engine = ProbeEngine::start(&every, 1).await;
+        let mut cases = vec![("", &every, true), ("", &chat, true), ("", &completions, true), ("", &embeddings, true)];
+        for fault in ["health-and-identity-only", "no-final-usage", "prompt-usage-json", "prompt-usage-stream",
+            "excess-output-json", "excess-output-stream", "tool-text-json", "tool-text-stream", "tool-name-json",
+            "tool-name-stream", "tool-arguments-json", "tool-arguments-stream", "schema-text-json",
+            "schema-text-stream", "schema-extra-json", "schema-extra-stream", "merged-finish", "malformed-logprobs",
+            "no-logprobs"] {
+            cases.push((fault, &every, false));
+        }
+        for fault in ["no-final-usage", "prompt-usage-json", "prompt-usage-stream", "excess-output-stream",
+            "malformed-logprobs", "no-logprobs"] {
+            cases.push((fault, &chat, false));
+            cases.push((fault, &completions, false));
+        }
+        cases.push(("merged-finish", &completions, false));
+        for fault in ["health-and-identity-only", "prompt-usage", "embedding-usage", "embedding-base64-dimensions"] {
+            cases.push((fault, &embeddings, false));
+        }
+        for fault in ["tool-text", "tool-name", "tool-arguments", "schema-text", "schema-extra", "merged-finish"] {
+            cases.push((fault, &chat, true));
+        }
+        for (fault, spec, ready) in cases {
+            engine.set_fault(fault);
+            let result = probe_backend(spec, &engine).qualification_probe(true).await;
+            let case = format!("{fault:?} for {:?}", spec.capabilities);
+            assert_eq!(result.is_ok(), ready, "{case}: {:?}", result.as_ref().err().map(|error| &error.code));
+            if let Err(error) = result {
+                assert_eq!(error.status, StatusCode::BAD_GATEWAY, "{case}: {}", error.code);
+            }
+        }
+    }
+
+    /// public-inference-api requirement 10 scenario "An inconsistent engine response is not a
+    /// success" (task 3.10): a two-input batch whose vectors have different lengths is refused
+    /// with and without `dimensions`, in `float` and `base64`; vectors of one length other than
+    /// the requested `dimensions` are refused; a batch of one common length is accepted and
+    /// reports it.
+    #[test]
+    fn an_embedding_batch_of_unequal_or_unrequested_lengths_is_not_a_success() {
+        use base64::Engine as _;
+        let response = |embeddings: Vec<Value>| json!({"object":"list","model":"model",
+            "data":embeddings.into_iter().enumerate().map(|(index, embedding)| json!({"object":"embedding",
+                "index":index,"embedding":embedding})).collect::<Vec<_>>(),
+            "usage":{"prompt_tokens":2,"completion_tokens":0,"total_tokens":2}});
+        for (format, dimensions) in [("float", None), ("float", Some(2)), ("base64", None), ("base64", Some(2))] {
+            let mut body = json!({"model":"model","input":["a","b"],"encoding_format":format});
+            if let Some(dimensions) = dimensions {
+                body["dimensions"] = json!(dimensions);
+            }
+            let request = prepare(body, Endpoint::Embeddings, &model()).unwrap();
+            let vector = |length: usize| if format == "float" {
+                json!(vec![0.5; length])
+            } else {
+                json!(base64::engine::general_purpose::STANDARD.encode(0.5f32.to_le_bytes().repeat(length)))
+            };
+            let case = format!("{format}, dimensions {dimensions:?}");
+            let accepted = validate_response_dimensions(&response(vec![vector(2), vector(2)]), &request);
+            assert_eq!(accepted.map(|(_, length)| length).map_err(|error| error.code), Ok(Some(2)), "{case}");
+            for lengths in [[2, 3], [3, 2], [1, 2], [2, 1]] {
+                let result = validate_response(&response(vec![vector(lengths[0]), vector(lengths[1])]), &request);
+                assert_eq!(result.map_err(|error| error.code).err().as_deref(), Some("engine_error"), "{case}: {lengths:?}");
+            }
+            if dimensions.is_some() {
+                for length in [1, 3] {
+                    let result = validate_response(&response(vec![vector(length), vector(length)]), &request);
+                    assert!(result.is_err(), "{case}: two vectors of {length} were accepted for dimensions 2");
+                }
+            }
+        }
+    }
+
+    /// public-inference-api requirement 11 scenario "A remote schema reference is not fetched"
+    /// (task 3.11), through `prepare`: a `$ref` that names another document (any URL scheme, a
+    /// network path or a relative document) or is not a string is refused before tokenization,
+    /// wherever it appears in a tool's `parameters` or in `response_format.json_schema.schema`
+    /// (at the top, in a property, inside `items` and `anyOf`, or in `$defs`). Local references
+    /// (`#`, `#/$defs/a`, `#/properties/a`) are descriptions and are accepted.
+    #[test]
+    fn remote_schema_references_are_refused_in_tool_parameters_and_response_schemas() {
+        let placements = |reference: Value| [
+            json!({"$ref":reference}),
+            json!({"type":"object","properties":{"a":{"$ref":reference}}}),
+            json!({"type":"array","items":{"anyOf":[{"type":"string"},{"$ref":reference}]}}),
+            json!({"type":"object","$defs":{"a":{"type":"object","properties":{"b":{"$ref":reference}}}}}),
+        ];
+        let requests = |schema: Value| [
+            json!({"model":"model","messages":[{"role":"user","content":"hi"}],
+                "tools":[{"type":"function","function":{"name":"ping","parameters":schema}}]}),
+            json!({"model":"model","messages":[{"role":"user","content":"hi"}],
+                "response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":schema}}}),
+        ];
+        let remote = [json!("https://example.org/schema.json"), json!("http://127.0.0.1:9/schema.json#/a"),
+            json!("file:///etc/passwd"), json!("//example.org/schema.json"), json!("other.json#/definitions/a"),
+            json!("urn:example:schema"), json!({"url":"https://example.org/schema.json"}), json!(1)];
+        for reference in remote {
+            for schema in placements(reference.clone()) {
+                for body in requests(schema.clone()) {
+                    let error = prepare(body, Endpoint::Chat, &model()).err()
+                        .unwrap_or_else(|| panic!("accepted {reference} in {schema}"));
+                    assert_eq!((error.status, error.code.as_str()), (StatusCode::BAD_REQUEST, "unsupported_parameter"), "{reference}");
+                }
+            }
+        }
+        for reference in ["#", "#/$defs/a", "#/properties/a"] {
+            for schema in placements(json!(reference)) {
+                for body in requests(schema) {
+                    assert!(prepare(body, Endpoint::Chat, &model()).is_ok(), "{reference}");
+                }
+            }
+        }
     }
 }
