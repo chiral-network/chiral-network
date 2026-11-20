@@ -21,7 +21,7 @@ Whitepaper `docs/chiral-book.md` (SHA-256 `eda22ce0…3933`) against the OpenSpe
 9. **Current offer discovery and publication: revisions, equivocation, withdrawal, bounded registry** (medium). Book lines 29, 59, 211–261. Specified in round 38 (specify-offer-discovery).
 10. **Payment-gated reputation: feedback admission, storage, Elo, revalidation** (medium). Book lines 361–446. Specified in round 43 (specify-payment-gated-reputation).
 11. **Outbound HTTP safeguards and the private engine origin boundary** (medium). Book lines 262–279. Specified in round 48 (specify-outbound-http-safeguards).
-12. **Credential issuance and secret storage** (medium). Book lines 325–360.
+12. **Credential issuance and secret storage** (medium). Book lines 325–360. Specified in round 50 (specify-account-credentials).
 13. **The provider's public OpenAI-compatible API and per-capability model qualification** (medium). Book lines 579–601.
 14. **Daemon lifecycle and readiness: health, drain, resume, refresh, child failure, shutdown, maintenance cadence** (medium). Book lines 605–680.
 15. **Catalog precedence, the catalog page contract and the readiness endpoint** (low). Book lines 211–261. Specified in round 38 (specify-offer-discovery).

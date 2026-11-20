@@ -408,3 +408,32 @@ Separately, the spec records two code differences, not questions (tasks 2.1 and 
 - credential export derives the SDK `base_url` without the origin validator (`consumer.rs:2222–2226`), so an account saved under rules that no longer validate it still returns its API secret with a `base_url` that every native request would refuse.
 
 Nonblocking: no requirement or task waits on these answers; option (b) or (c) of question 1, or option (a) of question 2, would add one task to another change.
+
+## 2026-11-19 — Account credentials: omitted spend cap, rotation restoring a missing default, and listing completeness
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Consumer control, credentials, and request lifecycle* (lines 325–360, chiefly line 345 on issuance options and storage) and the recovery line 495 ("issue or rotate"). Spec: the new change `specify-account-credentials` (capability `account-credentials`), design open questions 1–3. Code: `src-tauri/src/billing_store.rs:43–50` and `839–846`, `src-tauri/src/consumer.rs:2122–2138` and `2168–2171`.
+
+What it says now: credential issuance and secret storage in the current runtime are now specified (comparison item 12). Nine requirements cover:
+- the four-member options object;
+- hash-only provider storage with a public identifier separate from the secret;
+- bearer scopes and lifetime on the inference routes;
+- revocation and rotation of one named credential;
+- caps as limits on the same balance, never credit;
+- credential management that stays reachable without new admission;
+- the protected native store;
+- metadata-only command output except explicit export;
+- default selection on rotation.
+
+Questions:
+
+1. **May `spend_cap_wei` be omitted?** Today a missing member decodes as `null`, meaning no cap. Options: (a) require all four members, with `null` the only way to ask for no cap; (b) accept omission as `null`. Proposed default (what the spec adopts): the book text. Requirement 1 names the four members and allows `null` without deciding omission.
+2. **Does rotating a credential that is not the recorded default restore a missing default?** After a native revocation of the default, the default pointer is cleared. Rotating that revoked credential then leaves no default, while an issuance would restore one, although line 495 offers "issue or rotate" as equal remedies. Options: (a) a rotation with `infer` restores a missing default exactly as issuance does; (b) only rotating the recorded default does (current behaviour). Proposed default (what the spec adopts): (b), because requirement 9 covers rotation of the recorded default only.
+3. **Must `GET /credentials` list every credential that can still authenticate?** Today it returns the 100 newest records in any state. An older active credential, such as one whose secret was lost, can drop out of the list, and its owner then cannot find it to revoke it. Options: (a) list every active credential (at most 64), then recent inactive ones; (b) keep the 100 newest records. Proposed default (what the spec adopts): the book text, which states no bound or completeness rule.
+
+Separately, the review notes that requirement 1 refuses unknown and repeated members, reading the book's `{expires_at, spend_cap_wei, max_concurrency, scopes}` as a strict object. That follows the precedent of the opening-request and owner-challenge specs. The spec also records two code differences, not questions (tasks 2.1 and 2.2):
+- the options body also decodes from a positional JSON array, unlike the sibling bodies that use `protocol::deserialize_object`;
+- an explicit native issuance can replace a still-valid default once that default falls outside the provider's bounded list of the 100 newest records (task 2.2 is needed whichever answer question 3 gets).
+
+Nonblocking: no requirement or task waits on these answers. Option (a) of question 1 or 2, or option (a) of question 3, would add one task each.

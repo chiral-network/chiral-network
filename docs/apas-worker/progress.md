@@ -1,5 +1,24 @@
 # APAS progress
 
+## 2026-11-19 (fiftieth round) — Spec: account credential issuance and secret storage
+
+- In step at `572cd32d`; whitepaper unchanged; no new answers.
+- Specification step (comparison item 12, book lines 325–360). New change `specify-account-credentials`: 9 requirements and 23 scenarios. They cover:
+  - the four-member options object;
+  - hash-only provider storage with a separate public identifier;
+  - bearer scope and lifetime on the inference routes;
+  - revocation and rotation of one named credential;
+  - caps as limits, never credit;
+  - management reachable without new admission;
+  - the protected native store;
+  - metadata-only output except explicit export (including the SDK examples' in-process key);
+  - default selection on rotation.
+  Owner proof, request holds, `base_url` and webview handling are referenced from their owners.
+- The review moved non-book details (Unix-seconds encoding, response members, exact modes, export IDs) into design decision 4. It removed restatements of owner-control and request-accounting rules, and checked eight candidate defects against the code, rejecting each with evidence.
+- Two code differences recorded as tasks 2.1 (options decode from a positional array) and 2.2 (explicit issuance can replace a valid default outside the 100-record list).
+- Report entry with three nonblocking questions: omitted spend cap, rotation restoring a missing default, listing completeness.
+- Checks: `openspec validate specify-account-credentials --strict` passes; no code changed. The review reran the 24 cited tests and all passed.
+
 ## 2026-11-19 (forty-ninth round) — Code: development `localhost` resolves only to loopback; export validates the origin
 
 - In step at `033168d6`; whitepaper unchanged; no new answers.
@@ -491,7 +510,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 12–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: account-credentials 2.1 and 2.2; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 13, 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

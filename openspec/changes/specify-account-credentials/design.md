@@ -1,0 +1,186 @@
+## Authority and scope
+
+`docs/chiral-book.md` is the authority and stays read-only. Its SHA-256 was `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933` when this change was written. The requirements come from these lines:
+
+- *Consumer control, credentials, and request lifecycle* (lines 325–360):
+  - the authorization matrix rows for credential reads and management (335 and 336), and for the bearer-authorized inference routes (337–339);
+  - the credential paragraph (345);
+  - "Account and credential limits are enforced against the same ledger" (355);
+  - "Receipt/account reads, top-up settlement and credential recovery are not renegotiation of the original model/pricing contract" (357).
+- *Agreements and exact funding order*, lines 493 and 495: `fund` and `resume` must not rotate exported credentials; if the default has expired or been revoked, explicitly issue or rotate a credential; issuing restores a missing usable default without replacing a valid one.
+- *Configuration and state*, lines 472 (consumer credentials are network-scoped) and 474 (protected secret files, no bearer tokens on command lines or in diagnostics, explicit export reveals a secret).
+- *API compatibility and model qualification*, lines 581, 585 and 603 (ordinary bearer authentication, a credential-scoped model list, export only an intentionally scoped application bearer).
+- *Operations*, lines 671 (logs contain no credentials), 673 (backups include consumer credential state) and 677 (revoke compromised credentials instead of repeating operations).
+- Appendix A, lines 808 and 930, only to delimit the GUI's ownership (decision 2).
+- `CLAUDE.md`: "Resuming an already-open account must not rotate an exported API credential. Explicit revocation/issuance/rotation and historical funding recovery must remain reachable without abandoning accepted balances"; "Wallet/private engine/operator secrets use protected files, not command-line arguments, frontend stores, images, logs, or repository fixtures"; "refuse unsafe overwrites/symlinks"; "Private wallet keys never enter Svelte".
+
+Where the code differs, the requirement follows the whitepaper and an unchecked task records the code change. Requirements are never weakened to match the code. Values that the book does not state are recorded under decision 4 as current implementation values, not as normative constants.
+
+Out of scope, each owned elsewhere:
+
+- **Who may manage and read credentials.** Owner proofs, their one-use consumption, bearer reads of the control routes, and refusal of bearer-only mutation are owned by `inference-owner-control`.
+- **Reservation-time enforcement.** The `infer` scope, unrevoked and unexpired credential, cap and concurrency checks inside the reservation transaction, and what revocation, rotation and expiry do to an admitted hold, are owned by `inference-request-accounting`.
+- **Opening replay and the first secret.** That opening replay returns `credential: null` and never revives a revoked or expired credential is owned by `inference-account-opening-request`.
+- **Recovery without rotation.** That `fund` and `resume` never rotate, and that explicit issuance restores a missing default without replacing a valid one, is owned by `inference-funding-settlement`.
+- **The export's base URL** is owned by `outbound-http-safeguards`. **The webview** is owned by `desktop-gui-global-rules` and `desktop-gui-pages`: metadata display, the masked reveal, copy, hide and clearing, the GUI's 60-second to 30-day lifetime and its default options.
+- **The native version gate** is owned by `client-version-policy`, and **the location of profile state** by `profile-path-resolution`.
+- **The public API's body bounds and per-capability behaviour** (comparison item 13) and **daemon lifecycle** (item 14).
+- **Target-design credential stores**: the local API server bearer and its route credentials (`specify-desktop-local-api-server`), and the CLI gateway bearer and route credentials (`specify-cli-loopback-gateway`).
+
+## Relationship to existing and pending specifications
+
+| Specification | Owns | Referenced from |
+|---|---|---|
+| `inference-owner-control` (pending `specify-owner-control-authorization`) | *Account control authorization follows ownership and read scope* (issuance, revocation and rotation need the account owner's proof, and the six control reads accept a same-account `read` bearer); *Consuming owner authority does not imply business success*; the challenge exchange | Requirements 1, 3 and 4 |
+| `inference-request-accounting` (pending `specify-inference-request-accounting`) | *Reservation atomically binds authority limits and credit* (scope, revocation, expiry, cap and concurrency in one transaction; revocation and rotation keep an admitted hold); *Request and receipt history supports attributable recovery* (account isolation of request reads) | Requirements 3, 4 and 5 |
+| `inference-account-opening-request` (`openspec/specs`) | *Opening replay preserves accepted account state*: no new secret on replay, no revival of revoked or expired credentials | Requirement 2 |
+| `inference-funding-settlement` (pending `specify-funding-settlement`) | *Fund and resume recover the saved agreement without rotating credentials*: no rotation by `fund` or `resume`; explicit issuance restores a missing usable default without replacing a valid one | Requirement 9. Code difference 2 is a difference from this requirement |
+| `inference-wire-foundation` (`openspec/specs`) | *Exact monetary representation and CFX conversion*: canonical decimal wei | Requirement 1 |
+| `outbound-http-safeguards` (pending `specify-outbound-http-safeguards`) | *Advertised endpoints and catalog URLs are origins, and the SDK base URL is derived after validation* (the export's `base_url`) | Requirement 8 |
+| `desktop-gui-global-rules`, `desktop-gui-pages` (pending) | *Secrets stay native except for an explicitly revealed credential*; *API credentials are managed as metadata and revealed only on request* | Requirement 8 |
+| `client-version-policy` (pending `specify-version-policy`) | *A required update refuses new funding and native inference but keeps recovery reachable*: revocation stays reachable, and issuance and rotation are its open question 1 | Requirement 6 |
+| `profile-path-resolution` (pending) | *One profile reaches one state from every working directory*: one `data_dir`, one credential store | Requirement 7 |
+| `inference-account-snapshot` (pending) | A malformed snapshot installs no credential and rotates none | Not referenced |
+| `desktop-local-api-server`, `cli-loopback-gateway` (target design) | Route credentials issued through native `credential_issue`, with their own cap, expiry and default rules ("Issuing a route credential SHALL NOT make it the account's active credential") | Not referenced. When implemented they build on requirement 1 and must reconcile their default rule with requirement 9 and the funding-settlement issuance rule |
+
+This capability adds only what those specifications do not state:
+
+- the issuance and rotation options object and its member rules;
+- hash-only provider storage and an identifier independent of the secret;
+- the scope that each bearer-authorized inference route requires;
+- the meaning of revocation and atomic rotation, including rotation of an expired or revoked credential;
+- that a cap and concurrency limit restrict authority and never create or refund money;
+- that credential management needs no new-admission readiness;
+- the consumer's protected store, its metadata-only outputs and the explicit export;
+- how rotating the native default keeps a usable default.
+
+## Decisions
+
+1. **One capability for the current runtime.** `account-credentials` specifies the provider-account credentials that run today. The target-design local server and CLI gateway use it through native `credential_issue`; their own bearers are not account credentials.
+2. **Reference the owners, do not restate them.** Requirements name the owning requirement and add only the missing obligations. Requirement 8 states the native outputs; the webview's handling of a revealed key, including masking and clearing, stays with the GUI changes.
+3. **The options body is an object, like its siblings.** Line 345 names the body `{expires_at, spend_cap_wei, max_concurrency, scopes}`. The other control bodies already decode through `protocol::deserialize_object` (protocol.rs:12–32): `OpenRequest` (692–706), `TopupRequest` (713–725) and `ChallengeRequest` (735 onward). That function requires a JSON object and keeps the derived duplicate, unknown and missing-member checks; `specify-owner-control-authorization` task 2.6 restricted `ChallengeRequest` to an object after finding the same positional alias. Requirement 1 therefore refuses non-object bodies (code difference 1). It does not decide whether `spend_cap_wei` may be omitted (open question 1).
+4. **Implementation values.** None of these is in the book or normative:
+   - Issuance requires `expires_at` later than the provider's time and at most 90 days ahead (`CREDENTIAL_TTL_MAX`, billing_store.rs:29, checked at 884–885).
+   - Zero `max_concurrency` is refused (886), and so are more than two scopes (889).
+   - At most 64 unrevoked, unexpired credentials per account; another issuance answers 429 `rate_limit` (`MAX_CREDENTIALS`, 20, checked at 897–900).
+   - The list returns the 100 newest records of the account in any state (839–846).
+   - The secret is `chiral_` plus 64 lowercase hex digits (71 characters) and the identifier is `0x` plus 64 hex digits, each from 32 operating-system random bytes (protocol.rs:877–882; billing_store.rs:901–902). Authentication refuses any other bearer shape before a lookup (auth.rs:107; billing_store.rs:522–524).
+   - The stored hash is the unsalted Keccak-256 hex of the secret (`protocol::hash_hex`, protocol.rs:795–797; billing_store.rs:527–530 and 916–925). An unsalted hash is adequate because the secret carries 256 random bits.
+   - First opening issues one credential with `infer` and `read`, no cap, the account's concurrency and a 30-day expiry (billing_store.rs:766–767).
+   - The CLI's options default to a 30-day expiry, no cap, concurrency 1, `infer` and `read` (chiral.rs:183–190). The GUI defaults belong to `desktop-gui-pages`.
+   - `expires_at` is an integer of Unix seconds (`u64`, billing_store.rs:46), like the signed offer times of book line 157, and a credential stops authenticating once the provider's time reaches it (`expires_at <= now`, billing_store.rs:535). Requirement 1 states only that `expires_at` is the time from which the credential stops authenticating; the integer encoding is this implementation's.
+   - The creating response is the `Credential` object `{id, bearer, contract_id, expires_at}` (protocol.rs:645–651). The book requires only the secret and its separate public identifier (line 345).
+   - A list entry is `CredentialView` (billing_store.rs:52–65): identifier, account, expiry, cap, spent and reserved amounts, concurrency, scopes, revocation, creation time and the first-opening `root` flag. It never carries `token_hash`. Requirements 2 and 8 forbid only the secret, because the book says nothing about disclosing the hash; an unsalted hash of a 256-bit random secret does not authenticate.
+   - The export also returns `credential_id` and `contract_id` beside `api_key`, `base_url` and `model` (consumer.rs:2236–2237). Requirement 8 requires only the secret, the base URL and the model (book lines 603 and 930).
+   - The consumer store is the account file `<data_dir>/<network-hash>/consumer/<wallet>/<digest>.json`, with directory mode 0700 and file mode 0600 on Unix (decision 10). The book requires network scoping and no group or world access (lines 472 and 474), not the wallet subdirectory or the exact modes.
+   - Revoking an already revoked credential succeeds with `{"revoked":true}` (847–856; contracts.rs:505–517), and revocation requires an empty body (505–510).
+   - Error codes on the control routes: malformed JSON is 400 `invalid_request` (contracts.rs:78–85); invalid options are 400 `invalid_credential` and a non-canonical cap is 400 `invalid_amount` (billing_store.rs:892 and 146, mapped at contracts.rs:66–68); a credential of another account is 404 `not_found` (billing_store.rs:850–851 and 866–867).
+   - Error codes on the inference routes: a credential that does not authenticate is 401 `invalid_api_key` (inference_gateway.rs:108–113); a missing scope is 403 `credential_scope` (165–170); a cap that cannot cover the maximum cost is 402 `credential_spend_cap` (90–95).
+5. **Rotation of an unusable credential is normative.** Line 495 offers "explicitly issue or rotate a credential" as the remedy for an expired or revoked default, so requirement 4 requires rotation to work on such a credential. The code allows it: `rotate_credential` (billing_store.rs:857–874) checks only that the credential belongs to the account. The book does not define rotation further. Requirement 4 reads "rotate" as replacing the named credential: it revokes it and issues the replacement in one atomic change, with the issuance options (line 930 gives Rotate the same options as Issue). The code does this in one ledger transaction (857–874).
+6. **A zero cap is ordinary money.** `"0"` is canonical wei, so requirement 1 accepts it. Such a credential can only run requests whose maximum cost is zero, which is the cap working as specified, not a special case.
+7. **"Hash" without a named function.** Line 345 says "token hashes". Requirement 2 requires a hash from which the secret is not stored or recoverable, and decision 4 records Keccak-256 as the implementation value.
+8. **Native default rules.** Explicit issuance is governed by `inference-funding-settlement`. Requirement 9 adds rotation, from line 495. Two related behaviours are current implementation, not requirements. Native revocation of the default clears the default and deletes the local secret (consumer.rs:2168–2171), and rotation deletes the predecessor's local secret (2209). Open question 2 asks whether rotating a credential other than the recorded default should restore a missing default.
+9. **Reachability matches the code.** The credential branch of the control router never calls `accepting` (contracts.rs:160–174). Only the proposal, opening and funding-intent paths call it (246, 323 and 383); the credential branch is 473–529. The ledger operations read no readiness flag. Requirement 6 therefore records current behaviour as normative. The native version gate is `client-version-policy`'s (observation 5).
+10. **The consumer store is the account file.** Credentials live inside the agreement's `SavedAccount` (consumer.rs:44–70, `credentials` and `active_credential`). The file is written by `private_write` (222–243): a new owner-only temporary file opened without following links, synced and renamed into place under a directory checked by `wallet::secure_directory`. It is read by `private_read` (202–221) through `wallet::open_secret_file`, which refuses a symlink and an insecure file (wallet.rs:45–66 and 136–154). The directory is `<data_dir>/<network-hash>/consumer/<wallet>/` (consumer.rs:636 and 812–823). Requirement 7 states the network scoping, the protection and the exclusivity. The wallet subdirectory, the exact modes and the atomic replacement through a temporary file in the same protected directory are implementation (decision 4).
+
+## Coverage table
+
+Every test named below passed on 2026-11-19 in focused headless runs (`cargo test --offline --locked --no-default-features --manifest-path src-tauri/Cargo.toml`):
+
+- in the library, `billing_store::tests::caps_concurrency_revocation_and_scope_are_atomic`, `open_replay_never_revives_revoked_or_expired_roots`, `open_replay_preserves_credentials_holds_and_spend_without_crediting_twice` and `application_concurrency_rotation_and_revocation_do_not_release_running_holds`;
+- in the library, `consumer::tests::persisted_credentials_are_private_and_symlinks_rejected`, `explicit_credential_issue_recovers_default_without_rotating_on_resume`, `issuance_recovers_remote_revocation_and_expiry_but_read_only_rotation_never_becomes_default`, `credential_export_refuses_a_saved_origin_that_no_longer_validates`, `credential_export_base_url_is_the_validated_origin_plus_v1`, `agreement_exposes_only_public_disclosure_terms` and `resumed_open_accounts_preserve_exported_credentials_and_refresh_funding_status`;
+- in the library, `inference_gateway::tests::credential_cap_is_payment_error_not_ledger_failure`, `unauthenticated_incomplete_inference_bodies_are_not_polled` and `llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage`;
+- in `inference_owner_control_test`, `credential_mutations_accept_only_the_account_owner_not_any_bearer`, `credential_identifiers_cannot_escape_the_signed_account_even_for_the_same_owner`, `credential_business_refusals_consume_proof_without_partial_mutations`, `every_control_read_requires_its_owner_or_an_account_scoped_read_bearer` and `authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness`;
+- in `inference_owner_consumer_test`, `native_lost_free_opening_recovers_without_issuing_or_rotating_credentials`.
+
+All are unit, ledger or loopback-router checks. None is a native Windows run or deployment evidence. The GUI tests in `tests/credentials.test.ts` belong to `desktop-gui-pages` and are not counted here.
+
+| # | Requirement (book lines) | Code path | Existing tests | Gaps / differences |
+|---|---|---|---|---|
+| 1 | Credential issuance and rotation accept exactly the four-member options object (336, 345) | `CredentialIssueRequest` (billing_store.rs:43–50, derived `Deserialize` with `deny_unknown_fields`); `contracts::parse` (contracts.rs:78–85) at 519 after `authorize_owner` (473); `issue_credential` checks (billing_store.rs:877–900); `money` (140–151); native options decoded at consumer.rs:2109–2110 and 2185–2186 | `credential_business_refusals_consume_proof_without_partial_mutations` (zero concurrency: 400 `invalid_credential`, proof consumed, no partial change, rotation's predecessor revocation rolled back); `credential_mutations_accept_only_the_account_owner_not_any_bearer` (valid issuance and rotation through the router); `caps_concurrency_revocation_and_scope_are_atomic` (a stored cap is enforced) | **Code differs** (code difference 1). No test refuses empty or unknown scopes, concurrency above the account's, non-canonical caps, or unknown or repeated members. No test checks that the list shows exactly the issued limits |
+| 2 | The provider keeps only a hash of each secret, separate from the credential's public identifier (345, 495, 671) | Hash column and insert (billing_store.rs:304, 916–925); lookup by hash (521–544); `CredentialView` has no secret or hash (52–65); list (839–846); `Credential` only in creating responses (protocol.rs:645–651; billing_store.rs:926–931 and 766–768; contracts.rs:518–529); replay `credential: None` (billing_store.rs:763–765) | `every_control_read_requires_its_owner_or_an_account_scoped_read_bearer` (list entries have no `bearer`); `authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness` (replay documents contain no secret); `native_lost_free_opening_recovers_without_issuing_or_rotating_credentials` (stored hash row unchanged); `open_replay_never_revives_revoked_or_expired_roots` | No search of the ledger database, WAL and journal files for plaintext secrets. No test that the stored hash is the hash of the returned secret, that list entries carry no `token_hash`, or that identifier and secret are distinct and neither contains the other |
+| 3 | An account bearer authorizes the inference routes only within its credential's account, scope and lifetime (337–339, 345, 495, 581) | `inference_gateway::authenticate` (144–172); scopes at 246 (`/v1/models`), 266 (`/v1/requests/:id`), 281 (cancel), 421 (inference); `BillingStore::authenticate` revoked/expired check (535–537) | `caps_concurrency_revocation_and_scope_are_atomic` (ledger: revoked and expired bearers do not authenticate; a read-only credential cannot reserve); `unauthenticated_incomplete_inference_bodies_are_not_polled` (invalid bearer: 401 before the body); `llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage` (an `infer`+`read` bearer reads `/v1/requests/:id`) | No router test of a `read`-only bearer on `/v1/models`, the three inference routes or cancel, or of an `infer`-only bearer on `/v1/requests/:id`. No router test of a revoked bearer, or of a bearer at exactly `expires_at`, on these routes |
+| 4 | Revocation and rotation act on one named credential of the signed account (336, 495, 677) | `revoke_credential` (billing_store.rs:847–856); `rotate_credential` in one transaction (857–874); router (contracts.rs:505–529) | `credential_mutations_accept_only_the_account_owner_not_any_bearer` (revoked and rotated predecessors stop authenticating, others stay usable, account unchanged); `credential_identifiers_cannot_escape_the_signed_account_even_for_the_same_owner`; `credential_business_refusals_consume_proof_without_partial_mutations` (a refused rotation keeps its predecessor); `application_concurrency_rotation_and_revocation_do_not_release_running_holds` | No test rotates an expired or a revoked credential |
+| 5 | Credential limits restrict authority over the same prepaid balance (345, 355, 357) | `issue_credential` touches only the credentials table (billing_store.rs:877–931); reservation (1037–1065) | `caps_concurrency_revocation_and_scope_are_atomic`; `authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness` (issuance and rotation leave the account view unchanged) | No test with a cap larger than the available balance. No test that revoking a capped, partly spent credential leaves every amount and funding record unchanged |
+| 6 | Credential management stays reachable without new admission (357, 495, 677; `CLAUDE.md`) | No `accepting` or readiness check on the credential branch (contracts.rs:473–529; decision 9) | `authenticated_free_and_paid_reopening_preserves_credentials_and_funding_without_readiness` (issuance and rotation with `accepting` and `funding_ready` false, no qualified model and exhausted quote budgets) | Revocation and listing under the same closed gates are not tested |
+| 7 | The native consumer keeps credential secrets only in its protected account store (345, 472, 474, 671; `CLAUDE.md`) | `SavedAccount` (consumer.rs:44–70); `private_read` and `private_write` (202–243); `account_directory` (812–816); `wallet` secret-file functions (wallet.rs:45–154); request-key files hold no secret (consumer.rs:177–181 and 2289–2299) | `persisted_credentials_are_private_and_symlinks_rejected` (Unix: `private_write` creates mode 0600; a symlink and a 0644 file are refused on read); `agreement_exposes_only_public_disclosure_terms` | No test of the store as written by a real opening and issuance (directory and file with no group or other permission, the secret in no other file under `data_dir`). No test that an insecure or symlinked account file makes export, issuance and inference fail without repairing it. No native Windows run |
+| 8 | Native credential commands output metadata, and only an explicit export reveals a secret (345, 474, 603, 930) | `credential_metadata` (consumer.rs:2548–2550); `credentials` (2091–2104); `credential_revoke` result (2154–2174); `credential_export` (2219–2238); desktop dispatch (desktop.rs:100–108 and 170–182); CLI (chiral.rs:154–175 and 262–276) | `native_lost_free_opening_recovers_without_issuing_or_rotating_credentials` (native issuance result has no `bearer` or `api_key`); the two `credential_export_*` tests (the export carries `api_key`, `base_url`, `credential_id`, `contract_id`; a refusal carries no secret); `agreement_exposes_only_public_disclosure_terms` | No CLI process test that `credentials list`, `issue`, `rotate` and `revoke`, including failing runs, print no secret on stdout or stderr while `export` prints it. No test that the rotation result carries no secret. "No CLI argument accepts a secret" holds by inspection of the clap definitions. The SDK examples (`examples/openai_client.py`, `examples/openai-client.mjs`) keep the exported key in-process and print it nowhere by inspection: errors print fixed text, and `credentials.clear()` and `credentials.api_key = undefined` drop it. No automated test runs them |
+| 9 | Rotating the native default keeps a usable default (495) | `credential_rotate` (consumer.rs:2175–2212: `was_active` 2204–2208) | `issuance_recovers_remote_revocation_and_expiry_but_read_only_rotation_never_becomes_default` (a read-only replacement never becomes the default; an export by its identifier works); `explicit_credential_issue_recovers_default_without_rotating_on_resume` | No test rotates an expired or revoked default with `infer` and then runs native inference and an export without an identifier |
+
+## Code differences
+
+Each difference has a task in section 2 of `tasks.md`.
+
+1. **The options body also decodes from a positional array** (requirement 1; book line 345). `CredentialIssueRequest` (billing_store.rs:43–50) derives `Deserialize`. Serde's derived struct visitor also implements `visit_seq`, so `serde_json` decodes a four-element array in field order. `contracts::parse` (contracts.rs:78–85) decodes the issuance and rotation bodies with it (519). Example: an owner-proved `POST /v1/contracts/:id/credentials` with body `[<now+3600>, null, 1, ["read"]]` issues a `read` credential with HTTP 200.
+
+   The native consumer decodes desktop and CLI options with the same type (`serde_json::from_value`, consumer.rs:2109–2110 and 2185–2186) and re-encodes them as an object, so `chiral credentials <contract> issue --options <file>` with an array in the file also succeeds. The sibling bodies are restricted to objects through `protocol::deserialize_object` (decision 3).
+
+   Severity low: the owner proof binds the exact body bytes, so only the owner can send such a body, and every member rule still applies. It widens the wire contract that line 345 names. Verified by reading; no test sends an array. Task 2.1.
+2. **Explicit issuance can replace a valid native default once its record is older than the 100 newest** (`inference-funding-settlement` *Fund and resume recover the saved agreement without rotating credentials*; book line 495: "Issuing a key restores a missing usable default without replacing an existing valid default"). Native `credential_issue` (consumer.rs:2105–2153) reads the provider's list and treats the stored default as valid only if it appears there unrevoked, unexpired and with `infer` (2122–2134). Otherwise it clears the default (2135–2137) and makes the new credential the default when it has `infer` (2138 and 2150). The provider's list is the 100 newest records of the account in any state (`ORDER BY rowid DESC LIMIT 100`, billing_store.rs:839–846). Revoked and expired records stay rows and count toward the 100, while the 64-credential bound counts only unrevoked, unexpired ones (897–900).
+
+   Example: a native account's default is its first-opening credential (30-day expiry). The account then gets 100 further credential records, for example 100 rotations of another credential or 100 issue-and-revoke cycles. The default is now the 101st newest record, and an explicit `credential_issue` with `infer` makes the new credential the native default, although the old default is still valid at the provider and still stored locally.
+
+   Severity low: nothing is revoked, and an SDK that holds the old key keeps working. Native inference and an export without an identifier switch to the new key, which the user did not ask for. Verified by reading; the consumer's mock provider (consumer.rs:3090–3115) does not apply the bound, and no test creates 100 records. Task 2.2.
+
+No other difference from the whitepaper was found. The following match the requirements:
+
+- the member rules (scopes, canonical cap, concurrency at most the account's), apart from the array alias;
+- hash-only storage and an identifier independent of the secret;
+- metadata-only lists and replays;
+- the route scopes and the refusal of revoked and expired credentials;
+- revocation, atomic rotation (including of an expired or revoked credential) and refusal of another account's identifier;
+- caps as limits;
+- credential management without readiness;
+- the protected, network-scoped consumer store;
+- metadata-only native outputs with explicit export, and SDK examples that do not print the key;
+- rotation of the native default.
+
+The adversarial review of 2026-11-19 also checked these candidate defects against the code and found none of them:
+
+- a secret printed by the CLI or desktop outside the explicit export: issue and rotate return `credential_metadata` (consumer.rs:2548–2550), revoke returns the provider's `{"revoked":true}`, list returns `CredentialView`, and provider error text is never echoed (`response_bytes`, consumer.rs:310–319);
+- a secret in webview storage: only settings and UI conveniences use `localStorage` or `sessionStorage` (`src/lib/stores.ts:33–38`, `Sidebar.svelte`, `UpdateGate.svelte`). The webview is owned by the GUI changes;
+- rotation that leaves the predecessor usable: the ledger revokes it in the same transaction (billing_store.rs:869–872);
+- a revoked or expired bearer that still authenticates: billing_store.rs:535–537, rechecked in the reservation (1037–1040);
+- a read-only bearer that can infer or cancel: every inference route and cancel require `infer` (inference_gateway.rs:246, 281 and 421);
+- a bypass of the cap or concurrency: both are checked in the reservation transaction (billing_store.rs:1051–1062);
+- `fund` or `resume` rotating credentials: opening replay returns no credential, and resume of an open account only refreshes it (consumer.rs:1720–1723);
+- provider logging of bearers: the gateway, control router, ledger and authentication modules contain no logging calls.
+
+## Observations outside this capability
+
+- **Native request status and cancellation use only the native default** (`request_control`, consumer.rs:2325–2351, which calls `credential(&saved, None)` at 2332). An `infer`-only default gets 403 `credential_scope` from `GET /v1/requests/:id`, which needs `read` (inference_gateway.rs:266). With no default, for example after revoking a compromised one (book line 677), native status is unavailable until a credential is issued. The owner-proof read `/v1/contracts/:id/requests/:request_id` exists (contracts.rs:436–439), but the native consumer does not use it. Request-status recovery belongs to `inference-request-accounting` and to comparison item 13.
+- **A nonexistent credential identifier answers 401.** On revocation or rotation, `get_credential` returns `unauthorized: credential not found` (billing_store.rs:217), which `error` maps to HTTP 401 (contracts.rs:55–56) after the owner proof has been consumed. A credential of another account answers 404 `not_found`. A client can misread the 401 as a failed owner proof. The book does not specify the status.
+- **Repeated scopes** such as `["infer","infer"]` are accepted and stored as given (billing_store.rs:888–890). They grant nothing beyond the named scope.
+- **Repeated `Authorization` headers.** Control reads use the first header (auth.rs:101–111), while the inference routes refuse more than one (inference_gateway.rs:149–153). The book does not specify this.
+- **The version gate differs between desktop and CLI.** The desktop refuses issuance and rotation when the version policy requires an update (desktop.rs:46–52 and 150–151). The CLI does not: `credential_issue` and `credential_rotate` (consumer.rs:2105–2212) call no version check. `client-version-policy` leaves issuance and rotation undecided (its open question 1) and owns the answer.
+- **A secret that is never saved natively stays valid.** If the reply is lost or the local save fails (consumer.rs:2139–2152 and 2196–2211), the credential stays valid at the provider until it expires (at most 90 days, possibly without a cap) or is revoked. The provider cannot return the secret. The owner finds it for revocation only while it is among the 100 newest records (open question 3).
+- **`Credential` and `OpenResult` derive `Debug`** (protocol.rs:645–658), which would print the secret. No production code formats them; a future log line must not.
+- **Stale source citations.** Book line 347 cites `consumer.rs:789–834,1432–1560`, `billing_store.rs:35–57,757–809` and `inference_gateway.rs:145–172,242–303`. The code has moved since; this design cites current lines. No book change is proposed for that.
+
+## Open questions for the whitepaper author
+
+All three are nonblocking: no requirement or task waits on an answer.
+
+1. **May `spend_cap_wei` be omitted?** Line 345 names the four members and calls the cap "nullable". Serde decodes a missing `Option` member as `None`, so today `{expires_at, max_concurrency, scopes}` issues an uncapped credential (billing_store.rs:43–50). The options are:
+   - (a) require all four members, with `null` as the only way to ask for no cap;
+   - (b) accept omission as `null`, as now.
+
+   Proposed default, which is what the spec adopts: the book text. Requirement 1 names the four members and allows `null`, and decides nothing about omission. If (a) is chosen, requirement 1 gains a presence rule and task 2.1's decoder makes the member required.
+2. **Does rotating a credential that is not the recorded default restore a missing default?** Line 495 offers "explicitly issue or rotate a credential" when the default has expired or been revoked. The consumer makes a rotation's replacement the default only when the rotated credential is the recorded default (consumer.rs:2204–2208). After a native revocation of the default, the record is cleared (2168–2171), so rotating that revoked credential leaves no default, while an issuance would restore one. The options are:
+   - (a) a rotation whose replacement has `infer` restores a missing usable default, exactly as issuance does;
+   - (b) only rotating the recorded default does, as now.
+
+   Proposed default, which is what the spec adopts: the book text. Requirement 9 requires that rotating the recorded default restores it, and nothing more.
+3. **Must the credential list include every credential that can still authenticate?** Line 335 makes `/credentials` a read route, and line 677 tells consumers to revoke compromised credentials, but the book sets no bound on the list. The provider returns the 100 newest records in any state (billing_store.rs:839–846). An older credential that still authenticates, such as one whose secret was lost (observation 6), can therefore become invisible to its owner. The options are:
+   - (a) list every unrevoked, unexpired credential (at most 64), then recent inactive ones up to a bound;
+   - (b) keep the 100 newest records.
+
+   Proposed default, which is what the spec adopts: the book text, with no listing bound or completeness rule. Task 2.2 is fixed either way; option (a) would also be one way to fix it.
+
+## Risks
+
+- **Task 2.1 refuses array bodies.** Any client that sent options as an array now gets 400 `invalid_request`. Native clients and the GUI send objects (Usage.svelte:87; chiral.rs:183–190; examples), so only hand-written HTTP clients or option files are affected.
+- **Task 2.2 changes native default selection.** The fix must neither replace a valid default nor keep one that is unusable. Suppose it checks the stored default directly, for example by sending the stored bearer to an `infer`-scoped route of the same provider: a 401 means revoked or expired, and a 403 `credential_scope` means not inference-capable. Then that check sends the secret only to the provider that issued it, over the same validated transport. It must not treat a transport failure as a revoked default.
+- **Ledger search coverage.** The ledger-search test of task 3.2 must read the main database file and any `-wal` and `-journal` files, because SQLite may hold recent pages outside the main file.
+- **Process-wide state in tests.** The CLI and consumer-store tests of tasks 3.7 and 3.8 create files under temporary directories and set file modes. Run them in isolated directories so they cannot interfere with other tests, and never against a real `data_dir`.
+- **What the evidence is.** All executable evidence is unit, ledger or loopback-router testing. Native Windows owner protection (requirement 7) needs a native Windows run, which is listed as missing in task 3.7. No evidence here is public-release qualification.
