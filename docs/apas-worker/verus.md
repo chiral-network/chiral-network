@@ -225,3 +225,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `app::tests::a_resume_clears_only_the_settlement_failures_recorded_before_it` — **replaceable in principle**: `SettlementFaults` is a small sequence-number state machine (record, `clear_through(n)`), and a Verus lemma could prove that `clear_through(n)` never clears a failure numbered above `n` and always clears those at or below it. Not replaced, because Verus is unavailable (report entry of 2026-11-15).
 - `app::tests::a_resume_during_shutdown_does_not_reopen_the_provider`, `a_resume_keeps_a_settlement_failure_recorded_while_it_waits` and the `daemon_engine_process_test` signal tests (`sighup_*`, `sigterm_while_serving_*`, `sighup_stays_ignored_when_the_daemon_starts_ignoring_it`) — **not replaceable**: runtime interleavings, real child processes and POSIX signals.
+
+## Judged 2026-11-20 — daemon startup, deployment lock and runtime liveness
+
+- `app::tests::a_publication_failure_at_start_leaves_the_provider_serving_and_reports_it`, `a_second_provider_for_a_deployment_is_refused_before_it_joins_the_network` and `admin_runtime_reports_engine_liveness_without_calling_it_readiness` — **not replaceable**: provider runtimes, DHT nodes, file locks, a counting TCP listener and a managed helper process.
+- `scripts/test_provider_preflight.py` `RuntimeObservationLiveness` and `scripts/test_qualify_provider.py` liveness tests — **not replaceable**: Python operator scripts, outside Verus's scope.

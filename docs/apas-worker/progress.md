@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-20 (fifty-eighth round) — Code: non-fatal starting-pass publication, deployment lock before the DHT, runtime liveness without readiness
+
+- In step at `4c41f744`; whitepaper unchanged; no new answers.
+- Code step (provider-daemon-lifecycle 2.5, 2.6 and 2.7). All nine original code differences of this change, and the follow-up 2.10, are now done.
+  - A failure of the starting maintenance pass no longer stops the daemon. It is reported in `refresh_error` and on stderr; new funding stays closed, and admission is whatever the pass decided. Configuration, secret, inventory, launch, lock, ledger-identity, chain-identity and recovery failures still stop the start.
+  - The daemon loads its peer identity (unchanged file rules), takes the deployment lock, and only then starts the DHT node, so a refused second daemon never listens, dials or answers under the deployment's peer ID.
+  - `/admin/runtime` rows are now `{model_id, managed, alive, ready, observation}`: `alive` is process liveness, and `ready` is the latest readiness result, never true for a dead engine. `provider-preflight.py --running`, `qualify-provider.py` and the qualification guide now read `alive` and take readiness from `/readyz`. `/readyz` is unchanged.
+  - The review found no defect; one stderr wording fix ("running", not "serving").
+  - Rust and Python regressions fail without their changes.
+- Checks: full headless suite under `caffeinate` 571 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; Python compile and unit tests ok; `npm test` 70/70; no daemon or engine process left running; strict validation passes.
+
 ## 2026-11-20 (fifty-seventh round) — Code: hang-up and console events shut down cleanly; resume cannot reopen during shutdown or clear later faults
 
 - In step at `d337d481`; whitepaper unchanged; no new answers.
@@ -621,7 +632,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: provider-daemon-lifecycle 2.5–2.7; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

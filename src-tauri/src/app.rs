@@ -217,16 +217,12 @@ impl ProviderRuntime {
             config.network.identity.clone(),
             config.development,
         ));
-        let dht = Arc::new(
-            DhtService::start(
-                config.dht.clone(),
-                config.network.identity.clone(),
-                offers.clone(),
-            )
-            .await?,
-        );
+        // The deployment's peer identity, under the protected-file rules of
+        // `inference-offer-discovery`. Nothing joins the network under it before this process
+        // owns the deployment (provider-daemon-lifecycle requirement 8).
+        let identity = crate::dht::PeerIdentity::load(&config.dht.identity_file)?;
         // Deployments share the wallet nonce journal, not customer balances or locks.
-        let data_dir = config.runtime_data_dir()?.join(&wallet).join(dht.peer_id());
+        let data_dir = config.runtime_data_dir()?.join(&wallet).join(identity.peer_id());
         wallet::secure_directory(&data_dir)?;
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true);
@@ -242,6 +238,17 @@ impl ProviderRuntime {
             .map_err(|e| e.to_string())?;
         let instance_lock = ExclusiveFileLock::try_acquire(instance_lock)
             .map_err(|_| "another provider owns this deployment data directory")?;
+        // Only the lock owner listens, dials its bootstrap peers and answers manifests under the
+        // deployment's peer ID; a refused second daemon never connects to a peer.
+        let dht = Arc::new(
+            DhtService::start_as(
+                identity,
+                config.dht.clone(),
+                config.network.identity.clone(),
+                offers.clone(),
+            )
+            .await?,
+        );
         let admin_token = provider_config::read_secret(&config.admin_token_file)?;
         if admin_token.len() < 32 {
             return Err("administration token must contain at least 32 characters of cryptographic random data".into());
@@ -308,7 +315,13 @@ impl ProviderRuntime {
             _instance_lock: instance_lock,
         });
         // A stopped engine leaves administration available, but never publishes a usable offer.
-        runtime.refresh().await?;
+        // The starting pass fails as a later pass does: its error is kept in `refresh_error`
+        // for `/admin/status`, new-funding readiness is closed and nothing stays published,
+        // and admission is what the pass decided (a reconciliation or clock failure closes
+        // it). A publication failure is not a startup failure; configuration, secret,
+        // inventory, launch, lock, ledger-identity, chain-identity and recovery failures
+        // refused the start above (provider-daemon-lifecycle requirement 7).
+        let _ = runtime.refresh().await;
         // Weak ownership avoids retaining child processes after the provider is dropped.
         let weak = Arc::downgrade(&runtime);
         tokio::spawn(async move {
@@ -370,6 +383,12 @@ impl ProviderRuntime {
         }
         *current = next;
         Ok(next)
+    }
+
+    /// The sanitized error of the latest maintenance pass, if it failed, as `/admin/status`
+    /// reports it in `refresh_error`.
+    pub async fn refresh_error(&self) -> Option<String> {
+        self.refresh_error.read().await.clone()
     }
 
     /// One maintenance pass: the periodic pass and `POST /admin/offers/refresh`. It never
@@ -648,12 +667,22 @@ async fn ready(State(runtime): State<Arc<ProviderRuntime>>) -> Response {
         && runtime.state.ledger.admin_summary().is_ok();
     (if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }, Json(json!({"ready":ready,"funding_ready":runtime.state.funding_ready.load(Ordering::Acquire)}))).into_response()
 }
+/// Process observations, not readiness (provider-daemon-lifecycle requirement 2, design code
+/// difference 7). For each configured model: `managed`; `alive`, the managed engine process's
+/// liveness, `null` for an operator-owned engine, which has no process here; `ready`, the
+/// model's result in the latest readiness pass, as `/admin/status` reports it, and false once
+/// its managed engine is not alive, never the process alone; and the launcher's
+/// `observation`, which is not a signed serving profile, qualification evidence or permission
+/// to publish.
 async fn admin_runtime(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value> {
+    let health = runtime.health.read().await;
     Json(json!({"models": runtime.state.config.models.iter().map(|model| {
         let engine = runtime.state.managed_engines.get(&model.model.id);
-        json!({"model_id": model.model.id, "managed": engine.is_some(),
-            "ready": engine.is_some_and(|engine| engine.is_alive()),
-            "observation": engine.map(|engine| &engine.observation)})
+        let alive = engine.map(|engine| engine.is_alive());
+        let ready = alive != Some(false)
+            && health.iter().any(|health| health.model_id == model.model.id && health.ready);
+        json!({"model_id": model.model.id, "managed": engine.is_some(), "alive": alive,
+            "ready": ready, "observation": engine.map(|engine| &engine.observation)})
     }).collect::<Vec<_>>()}))
 }
 async fn policy() -> Json<version::VersionPolicy> {
@@ -2151,6 +2180,208 @@ mod tests {
         assert_eq!(runtime.state.ledger.request_view(&contract, "after-the-second-resume").unwrap().status, "completed");
         runtime.dht.stop().await;
         for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 7 (task 2.5, design code difference 5): a
+    /// publication failure in the starting maintenance pass does not stop the start. The
+    /// provider restarts over a deployment whose offer revision cannot be persisted, serves
+    /// administration and the existing account's inference, is not new-funding ready, publishes
+    /// nothing and reports the failed pass. In the first case the revision is exhausted, so later
+    /// passes fail the same way; in the second the revision file's replacement path is blocked,
+    /// and a later pass publishes once the obstacle is removed.
+    #[tokio::test]
+    async fn a_publication_failure_at_start_leaves_the_provider_serving_and_reports_it() {
+        for exhausted in [true, false] {
+            let case = if exhausted { "exhausted revision" } else { "blocked revision file" };
+            let directory = tempfile::tempdir().unwrap();
+            let (runtime, bearer, servers) =
+                embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+            assert_eq!(runtime.dht.status().await["published_offers"], 1, "{case}");
+            let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+            let config = (*runtime.state.config).clone();
+            let revision_file = runtime.revision_file.clone();
+            runtime.dht.stop().await;
+            drop(runtime);
+            if exhausted {
+                std::fs::write(&revision_file, format!("{}\n", u64::MAX)).unwrap();
+            } else {
+                std::fs::create_dir(revision_file.with_extension("next")).unwrap();
+            }
+
+            let runtime = ProviderRuntime::start(config).await.unwrap();
+            let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+            assert_eq!(status, StatusCode::OK, "{case}");
+            assert_eq!(view["refresh_error"], "Persisting offer revision failed", "{case}: {view}");
+            assert_eq!(runtime.refresh_error().await.as_deref(), Some("Persisting offer revision failed"));
+            assert_eq!((&view["accepting"], &view["funding_ready"], &view["draining"], &view["settlement_error"]),
+                (&json!(true), &json!(false), &json!(false), &Value::Null), "{case}: {view}");
+            assert_eq!(view["models"][0]["ready"], true, "{case}: {view}");
+            assert_eq!(readyz(&runtime).await, StatusCode::OK, "{case}");
+            assert_eq!(admin(&runtime, "GET", "/admin/offers").await, (StatusCode::OK, json!({"offers": []})), "{case}");
+            assert_eq!(runtime.dht.status().await["published_offers"], 0, "{case}");
+            // The existing account is served.
+            let (status, answer) = embed(&runtime, &bearer, "after-a-failed-starting-pass").await;
+            assert_eq!(status, StatusCode::OK, "{case}: {answer}");
+            assert_eq!(runtime.state.ledger.request_view(&contract, "after-a-failed-starting-pass").unwrap().status,
+                "completed", "{case}");
+
+            if exhausted {
+                // Later passes fail the same way and keep reporting it; nothing is published.
+                assert_eq!(runtime.refresh().await, Err("Persisting offer revision failed".into()), "{case}");
+                let view = admin(&runtime, "GET", "/admin/status").await.1;
+                assert_eq!(view["refresh_error"], "Persisting offer revision failed", "{case}: {view}");
+                assert_eq!(runtime.dht.status().await["published_offers"], 0, "{case}");
+            } else {
+                // Once the failure clears, a later pass publishes and clears the report.
+                std::fs::remove_dir(revision_file.with_extension("next")).unwrap();
+                assert_eq!(admin(&runtime, "POST", "/admin/offers/refresh").await,
+                    (StatusCode::OK, json!({"accepting": true, "offers_published": 1})), "{case}");
+                let view = admin(&runtime, "GET", "/admin/status").await.1;
+                assert_eq!((&view["refresh_error"], &view["funding_ready"]), (&Value::Null, &json!(true)), "{case}: {view}");
+                assert_eq!(runtime.dht.status().await["published_offers"], 1, "{case}");
+            }
+            runtime.dht.stop().await;
+            for server in servers {
+                server.abort();
+            }
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 8 (task 2.6, design code difference 6): a second
+    /// start of a running deployment, with the same data directory, signing key and DHT identity
+    /// file and an ephemeral DHT listen address, is refused by the deployment lock before its DHT
+    /// node listens or dials. The only bootstrap address is a plain listener that counts the
+    /// connections it accepts. Once the first provider has dialed it, the first provider's DHT
+    /// node is stopped, while it still holds the lock, so that only another start under this
+    /// identity could connect. The refused start makes no connection. Controls: once the first
+    /// provider is gone, the same configuration starts and dials; and the identity file is still
+    /// loaded under the protected-file rules of `inference-offer-discovery` before any dial.
+    #[tokio::test]
+    async fn a_second_provider_for_a_deployment_is_refused_before_it_joins_the_network() {
+        use std::sync::atomic::AtomicUsize;
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, server) = unavailable_provider(directory.path()).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let bootstrap = tokio::spawn({
+            let accepted = accepted.clone();
+            async move {
+                // Held open and never answered, so that no dialer completes a handshake.
+                let mut held = Vec::new();
+                while let Ok((stream, _)) = listener.accept().await {
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                    held.push(stream);
+                }
+            }
+        });
+        let bootstrap_peer = libp2p::identity::Keypair::generate_ed25519().public().to_peer_id();
+        config.dht.bootstrap = vec![format!("/ip4/127.0.0.1/tcp/{port}/p2p/{bootstrap_peer}")];
+        let connections_after = |count: usize| {
+            let accepted = accepted.clone();
+            async move {
+                within(async {
+                    while accepted.load(Ordering::SeqCst) <= count {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+            }
+        };
+
+        let first = ProviderRuntime::start(config.clone()).await.unwrap();
+        let peer = first.dht.peer_id();
+        connections_after(0).await;
+        first.dht.stop().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let before = accepted.load(Ordering::SeqCst);
+        let refused = ProviderRuntime::start(config.clone()).await.err();
+        assert_eq!(refused.as_deref(), Some("another provider owns this deployment data directory"));
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(accepted.load(Ordering::SeqCst), before,
+            "the refused start connected to its bootstrap peer under the deployment's identity");
+
+        // Control: once the owner has gone, the same configuration starts, under the same peer
+        // identity, and dials its bootstrap peer.
+        drop(first);
+        let restarted = ProviderRuntime::start(config.clone()).await.unwrap();
+        assert_eq!(restarted.dht.peer_id(), peer);
+        connections_after(before).await;
+        restarted.dht.stop().await;
+        drop(restarted);
+
+        // The identity file rules still apply before anything joins the network.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let identity = &config.dht.identity_file;
+            std::fs::set_permissions(identity, std::fs::Permissions::from_mode(0o644)).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let before = accepted.load(Ordering::SeqCst);
+            let refused = ProviderRuntime::start(config.clone()).await.err().unwrap_or_default();
+            assert!(refused.contains("owner-only"), "{refused}");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert_eq!(accepted.load(Ordering::SeqCst), before);
+        }
+        bootstrap.abort();
+        server.abort();
+    }
+
+    /// provider-daemon-lifecycle requirement 2 (task 2.7, design code difference 7):
+    /// `/admin/runtime` reports engine process liveness as `alive`, never as readiness. An
+    /// operator-owned engine whose model is ready is reported unmanaged, without a liveness claim
+    /// or observation, and not as not ready. A live managed engine whose model fails its readiness
+    /// probe is reported alive and not ready; once it exits, not alive and not ready.
+    #[tokio::test]
+    async fn admin_runtime_reports_engine_liveness_without_calling_it_readiness() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["models"][0]["ready"], true);
+        assert_eq!(admin(&runtime, "GET", "/admin/runtime").await, (StatusCode::OK, json!({"models": [
+            {"model_id": "model", "managed": false, "alive": null, "ready": true, "observation": null}]})));
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let healthy = Arc::new(AtomicBool::new(true));
+        let (runtime, _bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            healthy.clone(), Router::new().fallback(ready_chain), true).await;
+        let pid = runtime.state.managed_engines["model"].observation.pid;
+        let facts = |model: &Value| (model["managed"].clone(), model["alive"].clone(), model["ready"].clone());
+        let model = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+        assert_eq!(facts(&model), (json!(true), json!(true), json!(true)), "{model}");
+        assert_eq!(model["observation"]["pid"], pid, "{model}");
+        // The engine process stays alive while its model fails the readiness probe.
+        healthy.store(false, Ordering::Release);
+        assert_eq!(runtime.refresh().await, Ok(0));
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["models"][0]["ready"], false);
+        let model = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+        assert_eq!(facts(&model), (json!(true), json!(true), json!(false)), "{model}");
+        assert_eq!(model["observation"]["pid"], pid, "{model}");
+        // An exited engine is not alive, and its model is not ready.
+        healthy.store(true, Ordering::Release);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        runtime.state.managed_engines["model"].kill_for_test();
+        let model = within(async {
+            loop {
+                let model = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+                if model["alive"] == false {
+                    break model;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert_eq!(facts(&model), (json!(true), json!(false), json!(false)), "{model}");
+        assert_eq!(model["observation"]["pid"], pid, "{model}");
+        runtime.stop_engines().await;
+        runtime.dht.stop().await;
+        for server in servers {
             server.abort();
         }
     }

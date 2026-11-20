@@ -96,8 +96,11 @@ def inspect_runtime(args, model):
     private_origin(args.engine_url)
     rows = get_json(args.admin_url, "/admin/runtime", secret(args.admin_key_file))["models"]
     matches = [entry for entry in rows if entry["model_id"] == model["id"]]
-    if len(matches) != 1 or not matches[0]["managed"] or not matches[0]["ready"] or not matches[0].get("observation"):
-        raise ValueError("qualification requires one healthy managed runtime observation")
+    # `alive` is the managed engine process's liveness, not readiness, which `/admin/runtime`
+    # reports apart; the paid gateway samples of `main` fail unless the provider admits the model.
+    if (len(matches) != 1 or matches[0].get("managed") is not True or matches[0].get("alive") is not True
+            or not matches[0].get("observation")):
+        raise ValueError("qualification requires one live managed runtime observation")
     observed = matches[0]["observation"]
     if observed["engine_url"].rstrip("/") != args.engine_url.rstrip("/") or observed["model_id"] != model["id"]:
         raise ValueError("engine URL/model differs from observed managed process")

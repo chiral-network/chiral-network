@@ -252,7 +252,7 @@ manifest = json.loads(manifest_bytes)
 token = q.secret(Path(os.environ['DEPLOY_DIR']) / 'secrets/admin.token')
 rows = q.get_json('http://127.0.0.1:9421', '/admin/runtime', token)['models']
 rows = [row for row in rows if row['model_id'] == model['id']]
-assert len(rows) == 1 and rows[0]['managed'] and rows[0]['ready']
+assert len(rows) == 1 and rows[0]['managed'] is True and rows[0]['alive'] is True
 o = rows[0]['observation']
 assert o and o['model_id'] == model['id'] and o['pid'] > 0
 assert o['engine_url'].rstrip('/') == 'http://127.0.0.1:8000'
@@ -281,6 +281,8 @@ with (Path(os.environ['WORK']) / 'candidate-model.json').open('x') as out:
     out.write('\n')
 PY
 ```
+
+`/admin/runtime` reports the managed engine process's liveness as `alive` (`null` for an operator-owned engine) and keeps it apart from readiness: its `ready` is the model's latest readiness result, false once the engine has exited. A live process is not a ready model; check readiness with `GET /readyz` or the model's `ready` in `/admin/status`, as running preflight does.
 
 This copies platform, backend, memory kind, all observed physical device IDs/names/memory/driver versions/selectors, runtime/artifact SHA256, engine version, reserve, GPU layers, split/weights, K/V cache, flash attention, batch/microbatch and concurrency. Do not replace a driver string or physical ID with a label. `revision`, `tokenizer_revision`, template hash, quantization, capabilities and context/output limits stay exactly as installed. Both repository identities come from `manifest.model.repo_id` because the tokenizer is embedded in this GGUF artifact.
 

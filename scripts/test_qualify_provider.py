@@ -13,6 +13,9 @@ SPEC = importlib.util.spec_from_file_location('qualify_provider', Path(__file__)
 qualifier = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualifier)
 
+# A member the runtime row leaves out.
+ABSENT = object()
+
 
 def identity(memory=8188, kind='dedicated', backend='cuda'):
     return {
@@ -29,7 +32,7 @@ def identity(memory=8188, kind='dedicated', backend='cuda'):
 
 
 class RuntimeInspectionTests(unittest.TestCase):
-    def inspect(self, observed=None, mutate=None, capabilities=('chat', 'completions'), tier='8gb', managed=True, ready=True):
+    def inspect(self, observed=None, mutate=None, capabilities=('chat', 'completions'), tier='8gb', managed=True, alive=True, ready=True):
         observed = copy.deepcopy(observed or identity())
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -48,7 +51,10 @@ class RuntimeInspectionTests(unittest.TestCase):
             base = dict(model, serving=None)
             args = SimpleNamespace(admin_url='http://127.0.0.1:9421', admin_key_file='private-file',
                                    engine_url='http://127.0.0.1:8000', artifact_root=directory)
-            response = {'models': [{'model_id': model['id'], 'managed': managed, 'ready': ready, 'observation': observed}]}
+            row = {'model_id': model['id'], 'managed': managed, 'ready': ready, 'observation': observed}
+            if alive is not ABSENT:
+                row['alive'] = alive
+            response = {'models': [row]}
             provision = SimpleNamespace(validate_artifact=lambda _: (base, 'generation'))
             with patch.object(qualifier, 'provision_provider', return_value=provision), \
                  patch.object(qualifier, 'get_json', return_value=response), \
@@ -78,13 +84,21 @@ class RuntimeInspectionTests(unittest.TestCase):
                 self.inspect(mutate=lambda model: model['serving'].__setitem__(field, replacement))
 
     def test_external_or_dead_process_cannot_qualify(self):
-        for managed, ready in [(False, True), (True, False)]:
-            with self.subTest(managed=managed, ready=ready), self.assertRaisesRegex(ValueError, 'healthy managed'):
-                self.inspect(managed=managed, ready=ready)
+        # `/admin/runtime` reports an operator-owned engine with no liveness claim and an exited
+        # one as not alive, whatever readiness says; a row without `alive`, as an older daemon
+        # answered with liveness in `ready`, makes no liveness claim either.
+        for managed, alive, ready in [(False, None, True), (True, False, False), (True, False, True), (True, ABSENT, True)]:
+            with self.subTest(managed=managed, alive=alive, ready=ready), self.assertRaisesRegex(ValueError, 'live managed'):
+                self.inspect(managed=managed, alive=alive, ready=ready)
         observed = identity()
         observed['engine_url'] = 'http://127.0.0.1:8001'
         with self.assertRaisesRegex(ValueError, 'engine URL'):
             self.inspect(observed)
+
+    def test_a_live_process_is_inspected_by_its_liveness_not_readiness(self):
+        # provider-daemon-lifecycle requirement 2: a live engine whose model is not yet ready
+        # is still the process to inspect; readiness is the provider's, not the observation's.
+        self.assertEqual(self.inspect(ready=False)['pid'], 123)
 
     def test_generation_capabilities_do_not_require_separate_streaming_flag(self):
         for capabilities in [('chat',), ('completions',), ('chat', 'completions')]:

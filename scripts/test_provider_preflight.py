@@ -68,5 +68,31 @@ class RpcGatewayBearerProbe(unittest.TestCase):
         self.assertEqual(len(Gateway.seen), 1)
 
 
+class RuntimeObservationLiveness(unittest.TestCase):
+    """`GET /admin/runtime` reports engine process liveness as `alive` and readiness apart
+    (provider-daemon-lifecycle requirement 2). Running preflight takes the observation of a live
+    managed engine and reads readiness from `/readyz`."""
+    observation = {'pid': 123, 'model_id': 'org/model/Q4.gguf'}
+
+    def row(self, **fields):
+        return dict({'model_id': 'org/model/Q4.gguf', 'managed': True, 'alive': True, 'ready': True,
+                     'observation': self.observation}, **fields)
+
+    def test_a_live_engine_is_accepted_by_its_liveness(self):
+        for ready in (True, False):
+            with self.subTest(ready=ready):
+                self.assertEqual(preflight.live_runtime_observation([self.row(ready=ready)]), self.observation)
+
+    def test_a_dead_unmanaged_or_unobserved_engine_is_refused(self):
+        # An older daemon reported liveness as `ready` and made no `alive` claim.
+        older = self.row()
+        del older['alive']
+        for rows in ([self.row(alive=False, ready=False)], [self.row(alive=False, ready=True)], [older],
+                     [self.row(managed=False, alive=None, observation=None)], [self.row(observation=None)],
+                     [], [self.row(), self.row()]):
+            with self.subTest(rows=rows), self.assertRaisesRegex(RuntimeError, 'not alive/observed'):
+                preflight.live_runtime_observation(rows)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -322,6 +322,23 @@ fn load_identity(path: &Path) -> Result<identity::Keypair, String> {
         Err(e) => Err(format!("cannot inspect persisted peer identity: {e}")),
     }
 }
+
+/// A persisted peer identity, loaded under the protected-file rules of `load_identity`, before
+/// any node joins the network under it. A provider derives its deployment directory from the
+/// peer ID and takes that deployment's lock before `DhtService::start_as` dials or listens
+/// (provider-daemon-lifecycle requirement 8).
+pub struct PeerIdentity(identity::Keypair);
+
+impl PeerIdentity {
+    /// Loads the identity at `path`, or creates and persists a new one when none exists.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        load_identity(path).map(Self)
+    }
+    pub fn peer_id(&self) -> String {
+        self.0.public().to_peer_id().to_string()
+    }
+}
+
 fn index(network: &NetworkIdentity, model: Option<&str>) -> kad::RecordKey {
     let bytes = protocol::canonical_json(&(network, model)).expect("network index serializes");
     kad::RecordKey::new(&protocol::digest(&bytes))
@@ -394,7 +411,19 @@ impl DhtService {
         network: NetworkIdentity,
         registry: Arc<OfferRegistry>,
     ) -> Result<Self, String> {
-        let key = load_identity(&config.identity_file)?;
+        let identity = PeerIdentity::load(&config.identity_file)?;
+        Self::start_as(identity, config, network, registry).await
+    }
+
+    /// `start` under `identity`, already loaded from `config.identity_file`: the node listens
+    /// and dials its bootstrap peers only from here.
+    pub async fn start_as(
+        identity: PeerIdentity,
+        config: DhtConfig,
+        network: NetworkIdentity,
+        registry: Arc<OfferRegistry>,
+    ) -> Result<Self, String> {
+        let key = identity.0;
         let peer = key.public().to_peer_id();
         let mut swarm = build_swarm(key, &network)?;
         swarm

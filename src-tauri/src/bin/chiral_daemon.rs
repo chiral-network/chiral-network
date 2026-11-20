@@ -196,6 +196,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime.state.wallet,
         runtime.dht.peer_id()
     );
+    // A failed starting pass is not a failed start (provider-daemon-lifecycle requirement 7);
+    // `/admin/status` keeps reporting it until a later pass succeeds.
+    if let Some(error) = runtime.refresh_error().await {
+        eprintln!("Starting maintenance pass failed: {error}; running without new funding or published offers until a later pass succeeds; see /admin/status for admission");
+    }
     let mut server_error = None;
     let mut public_finished = false;
     let mut admin_finished = false;

@@ -35,6 +35,15 @@ def check_rpc_gateway_bearer(base='http://127.0.0.1:8547'):
         raise RuntimeError('chain RPC gateway answered a request without its bearer with HTTP %d, not 401' % status)
 
 
+def live_runtime_observation(rows):
+    """The one managed engine's launcher observation from `GET /admin/runtime`. That route
+    reports process liveness as `alive` (null for an operator-owned engine) and keeps readiness
+    separate; readiness is read from `/readyz` below, never from the process observation."""
+    if len(rows) != 1 or rows[0].get('managed') is not True or rows[0].get('alive') is not True or not rows[0].get('observation'):
+        raise RuntimeError('managed runtime not alive/observed')
+    return rows[0]['observation']
+
+
 def check_listeners():
     private_ports = {8000, 9419, 9421, 8547, 8081}
     host = platform.system()
@@ -144,10 +153,7 @@ def main():
     if args.running:
         admin_url = 'http://' + config['admin_bind']
         admin_token = provision.secret_file(args.deployment / 'secrets/admin.token')
-        rows = qualifier.get_json(admin_url, '/admin/runtime', admin_token)['models']
-        if len(rows) != 1 or not rows[0]['managed'] or not rows[0]['ready'] or not rows[0].get('observation'):
-            raise RuntimeError('managed runtime not healthy/observed')
-        observed = rows[0]['observation']
+        observed = live_runtime_observation(qualifier.get_json(admin_url, '/admin/runtime', admin_token)['models'])
         expected = {field: runtime[field] for field in provision.RUNTIME_FIELDS - {'device_ids', 'startup_timeout_secs'}}
         expected.update(model_id=base['id'], engine_url=served['engine_url'], context_length=base['context_length'], max_concurrency=served['max_concurrency'], runtime_sha256=runtime_hash, artifact_manifest_sha256=qualifier.sha(manifest_bytes), platform=host, engine_version=runtime_manifest['engine_version'])
         if any(observed.get(field) != value for field, value in expected.items()) or [d['engine_device'] for d in observed['devices']] != runtime['device_ids']:
