@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-20 (sixty-fifth round) — Acceptance: credential options, hashed secrets, bearer scope and lifetime, rotation, limits, management without admission
+
+- In step at `7fdc4436`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-account-credentials` 3.1–3.6; 3.7–3.9 follow). New library tests drive the production control and inference routers over file-backed ledgers with owner proofs:
+  - 3.1: issuance and rotation refuse empty, unknown and mixed scopes, concurrency above the account limit, non-canonical caps (`"01"`, `"1.5"`, `"-1"`, `""`, a number), unknown and repeated members and a positional array, with every credential row and the account view unchanged and the rotated credential still working; valid options give a list entry with exactly that expiry, cap, concurrency and scopes, authenticating at `expires_at - 1` and not at `expires_at`.
+  - 3.2: no secret (whole, its random hex in either case, or its 32 raw bytes) appears in `ledger.sqlite`, `-wal`, `-shm` or `-journal`, open or closed; each `token_hash` is `hash_hex` of its secret; list entries carry exactly the 11 view members; identifiers are independent of secrets.
+  - 3.3: read-only bearers get 403 `credential_scope` on the inference routes and cancel, with nothing reserved, sent or cancelled; infer-only bearers get 403 on request status; revoked bearers and bearers at or past `expires_at` get 401 on all six routes (the exact second is caught by a same-second retry loop, no sleep or seam).
+  - 3.4: expired and revoked credentials rotate into replacements with exactly the requested scopes while the predecessor stays refused; another account's identifier of the same owner is refused with 404 for revocation and rotation (added by the review; before, only `inference_owner_control_test` covered it).
+  - 3.5: a cap above the balance changes no account, funding or fee state; a reservation above the balance fails `insufficient_funds`, not `spend_cap`; revocation, rotation and expiry move no money.
+  - 3.6: with admission, new funding, qualified models, quote budgets and funding-intent capacity all closed and no offer registered, owner list, issuance, rotation and revocation answer 200 and change no money or gate state.
+- The review found five mutations that passed (any-known instead of every-known scope, raw secret bytes in the ledger, both cross-account checks removed, issuance gated on opening capacity) and added assertions until each failed. Failure messages of the new tests print only error codes, never a document that could hold a secret.
+- No product code changed and no code difference was found. 3.1–3.6 are ticked. Two statements hold by inspection only, as recorded in tasks.md: no secret in provider logs (no logging call in those modules) and no native surface presenting a cap as a balance.
+- Checks: `--lib` 363 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; strict validation passes. The integration suite was not rerun: every change is in library test code (`billing_store_tests.rs` and the `inference_gateway` tests module), which integration targets and binaries do not compile.
+
 ## 2026-11-20 (sixty-fourth round) — Acceptance: pinned outbound client, private engine origin, ingress and preflight
 
 - In step at `3140f4ee`; whitepaper unchanged; no new answers.
@@ -713,7 +727,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials 3.7–3.9 (3.1–3.6 done), public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

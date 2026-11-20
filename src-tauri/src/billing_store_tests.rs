@@ -4138,3 +4138,799 @@ fn quote_work_invalid_evidence_fails_closed_without_blocking_paid_settlement() {
         assert_eq!(quote_work_protected_snapshot(&store), after_settlement);
     }
 }
+
+// account-credentials acceptance evidence (tasks 3.1, 3.2, 3.4, 3.5 and 3.6). Ledger
+// tests use logical time; the router tests use current time, because the production
+// control and inference routers read the real clock.
+
+/// A paid account opened now on `store`, funded with `funding` wei, whose signed
+/// concurrency limit is `max_concurrency`. Verified funding is a ledger prerequisite
+/// after the chain boundary, as in `paid`.
+fn paid_now(
+    store: &BillingStore,
+    funding: u128,
+    max_concurrency: u32,
+) -> (Signed<Quote>, crate::protocol::OpenResult) {
+    let now = protocol::now().unwrap();
+    let mut payload = quote(funding, false).payload;
+    payload.max_concurrency = max_concurrency;
+    payload.issued_at = now;
+    payload.expires_at = now + 300;
+    let agreement = protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap();
+    store.store_quote(&agreement, now).unwrap();
+    let funding_payment = payment(&agreement.payload, true, funding, 1);
+    register(store, &agreement, &funding_payment, now);
+    let opened = store.open_account(&agreement, Some(&funding_payment), now).unwrap();
+    (agreement, opened)
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+/// The production control router and public inference router over a file-backed
+/// ledger holding one paid account (`paid_now`). The provider is accepting, new
+/// funding is ready and the agreed model is qualified until a test closes them; no
+/// chain RPC or engine answers.
+struct CredentialRoutes {
+    _directory: tempfile::TempDir,
+    path: std::path::PathBuf,
+    state: Arc<crate::app::ProviderState>,
+    agreement: Signed<Quote>,
+    opened: crate::protocol::OpenResult,
+}
+
+impl CredentialRoutes {
+    fn new(funding: u128, max_concurrency: u32) -> Self {
+        use crate::{
+            app::ProviderState,
+            chain_client::ChainClient,
+            network::NetworkConfig,
+            offer_registry::OfferRegistry,
+            provider_config::{DhtConfig, ModelConfig, ProviderConfig},
+        };
+        use std::sync::atomic::AtomicBool;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.sqlite");
+        let ledger = Arc::new(BillingStore::open(&path, &network()).unwrap());
+        let (agreement, opened) = paid_now(&ledger, funding, max_concurrency);
+        let network_config = NetworkConfig {
+            identity: network(),
+            rpc_url: "http://127.0.0.1:1".into(),
+            rpc_bearer_file: None,
+            faucet_url: None,
+            explorer_url: None,
+            policy_url: None,
+        };
+        let config = ProviderConfig {
+            network: network_config.clone(),
+            data_dir: directory.path().into(),
+            signing_key_file: directory.path().join("key"),
+            admin_token_file: directory.path().join("admin"),
+            public_endpoint: "http://127.0.0.1:9419".into(),
+            public_bind: "127.0.0.1:9419".parse().unwrap(),
+            admin_bind: "127.0.0.1:9421".parse().unwrap(),
+            platform_wallet: agreement.payload.platform_wallet.clone(),
+            fee_bps: 50,
+            min_funding_wei: "1000".into(),
+            models: vec![ModelConfig {
+                model: agreement.payload.model.clone(),
+                price: agreement.payload.price.clone(),
+                engine_url: "http://127.0.0.1:1".into(),
+                engine_api_key_file: None,
+                max_concurrency,
+                request_timeout_secs: 1,
+                qualification_evidence_file: None,
+                runtime: None,
+            }],
+            dht: DhtConfig {
+                listen: "/ip4/127.0.0.1/tcp/0".into(),
+                bootstrap: vec![],
+                identity_file: directory.path().join("dht"),
+            },
+            development: true,
+        };
+        let state = Arc::new(ProviderState {
+            model_slots: ProviderState::slots(&config),
+            managed_engines: Default::default(),
+            config: Arc::new(config),
+            chain: Arc::new(ChainClient::new(network_config, directory.path().into()).unwrap()),
+            ledger,
+            private_key: Arc::new(PROVIDER_KEY.into()),
+            wallet: agreement.payload.provider_wallet.clone(),
+            offers: Arc::new(OfferRegistry::new(network(), true)),
+            accepting: AtomicBool::new(true),
+            settlement_fault: Default::default(),
+            funding_ready: AtomicBool::new(true),
+            qualified_models: std::sync::RwLock::new(
+                [agreement.payload.model.id.clone()].into_iter().collect(),
+            ),
+            embedding_dimensions: std::sync::RwLock::new(Default::default()),
+        });
+        Self { _directory: directory, path, state, agreement, opened }
+    }
+
+    fn id(&self) -> String {
+        self.agreement.payload.id.clone()
+    }
+
+    fn ledger(&self) -> &BillingStore {
+        &self.state.ledger
+    }
+
+    /// A credential issued directly in the ledger, valid for an hour, with no cap.
+    fn issue(&self, max_concurrency: u32, scopes: &[&str]) -> Credential {
+        let now = protocol::now().unwrap();
+        self.ledger()
+            .issue_credential(
+                &self.id(),
+                &CredentialIssueRequest {
+                    expires_at: now + 3600,
+                    spend_cap_wei: None,
+                    max_concurrency,
+                    scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+                },
+                now,
+            )
+            .unwrap()
+    }
+
+    /// The credential authenticates now for this account, as `credential.id`.
+    fn authenticates(&self, credential: &Credential) -> CredentialContext {
+        let context = self
+            .ledger()
+            .authenticate(&credential.bearer, protocol::now().unwrap())
+            .unwrap();
+        assert_eq!(context.account.contract_id, self.id());
+        assert_eq!(context.credential_id, credential.id);
+        context
+    }
+
+    /// Complete credential rows, read through an independent connection.
+    fn credential_rows(&self) -> Vec<Value> {
+        let db = Connection::open(&self.path).unwrap();
+        let mut statement = db
+            .prepare("SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|row| serde_json::from_str(&row.unwrap()).unwrap())
+            .collect();
+        rows
+    }
+
+    /// Sends `body` to the control router with a valid one-use owner proof for exactly
+    /// this method, path and body, recorded in the ledger as `owner_post` records it.
+    /// Returns the status, the document and the proof's nonce.
+    async fn owner(&self, method: &str, path: &str, body: Vec<u8>) -> (axum::http::StatusCode, Value, String) {
+        let now = protocol::now().unwrap();
+        let wallet = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
+        let proof = AuthPayload {
+            network: network(),
+            provider_wallet: self.state.wallet.clone(),
+            wallet: wallet.clone(),
+            method: method.into(),
+            path: path.into(),
+            body_hash: protocol::hash_hex(&body),
+            nonce: protocol::random_id(),
+            expires_at: now + 120,
+        };
+        self.ledger().create_challenge(&proof, now).unwrap();
+        let signature =
+            crate::wallet::sign_message(OWNER_KEY, &crate::auth::challenge_payload(&proof).unwrap())
+                .unwrap();
+        let request = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("x-chiral-owner", wallet)
+            .header("x-chiral-nonce", &proof.nonce)
+            .header("x-chiral-signature", signature)
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let (status, document) = self.control(request).await;
+        (status, document, proof.nonce)
+    }
+
+    /// Sends `body` to the control router without any credential.
+    async fn anonymous(&self, method: &str, path: &str, body: Vec<u8>) -> (axum::http::StatusCode, Value) {
+        let request = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        self.control(request).await
+    }
+
+    async fn control(&self, request: axum::http::Request<axum::body::Body>) -> (axum::http::StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = crate::contracts::router(self.state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// Sends a bodiless request with `bearer` to the public inference router.
+    async fn public(&self, method: &str, path: &str, bearer: &str) -> (axum::http::StatusCode, Value) {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", format!("Bearer {bearer}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = crate::inference_gateway::router(self.state.clone()).oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        assert!(!contains(&bytes, bearer.as_bytes()), "a response echoed the bearer");
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    fn entry(&self, credential: &str) -> CredentialView {
+        self.ledger()
+            .credentials(&self.id())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.id == credential)
+            .unwrap()
+    }
+}
+
+/// account-credentials requirement 1 (task 3.1), scenarios *Options outside the contract
+/// are refused* (including a scope list that mixes `infer` with an unknown scope) and *A
+/// positional array is not the options object*, through the production control router.
+/// Each options body is sent with
+/// a valid owner proof for exactly that body, once as an issuance and once as a
+/// rotation of a valid credential A. Each is refused, A still authenticates, and every
+/// credential row and the account view stay exactly as they were. That includes
+/// rotation's revocation of A, which happens before the replacement is checked and must
+/// roll back: requirement 4 *A refused rotation keeps its predecessor* (concurrency case).
+/// The error codes are current implementation values (design decision 4); the
+/// requirement says only "refused". Who may send these and the proof's consumption are
+/// `inference-owner-control`'s; consumption is checked only as a fixture precondition.
+#[tokio::test]
+async fn credential_options_outside_the_contract_change_no_credential() {
+    let expires_at = protocol::now().unwrap() + 3600;
+    let valid = json!({"expires_at": expires_at, "spend_cap_wei": null, "max_concurrency": 1, "scopes": ["infer"]});
+    let with = |member: &str, value: Value| {
+        let mut body = valid.clone();
+        body[member] = value;
+        serde_json::to_vec(&body).unwrap()
+    };
+    let repeated = format!(
+        r#"{{"expires_at":{expires_at},"spend_cap_wei":null,"max_concurrency":1,"scopes":["infer"],"scopes":["read"]}}"#
+    )
+    .into_bytes();
+    // The account's signed concurrency limit is 2.
+    let cases = [
+        ("empty scopes", with("scopes", json!([])), "invalid_credential"),
+        ("unknown scope", with("scopes", json!(["admin"])), "invalid_credential"),
+        // Every element must be `infer` or `read`, not merely one of them.
+        ("known and unknown scope", with("scopes", json!(["infer", "admin"])), "invalid_credential"),
+        // Scenario *A positional array is not the options object* (task 2.1's decoder).
+        ("positional array", serde_json::to_vec(&json!([expires_at, null, 1, ["read"]])).unwrap(), "invalid_request"),
+        ("concurrency above the account's", with("max_concurrency", json!(3)), "invalid_credential"),
+        ("leading-zero cap", with("spend_cap_wei", json!("01")), "invalid_amount"),
+        ("fractional cap", with("spend_cap_wei", json!("1.5")), "invalid_amount"),
+        ("negative cap", with("spend_cap_wei", json!("-1")), "invalid_amount"),
+        ("empty cap", with("spend_cap_wei", json!("")), "invalid_amount"),
+        ("numeric cap", with("spend_cap_wei", json!(1)), "invalid_request"),
+        ("unknown member", with("account", json!("other")), "invalid_request"),
+        ("repeated member", repeated, "invalid_request"),
+    ];
+    for (name, body, code) in cases {
+        // A ledger per case keeps the owner within its per-minute challenge budget.
+        let routes = CredentialRoutes::new(1000, 2);
+        let id = routes.id();
+        let named = routes.issue(1, &["infer", "read"]);
+        let rows = routes.credential_rows();
+        assert_eq!(rows.len(), 2);
+        let account = encode(&routes.ledger().account(&id).unwrap()).unwrap();
+        for path in [
+            format!("/v1/contracts/{id}/credentials"),
+            format!("/v1/contracts/{id}/credentials/{}/rotate", named.id),
+        ] {
+            let (status, document, nonce) = routes.owner("POST", &path, body.clone()).await;
+            // Only the error member is printed: an accepted body would carry a secret.
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{name} {path}: {}", document["error"]);
+            assert_eq!(document["error"]["code"], code, "{name} {path}: {}", document["error"]);
+            assert!(routes.ledger().challenge(&nonce).is_err(), "{name}: the proof was not consumed");
+            assert_eq!(routes.credential_rows(), rows, "{name} {path}: a credential row changed");
+            assert_eq!(encode(&routes.ledger().account(&id).unwrap()).unwrap(), account, "{name}");
+            routes.authenticates(&named);
+            routes.authenticates(routes.opened.credential.as_ref().unwrap());
+        }
+    }
+}
+
+/// account-credentials requirement 1 (task 3.1), scenario *Valid options issue a
+/// credential with exactly those limits*: with an account concurrency limit of 2,
+/// issuance and rotation with `{"spend_cap_wei":"900","max_concurrency":2,
+/// "scopes":["infer","read"]}` return the credential, and the owner's credential list
+/// shows each with exactly that expiry, cap, concurrency and both scopes. The issued
+/// `expires_at` is the time from which the credential no longer authenticates. Neither
+/// operation changes the account view.
+#[tokio::test]
+async fn valid_options_issue_and_rotate_credentials_with_exactly_those_limits() {
+    let routes = CredentialRoutes::new(1000, 2);
+    let id = routes.id();
+    let named = routes.issue(1, &["read"]);
+    let account = encode(&routes.ledger().account(&id).unwrap()).unwrap();
+    let expires_at = protocol::now().unwrap() + 3600;
+    let options = json!({"expires_at": expires_at, "spend_cap_wei": "900", "max_concurrency": 2, "scopes": ["infer", "read"]});
+    for path in [
+        format!("/v1/contracts/{id}/credentials"),
+        format!("/v1/contracts/{id}/credentials/{}/rotate", named.id),
+    ] {
+        let before = protocol::now().unwrap();
+        let (status, document, _) = routes.owner("POST", &path, serde_json::to_vec(&options).unwrap()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{path}: {}", document["error"]);
+        let credential: Credential = serde_json::from_value(document).unwrap();
+        assert_eq!(credential.contract_id, id);
+        assert_eq!(credential.expires_at, expires_at);
+        let (status, list, _) = routes.owner("GET", &format!("/v1/contracts/{id}/credentials"), Vec::new()).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let entry = list.as_array().unwrap().iter().find(|entry| entry["id"] == credential.id).unwrap();
+        let created_at = entry["created_at"].as_u64().unwrap();
+        assert!((before..=protocol::now().unwrap()).contains(&created_at));
+        assert_eq!(
+            entry,
+            &json!({"id": credential.id, "contract_id": id, "expires_at": expires_at,
+                "spend_cap_wei": "900", "spent_wei": "0", "reserved_wei": "0",
+                "max_concurrency": 2, "scopes": ["infer", "read"], "revoked": false,
+                "created_at": created_at, "root": false})
+        );
+        assert_eq!(routes.authenticates(&credential).scopes, ["infer", "read"]);
+        assert!(routes.ledger().authenticate(&credential.bearer, expires_at - 1).is_ok());
+        assert!(routes.ledger().authenticate(&credential.bearer, expires_at).unwrap_err().starts_with("unauthorized:"));
+        assert_eq!(encode(&routes.ledger().account(&id).unwrap()).unwrap(), account);
+    }
+    assert!(routes.entry(&named.id).revoked);
+    assert!(routes.ledger().authenticate(&named.bearer, protocol::now().unwrap()).is_err());
+}
+
+/// account-credentials requirement 2 (task 3.2) on a file-backed ledger. Credentials
+/// created by a first opening, an issuance and a rotation:
+/// - appear in no ledger file, main database, `-wal`, `-shm` or `-journal`, either
+///   whole, as the 64 random hex digits after `chiral_` (lower or upper case) or as the
+///   32 bytes they encode, while the ledger is open (the recent pages are in the WAL)
+///   and after it is closed;
+/// - are stored with `token_hash` = `protocol::hash_hex(secret)` (Keccak-256 is the
+///   current implementation value, design decision 4);
+/// - have list entries with exactly the `CredentialView` members, so no `token_hash` or
+///   secret, and the account, request and receipt views carry no secret either;
+/// - have a public identifier that is not the secret, its random part or its hash, and
+///   neither the identifier nor the secret contains the other.
+#[test]
+fn the_ledger_keeps_only_a_hash_of_each_secret_and_an_independent_identifier() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let root = opened.credential.clone().unwrap();
+    let options = CredentialIssueRequest {
+        expires_at: 1000,
+        spend_cap_wei: Some("900".into()),
+        max_concurrency: 2,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let issued = store.issue_credential(&id, &options, 102).unwrap();
+    let rotated = store.rotate_credential(&id, &issued.id, &options, 103).unwrap();
+    let created = [&root, &issued, &rotated];
+    let held = store.reserve(&id, &rotated.id, "held", 10, 10, 104, &q.payload.model).unwrap();
+    // Each secret is searched for whole, as its 64 random hex digits in either case, and
+    // as the 32 random bytes those digits encode (a blob column would hold these).
+    let forms: Vec<Vec<u8>> = created
+        .iter()
+        .flat_map(|credential| {
+            let random = &credential.bearer[7..];
+            [
+                credential.bearer.clone().into_bytes(),
+                random.as_bytes().to_vec(),
+                random.to_uppercase().into_bytes(),
+                hex::decode(random).unwrap(),
+            ]
+        })
+        .collect();
+    assert!(forms.iter().all(|form| form.len() >= 32));
+    let secrets = |text: &[u8]| forms.iter().any(|form| contains(text, form));
+    let search = |stage: &str| {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().into_string().unwrap();
+            assert!(name.starts_with("ledger.sqlite"), "{stage}: unexpected file {name}");
+            assert!(!secrets(&std::fs::read(entry.path()).unwrap()), "{stage}: {name} holds a secret, as text or as its random bytes");
+            names.push(name);
+        }
+        names.sort();
+        names
+    };
+    // The search covers the write-ahead log, where SQLite keeps the recent pages.
+    let open = search("open");
+    assert!(open.contains(&"ledger.sqlite".to_string()) && open.contains(&"ledger.sqlite-wal".to_string()), "{open:?}");
+    let db = Connection::open(&path).unwrap();
+    for credential in created {
+        let hash: String = db
+            .query_row("SELECT token_hash FROM credentials WHERE id=?1", [&credential.id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(hash, protocol::hash_hex(credential.bearer.as_bytes()));
+        assert_ne!(credential.id, credential.bearer);
+        assert!(!credential.bearer.contains(&credential.id) && !credential.id.contains(&credential.bearer));
+        assert!(!credential.id.contains(&credential.bearer[7..]) && !credential.bearer.contains(&credential.id[2..]));
+        assert_ne!(credential.id, hash);
+    }
+    drop(db);
+    let members = [
+        "contract_id", "created_at", "expires_at", "id", "max_concurrency", "reserved_wei",
+        "revoked", "root", "scopes", "spend_cap_wei", "spent_wei",
+    ];
+    let list = serde_json::to_value(store.credentials(&id).unwrap()).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 3);
+    for entry in list.as_array().unwrap() {
+        let mut keys: Vec<_> = entry.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, members);
+        assert!(!secrets(entry.to_string().as_bytes()));
+    }
+    for view in [
+        serde_json::to_value(store.account(&id).unwrap()).unwrap(),
+        serde_json::to_value(store.requests(&id, None).unwrap()).unwrap(),
+        serde_json::to_value(store.request_view(&id, &held.id).unwrap()).unwrap(),
+        serde_json::to_value(store.receipt(&id, PROVIDER_KEY, 105).unwrap()).unwrap(),
+        serde_json::to_value(store.open_account(&q, None, 106).unwrap()).unwrap(),
+    ] {
+        assert!(!secrets(view.to_string().as_bytes()), "a view carries a secret");
+    }
+    drop(store);
+    search("closed");
+}
+
+/// account-credentials requirement 5 (task 3.5) on a paid account with 1,000 wei
+/// available (1,005 wei funded, 5 wei platform fee):
+/// - issuing a credential with cap 10^18 wei leaves the account view, funding history,
+///   fee obligations and fee batches unchanged;
+/// - that credential's reservation with maximum cost 2,000 wei fails with
+///   `insufficient_funds`, not `spend_cap`, and reserves nothing;
+/// - revoking a credential with cap 900 wei that has spent 100 wei, rotating another and
+///   the expiry of a third create no funding, refund or fee record and change no amount:
+///   the 800 wei of unused cap is not money.
+#[test]
+fn credential_caps_restrict_authority_and_never_create_or_refund_money() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let q = quote(1005, false);
+    store.store_quote(&q, 100).unwrap();
+    let funding = payment(&q.payload, true, 1005, 1);
+    register(&store, &q, &funding, 100);
+    store.open_account(&q, Some(&funding), 101).unwrap();
+    let id = q.payload.id.clone();
+    let model = &q.payload.model;
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (account.funded_wei.as_str(), account.fee_wei.as_str(), account.available_wei.as_str()),
+        ("1005", "5", "1000")
+    );
+    let money_state = || {
+        let db = Connection::open(&path).unwrap();
+        let count = |table: &str| -> i64 {
+            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap()
+        };
+        json!({
+            "account": store.account(&id).unwrap(),
+            "agreement": store.quote(&id).unwrap(),
+            "funding": store.funding_history(&id).unwrap(),
+            "fee_batches": store.fee_batches().unwrap(),
+            "fees": store.fee_summary().unwrap(),
+            "rows": [count("funding"), count("funding_attempts"), count("fee_obligations"), count("fee_batches")],
+        })
+    };
+    let options = |cap: &str| CredentialIssueRequest {
+        expires_at: 1000,
+        spend_cap_wei: Some(cap.into()),
+        max_concurrency: 2,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let before = money_state();
+    let large = store.issue_credential(&id, &options("1000000000000000000"), 102).unwrap();
+    assert_eq!(money_state(), before);
+    // Prices are 1,000 wei per 1,000 tokens each way: 1,000 + 1,000 tokens cost 2,000 wei.
+    let error = store.reserve(&id, &large.id, "beyond-balance", 1000, 1000, 103, model).unwrap_err();
+    assert!(error.starts_with("insufficient_funds:"), "{error}");
+    assert!(store.request_view(&id, "beyond-balance").is_err());
+    assert_eq!(money_state(), before);
+    assert_eq!(store.credentials(&id).unwrap().iter().find(|c| c.id == large.id).unwrap().reserved_wei, "0");
+
+    let capped = store.issue_credential(&id, &options("900"), 104).unwrap();
+    let spend = store.reserve(&id, &capped.id, "spend-100", 50, 50, 105, model).unwrap();
+    assert_eq!(spend.max_cost_wei, "100");
+    store.settle(&spend.id, &TokenUsage { prompt_tokens: 50, completion_tokens: 50 }, "completed", 106).unwrap();
+    let entry = store.credentials(&id).unwrap().into_iter().find(|c| c.id == capped.id).unwrap();
+    assert_eq!((entry.spend_cap_wei.as_deref(), entry.spent_wei.as_str(), entry.reserved_wei.as_str()), (Some("900"), "100", "0"));
+    let spent = store.account(&id).unwrap();
+    assert_eq!(
+        (spent.funded_wei.as_str(), spent.fee_wei.as_str(), spent.spent_wei.as_str(), spent.reserved_wei.as_str(), spent.available_wei.as_str()),
+        ("1005", "5", "100", "0", "900")
+    );
+    let before = money_state();
+    store.revoke_credential(&id, &capped.id).unwrap();
+    assert!(store.authenticate(&capped.bearer, 107).is_err());
+    assert_eq!(money_state(), before);
+    store.rotate_credential(&id, &large.id, &options("1000000000000000000"), 108).unwrap();
+    assert_eq!(money_state(), before);
+    let expiring = store.issue_credential(&id, &CredentialIssueRequest { expires_at: 200, ..options("900") }, 109).unwrap();
+    assert!(store.authenticate(&expiring.bearer, 200).is_err());
+    assert!(store.reserve(&id, &expiring.id, "after-expiry", 1, 1, 200, model).unwrap_err().starts_with("forbidden:"));
+    assert_eq!(money_state(), before);
+}
+
+/// account-credentials requirement 4 (task 3.4), scenario *An expired or revoked
+/// credential can be rotated*, through the production control router. Credential A has
+/// expired (a restored record whose `expires_at` has passed, not a sleep), or the owner
+/// has revoked it. The owner rotates A with valid options that include `infer`. The
+/// replacement authenticates for the account with exactly the requested scopes, also on
+/// the public routes; A still does not authenticate and is listed revoked; the account's
+/// other credential and its account view are unchanged.
+#[tokio::test]
+async fn an_expired_or_revoked_credential_rotates_into_a_working_replacement() {
+    use axum::http::StatusCode;
+    for (case, scopes) in [("expired", json!(["infer"])), ("revoked", json!(["infer", "read"]))] {
+        let routes = CredentialRoutes::new(1000, 2);
+        let id = routes.id();
+        let unusable = routes.issue(1, &["infer", "read"]);
+        let other = routes.issue(1, &["infer"]);
+        let now = protocol::now().unwrap();
+        if case == "expired" {
+            let db = Connection::open(&routes.path).unwrap();
+            assert_eq!(
+                db.execute("UPDATE credentials SET record=json_set(record,'$.expires_at',?1) WHERE id=?2", params![now - 1, unusable.id])
+                    .unwrap(),
+                1
+            );
+        } else {
+            let path = format!("/v1/contracts/{id}/credentials/{}", unusable.id);
+            let (status, document, _) = routes.owner("DELETE", &path, Vec::new()).await;
+            assert_eq!(status, StatusCode::OK, "{document}");
+            assert_eq!(document, json!({"revoked": true}));
+        }
+        assert!(routes.ledger().authenticate(&unusable.bearer, now).unwrap_err().starts_with("unauthorized:"));
+        let (status, document) = routes.public("GET", "/v1/models", &unusable.bearer).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_api_key")));
+        let account = encode(&routes.ledger().account(&id).unwrap()).unwrap();
+
+        let options = json!({"expires_at": now + 3600, "spend_cap_wei": null, "max_concurrency": 1, "scopes": scopes});
+        let path = format!("/v1/contracts/{id}/credentials/{}/rotate", unusable.id);
+        let (status, document, _) = routes.owner("POST", &path, serde_json::to_vec(&options).unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {}", document["error"]);
+        let replacement: Credential = serde_json::from_value(document).unwrap();
+        assert_eq!(replacement.contract_id, id);
+        assert_ne!(replacement.id, unusable.id);
+        assert_ne!(replacement.bearer, unusable.bearer);
+        assert_eq!(json!(routes.authenticates(&replacement).scopes), scopes, "{case}");
+        let entry = routes.entry(&replacement.id);
+        assert_eq!((entry.revoked, entry.max_concurrency, json!(entry.scopes)), (false, 1, scopes.clone()));
+        let (status, models) = routes.public("GET", "/v1/models", &replacement.bearer).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {models}");
+        assert_eq!(models["data"][0]["id"], routes.agreement.payload.model.id);
+        let (status, read) = routes.public("GET", "/v1/requests/no-such-request", &replacement.bearer).await;
+        let expected = if case == "expired" {
+            (StatusCode::FORBIDDEN, "credential_scope")
+        } else {
+            (StatusCode::NOT_FOUND, "request_not_found")
+        };
+        assert_eq!((status, read["error"]["code"].as_str().unwrap()), expected, "{case}: {read}");
+
+        assert!(routes.ledger().authenticate(&unusable.bearer, protocol::now().unwrap()).is_err());
+        let (status, document) = routes.public("GET", "/v1/models", &unusable.bearer).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_api_key")));
+        assert!(routes.entry(&unusable.id).revoked);
+        routes.authenticates(&other);
+        routes.authenticates(routes.opened.credential.as_ref().unwrap());
+        assert_eq!(encode(&routes.ledger().account(&id).unwrap()).unwrap(), account, "{case}");
+    }
+}
+
+/// account-credentials requirement 4 (task 3.4), scenario *An identifier from another
+/// account is refused*, in the library suite through the production control router (the
+/// owner-control integration test `credential_identifiers_cannot_escape_the_signed_account_even_for_the_same_owner`
+/// covers it end to end). Accounts X (paid) and Y (free) have the same owner. A
+/// revocation and a rotation for X naming Y's credential C, each with a valid owner
+/// proof for exactly that request, are refused. No credential row of either account
+/// changes, neither account view changes, and C still authenticates for Y. As a control,
+/// the same rotation addressed to Y succeeds. 404 `not_found` is a current
+/// implementation value (design decision 4).
+#[tokio::test]
+async fn an_identifier_of_another_account_of_the_same_owner_is_refused() {
+    use axum::http::StatusCode;
+    let routes = CredentialRoutes::new(1000, 2);
+    let x = routes.id();
+    let now = protocol::now().unwrap();
+    let free = {
+        let mut payload = quote(0, true).payload;
+        payload.issued_at = now;
+        payload.expires_at = now + 300;
+        protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap()
+    };
+    routes.ledger().store_quote(&free, now).unwrap();
+    let c = routes.ledger().open_account(&free, None, now).unwrap().credential.unwrap();
+    let y = free.payload.id.clone();
+    let views = || [encode(&routes.ledger().account(&x).unwrap()).unwrap(), encode(&routes.ledger().account(&y).unwrap()).unwrap()];
+    let accounts = views();
+    assert_eq!(routes.ledger().account(&x).unwrap().consumer_wallet, routes.ledger().account(&y).unwrap().consumer_wallet);
+    let rows = routes.credential_rows();
+    assert_eq!(rows.len(), 2);
+    let c_authenticates = || {
+        let context = routes.ledger().authenticate(&c.bearer, protocol::now().unwrap()).unwrap();
+        assert_eq!((context.account.contract_id.as_str(), context.credential_id.as_str()), (y.as_str(), c.id.as_str()));
+    };
+    let options = serde_json::to_vec(&json!({"expires_at": now + 3600, "spend_cap_wei": null, "max_concurrency": 1, "scopes": ["infer", "read"]})).unwrap();
+    for (method, path, body) in [
+        ("DELETE", format!("/v1/contracts/{x}/credentials/{}", c.id), Vec::new()),
+        ("POST", format!("/v1/contracts/{x}/credentials/{}/rotate", c.id), options.clone()),
+    ] {
+        let (status, document, nonce) = routes.owner(method, &path, body).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")), "{method}: {}", document["error"]);
+        assert!(routes.ledger().challenge(&nonce).is_err(), "{method}: the proof was not consumed");
+        assert_eq!(routes.credential_rows(), rows, "{method}: a credential row changed");
+        assert_eq!(views(), accounts, "{method}");
+        c_authenticates();
+        routes.authenticates(routes.opened.credential.as_ref().unwrap());
+    }
+    let (status, document, _) = routes.owner("POST", &format!("/v1/contracts/{y}/credentials/{}/rotate", c.id), options).await;
+    assert_eq!(status, StatusCode::OK, "{}", document["error"]);
+    assert_eq!(document["contract_id"], y);
+    assert!(routes.ledger().authenticate(&c.bearer, protocol::now().unwrap()).is_err());
+    routes.authenticates(routes.opened.credential.as_ref().unwrap());
+    assert_eq!(views(), accounts);
+}
+
+/// account-credentials requirement 6 (task 3.6), scenario *A draining provider still
+/// manages credentials*, through the production control router. The provider is not
+/// accepting, new-funding readiness is lost, no model is qualified, both quote budgets
+/// are exhausted (restored rate state, not 600 observed issuances), opening capacity is
+/// exhausted (`MAX_PENDING` restored unopened funding intents with open admission) and
+/// no offer is registered; the closed gates are first shown to refuse. Owner-proved listing, issuance, rotation and
+/// revocation then each succeed, and the account view (with nonzero funded, fee, spent,
+/// reserved and available amounts), the signed agreement, the funding and fee records
+/// and the exhausted budgets stay exactly as they were.
+#[tokio::test]
+async fn credential_management_stays_reachable_while_every_admission_gate_is_closed() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    let routes = CredentialRoutes::new(1000, 2);
+    let id = routes.id();
+    let root = routes.opened.credential.clone().unwrap();
+    let model = routes.agreement.payload.model.clone();
+    let now = protocol::now().unwrap();
+    let spent = routes.ledger().reserve(&id, &root.id, "spent", 10, 10, now, &model).unwrap();
+    routes.ledger().settle(&spent.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 5 }, "completed", now).unwrap();
+    routes.ledger().reserve(&id, &root.id, "held", 10, 10, now, &model).unwrap();
+    let named = routes.issue(1, &["read"]);
+
+    routes.state.accepting.store(false, Ordering::Release);
+    routes.state.funding_ready.store(false, Ordering::Release);
+    routes.state.qualified_models.write().unwrap().clear();
+    let minute = now / 60 + 10;
+    let db = Connection::open(&routes.path).unwrap();
+    for (bucket, watermark) in [("quote:global", "quote_committed_minute"), ("quote-work:global", "quote_work_minute")] {
+        db.execute(
+            "INSERT INTO rate_limits(bucket,window,count) VALUES(?1,?2,600) ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=excluded.count",
+            params![bucket, minute],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![watermark, minute.to_string()],
+        )
+        .unwrap();
+    }
+    // Opening capacity: `MAX_PENDING` funding intents whose admission is still open and
+    // whose accounts were never opened (restored rows), so no new opening is admitted.
+    db.execute_batch("BEGIN").unwrap();
+    {
+        let mut insert = db
+            .prepare("INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) VALUES(?1,?2,'0x','{}','{}','0xpending',?3,?4)")
+            .unwrap();
+        for index in 0..MAX_PENDING {
+            insert
+                .execute(params![format!("pending-opening-{index}"), format!("pending-opening-tx-{index}"), index.to_string(), now + 86_400])
+                .unwrap();
+        }
+    }
+    db.execute_batch("COMMIT").unwrap();
+    let protected = || {
+        let rows = |query: &str| -> Vec<String> {
+            let mut statement = db.prepare(query).unwrap();
+            let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap();
+            rows.collect::<rusqlite::Result<_>>().unwrap()
+        };
+        json!({
+            "account": routes.ledger().account(&id).unwrap(),
+            "agreement": routes.ledger().quote(&id).unwrap(),
+            "funding": rows("SELECT json_array(tx_hash,contract,json(record),json(evidence),status,checked) FROM funding ORDER BY tx_hash"),
+            "intents": rows("SELECT json_array(contract,tx_hash,json(ack),sender,nonce,admission_until) FROM funding_intents WHERE contract NOT GLOB 'pending-opening-*' ORDER BY contract"),
+            "opening_capacity": rows("SELECT json_array(COUNT(*),MIN(admission_until),MAX(admission_until)) FROM funding_intents WHERE contract GLOB 'pending-opening-*'"),
+            "fees": rows("SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash"),
+            "batches": rows("SELECT json_array(id,status,json(record)) FROM fee_batches ORDER BY id"),
+            "requests": rows("SELECT json_array(id,status,json(record)) FROM requests ORDER BY id"),
+            "budgets": rows("SELECT json_array(bucket,window,count) FROM rate_limits WHERE bucket IN ('quote:global','quote-work:global') ORDER BY bucket"),
+        })
+    };
+    let before = protected();
+    let account = &before["account"];
+    for (member, amount) in [("funded_wei", "1000"), ("fee_wei", "5"), ("spent_wei", "15"), ("reserved_wei", "20"), ("available_wei", "960")] {
+        assert_eq!(account[member], amount, "{member}");
+    }
+    // Each gate is closed.
+    let (status, document) = routes.anonymous("POST", "/v1/contracts/propose", b"{}".to_vec()).await;
+    assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("provider_draining")));
+    assert!(routes.state.qualified_model(&model).is_none());
+    assert!(routes.state.offers.list().is_empty(), "no live or current offer");
+    let (status, models) = routes.public("GET", "/v1/models", &root.bearer).await;
+    assert_eq!((status, models), (StatusCode::OK, json!({"object": "list", "data": []})));
+    assert!(routes.ledger().sign_quote(quote(1000, false).payload, PROVIDER_KEY, now).unwrap_err().starts_with("rate_limit:"));
+    // A new opening is refused for capacity even when accepting and its model are
+    // assumed: its quote is restored directly because the quote budgets are exhausted.
+    let opening = {
+        let mut payload = quote(1000, false).payload;
+        payload.issued_at = now;
+        payload.expires_at = now + 300;
+        protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap()
+    };
+    db.execute(
+        "INSERT INTO quotes(id,owner,expires,record) VALUES(?1,?2,?3,?4)",
+        params![opening.payload.id, opening.payload.consumer_wallet, opening.payload.expires_at, encode(&opening).unwrap()],
+    )
+    .unwrap();
+    let opening_payment = payment(&opening.payload, true, 1000, 2);
+    let error = routes
+        .ledger()
+        .register_funding_intent(
+            &opening,
+            &opening.payload.consumer_wallet,
+            &opening_payment.raw_transaction,
+            &opening_payment.tx_hash,
+            2,
+            PROVIDER_KEY,
+            || Ok(now),
+            true,
+            &opening.payload.model,
+        )
+        .unwrap_err();
+    assert!(error.starts_with("rate_limit: active funding intent capacity"), "{error}");
+    assert_eq!(protected(), before);
+
+    let list = format!("/v1/contracts/{id}/credentials");
+    let (status, listed, _) = routes.owner("GET", &list, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed.as_array().unwrap().iter().any(|entry| entry["id"] == named.id && entry["revoked"] == false));
+    assert_eq!(protected(), before);
+    let options = serde_json::to_vec(&json!({"expires_at": now + 3600, "spend_cap_wei": null, "max_concurrency": 1, "scopes": ["infer", "read"]})).unwrap();
+    let (status, document, _) = routes.owner("POST", &list, options.clone()).await;
+    assert_eq!(status, StatusCode::OK, "issue: {}", document["error"]);
+    let issued: Credential = serde_json::from_value(document).unwrap();
+    routes.authenticates(&issued);
+    assert_eq!(protected(), before);
+    let (status, document, _) = routes.owner("POST", &format!("{list}/{}/rotate", named.id), options).await;
+    assert_eq!(status, StatusCode::OK, "rotate: {}", document["error"]);
+    let replacement: Credential = serde_json::from_value(document).unwrap();
+    routes.authenticates(&replacement);
+    assert!(routes.ledger().authenticate(&named.bearer, protocol::now().unwrap()).is_err());
+    assert_eq!(protected(), before);
+    let (status, document, _) = routes.owner("DELETE", &format!("{list}/{}", issued.id), Vec::new()).await;
+    assert_eq!((status, document), (StatusCode::OK, json!({"revoked": true})));
+    assert!(routes.ledger().authenticate(&issued.bearer, protocol::now().unwrap()).is_err());
+    assert_eq!(protected(), before);
+    let (status, listed, _) = routes.owner("GET", &list, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let listed = listed.as_array().unwrap();
+    for (credential, revoked) in [(&named.id, true), (&issued.id, true), (&replacement.id, false), (&root.id, false)] {
+        assert!(listed.iter().any(|entry| entry["id"] == *credential && entry["revoked"] == revoked), "{credential}");
+    }
+    assert!(!routes.state.accepting.load(Ordering::Acquire) && !routes.state.funding_ready.load(Ordering::Acquire));
+    assert_eq!(protected(), before);
+}

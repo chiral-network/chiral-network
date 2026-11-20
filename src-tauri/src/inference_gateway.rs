@@ -2165,4 +2165,211 @@ mod tests {
         assert!(state.ledger.list_requests().unwrap().is_empty());
         engine_task.abort();
     }
+
+    /// One request to a bearer-authorized public route: `models`, `chat`, `completions`,
+    /// `embeddings`, `status` or `cancel`. `key` is the request key of an inference request
+    /// and the request named by `status` and `cancel`.
+    fn bearer_route(route: &str, bearer: &str, key: &str) -> Request {
+        let (method, path, body) = match route {
+            "models" => ("GET", "/v1/models".to_string(), None),
+            "chat" => ("POST", "/v1/chat/completions".into(),
+                Some(json!({"model":"model","messages":[{"role":"user","content":"complete"}],"max_tokens":4}))),
+            "completions" => ("POST", "/v1/completions".into(),
+                Some(json!({"model":"model","prompt":"complete","max_tokens":4}))),
+            "embeddings" => ("POST", "/v1/embeddings".into(), Some(json!({"model":"model","input":"complete"}))),
+            "status" => ("GET", format!("/v1/requests/{key}"), None),
+            "cancel" => ("POST", format!("/v1/requests/{key}/cancel"), None),
+            _ => unreachable!("{route}"),
+        };
+        let mut request = Request::builder().method(method).uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        if body.is_some() {
+            request = request.header(header::CONTENT_TYPE, "application/json").header("idempotency-key", key);
+        }
+        request.body(body.map_or_else(Body::empty, |body| Body::from(body.to_string()))).unwrap()
+    }
+
+    /// account-credentials requirement 3 (task 3.3) through the public inference router,
+    /// with a qualified model, an engine that counts every request it receives, and a
+    /// `read`-only, an `infer`-only, a revoked and an expired credential of the account:
+    /// - the `read`-only bearer is refused for missing scope on `GET /v1/models`, the three
+    ///   inference routes and `POST /v1/requests/:id/cancel` of an in-flight request of its
+    ///   own account: nothing is reserved, the engine receives nothing, and the in-flight
+    ///   request is not cancelled;
+    /// - the `infer`-only bearer is refused for missing scope on `GET /v1/requests/:id`;
+    /// - the revoked bearer, and a bearer whose `expires_at` has passed or equals the
+    ///   provider's current time, are refused as unauthenticated on all six routes, and no
+    ///   account, credential, request or engine state changes; their cancellation of the
+    ///   in-flight request signals nothing.
+    ///
+    /// Positive controls show that the same fixture reserves, reads and cancels for the
+    /// scopes that allow it. 403 `credential_scope` and 401 `invalid_api_key` are current
+    /// implementation values (design decision 4). The exact-expiry case restores the
+    /// record instead of sleeping: a call counts only when the clock reads `expires_at`
+    /// both before and after it, so the provider's own reading was `expires_at`.
+    #[tokio::test]
+    async fn bearers_outside_their_scope_or_lifetime_change_nothing_on_any_route() {
+        use crate::billing_store::CredentialIssueRequest;
+        use axum::routing::post;
+        use std::sync::atomic::AtomicUsize;
+        const ROUTES: [&str; 6] = ["models", "chat", "completions", "embeddings", "status", "cancel"];
+        let (directory, mut state, root) = ingress_fixture();
+        let engine_requests = Arc::new(AtomicUsize::new(0));
+        let counted = engine_requests.clone();
+        let (events, mut engine_events) = mpsc::unbounded_channel();
+        let engine = Router::new()
+            .route("/health", get(|| async { StatusCode::OK }))
+            .route("/apply-template", post(|| async { Json(json!({"prompt":"rendered"})) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens":[10,11]})) }))
+            .route("/v1/chat/completions", post(move |Json(body): Json<Value>| {
+                let events = events.clone();
+                async move {
+                    if body["messages"][0]["content"] == "token:0" {
+                        // One token, then the stream stays open: the request is in flight.
+                        return delayed_engine(events, body).await;
+                    }
+                    let chunk = |choices: Value| json!({"id":"engine-response","object":"chat.completion.chunk",
+                        "model":"model","created":1,"choices":choices});
+                    let mut usage = chunk(json!([]));
+                    usage["usage"] = json!({"prompt_tokens":2,"completion_tokens":1,"total_tokens":3});
+                    let events = [
+                        chunk(json!([{"index":0,"delta":{"content":"OK"},"finish_reason":null,
+                            "logprobs":{"content":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5,
+                                "top_logprobs":[{"id":42,"token":"OK","bytes":[79,75],"logprob":-0.5}]}]}}])),
+                        chunk(json!([{"index":0,"delta":{},"finish_reason":"stop"}])),
+                        usage,
+                    ];
+                    let mut text: String = events.iter().map(|event| format!("data: {event}\n\n")).collect();
+                    text.push_str("data: [DONE]\n\n");
+                    ([(header::CONTENT_TYPE, "text/event-stream")], text).into_response()
+                }
+            }))
+            .layer(axum::middleware::from_fn(move |request: Request, next: axum::middleware::Next| {
+                let counted = counted.clone();
+                async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    next.run(request).await
+                }
+            }));
+        let (base, engine_task) = serve_engine(engine).await;
+        let inner = Arc::get_mut(&mut state).unwrap();
+        Arc::get_mut(&mut inner.config).unwrap().models[0].engine_url = base;
+        inner.qualified_models.write().unwrap().insert("model".into());
+        let ledger = state.ledger.clone();
+        let contract = ledger.authenticate(&root, protocol::now().unwrap()).unwrap().account.contract_id;
+        let issue = |scopes: &[&str]| {
+            let now = protocol::now().unwrap();
+            ledger.issue_credential(&contract, &CredentialIssueRequest {
+                expires_at: now + 3600, spend_cap_wei: None, max_concurrency: 1,
+                scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+            }, now).unwrap()
+        };
+        let read = issue(&["read"]).bearer;
+        let infer = issue(&["infer"]).bearer;
+        let revoked = issue(&["infer", "read"]);
+        ledger.revoke_credential(&contract, &revoked.id).unwrap();
+        let revoked = revoked.bearer;
+        let expired = issue(&["infer", "read"]);
+        // Restores the expired credential's record with `expires_at` = `at`.
+        let db = rusqlite::Connection::open(directory.path().join("ledger.sqlite")).unwrap();
+        let expire = |at: u64| {
+            assert_eq!(db.execute("UPDATE credentials SET record=json_set(record,'$.expires_at',?1) WHERE id=?2",
+                rusqlite::params![at, expired.id]).unwrap(), 1);
+        };
+        let expired = expired.bearer.clone();
+        let observed = || json!({
+            "account": ledger.account(&contract).unwrap(),
+            "credentials": ledger.credentials(&contract).unwrap(),
+            "requests": ledger.requests(&contract, None).unwrap(),
+            "engine_requests": engine_requests.load(Ordering::SeqCst),
+        });
+        let mut app = router(state.clone());
+
+        let before = observed();
+        assert_eq!(before["requests"], json!([]));
+        for route in ["models", "chat", "completions", "embeddings"] {
+            let response = app.call(bearer_route(route, &read, "read-only")).await.unwrap();
+            assert_api_error(response, StatusCode::FORBIDDEN, "credential_scope", &read).await;
+            assert_eq!(observed(), before, "read-only {route}");
+        }
+        expire(protocol::now().unwrap() - 60);
+        let before = observed();
+        for bearer in [&revoked, &expired] {
+            for route in ROUTES {
+                let response = app.call(bearer_route(route, bearer, "refused")).await.unwrap();
+                assert_api_error(response, StatusCode::UNAUTHORIZED, "invalid_api_key", bearer).await;
+                assert_eq!(observed(), before, "{route}");
+            }
+        }
+        for route in ROUTES {
+            let mut exact = false;
+            for _ in 0..20 {
+                let at = protocol::now().unwrap();
+                expire(at);
+                let before = observed();
+                let response = app.call(bearer_route(route, &expired, "refused")).await.unwrap();
+                let after = protocol::now().unwrap();
+                assert_api_error(response, StatusCode::UNAUTHORIZED, "invalid_api_key", &expired).await;
+                assert_eq!(observed(), before, "{route} at expiry");
+                if after == at {
+                    exact = true;
+                    break;
+                }
+            }
+            assert!(exact, "{route}: no call ran within the second of its expiry");
+        }
+
+        // Positive controls: `infer` reserves and completes; `read`, not `infer`, reads.
+        let response = app.call(bearer_route("chat", &infer, "completed")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(ledger.request_view(&contract, "completed").unwrap().status, "completed");
+        let engine_after_completion = engine_requests.load(Ordering::SeqCst);
+        assert!(engine_after_completion > 0);
+        let response = app.call(bearer_route("status", &infer, "completed")).await.unwrap();
+        assert_api_error(response, StatusCode::FORBIDDEN, "credential_scope", &infer).await;
+        assert_eq!(request_status_of(&mut app, &read, "completed").await["status"], "completed");
+
+        // An in-flight request of the same account.
+        let mut held_app = app.clone();
+        let held_bearer = root.clone();
+        let held = tokio::spawn(async move {
+            held_app.call(keyed("/v1/chat/completions", &held_bearer, "held",
+                json!({"model":"model","messages":[{"role":"user","content":"token:0"}],"max_tokens":4})))
+                .await.unwrap()
+        });
+        let event = tokio::time::timeout(Duration::from_secs(10), engine_events.recv()).await;
+        assert_eq!(event.unwrap().unwrap(), "first_token");
+        assert_eq!(ledger.request_view(&contract, "held").unwrap().status, "reserved");
+        let before = observed();
+        for (bearer, status, code) in [
+            (&read, StatusCode::FORBIDDEN, "credential_scope"),
+            (&revoked, StatusCode::UNAUTHORIZED, "invalid_api_key"),
+            (&expired, StatusCode::UNAUTHORIZED, "invalid_api_key"),
+        ] {
+            let response = app.call(bearer_route("cancel", bearer, "held")).await.unwrap();
+            assert_api_error(response, status, code, bearer).await;
+            // A signalled cancellation would settle the hold and end the engine request.
+            assert!(tokio::time::timeout(Duration::from_millis(200), engine_events.recv()).await.is_err(),
+                "{code}: the in-flight request was cancelled");
+            assert_eq!(observed(), before, "{code}");
+        }
+        for (bearer, status, code) in [
+            (&infer, StatusCode::FORBIDDEN, "credential_scope"),
+            (&revoked, StatusCode::UNAUTHORIZED, "invalid_api_key"),
+            (&expired, StatusCode::UNAUTHORIZED, "invalid_api_key"),
+        ] {
+            let response = app.call(bearer_route("status", bearer, "held")).await.unwrap();
+            assert_api_error(response, status, code, bearer).await;
+            assert_eq!(observed(), before, "{code}");
+        }
+        assert_eq!(request_status_of(&mut app, &read, "held").await["status"], "reserved");
+        let response = app.call(bearer_route("cancel", &infer, "held")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let event = tokio::time::timeout(Duration::from_secs(10), engine_events.recv()).await;
+        assert_eq!(event.unwrap().unwrap(), "dropped");
+        let held = tokio::time::timeout(Duration::from_secs(10), held).await.unwrap().unwrap();
+        assert_api_error(held, StatusCode::CONFLICT, "request_cancelled", &root).await;
+        assert_eq!(ledger.request_view(&contract, "held").unwrap().status, "cancelled_unknown_usage");
+        engine_task.abort();
+    }
 }
