@@ -518,3 +518,24 @@ Separately, the spec records nine code differences, not questions (tasks 2.1–2
 - a resume racing shutdown can reopen admission after the shutdown drain.
 
 Nonblocking: no requirement or task waits on these answers. A different answer to question 2, 3 or 6 would change task 2.1, 2.5 or 2.2. Option (a) of question 4, or (b) or (c) of question 1, would add a task.
+
+## 2026-11-20 — Application startup: may the desktop ever start at login if it starts no node or miner?
+
+Status: open
+
+Where: `docs/chiral-book.md`, Part I line 31 ("The application never starts a node or miner on login"), with lines 17, 777 and 793. Spec: the new change `specify-no-background-start` (capability `application-startup-boundaries`), design open question 1. Code: none differs (see below).
+
+What it says now: the application's startup boundaries are now specified (comparison item 16). Five requirements cover:
+- the application runs no chain node or miner;
+- login and session start launch no node, miner or legacy service;
+- legacy data stays in place and is never imported automatically;
+- Core-space funds become usable only through the user's explicit transfer to eSpace;
+- native provisioning starts no service.
+
+The code search found no difference. There is no autostart plugin, launch agent, Run key, XDG autostart entry, systemd unit or scheduled task. The desktop setup only installs the tray. The only process spawns are the provider daemon's engine launch and device observation. The chain client sends only `eth_*` methods.
+
+Question:
+
+1. **May the application register itself to start at login when that start launches no node, miner or legacy service?** Line 31 forbids only starting a node or miner on login. Today nothing is registered, and the archived window-lifecycle and tray specs, like the target-design `desktop-share-online`, leave start-at-login out of scope. Options: (a) follow the book text: only a login start of a node, miner or legacy service is forbidden, and any desktop start-at-login needs its own change; (b) allow no start-at-login entry of any kind in this release. Proposed default (what the spec adopts): (a).
+
+Nonblocking: no requirement or task waits on the answer; option (b) would add one requirement. There are no code differences; acceptance evidence is tasks 3.1–3.5 and 4.1.

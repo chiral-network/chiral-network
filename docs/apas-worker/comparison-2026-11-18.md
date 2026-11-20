@@ -25,5 +25,5 @@ Whitepaper `docs/chiral-book.md` (SHA-256 `eda22ce0…3933`) against the OpenSpe
 13. **The provider's public OpenAI-compatible API and per-capability model qualification** (medium). Book lines 579–601. Specified in round 52 (specify-public-inference-api).
 14. **Daemon lifecycle and readiness: health, drain, resume, refresh, child failure, shutdown, maintenance cadence** (medium). Book lines 605–680. Specified in round 55 (specify-provider-daemon-lifecycle).
 15. **Catalog precedence, the catalog page contract and the readiness endpoint** (low). Book lines 211–261. Specified in round 38 (specify-offer-discovery).
-16. **The application never starts a node or miner on login** (low). Book Part I.
+16. **The application never starts a node or miner on login** (low). Book Part I. Specified in round 59 (specify-no-background-start).
 17. **Offer revision and equivocation rules for the current runtime** (low; overlaps item 9). Specified in round 38 (specify-offer-discovery).

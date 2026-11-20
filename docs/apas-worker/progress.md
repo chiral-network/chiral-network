@@ -1,5 +1,22 @@
 # APAS progress
 
+## 2026-11-20 (fifty-ninth round) — Spec: the application starts no node, miner or legacy service
+
+- In step at `91970f1f`; whitepaper unchanged; no new answers.
+- Specification step (comparison item 16, book line 31 with 17, 777 and 793). New change `specify-no-background-start` (capability `application-startup-boundaries`): 5 requirements and 14 scenarios. They cover:
+  - no node or miner in any binary;
+  - no node, miner or legacy service at operating-system login, launch or profile load;
+  - legacy data left in place and never imported automatically;
+  - Core funds usable only through the user's explicit transfer;
+  - native provisioning starts no service.
+- The review:
+  - narrowed rules that went beyond the book (stopping or removing legacy services, placing the policy cache, container-mode provisioning, mining status);
+  - corrected the spawn inventory (the engine helper also runs device observers);
+  - widened the code search.
+- No code difference was found; acceptance tasks 3.1–3.5 name the missing evidence. Report entry with one nonblocking question (start-at-login without a node or miner).
+- With this, every missing specification in `comparison-2026-11-18.md` is written.
+- Checks: `openspec validate specify-no-background-start --strict` passes; no code changed.
+
 ## 2026-11-20 (fifty-eighth round) — Code: non-fatal starting-pass publication, deployment lock before the DHT, runtime liveness without readiness
 
 - In step at `4c41f744`; whitepaper unchanged; no new answers.
@@ -632,8 +649,8 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
-2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 
