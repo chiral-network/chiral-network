@@ -1,5 +1,35 @@
 # APAS progress
 
+## 2026-11-19 (fifty-second round) — Spec: the public OpenAI-compatible API and per-capability qualification
+
+- In step at `80334be3`; whitepaper unchanged; no new answers.
+- Specification step (comparison item 13, book lines 579–601). New change `specify-public-inference-api`: 12 requirements and 37 scenarios. They cover:
+  - the endpoint set (no engine or out-of-scope route);
+  - both modes for stock clients;
+  - credential-scoped listing;
+  - capability-bounded admission;
+  - body bounds;
+  - honest failures;
+  - GGUF derivation;
+  - readiness probing every advertised capability;
+  - exact echo without invented prompt probabilities;
+  - matching embedding dimensions;
+  - tools and schemas as data that is never executed;
+  - whole-model text inference.
+  Credentials, request accounting, performance, the engine launch, offer pins and outbound HTTP are referenced from their owners.
+- The review:
+  - removed a listing rule the book does not state;
+  - extended the identity and context checks to operator-owned engines;
+  - found a fourth code difference;
+  - rewrote task 2.3's regression, which would have passed without the fix.
+- Four code differences recorded as tasks 2.1–2.4:
+  - unprobed `streaming` on an embedding deployment;
+  - embedding dimensions refused only after dispatch;
+  - a failed stream that ends cleanly when the client stops reading;
+  - an empty tokenization reported as context overflow.
+- Report entry with four nonblocking questions.
+- Checks: `openspec validate specify-public-inference-api --strict` passes; no code changed. The review reran 42 library tests, 3 integration tests and 46 Python tests behind the coverage table, and all passed.
+
 ## 2026-11-19 (fifty-first round) — Code: credential options only as an object; issuance keeps a valid hidden default
 
 - In step at `984513a9`; whitepaper unchanged; no new answers.
@@ -521,7 +551,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 13, 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: public-inference-api 2.1–2.4; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

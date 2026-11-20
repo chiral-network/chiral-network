@@ -437,3 +437,40 @@ Separately, the review notes that requirement 1 refuses unknown and repeated mem
 - an explicit native issuance can replace a still-valid default once that default falls outside the provider's bounded list of the 100 newest records (task 2.2 is needed whichever answer question 3 gets).
 
 Nonblocking: no requirement or task waits on these answers. Option (a) of question 1 or 2, or option (a) of question 3, would add one task each.
+
+## 2026-11-19 — Public inference API: the `streaming` capability, tools on managed deployments, embedding dimensions and busy-model probes
+
+Status: open
+
+Where: `docs/chiral-book.md`, *API compatibility and model qualification* (lines 579–601), with lines 530, 591 and 628. Spec: the new change `specify-public-inference-api` (capability `public-inference-api`), design open questions 1–4. Code: `src-tauri/src/inference_backend.rs:250–265`, `317–319`, `738–795` and `1370–1397`, `src-tauri/src/engine_runtime.rs:152`, `src-tauri/src/inference_gateway.rs:578–598` and `825–852`.
+
+What it says now: the provider's public OpenAI-compatible surface and per-capability qualification are now specified (comparison item 13). Twelve requirements cover:
+- the implemented endpoint set, with no engine or out-of-scope route;
+- both modes for stock clients;
+- credential-scoped listing;
+- admission only within the contracted model's capabilities;
+- body bounds;
+- honest failures;
+- GGUF capability derivation;
+- readiness probing every advertised capability;
+- exact echo with no invented prompt probabilities;
+- matching embedding dimensions;
+- tools and structured output as data that is never executed;
+- whole-model text inference only.
+
+Questions:
+
+1. **Does SSE on a generation route require the `streaming` capability?** Options: (a) serve SSE only for models advertising `streaming`, derived by provisioning; (b) every chat or completion model serves SSE, and `streaming` is informational, as today. Proposed default (what the spec adopts): the book text. Lines 587–588 require both modes for chat and completions, and line 595 requires an advertised `streaming` to be probed.
+2. **How may `tools` or `structured_output` be offered on a managed deployment?** Launch requires the configured capabilities to equal the artifact's derived ones, so neither can be added today. Options: (a) a separate qualification step that extends the signed capabilities with probe evidence; (b) not offered in this release. Proposed default (what the spec adopts): the book text. Line 601 requires separate qualification, never a model card, but specifies no procedure.
+3. **Should the native embedding dimension be signed or listed?** Options: (a) add it to the signed model description (a wire change); (b) report it in `/v1/models` after readiness measures it; (c) neither, as today. Proposed default (what the spec adopts): (c). Line 599 does not advertise it, and task 2.2 learns it from readiness.
+4. **Must readiness repeat inference probes while a model stays busy?** Today a busy ready model repeats only identity and template checks. Options: (a) reserve or schedule probe capacity within a bound; (b) as now. Proposed default (what the spec adopts): the book text. Probes gate readiness (lines 591 and 628), but no cadence is stated.
+
+Separately, the spec records four code differences, not questions (tasks 2.1–2.4):
+- an advertised `streaming` capability that no probe exercises still lets an operator-owned embedding deployment become ready and publish;
+- a requested embedding `dimensions` the deployment does not produce is refused only after dispatch, as an engine error at the provider's loss, and counts toward the account's hourly unknown-usage bound;
+- a failed stream whose error event cannot be queued, because the client stopped reading, ends like a normal stream;
+- a prompt the engine tokenizes to nothing is refused as `context_length_exceeded`.
+
+Difference 2 depends partly on question 3. The review also notes that the code may hash the raw engine template while provisioning uses the normalized digest; only a pinned-engine run can settle that (task 4.1).
+
+Nonblocking: no requirement or task waits on these answers. Option (a) of questions 1, 2 or 4, or option (a) or (b) of question 3, would add a task.
