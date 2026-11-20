@@ -5653,4 +5653,355 @@ mod tests {
         assert_eq!(state.policy_requests.load(Ordering::SeqCst), 9);
         task.abort();
     }
+    /// A loopback listener that counts the TCP connections it accepts and answers none:
+    /// a request that reached it would fail only after the count.
+    async fn connection_recorder() -> (
+        std::net::SocketAddr,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = count.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        (address, count, task)
+    }
+    /// Runs `future` with the test resolver answering only `answers` (every other host fails
+    /// to resolve, so nothing reaches DNS): its output and the hosts that reached resolution.
+    async fn resolving<T>(
+        answers: &[(&str, &[&str])],
+        future: impl std::future::Future<Output = T>,
+    ) -> (T, Vec<String>) {
+        let resolver = crate::offer_registry::tests::test_resolver(answers);
+        let output = crate::offer_registry::TEST_RESOLVER
+            .scope(resolver.clone(), future)
+            .await;
+        let queries = resolver.queries.lock().unwrap().clone();
+        (output, queries)
+    }
+    /// outbound-http-safeguards requirement 1 scenario "A non-public catalog origin is
+    /// refused before any connection" (task 3.1). Without development and without `dht`,
+    /// discovery and feedback fail, and the reputation read of provider inspection reports
+    /// unavailable, with the origin validation error. The catalog host never reaches the
+    /// resolver, and a loopback listener named as a catalog receives no connection.
+    #[tokio::test]
+    async fn non_conforming_catalog_origins_fail_before_resolution_or_connection() {
+        let (recorder, connections, task) = connection_recorder().await;
+        let loopback = format!("https://{recorder}");
+        // The loopback recorder comes first, so that a request path which bypassed the
+        // pinned client would fail on it before any `.example` name could reach DNS.
+        for catalog in [
+            loopback.as_str(),
+            "https://relay.example:8443",
+            "https://10.0.0.5",
+            "https://relay",
+            "https://relay.localhost",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut config = configuration(directory.path());
+            config.catalog_url = Some(catalog.into());
+            assert!(!config.development && config.dht.is_none());
+            // Profile load checks only the catalog's syntax (design decision 4).
+            let consumer = Consumer::new(config).unwrap();
+            consumer.wallet_create().unwrap();
+            let key = wallet::generate_private_key();
+            let (offer, quote) =
+                funding_terms(&consumer, &key, "https://provider.example", false, false);
+            let id = quote.payload.id.clone();
+            let mut saved = saved_funding(offer.clone(), quote);
+            saved.raw_transaction = Some("0x01".into());
+            saved.tx_hash = Some(format!("0x{}", "44".repeat(32)));
+            consumer.save_account(&saved).unwrap();
+            let expected = crate::offer_registry::validate_endpoint(catalog, false).unwrap_err();
+            let ((discovered, feedback, info), queries) = resolving(&[], async {
+                (
+                    consumer.discover(None).await,
+                    consumer.feedback(&id, 80, 2).await,
+                    consumer.provider_info(&offer).await,
+                )
+            })
+            .await;
+            assert_eq!(discovered.unwrap_err(), expected, "{catalog}");
+            assert_eq!(feedback.unwrap_err(), expected, "{catalog}");
+            assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0, "{catalog}");
+            let info = info.unwrap();
+            assert_eq!(
+                info["reputation"],
+                json!({"available": false, "error": expected}),
+                "{catalog}"
+            );
+            // Only the provider's own origin, which validates, reached resolution; the test
+            // resolver has no answer for it, so it was not contacted either.
+            assert_eq!(queries, ["provider.example"], "{catalog}");
+            assert_eq!(info["health"]["error"], "safe provider transport unavailable");
+        }
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+        task.abort();
+    }
+    /// outbound-http-safeguards requirement 1 scenario "A provider origin that fails
+    /// validation is not contacted" (task 3.1). A validly signed offer whose endpoint fails
+    /// validation without development is refused by inspection, quoting and funding, and a
+    /// saved account at that origin by control and inference requests, each with the origin
+    /// validation error: nothing reaches the resolver, the loopback listener named by the
+    /// offer, or the chain RPC.
+    #[tokio::test]
+    async fn non_conforming_provider_origins_are_refused_before_resolution_or_connection() {
+        use std::sync::atomic::Ordering;
+        let (provider, provider_connections, provider_task) = connection_recorder().await;
+        let (rpc, rpc_connections, rpc_task) = connection_recorder().await;
+        let loopback = format!("https://{provider}");
+        let secret = "sk-chiral-origin-secret-0123456789abcdef";
+        for endpoint in [loopback.as_str(), "https://provider.example:8443"] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut config = configuration(directory.path());
+            config.network.rpc_url = format!("http://{rpc}");
+            let consumer = Consumer::new(config).unwrap();
+            consumer.wallet_create().unwrap();
+            let key = wallet::generate_private_key();
+            let (offer, quote) = funding_terms(&consumer, &key, endpoint, false, false);
+            // The signatures are valid: only the origin is refused.
+            protocol::verify(OFFER_DOMAIN, &offer, &offer.payload.provider_wallet).unwrap();
+            protocol::verify(QUOTE_DOMAIN, &quote, &offer.payload.provider_wallet).unwrap();
+            let expected = crate::offer_registry::validate_endpoint(endpoint, false).unwrap_err();
+            let id = quote.payload.id.clone();
+            let path = consumer.account_path(&id).unwrap();
+            let ((info, quoted, funded), queries) = resolving(&[], async {
+                (
+                    consumer.provider_info(&offer).await,
+                    consumer.quote(&offer, "100").await,
+                    consumer.fund(&offer, &quote).await,
+                )
+            })
+            .await;
+            assert_eq!(info.unwrap_err(), expected, "{endpoint}");
+            assert_eq!(quoted.unwrap_err(), expected, "{endpoint}");
+            assert_eq!(funded.unwrap_err(), expected, "{endpoint}");
+            assert!(queries.is_empty(), "{endpoint}: {queries:?}");
+            // Current behaviour (design decision 10): funding refuses before it saves the
+            // account or prepares any payment.
+            assert!(!path.exists(), "{endpoint}");
+            // A saved account at that origin (as an earlier release could have saved it)
+            // with a stored credential: control and inference requests are refused alike,
+            // and no inference request key is persisted.
+            let mut saved = saved_funding(offer.clone(), quote.clone());
+            let credential = Credential {
+                id: "credential-a".into(),
+                bearer: secret.into(),
+                contract_id: id.clone(),
+                expires_at: protocol::now().unwrap() + 3600,
+            };
+            consumer.store_credential(&mut saved, credential, true).unwrap();
+            consumer.save_account(&saved).unwrap();
+            let before = fs::read(&path).unwrap();
+            let chat = json!({"model":"model-a","messages":[{"role":"user","content":"hi"}],"max_tokens":8});
+            let (errors, queries) = resolving(&[], async {
+                vec![
+                    consumer.infer(&id, "chat", chat.clone()).await.unwrap_err(),
+                    consumer.stream_kind(&id, "chat", chat.clone()).await.err().unwrap(),
+                    consumer.request_status(&id, "request-a").await.unwrap_err(),
+                    consumer.cancel_request(&id, "request-a").await.unwrap_err(),
+                    consumer.receipt(&id).await.unwrap_err(),
+                    consumer.account(&id).await.unwrap_err(),
+                    consumer.usage(&id).await.unwrap_err(),
+                    consumer.funding(&id).await.unwrap_err(),
+                    consumer.credential_issue(&id, credential_options(&["read"])).await.unwrap_err(),
+                    consumer.credential_revoke(&id, "credential-a").await.unwrap_err(),
+                    consumer
+                        .credential_rotate(&id, "credential-a", credential_options(&["infer"]))
+                        .await
+                        .unwrap_err(),
+                    consumer.topup(&id, "10").await.unwrap_err(),
+                    consumer.fund(&offer, &quote).await.unwrap_err(),
+                    consumer.provider_info(&offer).await.unwrap_err(),
+                ]
+            })
+            .await;
+            for error in errors {
+                assert_eq!(error, expected, "{endpoint}");
+                assert!(!error.contains(secret), "{endpoint}");
+            }
+            assert!(queries.is_empty(), "{endpoint}: {queries:?}");
+            // Compared without printing: the account file holds the stored credential.
+            assert!(fs::read(&path).unwrap() == before, "{endpoint}: the account file changed");
+            assert!(!consumer.account_directory().unwrap().join("requests").exists());
+        }
+        assert_eq!(provider_connections.load(Ordering::SeqCst), 0);
+        assert_eq!(rpc_connections.load(Ordering::SeqCst), 0);
+        provider_task.abort();
+        rpc_task.abort();
+    }
+    /// outbound-http-safeguards requirement 2, task 3.2: `development` defaults to false
+    /// (book line 463). A consumer profile without the member is not a development profile:
+    /// a `http://127.0.0.1` catalog is refused at load, and a signed offer at a
+    /// `http://127.0.0.1` origin is refused by inspection, quoting and funding before any
+    /// connection. The same profile with `"development": true` loads and does connect.
+    #[tokio::test]
+    async fn a_consumer_profile_without_a_development_member_is_not_development() {
+        use std::sync::atomic::Ordering;
+        let (recorder, connections, task) = connection_recorder().await;
+        let origin = format!("http://{recorder}");
+        let directory = tempfile::tempdir().unwrap();
+        let mut document = serde_json::to_value(configuration(&directory.path().join("state"))).unwrap();
+        assert_eq!(document.as_object_mut().unwrap().remove("development"), Some(json!(false)));
+        document["catalog_url"] = json!(origin);
+        let profile = directory.path().join("consumer.json");
+        let write = |document: &Value| fs::write(&profile, serde_json::to_vec(document).unwrap()).unwrap();
+        write(&document);
+        assert!(!decode::<ConsumerConfig>(&fs::read(&profile).unwrap()).unwrap().development);
+        assert_eq!(
+            Consumer::load(&profile).err().unwrap(),
+            "HTTPS required except explicitly enabled loopback development"
+        );
+        // Without a catalog the profile loads, still without development.
+        document["catalog_url"] = Value::Null;
+        write(&document);
+        let consumer = Consumer::load(&profile).unwrap();
+        assert!(!consumer.config.development);
+        consumer.wallet_create().unwrap();
+        let key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &key, &origin, false, false);
+        let expected = crate::offer_registry::validate_endpoint(&origin, false).unwrap_err();
+        let ((info, quoted, funded), queries) = resolving(&[], async {
+            (
+                consumer.provider_info(&offer).await,
+                consumer.quote(&offer, "100").await,
+                consumer.fund(&offer, &quote).await,
+            )
+        })
+        .await;
+        // `fund` checks the quote's origin with the scheme rule first.
+        assert_eq!(info.unwrap_err(), expected);
+        assert_eq!(quoted.unwrap_err(), expected);
+        assert_eq!(
+            funded.unwrap_err(),
+            "HTTPS required except explicitly enabled loopback development"
+        );
+        assert!(!consumer.account_path(&quote.payload.id).unwrap().exists());
+        assert!(queries.is_empty(), "{queries:?}");
+        assert_eq!(connections.load(Ordering::SeqCst), 0);
+        // Positive control: with `"development": true` the same profile loads its loopback
+        // catalog, and inspecting the same offer connects to the listener.
+        drop(consumer);
+        document["development"] = json!(true);
+        document["catalog_url"] = json!(origin);
+        write(&document);
+        let consumer = Consumer::load(&profile).unwrap();
+        assert!(consumer.config.development);
+        consumer.provider_info(&offer).await.unwrap();
+        assert!(connections.load(Ordering::SeqCst) > 0);
+        task.abort();
+    }
+    /// outbound-http-safeguards requirement 3 scenario "A catalog path is not a catalog
+    /// origin" (task 3.3). A `catalog_url` with a path, query, fragment or credentials is
+    /// refused before any catalog request; in current behaviour (design decision 10)
+    /// `Consumer::new` refuses it at profile load. A loopback catalog named that way receives
+    /// no request; the origin itself, as a positive control, does.
+    #[tokio::test]
+    async fn catalog_urls_with_a_path_query_fragment_or_credentials_are_refused_before_any_request() {
+        use std::sync::atomic::Ordering;
+        let (origin, state, task) = source_fixture().await;
+        let authority = origin.trim_start_matches("http://");
+        for (catalog, development) in [
+            ("https://relay.example/api/offers".to_string(), false),
+            ("https://relay.example/?page=1".into(), false),
+            ("https://relay.example/#offers".into(), false),
+            ("https://reader:secret@relay.example".into(), false),
+            (format!("{origin}/api/offers"), true),
+            (format!("{origin}/?page=1"), true),
+            (format!("{origin}/#offers"), true),
+            (format!("http://reader:secret@{authority}"), true),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut config = configuration(directory.path());
+            config.development = development;
+            config.catalog_url = Some(catalog.clone());
+            let error = Consumer::new(config).err().expect(&catalog);
+            assert_eq!(
+                error,
+                "endpoint must be an origin without credentials, path, query or fragment",
+                "{catalog}"
+            );
+            assert!(!error.contains("secret"), "{catalog}");
+        }
+        assert!(state.queries.lock().unwrap().is_empty());
+        assert_eq!(state.other_requests.load(Ordering::SeqCst), 0);
+        // Positive control: the origin loads, and discovery adds `/api/offers` to it.
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = configuration(directory.path());
+        config.development = true;
+        config.catalog_url = Some(origin.clone());
+        let consumer = Consumer::new(config).unwrap();
+        *state.pages.lock().unwrap() = vec![page(Vec::new(), None)];
+        assert!(consumer.discover(None).await.unwrap().is_empty());
+        assert_eq!(*state.queries.lock().unwrap(), ["offset=0&limit=50"]);
+        assert_eq!(state.other_requests.load(Ordering::SeqCst), 0);
+        task.abort();
+    }
+    /// outbound-http-safeguards requirement 6 scenario "The native administration client
+    /// contacts only local loopback" (task 3.6). `http://10.0.0.5:9421` and
+    /// `https://provider.example` are refused with the loopback error, and the administration
+    /// fixture on loopback receives nothing. Implementation values of design decision 10,
+    /// pinned as such: `localhost` is refused too, and the endpoint is checked before the
+    /// token file is read (a missing token file gives the same refusal).
+    #[tokio::test]
+    async fn the_native_administration_client_contacts_only_literal_loopback() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorded = seen.clone();
+        let app = axum::Router::new().fallback(
+            move |method: axum::http::Method, uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                let recorded = recorded.clone();
+                async move {
+                    let authorization = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    recorded.lock().unwrap().push(format!("{method} {} {authorization}", uri.path()));
+                    axum::Json(json!({"ok": true}))
+                }
+            },
+        );
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let consumer = Consumer::new(configuration(directory.path())).unwrap();
+        let token = "administration-test-token-0123456789abcdef";
+        let token_file = directory.path().join("admin.token");
+        wallet::create_secret_file(&token_file)
+            .unwrap()
+            .write_all(token.as_bytes())
+            .unwrap();
+        let missing = directory.path().join("missing.token");
+        let refused = "administration requires a literal loopback endpoint";
+        let localhost = origin.replacen("127.0.0.1", "localhost", 1);
+        for endpoint in ["http://10.0.0.5:9421", "https://provider.example", localhost.as_str()] {
+            for action in ["status", "drain"] {
+                assert_eq!(
+                    consumer.provider_admin(endpoint, &missing, action).await.unwrap_err(),
+                    refused,
+                    "{endpoint}"
+                );
+                assert_eq!(
+                    consumer.provider_admin(endpoint, &token_file, action).await.unwrap_err(),
+                    refused,
+                    "{endpoint}"
+                );
+            }
+        }
+        assert!(seen.lock().unwrap().is_empty());
+        // Positive control: the literal loopback endpoint receives the bearer.
+        assert_eq!(
+            consumer.provider_admin(&origin, &token_file, "status").await.unwrap(),
+            json!({"ok": true})
+        );
+        assert_eq!(*seen.lock().unwrap(), [format!("GET /admin/status Bearer {token}")]);
+        task.abort();
+    }
 }

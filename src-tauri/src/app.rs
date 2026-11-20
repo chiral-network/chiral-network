@@ -2810,4 +2810,156 @@ mod tests {
             server.abort();
         }
     }
+
+    /// outbound-http-safeguards requirement 6 scenario "The public listener serves no
+    /// administration route" (task 3.6): every administration route, sent to the public
+    /// router with the valid administration bearer, is an unknown endpoint, and no
+    /// administrative action runs: the provider keeps accepting and its offer stays published.
+    #[tokio::test]
+    async fn the_public_router_serves_no_administration_route() {
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        let funding_ready = runtime.state.funding_ready.load(Ordering::Acquire);
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        for (method, path) in [
+            ("GET", "/admin/status"),
+            ("GET", "/admin/offers"),
+            ("POST", "/admin/drain"),
+            ("GET", "/admin/runtime"),
+            ("GET", "/admin/accounts"),
+            ("GET", "/admin/requests"),
+            ("GET", "/admin/fees"),
+            ("POST", "/admin/resume"),
+            ("POST", "/admin/offers/refresh"),
+            ("POST", "/admin/fees/remit"),
+        ] {
+            let response = runtime.public_router().oneshot(Request::builder().method(method).uri(path)
+                .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("{}")).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            let answer: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(answer["error"]["code"], "not_found", "{method} {path}: {answer}");
+        }
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.state.funding_ready.load(Ordering::Acquire), funding_ready);
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        // Positive control: the same drain on the administration router closes admission.
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 0);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// outbound-http-safeguards requirement 6 scenario "Only the administration token
+    /// authorizes administration" (task 3.6). No `Authorization`, a wrong token, an account
+    /// API bearer issued by this provider, the valid bearer with `Origin: http://localhost`,
+    /// the account owner's wallet control headers and signature, the bare token without the
+    /// `Bearer` scheme, and the token with a suffix are each refused as unauthorized (HTTP 401,
+    /// an implementation value of design decision 10) on every administration route, before
+    /// any administrative action: `POST /admin/drain` leaves the provider accepting with its
+    /// offer published.
+    #[tokio::test]
+    async fn only_the_administration_bearer_without_an_origin_authorizes_administration() {
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, account_bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        // The account bearer is genuine: the public router accepts it.
+        let listing = runtime.public_router().oneshot(Request::builder().uri("/v1/models")
+            .header(header::AUTHORIZATION, format!("Bearer {account_bearer}"))
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(listing.status(), StatusCode::OK);
+        // The account owner's wallet signs the request it sends.
+        let owner_key = "22".repeat(32);
+        let owner = wallet::address_from_private_key(&owner_key).unwrap();
+        let signature = wallet::sign_message(&owner_key, b"POST /admin/drain").unwrap();
+        let operator = format!("Bearer {OPERATOR_TOKEN}");
+        let account = format!("Bearer {account_bearer}");
+        let extended = format!("Bearer {OPERATOR_TOKEN}x");
+        let attempts: [(&str, Vec<(&str, &str)>); 7] = [
+            ("no Authorization", vec![]),
+            ("a wrong token", vec![("authorization", "Bearer wrong-operator-token-of-32-bytes")]),
+            ("an account API bearer", vec![("authorization", account.as_str())]),
+            (
+                "the administration bearer with a browser Origin",
+                vec![("authorization", operator.as_str()), ("origin", "http://localhost")],
+            ),
+            (
+                "wallet owner-control headers",
+                vec![
+                    ("x-chiral-owner", owner.as_str()),
+                    ("x-chiral-nonce", "owner-nonce"),
+                    ("x-chiral-signature", signature.as_str()),
+                ],
+            ),
+            ("the token without the Bearer scheme", vec![("authorization", OPERATOR_TOKEN)]),
+            ("the token followed by more characters", vec![("authorization", extended.as_str())]),
+        ];
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        // Every administration route, so that a route mounted outside the authentication
+        // layer is caught, not only the three routes the scenario names.
+        let routes = [
+            ("GET", "/admin/status"),
+            ("GET", "/admin/runtime"),
+            ("GET", "/admin/offers"),
+            ("GET", "/admin/accounts"),
+            ("GET", "/admin/requests"),
+            ("GET", "/admin/fees"),
+            ("POST", "/admin/drain"),
+            ("POST", "/admin/resume"),
+            ("POST", "/admin/offers/refresh"),
+            ("POST", "/admin/fees/remit"),
+        ];
+        for (case, headers) in &attempts {
+            for (method, path) in routes {
+                let mut request = Request::builder().method(method).uri(path);
+                for (name, value) in headers {
+                    request = request.header(*name, *value);
+                }
+                let response = runtime.admin_router()
+                    .oneshot(request.body(axum::body::Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{case}: {method} {path}");
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                let answer: Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(answer.get("offers").is_none() && answer.get("accepting").is_none(), "{case}: {answer}");
+            }
+            assert!(runtime.state.accepting.load(Ordering::Acquire), "{case}");
+            assert_eq!(runtime.dht.status().await["published_offers"], 1, "{case}");
+        }
+        // Positive control: the administration bearer alone authorizes the same drain.
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// outbound-http-safeguards requirement 6, task 3.6: the administration token is read
+    /// only from a protected file (book lines 474 and 658). A copy readable by group or
+    /// others refuses the start, and the error names no token.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_administration_token_is_read_only_from_a_protected_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (config, server) = unavailable_provider(directory.path()).await;
+        std::fs::set_permissions(&config.admin_token_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = ProviderRuntime::start(config.clone()).await.err().unwrap();
+        assert_eq!(error, "secret file must be owned by this user with no group/other permissions");
+        assert!(!error.contains(OPERATOR_TOKEN));
+        std::fs::set_permissions(&config.admin_token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        runtime.dht.stop().await;
+        server.abort();
+    }
 }

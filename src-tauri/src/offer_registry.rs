@@ -211,6 +211,37 @@ fn check_resolved_answers(
     }
     Ok(())
 }
+/// Test-only resolver seam (outbound-http-safeguards tasks 3.1, 3.2 and 3.5). Inside
+/// `TEST_RESOLVER.scope(..)`, `safe_http_client` records every host it is about to resolve
+/// and takes that host's answers from `answers` instead of the system resolver; a host that
+/// `answers` does not name fails to resolve. A scoped test therefore sends no DNS query, and
+/// its `queries` show whether resolution was reached at all. Compiled only into this
+/// crate's own tests: no production path can reach it, and it replaces only the resolver,
+/// never validation, the answer check or pinning.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct TestResolver {
+    pub(crate) answers: std::collections::HashMap<String, Vec<IpAddr>>,
+    pub(crate) queries: std::sync::Mutex<Vec<String>>,
+}
+#[cfg(test)]
+tokio::task_local! {
+    pub(crate) static TEST_RESOLVER: std::sync::Arc<TestResolver>;
+}
+/// Resolves the origin's host once with the system resolver (or, in this crate's tests
+/// only, with an active `TEST_RESOLVER`).
+async fn resolve(host: &str, port: u16) -> std::io::Result<Vec<SocketAddr>> {
+    #[cfg(test)]
+    if let Ok(resolver) = TEST_RESOLVER.try_with(std::sync::Arc::clone) {
+        resolver.queries.lock().unwrap().push(host.to_owned());
+        return resolver
+            .answers
+            .get(host)
+            .map(|ips| ips.iter().map(|ip| SocketAddr::new(*ip, port)).collect())
+            .ok_or_else(|| std::io::Error::other(format!("test resolver has no answer for {host}")));
+    }
+    Ok(tokio::net::lookup_host((host, port)).await?.collect())
+}
 /// Resolve once, validate every result, pin addresses and disable both redirects and
 /// environment proxies. Call for each origin; do not reuse across unvalidated hosts.
 pub async fn safe_http_client(
@@ -225,15 +256,14 @@ pub async fn safe_http_client(
     let port = url.port_or_known_default().ok_or("missing port")?;
     let loopback_origin = host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
         || host.eq_ignore_ascii_case("localhost");
-    let addresses: Vec<SocketAddr> = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::lookup_host((host, port)),
-    )
-    .await
-    .map_err(|_| "DNS resolution timeout")?
-    .map_err(|e| e.to_string())?
-    .take(33)
-    .collect();
+    let addresses: Vec<SocketAddr> =
+        tokio::time::timeout(Duration::from_secs(5), resolve(host, port))
+            .await
+            .map_err(|_| "DNS resolution timeout")?
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .take(33)
+            .collect();
     let answers: Vec<IpAddr> = addresses.iter().map(SocketAddr::ip).collect();
     check_resolved_answers(&answers, development, loopback_origin)?;
     reqwest::Client::builder()
@@ -594,6 +624,238 @@ pub(crate) mod tests {
             check_resolved_answers(&mixed, true, true).unwrap_err(),
             "endpoint resolves to forbidden addresses"
         );
+    }
+    /// outbound-http-safeguards requirement 5, task 3.5: `public_ip` judged directly, at every
+    /// address of the three predicate scenarios and at both edges of each listed range.
+    #[test]
+    fn public_ip_is_the_exact_documented_predicate() {
+        let judge = |ip: &str| public_ip(ip.parse().unwrap());
+        // Scenario "IPv4 range boundaries".
+        for ip in ["100.63.255.255", "100.128.0.0", "198.17.255.255", "198.20.0.0", "192.0.1.1", "1.1.1.1"] {
+            assert!(judge(ip), "{ip} must be public");
+        }
+        for ip in [
+            "100.64.0.0", "100.127.255.255", "198.18.0.0", "198.19.255.255", "192.0.0.1",
+            "172.31.255.254", "169.254.169.254", "0.1.2.3", "240.0.0.1",
+        ] {
+            assert!(!judge(ip), "{ip} must not be public");
+        }
+        // Scenario "IPv4-mapped IPv6 follows the IPv4 predicate".
+        for ip in ["::ffff:10.0.0.1", "::ffff:127.0.0.1", "::ffff:169.254.169.254"] {
+            assert!(!judge(ip), "{ip} must not be public");
+        }
+        assert!(judge("::ffff:1.1.1.1"));
+        // Scenario "IPv6 global unicast with documented exclusions".
+        for ip in ["2606:4700:4700::1111", "2001:200::1", "3fff:1000::1"] {
+            assert!(judge(ip), "{ip} must be public");
+        }
+        for ip in [
+            "::", "::1", "fd00::1", "fe80::1", "ff02::1", "2001:1ff:ffff::1", "2001:db8::1",
+            "2002:7f00:1::", "3fff:fff::1",
+        ] {
+            assert!(!judge(ip), "{ip} must not be public");
+        }
+        // Each IPv4 range of the requirement, with the public address on either side.
+        for (first, last, before, after) in [
+            ("0.0.0.0", "0.255.255.255", None, Some("1.0.0.0")),
+            ("10.0.0.0", "10.255.255.255", Some("9.255.255.255"), Some("11.0.0.0")),
+            ("100.64.0.0", "100.127.255.255", Some("100.63.255.255"), Some("100.128.0.0")),
+            ("127.0.0.0", "127.255.255.255", Some("126.255.255.255"), Some("128.0.0.0")),
+            ("169.254.0.0", "169.254.255.255", Some("169.253.255.255"), Some("169.255.0.0")),
+            ("172.16.0.0", "172.31.255.255", Some("172.15.255.255"), Some("172.32.0.0")),
+            ("192.0.0.0", "192.0.0.255", Some("191.255.255.255"), Some("192.0.1.0")),
+            ("192.0.2.0", "192.0.2.255", Some("192.0.1.255"), Some("192.0.3.0")),
+            ("192.168.0.0", "192.168.255.255", Some("192.167.255.255"), Some("192.169.0.0")),
+            ("198.18.0.0", "198.19.255.255", Some("198.17.255.255"), Some("198.20.0.0")),
+            ("198.51.100.0", "198.51.100.255", Some("198.51.99.255"), Some("198.51.101.0")),
+            ("203.0.113.0", "203.0.113.255", Some("203.0.112.255"), Some("203.0.114.0")),
+            // Multicast 224.0.0.0/4 and reserved 240.0.0.0/4 are adjacent, so their shared
+            // edge has no public neighbour; both of its sides are checked.
+            ("224.0.0.0", "239.255.255.255", Some("223.255.255.255"), None),
+            ("240.0.0.0", "255.255.255.255", None, None),
+        ] {
+            assert!(!judge(first) && !judge(last), "{first}-{last} must not be public");
+            for public in [before, after].into_iter().flatten() {
+                assert!(judge(public), "{public} must be public");
+            }
+            // A mapped address is judged by the same IPv4 rule.
+            assert!(!judge(&format!("::ffff:{first}")) && !judge(&format!("::ffff:{last}")));
+        }
+        // IPv6: public exactly within 2000::/3 outside 2001::/23, 2001:db8::/32, 2002::/16
+        // and 3fff::/20. IPv4-compatible and NAT64 spellings are not mapped addresses.
+        for ip in [
+            "2000::", "2001:200::", "2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db9::",
+            "2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "2003::", "3ffe:ffff::1", "3fff:1000::", "3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(judge(ip), "{ip} must be public");
+        }
+        for ip in [
+            "1fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "4000::", "2001::", "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", "2002::", "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "3fff::", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff", "::1.1.1.1", "64:ff9b::101:101",
+        ] {
+            assert!(!judge(ip), "{ip} must not be public");
+        }
+    }
+    /// The answers `answers` gives `TEST_RESOLVER` for `host`.
+    pub(crate) fn test_resolver(answers: &[(&str, &[&str])]) -> std::sync::Arc<TestResolver> {
+        std::sync::Arc::new(TestResolver {
+            answers: answers
+                .iter()
+                .map(|(host, ips)| (host.to_string(), ips.iter().map(|ip| ip.parse().unwrap()).collect()))
+                .collect(),
+            queries: Default::default(),
+        })
+    }
+    /// outbound-http-safeguards requirement 5 scenario "Literal and resolved addresses use one
+    /// predicate" (task 3.5) and requirement 2 scenario "A localhost origin that resolves to a
+    /// remote address is refused" (task 3.2), through `safe_http_client` with resolver answers
+    /// that the test controls. A refusal builds no client, so nothing can connect; a built
+    /// client is never used here.
+    #[tokio::test]
+    async fn safe_http_client_judges_every_resolved_answer_by_the_same_rules() {
+        let client = |resolver: std::sync::Arc<TestResolver>, endpoint: &'static str, development: bool| async move {
+            let built = TEST_RESOLVER.scope(resolver.clone(), safe_http_client(endpoint, development)).await;
+            let queries = resolver.queries.lock().unwrap().clone();
+            (built.map(drop), queries)
+        };
+        // The answer-set rule itself refuses a resolved IPv4-mapped loopback address.
+        let mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        for development in [false, true] {
+            assert_eq!(
+                check_resolved_answers(&[mapped], development, false).unwrap_err(),
+                "endpoint resolves to forbidden addresses"
+            );
+        }
+        // A hostname whose resolution includes `::ffff:127.0.0.1`, alone or beside a public
+        // answer, is refused after one resolution, with or without development.
+        for answers in [&["93.184.216.34", "::ffff:127.0.0.1"][..], &["::ffff:127.0.0.1"]] {
+            for development in [false, true] {
+                let resolver = test_resolver(&[("provider.example", answers)]);
+                assert_eq!(
+                    client(resolver, "https://provider.example", development).await,
+                    (Err("endpoint resolves to forbidden addresses".into()), vec!["provider.example".to_string()]),
+                    "{answers:?}/{development}"
+                );
+            }
+        }
+        // The literal origin is refused by the same predicate before any resolution.
+        for development in [false, true] {
+            assert_eq!(
+                client(test_resolver(&[]), "https://[::ffff:127.0.0.1]", development).await,
+                (Err(validate_endpoint("https://[::ffff:127.0.0.1]", development).unwrap_err()), Vec::new())
+            );
+        }
+        // Positive control: only public answers build the client.
+        let resolver = test_resolver(&[("provider.example", &["93.184.216.34", "2606:4700:4700::1111"])]);
+        assert_eq!(client(resolver, "https://provider.example", false).await.0, Ok(()));
+        // Development `localhost`: a public answer beside loopback builds no client; only
+        // loopback answers do. Without development the origin is refused before resolution.
+        let localhost = "http://localhost:9419";
+        let resolver = test_resolver(&[("localhost", &["127.0.0.1", "93.184.216.34"])]);
+        let (built, queries) = client(resolver, localhost, true).await;
+        assert!(built.unwrap_err().contains("must resolve only to loopback"));
+        assert_eq!(queries, ["localhost"]);
+        let resolver = test_resolver(&[("localhost", &["127.0.0.1", "::1"])]);
+        assert_eq!(client(resolver, localhost, true).await, (Ok(()), vec!["localhost".to_string()]));
+        let resolver = test_resolver(&[("localhost", &["127.0.0.1", "::1"])]);
+        assert_eq!(
+            client(resolver, localhost, false).await,
+            (Err(validate_endpoint(localhost, false).unwrap_err()), Vec::new())
+        );
+    }
+    /// outbound-http-safeguards requirement 2 scenarios "Development admits loopback origins
+    /// only" and "Without development, loopback origins are refused" (task 3.2), with their
+    /// exact origins, through `safe_http_client`: an admitted origin reaches resolution once
+    /// and builds its client from loopback answers; a refused origin never reaches resolution.
+    #[tokio::test]
+    async fn development_scenario_origins_reach_resolution_only_when_admitted() {
+        let resolver = || {
+            test_resolver(&[
+                ("127.0.0.1", &["127.0.0.1"]),
+                ("::1", &["::1"]),
+                ("localhost", &["127.0.0.1", "::1"]),
+            ])
+        };
+        for (origin, host) in [
+            ("http://127.0.0.1:9419", "127.0.0.1"),
+            ("http://[::1]:9419", "::1"),
+            ("http://localhost:8080", "localhost"),
+        ] {
+            let resolver = resolver();
+            let built = TEST_RESOLVER.scope(resolver.clone(), safe_http_client(origin, true)).await;
+            assert_eq!(built.map(drop), Ok(()), "{origin}");
+            assert_eq!(*resolver.queries.lock().unwrap(), [host], "{origin}");
+        }
+        for (origin, development) in [
+            ("http://10.0.0.1:9419", true),
+            ("https://192.168.10.1", true),
+            ("http://169.254.169.254", true),
+            ("https://provider.localhost", true),
+            ("http://localhost.:8080", true),
+            ("http://provider.example:8080", true),
+            ("http://127.0.0.1:9419", false),
+            ("https://127.0.0.1", false),
+            ("https://localhost", false),
+        ] {
+            let resolver = resolver();
+            let built = TEST_RESOLVER.scope(resolver.clone(), safe_http_client(origin, development)).await;
+            assert_eq!(
+                built.map(drop),
+                Err(validate_endpoint(origin, development).unwrap_err()),
+                "{origin}/{development}"
+            );
+            assert!(resolver.queries.lock().unwrap().is_empty(), "{origin}/{development}");
+        }
+    }
+    /// outbound-http-safeguards requirement 2 scenario "A localhost origin that resolves to a
+    /// remote address is refused", its last clause (task 3.2): a development `localhost`
+    /// client built from loopback answers is pinned to them. Two recorders listen on one port,
+    /// at `127.0.0.1` and at `[::1]`, and the system resolver answers `localhost` with both;
+    /// a client built from one answer connects only to that answer's recorder, so an unpinned
+    /// client fails one of the two cases whichever address the system prefers. Loopback only,
+    /// no DNS query. (Pinning of public answers, the deadline, the connect timeout, proxies
+    /// and redirects remain task 3.4's evidence.)
+    #[tokio::test]
+    async fn a_development_localhost_client_connects_only_to_its_loopback_answers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        fn record(listener: tokio::net::TcpListener) -> Arc<AtomicUsize> {
+            let count = Arc::new(AtomicUsize::new(0));
+            let counter = count.clone();
+            tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    drop(stream);
+                }
+            });
+            count
+        }
+        let mut pair = None;
+        for _ in 0..100 {
+            let v4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = v4.local_addr().unwrap().port();
+            if let Ok(v6) = tokio::net::TcpListener::bind(("::1", port)).await {
+                pair = Some((v4, v6));
+                break;
+            }
+        }
+        let (v4, v6) = pair.expect("no port free on both 127.0.0.1 and [::1]; this test needs IPv6 loopback");
+        let origin = format!("http://localhost:{}", v4.local_addr().unwrap().port());
+        let (v4, v6) = (record(v4), record(v6));
+        for (answer, pinned, other) in [("127.0.0.1", &v4, &v6), ("::1", &v6, &v4)] {
+            let before = (pinned.load(Ordering::SeqCst), other.load(Ordering::SeqCst));
+            let resolver = test_resolver(&[("localhost", &[answer])]);
+            let client = TEST_RESOLVER
+                .scope(resolver.clone(), safe_http_client(&origin, true))
+                .await
+                .unwrap();
+            assert_eq!(*resolver.queries.lock().unwrap(), ["localhost"]);
+            // The recorder closes the connection unanswered, after counting it.
+            assert!(client.get(format!("{origin}/healthz")).send().await.is_err());
+            assert_eq!(pinned.load(Ordering::SeqCst), before.0 + 1, "pinned to {answer}");
+            assert_eq!(other.load(Ordering::SeqCst), before.1, "pinned to {answer}");
+        }
     }
     #[test]
     fn expired_watermarks_can_be_evicted_without_replaying_old_signatures() {

@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-20 (sixty-third round) — Acceptance: origins before any request, the development exception, the public address predicate, the administration listener
+
+- In step at `850f8e5b`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-outbound-http-safeguards` 3.1, 3.2, 3.3, 3.5 and 3.6; 3.4, 3.7 and 3.8 follow). New tests:
+  - 3.1: non-conforming catalog origins (`:8443`, `10.0.0.5`, a single label, `.localhost`) fail `discover`, `feedback` and the reputation read of `provider_info` with the origin error before any resolution or connection; a validly signed offer at a non-conforming origin is refused by `provider_info`, `quote` and `fund` (no account file saved, current behaviour), and a saved account at such an origin is refused by every consumer operation with the account file unchanged; `ProviderConfig::validate`, `load` and `ProviderRuntime::start` refuse non-conforming public endpoints and create nothing.
+  - 3.2: development `public_bind` must be loopback; consumer profiles and provider files without a `development` member are not development; the scenario origins reach resolution only when admitted; a development `localhost` client connects only to the answer it was pinned to (added by the review, after removing the pin passed every test).
+  - 3.3: catalog URLs with a path, query, fragment or credentials are refused before any request (load-time refusal pinned as current behaviour).
+  - 3.5: `public_ip` judged directly at every range edge and public neighbour, including IPv4-mapped, IPv4-compatible and NAT64 forms; a resolved `::ffff:127.0.0.1` is refused.
+  - 3.6: `admin_bind` must be a non-zero loopback port distinct from the public port; the public router serves no `/admin` route; all ten administration routes refuse a missing, wrong, account-API, Origin-carrying, owner-signed or scheme-less credential and nothing drains; the token comes only from a protected file; the native administration client contacts only literal loopback and ignores environment proxies (new integration binary `outbound_proxy_environment_test`).
+- Test seam: a `#[cfg(test)]` task-local resolver in `offer_registry.rs`. The system lookup moved into `resolve()`, a behaviour-preserving extraction (the same lookup, still at most 33 answers inspected); it is the only change outside test code. No code difference was found.
+- The review found four mutations that passed every test (pin removed, `POST /admin/fees/remit` outside the bearer layer, multicast narrowed to /5, a local credential change before the provider request) and added assertions until each failed. I bounded the pinning test's search for a port free on both loopback families, so a host without IPv6 loopback fails clearly instead of hanging.
+- 3.1, 3.2, 3.3, 3.5 and 3.6 are ticked.
+- Checks: full headless suite under `caffeinate` 623 passed, 12 ignored (helpers), 0 failed across 27 targets (the new proxy-environment binary included); `cargo test --lib desktop::` (desktop feature) 4 passed; `npm test` 70/70; no daemon or engine process left running; strict validation passes. Two stale `tail -f` watchers left by earlier steps of this session were stopped.
+
 ## 2026-11-20 (sixty-second round) — Acceptance: bounded startup, engine exit without restart, shutdown stops owned engines
 
 - In step at `5cd927bc`; whitepaper unchanged; no new answers.
@@ -688,7 +702,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards 3.4, 3.7 and 3.8, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 
