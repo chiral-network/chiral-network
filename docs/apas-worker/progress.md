@@ -1,5 +1,18 @@
 # APAS progress
 
+## 2026-11-20 (sixtieth round) — Acceptance: managed-engine settings, launch arguments, environment and contract checks
+
+- In step at `3511e419`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-managed-engine-launch` 3.3, 3.5, 3.6 and 3.8). Six new tests:
+  - every runtime setting bound, through both `EngineRuntimeConfig::validate` and a provider file load, refused rather than adjusted;
+  - the complete llama-server argument vector for CPU, one- and two-device CUDA, embedding and IPv6 fixtures, with `--fit off` and `--no-context-shift` always present and no key, remote-model or web-UI option;
+  - the engine and device-observer children receive only the allowlisted environment, even with a polluted parent (including `CUDA_DEVICE_ORDER` and lower-case proxies), the executable's directory, and `/dev/null` stdio;
+  - engine key files must hold one protected literal token;
+  - an engine whose `/props` reports another context, slot count, alias or build stays not ready and unpublished.
+- Every test was checked against at least one mutation. The review found five mutations that survived and added assertions until each failed.
+- No product code changed. 3.3, 3.5 and 3.8 are ticked. 3.6 stays open for the Windows environment branch, Windows key storage, the Unix owner rule and Linux runs. The does-not-fit scenario of 3.8 is assigned to task 4.1 (real engine), as the task states.
+- Checks: `--lib` 305 passed, 5 ignored (helpers); bins build; `daemon_engine_process_test` 8/8 (review); strict validation passes. The full integration suite was not rerun: every change is in `#[cfg(test)]` code, which integration targets and binaries do not compile.
+
 ## 2026-11-20 (fifty-ninth round) — Spec: the application starts no node, miner or legacy service
 
 - In step at `91970f1f`; whitepaper unchanged; no new answers.
@@ -649,7 +662,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). Then acceptance tests: `specify-managed-engine-launch` 3.1, 3.2, 3.4, 3.7, 3.9–3.11 (and 3.6 off-host).
 2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open: outbound-http-safeguards, account-credentials, public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

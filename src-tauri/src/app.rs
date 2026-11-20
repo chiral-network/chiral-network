@@ -966,9 +966,14 @@ mod tests {
 
     /// `embeddings_engine` reporting `slots` engine slots, for a model of that concurrency.
     fn embeddings_engine_with_slots(model: protocol::ModelSpec, slots: u32) -> Router {
-        let id = model.id.clone();
         let props = json!({"build_info": "b1-cd959ba", "total_slots": slots, "model_alias": model.id,
             "default_generation_settings": {"n_ctx": model.context_length}});
+        embeddings_engine_with_props(model, props)
+    }
+
+    /// `embeddings_engine` whose `/props` answers `props`.
+    fn embeddings_engine_with_props(model: protocol::ModelSpec, props: Value) -> Router {
+        let id = model.id.clone();
         Router::new()
             .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
             .route("/v1/models", get(move || async move { Json(json!({"data": [{"id": id}]})) }))
@@ -1078,6 +1083,89 @@ mod tests {
         runtime.dht.stop().await;
         for server in engines.into_iter().chain([rpc_server, unavailable]) {
             server.abort();
+        }
+    }
+
+    /// `managed-engine-runtime` requirement 8 (task 3.8): before a model on a managed engine is
+    /// ready, the engine's own `/props` must report the pinned build, the model's alias, exactly
+    /// `max_concurrency` slots and exactly the model's per-slot context. An engine that reduced
+    /// or otherwise changed one of them keeps the model not ready, and a refresh with a ready
+    /// chain publishes no offer for it, while the matching engine is ready and published. The
+    /// engine answers only requests carrying the engine key as bearer (requirement 6), so the
+    /// matching case also shows that every readiness probe presents it.
+    #[tokio::test]
+    async fn an_engine_reporting_another_contract_keeps_the_model_unready_and_unpublished() {
+        const ENGINE_KEY: &str = "private-test-engine-key-of-32-characters";
+        let cases: [(&str, fn(&mut Value)); 10] = [
+            ("the matching engine", |_| {}),
+            ("per-slot context 256 for context 512", |props| props["default_generation_settings"]["n_ctx"] = json!(256)),
+            ("the total context 1,024 as per-slot context", |props| props["default_generation_settings"]["n_ctx"] = json!(1024)),
+            ("one slot for concurrency 2", |props| props["total_slots"] = json!(1)),
+            ("three slots for concurrency 2", |props| props["total_slots"] = json!(3)),
+            ("another model alias", |props| props["model_alias"] = json!("test/another-model")),
+            ("a build of another commit", |props| props["build_info"] = json!("b1-0123456")),
+            // A commit too short to identify the pinned revision, though a prefix of it.
+            ("a build naming no commit", |props| props["build_info"] = json!("b1-")),
+            ("a build naming six characters of the pinned commit", |props| props["build_info"] = json!("b1-cd959b")),
+            ("no per-slot context", |props| props["default_generation_settings"] = json!({})),
+        ];
+        for (case, change) in cases {
+            let ready = case == "the matching engine";
+            let directory = tempfile::tempdir().unwrap();
+            let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+            let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+            config.network.rpc_url = rpc;
+            // A public embeddings deployment, which a non-development provider publishes
+            // through its DHT manifest without a serving profile.
+            config.development = false;
+            config.public_endpoint = "https://inference.example.org/".into();
+            let key_file = directory.path().join("engine.key");
+            wallet::create_secret_file(&key_file).unwrap().write_all(ENGINE_KEY.as_bytes()).unwrap();
+            let model = &mut config.models[0];
+            model.model.capabilities = vec!["embeddings".into()];
+            model.model.context_length = 512;
+            model.model.max_output_tokens = 0;
+            model.price.output_wei_per_1k = "0".into();
+            model.max_concurrency = 2;
+            model.request_timeout_secs = 30;
+            model.engine_api_key_file = Some(key_file);
+            let mut props = json!({"build_info": "b1-cd959ba", "total_slots": 2, "model_alias": model.model.id,
+                "default_generation_settings": {"n_ctx": 512}});
+            change(&mut props);
+            let engine = embeddings_engine_with_props(model.model.clone(), props).layer(middleware::from_fn(
+                |request: Request, next: Next| async move {
+                    let bearer = format!("Bearer {ENGINE_KEY}");
+                    if request.headers().get(header::AUTHORIZATION).is_some_and(|value| value.as_bytes() == bearer.as_bytes()) {
+                        next.run(request).await
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                },
+            ));
+            let (engine_url, engine_server) = serve(engine).await;
+            model.engine_url = engine_url.clone();
+            // The model runs on a managed engine: the helper child stands in for the process,
+            // the fixture answers for it.
+            let helper = crate::engine_runtime::ManagedEngine::helper_for_test(&model.model.id, &engine_url);
+            let engines = std::collections::HashMap::from([(model.model.id.clone(), Arc::new(helper))]);
+            let runtime = ProviderRuntime::start_with(config, engines).await.unwrap();
+
+            let health = inference_backend::model_health(&runtime.state).await;
+            assert_eq!(health.len(), 1);
+            assert_eq!(health[0].ready, ready, "{case}: {}", health[0].detail);
+            assert_eq!(runtime.refresh().await, Ok(usize::from(ready)), "{case}");
+            assert_eq!(runtime.dht.status().await["published_offers"], usize::from(ready), "{case}");
+            let (status, offers) = admin(&runtime, "GET", "/admin/offers").await;
+            assert_eq!((status, offers["offers"].as_array().unwrap().len()), (StatusCode::OK, usize::from(ready)), "{case}");
+            let (_, view) = admin(&runtime, "GET", "/admin/status").await;
+            assert_eq!(view["models"][0]["ready"], ready, "{case}: {view}");
+            assert_eq!(runtime.state.funding_ready.load(Ordering::Acquire), ready, "{case}");
+
+            runtime.dht.stop().await;
+            runtime.stop_engines().await;
+            for server in [engine_server, rpc_server, unavailable] {
+                server.abort();
+            }
         }
     }
 

@@ -230,3 +230,9 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `app::tests::a_publication_failure_at_start_leaves_the_provider_serving_and_reports_it`, `a_second_provider_for_a_deployment_is_refused_before_it_joins_the_network` and `admin_runtime_reports_engine_liveness_without_calling_it_readiness` — **not replaceable**: provider runtimes, DHT nodes, file locks, a counting TCP listener and a managed helper process.
 - `scripts/test_provider_preflight.py` `RuntimeObservationLiveness` and `scripts/test_qualify_provider.py` liveness tests — **not replaceable**: Python operator scripts, outside Verus's scope.
+
+## Judged 2026-11-20 — managed-engine launch acceptance tests
+
+- `engine_runtime::tests::runtime_settings_are_explicit_bounded_and_refused_rather_than_adjusted` — **replaceable in principle** for the bound checks: `EngineRuntimeConfig::validate` is pure over a parsed struct, so the numeric and selector bounds could be stated as Verus lemmas. The half that loads `ProviderConfig` files is not replaceable (serde, files). Not replaced, because Verus is unavailable.
+- `launch_command_passes_the_serving_contract_as_explicit_arguments` — **replaceable in principle** if argument construction were split into a pure function returning a vector; today it builds a `tokio::process::Command`. Not replaced.
+- `the_engine_child_receives_only_the_allowlisted_environment`, `the_launch_command_sets_only_the_allowlisted_environment`, `engine_key_files_must_hold_one_protected_literal_token` and `app::tests::an_engine_reporting_another_contract_keeps_the_model_unready_and_unpublished` — **not replaceable**: child processes, file permissions, symlinks and HTTP stub engines.
