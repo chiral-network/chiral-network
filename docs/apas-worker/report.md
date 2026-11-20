@@ -521,6 +521,8 @@ Separately, the spec records nine code differences, not questions (tasks 2.1–2
 - an engine exit keeps a "Ready" status detail until the next pass;
 - a resume racing shutdown can reopen admission after the shutdown drain.
 
+A tenth code difference was found on 2026-11-20 by the acceptance tests of task 3.1: while a maintenance pass held the lifecycle lock, `/admin/status` still reported a model whose managed engine had exited as ready. It was fixed the same day (design code difference 10).
+
 Nonblocking: no requirement or task waits on these answers. A different answer to question 2, 3 or 6 would change task 2.1, 2.5 or 2.2. Option (a) of question 4, or (b) or (c) of question 1, would add a task.
 
 ## 2026-11-20 — Application startup: may the desktop ever start at login if it starts no node or miner?

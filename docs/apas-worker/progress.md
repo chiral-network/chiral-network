@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-20 (sixty-ninth round) — Acceptance: status facts, runtime observation, drain, resume and refresh through a pass, pass ordering, the persistence-failure latch
+
+- In step at `73281ae4`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-provider-daemon-lifecycle` 3.1–3.6; 3.7–3.12 follow). Fourteen new `app::tests` on funded paid accounts, a stub chain that settles signed payments, and a chat engine that can hold one stream open (`HeldStream`):
+  - 3.1: reading `/admin/status` changes no admission, publication or ledger state (with a credited funding due for recheck and a pending fee); one admitted held stream counts as one unsettled request and none after it completes; drain, readiness, latch and errors stay separate facts.
+  - 3.2: `/admin/runtime` reports a live engine failing its template probe as alive and not ready, and an exited one as neither.
+  - 3.3: through `POST /admin/drain`, a new request is refused as `provider_paused` with no record, the held stream settles `completed` with its usage, no offer is published, the owner reads status and receipts, rotates a credential, tops up and cancels while drained, a new quote is refused, passes keep rechecking credited funding, and a second drain changes no durable state.
+  - 3.4: resume reopens only through its pass, under a higher revision; offer refresh does not end a drain; resume over an exited engine ends the drain, reopens nothing and starts no process; a latched report stays latched through both.
+  - 3.5: `#[cfg(test)]` pause points before and after a pass stores admission show that a racing drain or engine exit leaves nothing admitted or published, closed at once; passes recheck funding while drained, after an exit and in an outage; a quarantining recheck keeps the same pass from publishing; a failed reconciliation closes admission until a later pass succeeds; the periodic loop keeps running after a failed pass (the period is 100 ms only under `cfg(test)`, 30 s otherwise).
+  - 3.6: after a settlement failure, a restart settles the reserved request as `restart_unknown_usage` before admitting again.
+- Code difference 10 (task 3.1, found by the review), fixed: while a pass held the lifecycle lock, `/admin/status` reported a model whose managed engine had exited as ready with its passed-probe reason, while `/admin/runtime` and `/readyz` reported it not ready. `model_status` now reads engine liveness at read time, as those routes do. Severity low: admission was already closed.
+- The author's 13 mutations and the review's 15 each failed a test. Those the review first found passing (both closing stores of a drain and of the engine watcher, a status read that reconciles or remits, a drained model reported not ready, a settlement error reported whenever admission is closed) now fail. The review also fixed a 2-in-11 flake in the periodic test (a request racing a readiness probe for the model's one slot), and replaced status-based waits for the engine watcher with a wait on the watcher's own entry.
+- 3.1–3.4 and 3.6 are ticked. 3.5 stays open only for the version-policy admission gate: the effective policy is process-global and its test setter exists only with the desktop feature, so a parallel library test cannot set it (owned by `client-version-policy` 3.12). Recorded, not fixed: a drain beginning between a pass's admission decision and its store can let that pass reopen admission until the drain takes the lock, which happens before the drain answers, so requirement 5 holds.
+- Checks: full suite under caffeinate: bins build passes; 28 headless test targets, 691 passed, 12 ignored (helpers), 0 failed (`--lib` 412); desktop `--lib desktop::` 4/4; `npm test` 70/70; strict validation passes. The scripts were not changed this round.
+
 ## 2026-11-20 (sixty-eighth round) — Acceptance: stock-client modes, GGUF capability derivation, readiness probes, completion echo, embedding dimensions, tool output as data
 
 - In step at `1a147f92`; whitepaper unchanged; no new answers.
@@ -770,7 +785,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api (3.x done on this host; 3.2 needs the SDK example runs), provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api (3.x done on this host; 3.2 needs the SDK example runs), provider-daemon-lifecycle (3.1–3.4 and 3.6 done; 3.5 waits on the version-policy gate; 3.7–3.12 next) and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

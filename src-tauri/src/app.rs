@@ -161,6 +161,25 @@ impl ProviderState {
     }
 }
 
+/// The period of `ProviderRuntime::maintenance`, the periodic pass (`inference-offer-discovery`'s
+/// 30 seconds). Unit tests shorten it, so that a test can observe periodic passes
+/// (provider-daemon-lifecycle task 3.5); every other build uses 30 seconds.
+#[cfg(not(test))]
+const MAINTENANCE_PERIOD: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const MAINTENANCE_PERIOD: Duration = Duration::from_millis(100);
+
+/// The test-only pause points of a maintenance pass (provider-daemon-lifecycle task 3.5), both
+/// after the pass has decided admission and before it publishes.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PassPoint {
+    /// The pass has decided admission and new-funding readiness and has not yet stored them.
+    Decided,
+    /// The pass has stored its decision and has not yet published.
+    Stored,
+}
+
 /// `ProviderRuntime::drain_state` values.
 const OPEN: u8 = 0;
 const DRAINING: u8 = 1;
@@ -194,6 +213,11 @@ pub struct ProviderRuntime {
     revision_file: PathBuf,
     revision: Mutex<u64>,
     _instance_lock: ExclusiveFileLock,
+    /// Test-only pause point of `refresh_inner` (provider-daemon-lifecycle task 3.5): when armed,
+    /// the next pass that reaches the armed `PassPoint` reports on the sender and continues once
+    /// the receiver resolves.
+    #[cfg(test)]
+    pass_pause: std::sync::Mutex<Option<(PassPoint, tokio::sync::oneshot::Sender<()>, tokio::sync::oneshot::Receiver<()>)>>,
 }
 
 impl ProviderRuntime {
@@ -313,6 +337,8 @@ impl ProviderRuntime {
             revision_file,
             revision: Mutex::new(revision),
             _instance_lock: instance_lock,
+            #[cfg(test)]
+            pass_pause: std::sync::Mutex::new(None),
         });
         // A stopped engine leaves administration available, but never publishes a usable offer.
         // The starting pass fails as a later pass does: its error is kept in `refresh_error`
@@ -508,9 +534,13 @@ impl ProviderRuntime {
             && self.state.managed_engines.values().all(|engine| engine.is_alive())
             && health.iter().any(|model| model.ready);
         *self.health.write().await = health;
+        #[cfg(test)]
+        self.pause_for_test(PassPoint::Decided).await;
         // A durable settlement failure keeps admission, and so new funding and publication,
         // closed until the operator resumes (provider-daemon-lifecycle requirement 6).
         let funding_ready = self.state.store_admission(accepting, chain_ready && funding_safe);
+        #[cfg(test)]
+        self.pause_for_test(PassPoint::Stored).await;
         let mut next = HashSet::new();
         if funding_ready {
             let revision = self
@@ -567,6 +597,20 @@ impl ProviderRuntime {
         Ok(published.len())
     }
 
+    /// The test-only pause point `point` of a pass, when it is the armed one: reports that the
+    /// pass has reached it and waits until the test lets the pass continue.
+    #[cfg(test)]
+    async fn pause_for_test(&self, point: PassPoint) {
+        let armed = {
+            let mut pause = self.pass_pause.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pause.as_ref().is_some_and(|(armed, _, _)| *armed == point) { pause.take() } else { None }
+        };
+        if let Some((_, paused, resume)) = armed {
+            let _ = paused.send(());
+            let _ = resume.await;
+        }
+    }
+
     pub async fn stop_engines(&self) {
         for engine in self.state.managed_engines.values() { engine.stop().await; }
     }
@@ -604,7 +648,7 @@ impl ProviderRuntime {
     pub fn maintenance(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let runtime = self.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            let mut interval = tokio::time::interval(MAINTENANCE_PERIOD);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             interval.tick().await;
             loop {
@@ -767,18 +811,26 @@ impl ProviderRuntime {
     /// Each model's latest readiness, or a later observed engine exit, and whether a durable
     /// performance-withdrawal latch blocks its admission: read from the ledger now, because a
     /// settlement can latch a report between passes; `null` when the ledger cannot answer.
+    /// An exited managed engine is read here too, as `/admin/runtime` and `/readyz` read it:
+    /// while a pass holds the lifecycle lock, the engine watcher cannot yet replace the latest
+    /// pass's entry (provider-daemon-lifecycle requirement 1, design code difference 10).
     async fn model_status(&self) -> Vec<Value> {
         let health = self.health.read().await;
         health.iter().map(|model| {
+            let (ready, reason) = if self.state.engine_alive(&model.model_id) {
+                (model.ready, model.detail.as_str())
+            } else {
+                (false, inference_backend::ENGINE_EXITED)
+            };
             let withdrawn = self.state.config.models.iter()
                 .find(|configured| configured.model.id == model.model_id)
                 .and_then(|configured| self.state.ledger.performance_withdrawn(&configured.model).ok());
             let detail = if withdrawn == Some(true) {
-                format!("{PERFORMANCE_WITHDRAWN} Latest readiness result: {}", model.detail)
+                format!("{PERFORMANCE_WITHDRAWN} Latest readiness result: {reason}")
             } else {
-                model.detail.clone()
+                reason.to_owned()
             };
-            json!({"model_id": model.model_id, "ready": model.ready, "detail": detail,
+            json!({"model_id": model.model_id, "ready": ready, "detail": detail,
                 "performance_withdrawn": withdrawn})
         }).collect()
     }
@@ -1825,6 +1877,60 @@ mod tests {
     /// A private engine that passes the chat readiness probes of one-slot `model`, whose
     /// served chat template is `template`.
     fn chat_engine(model: protocol::ModelSpec, template: &'static str) -> Router {
+        chat_engine_holding(model, template, None)
+    }
+
+    /// Holds one streamed chat request of `chat_engine_holding` open after its first token.
+    #[derive(Clone)]
+    struct HeldStream {
+        entered: Arc<tokio::sync::watch::Sender<bool>>,
+        open: Arc<tokio::sync::watch::Sender<bool>>,
+    }
+
+    impl HeldStream {
+        fn new() -> Self {
+            Self {
+                entered: Arc::new(tokio::sync::watch::channel(false).0),
+                open: Arc::new(tokio::sync::watch::channel(false).0),
+            }
+        }
+        /// Returns once the held stream has sent its first token, within 30 seconds.
+        async fn entered(&self) {
+            within(self.entered.subscribe().wait_for(|entered| *entered)).await.unwrap();
+        }
+        /// Lets the held stream finish.
+        fn release(&self) {
+            self.open.send_replace(true);
+        }
+        /// The engine's answer to the held request: its token `OK` with its sampled ID, then,
+        /// once released, a `stop` finish, exact usage (two prompt tokens, one completion
+        /// token) and `[DONE]`.
+        fn answer(&self, model: Value) -> Response {
+            use futures_util::StreamExt;
+            let chunk = |choices: Value| json!({"id": "held", "object": "chat.completion.chunk",
+                "model": model, "created": 1, "choices": choices});
+            let token = chunk(json!([{"index": 0, "delta": {"content": "OK"}, "finish_reason": null,
+                "logprobs": {"content": [{"id": 42, "token": "OK", "bytes": [79, 75], "logprob": -0.5,
+                    "top_logprobs": []}]}}]));
+            let finish = chunk(json!([{"index": 0, "delta": {}, "finish_reason": "stop"}]));
+            let mut usage = chunk(json!([]));
+            usage["usage"] = json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3});
+            let first = axum::body::Bytes::from(format!("data: {token}\n\n"));
+            let rest = axum::body::Bytes::from(format!("data: {finish}\n\ndata: {usage}\n\ndata: [DONE]\n\n"));
+            let held = self.clone();
+            let body = futures_util::stream::iter([Ok::<_, std::convert::Infallible>(first)])
+                .chain(futures_util::stream::once(async move {
+                    held.entered.send_replace(true);
+                    let _ = held.open.subscribe().wait_for(|open| *open).await;
+                    Ok(rest)
+                }));
+            ([(header::CONTENT_TYPE, "text/event-stream")], axum::body::Body::from_stream(body)).into_response()
+        }
+    }
+
+    /// `chat_engine`, which, given `held`, answers a chat request whose user message is `held`
+    /// with `HeldStream::answer`: an admitted stream that the test holds open.
+    fn chat_engine_holding(model: protocol::ModelSpec, template: &'static str, held: Option<HeldStream>) -> Router {
         let id = model.id.clone();
         let props = json!({"build_info": "b1-cd959ba", "total_slots": 1, "model_alias": model.id,
             "default_generation_settings": {"n_ctx": model.context_length}, "chat_template": template});
@@ -1834,22 +1940,28 @@ mod tests {
             .route("/props", get(move || async move { Json(props) }))
             .route("/apply-template", post(|| async { Json(json!({"prompt": "rendered"})) }))
             .route("/tokenize", post(|| async { Json(json!({"tokens": [1, 2]})) }))
-            .route("/v1/chat/completions", post(|request: Json<Value>| async move {
-                let usage = json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3});
-                if request["stream"] != true {
-                    return Json(json!({"id": "probe", "object": "chat.completion", "model": request["model"],
-                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"},
-                            "finish_reason": "length"}], "usage": usage})).into_response();
+            .route("/v1/chat/completions", post(move |request: Json<Value>| {
+                let held = held.clone().filter(|_| request["messages"][0]["content"] == "held");
+                async move {
+                    if let Some(held) = held {
+                        return held.answer(request["model"].clone());
+                    }
+                    let usage = json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3});
+                    if request["stream"] != true {
+                        return Json(json!({"id": "probe", "object": "chat.completion", "model": request["model"],
+                            "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"},
+                                "finish_reason": "length"}], "usage": usage})).into_response();
+                    }
+                    let token = json!({"id": 7, "token": "OK", "logprob": -0.1,
+                        "top_logprobs": [{"token": "OK", "logprob": -0.1}]});
+                    let chunk = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
+                        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"},
+                            "logprobs": {"content": [token]}, "finish_reason": "length"}]});
+                    let last = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
+                        "choices": [], "usage": usage});
+                    ([(header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {last}\n\ndata: [DONE]\n\n")).into_response()
                 }
-                let token = json!({"id": 7, "token": "OK", "logprob": -0.1,
-                    "top_logprobs": [{"token": "OK", "logprob": -0.1}]});
-                let chunk = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
-                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"},
-                        "logprobs": {"content": [token]}, "finish_reason": "length"}]});
-                let last = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
-                    "choices": [], "usage": usage});
-                ([(header::CONTENT_TYPE, "text/event-stream")],
-                    format!("data: {chunk}\n\ndata: {last}\n\ndata: [DONE]\n\n")).into_response()
             }))
     }
 
@@ -1972,7 +2084,8 @@ mod tests {
         assert_eq!(readyz(&runtime).await, StatusCode::OK);
 
         runtime.state.managed_engines["model"].kill_for_test();
-        // `/readyz` sees the exit at once; the status once the engine watcher has observed it.
+        // `/readyz` and the status see the exit once the process is gone (design code difference
+        // 10); the engine watcher then closes admission, records the exit and withdraws.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let model = loop {
             let model = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
@@ -1983,6 +2096,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         };
         assert_eq!(model["detail"], inference_backend::ENGINE_EXITED, "{model}");
+        watcher_recorded_exit(&runtime).await;
+        let model = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
+        assert_eq!((&model["ready"], &model["detail"]), (&json!(false), &json!(inference_backend::ENGINE_EXITED)), "{model}");
         assert!(!runtime.state.accepting.load(Ordering::Acquire));
         assert_eq!(runtime.dht.status().await["published_offers"], 0);
         runtime.dht.stop().await;
@@ -2043,6 +2159,20 @@ mod tests {
     /// `future`, which must finish within 30 seconds.
     async fn within<F: std::future::Future>(future: F) -> F::Output {
         tokio::time::timeout(Duration::from_secs(30), future).await.expect("timed out")
+    }
+
+    /// Waits, within 30 seconds, until the engine watcher has replaced the first model's entry of
+    /// the latest pass with the engine exit. It does so under the lifecycle lock, after it has
+    /// closed admission and new funding again, and just before it withdraws the published offers.
+    /// `/admin/status` reports the exit as soon as the process is gone, before the watcher acts
+    /// (design code difference 10), so it is no signal that the watcher has acted.
+    async fn watcher_recorded_exit(runtime: &ProviderRuntime) {
+        within(async {
+            while runtime.health.read().await.first().is_none_or(|model| model.detail != inference_backend::ENGINE_EXITED) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
     }
 
     /// Waits until the provider's drain state satisfies `reached`, within 30 seconds.
@@ -3486,6 +3616,1310 @@ mod tests {
             for server in [rpc_server, unavailable] {
                 server.abort();
             }
+        }
+    }
+
+    // provider-daemon-lifecycle acceptance evidence, tasks 3.1 to 3.6.
+
+    /// The hash of block 10, the `safe` block of `ready_chain` and `settled_chain`.
+    fn safe_block_hash() -> String {
+        format!("0x{}", "56".repeat(32))
+    }
+
+    /// The receipts that `settled_chain` answers, by lower-case transaction hash.
+    type Receipts = Arc<std::sync::Mutex<std::collections::HashMap<String, Value>>>;
+
+    /// `ready_chain`, which also answers the receipt of each transaction in `receipts`, executed
+    /// successfully in block 10, the `safe` block, and that block by its number, with a timestamp
+    /// fixed when the stub is made, so that the two observations of one payment agree. A credited
+    /// payment then rechecks as accepted, and a signed payment verifies as canonical.
+    fn settled_chain(receipts: Receipts) -> Router {
+        let fixed = protocol::now().unwrap() - 2;
+        Router::new().fallback(move |request: Json<Value>| {
+            let receipts = receipts.clone();
+            async move {
+                let method = request["method"].as_str().unwrap_or("").to_owned();
+                let result = match method.as_str() {
+                    "eth_getTransactionReceipt" => receipts.lock().unwrap()
+                        .get(&request["params"][0].as_str().unwrap_or("").to_ascii_lowercase())
+                        .cloned().unwrap_or(Value::Null),
+                    "eth_getBlockByNumber" if request["params"][0] == "0xa" =>
+                        json!({"number": "0xa", "hash": safe_block_hash(), "timestamp": format!("0x{fixed:x}")}),
+                    _ => return ready_chain(request).await,
+                };
+                Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result})).into_response()
+            }
+        })
+    }
+
+    /// Signs a legacy payment of `value` wei carrying `data`, from the wallet of signing key
+    /// `consumer` repeated with sender nonce `nonce`, to the provider, and adds its successful
+    /// receipt in the `safe` block to `receipts`.
+    fn signed_payment(state: &ProviderState, receipts: &Receipts, consumer: &str, nonce: u64, value: u128,
+        data: &[u8]) -> crate::chain_client::SubmittedTransaction {
+        let key = consumer.repeat(32);
+        let payment = crate::chain_client::sign_transaction(&key, state.config.network.identity.chain_id, nonce,
+            &state.wallet, value, data, 1, 21_000 + 40 * data.len() as u64).unwrap();
+        receipts.lock().unwrap().insert(payment.tx_hash.to_ascii_lowercase(), json!({
+            "transactionHash": payment.tx_hash, "from": wallet::address_from_private_key(&key).unwrap(),
+            "to": state.wallet, "type": "0x0", "gasUsed": "0x5208", "status": "0x1",
+            "blockNumber": "0xa", "blockHash": safe_block_hash()}));
+        payment
+    }
+
+    /// Stores a quote of the first model for the wallet of signing key `consumer` repeated, free
+    /// when `funding` is zero and otherwise at the configured price.
+    fn stored_quote(state: &ProviderState, consumer: &str, funding: u128) -> Signed<Quote> {
+        let now = protocol::now().unwrap();
+        let configured = &state.config.models[0];
+        let price = if funding == 0 {
+            PriceSchedule { input_wei_per_1k: "0".into(), output_wei_per_1k: "0".into() }
+        } else {
+            configured.price.clone()
+        };
+        let quote = protocol::sign(protocol::QUOTE_DOMAIN, Quote {
+            id: protocol::random_id(), network: state.config.network.identity.clone(),
+            offer_id: protocol::random_id(), provider_wallet: state.wallet.clone(),
+            consumer_wallet: wallet::address_from_private_key(&consumer.repeat(32)).unwrap(),
+            model: configured.model.clone(), price, funding_wei: funding.to_string(),
+            platform_wallet: state.config.platform_wallet.clone(), fee_bps: 50, max_concurrency: 1,
+            nonce: protocol::random_id(), issued_at: now, expires_at: now + 300,
+        }, &state.private_key).unwrap();
+        state.ledger.store_quote(&quote, now).unwrap();
+        quote
+    }
+
+    /// Acknowledges the funding intent of the paid `quote` for its signed opening payment, with
+    /// sender nonce 0, as an admitted `POST /v1/contracts/<id>/funding-intent` does: the payment
+    /// and the acknowledgement.
+    fn acknowledged_opening(state: &ProviderState, receipts: &Receipts, consumer: &str, quote: &Signed<Quote>)
+        -> (crate::chain_client::SubmittedTransaction, Value) {
+        let opening = protocol::opening_data(&quote.payload).unwrap();
+        let payment = signed_payment(state, receipts, consumer, 0, quote.payload.funding_wei.parse().unwrap(), &opening);
+        let acknowledgement = state.ledger.register_funding_intent(quote, &quote.payload.consumer_wallet,
+            &payment.raw_transaction, &payment.tx_hash, 0, &state.private_key, protocol::now, true,
+            &quote.payload.model).unwrap();
+        (payment, serde_json::to_value(acknowledgement).unwrap())
+    }
+
+    /// Opens a paid account through an acknowledged opening of `funding` wei, whose canonical
+    /// evidence (block 10 of `settled_chain`) is a ledger input here: its contract, its default
+    /// credential and the opening's transaction hash.
+    fn funded_account(state: &ProviderState, receipts: &Receipts, consumer: &str, funding: u128)
+        -> (String, protocol::Credential, String) {
+        let quote = stored_quote(state, consumer, funding);
+        let (payment, _) = acknowledged_opening(state, receipts, consumer, &quote);
+        let evidence = crate::chain_client::VerifiedPayment {
+            network: state.config.network.identity.clone(), tx_hash: payment.tx_hash.clone(),
+            from: quote.payload.consumer_wallet.clone(), to: state.wallet.clone(), value_wei: funding.to_string(),
+            data: protocol::opening_data(&quote.payload).unwrap(), block_hash: safe_block_hash(), block_number: 10,
+            raw_transaction: payment.raw_transaction,
+        };
+        let opened = state.ledger.open_account(&quote, Some(&evidence), protocol::now().unwrap()).unwrap();
+        (quote.payload.id.clone(), opened.credential.unwrap(), payment.tx_hash)
+    }
+
+    /// When the ledger last checked the credited funding `hash`.
+    fn funding_checked(runtime: &ProviderRuntime, hash: &str) -> u64 {
+        ledger_connection(runtime).query_row("SELECT checked FROM funding WHERE tx_hash=?1", [hash],
+            |row| row.get::<_, i64>(0)).unwrap() as u64
+    }
+
+    /// Marks the credited funding `hash` as never checked, so that a pass that rechecks it moves its
+    /// checked time forward, even within the same second: the time before that pass.
+    fn unchecked(runtime: &ProviderRuntime, hash: &str) -> u64 {
+        ledger_connection(runtime).execute("UPDATE funding SET checked=0 WHERE tx_hash=?1", [hash]).unwrap();
+        protocol::now().unwrap()
+    }
+
+    /// `method path` on `router` with `headers` and, when given, a JSON `body`: the status and the
+    /// body.
+    async fn send(router: &Router, method: &str, path: &str, headers: &[(String, String)], body: Option<&Value>)
+        -> (StatusCode, Vec<u8>) {
+        use tower::ServiceExt;
+        let mut request = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        let body = match body {
+            Some(body) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                axum::body::Body::from(body.to_string())
+            }
+            None => axum::body::Body::empty(),
+        };
+        let response = router.clone().oneshot(request.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        (status, axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec())
+    }
+
+    /// `send`, with the answer as JSON (`null` when it is not JSON).
+    async fn call(router: &Router, method: &str, path: &str, headers: &[(String, String)], body: Option<&Value>)
+        -> (StatusCode, Value) {
+        let (status, bytes) = send(router, method, path, headers, body).await;
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    /// The `Authorization` header for `bearer`.
+    fn bearer_header(bearer: &str) -> Vec<(String, String)> {
+        vec![("authorization".into(), format!("Bearer {bearer}"))]
+    }
+
+    /// The `Authorization` header for `bearer` with `Idempotency-Key: key`.
+    fn keyed(bearer: &str, key: &str) -> Vec<(String, String)> {
+        let mut headers = bearer_header(bearer);
+        headers.push(("idempotency-key".into(), key.into()));
+        headers
+    }
+
+    /// `POST path` with `body` on `public`, proved by the owner, the wallet of signing key
+    /// `consumer` repeated, with a one-use challenge of `public` signed by that key.
+    async fn owner_post(public: &Router, state: &ProviderState, consumer: &str, path: &str, body: Value)
+        -> (StatusCode, Value) {
+        let key = consumer.repeat(32);
+        let owner = wallet::address_from_private_key(&key).unwrap();
+        let body_hash = protocol::hash_hex(body.to_string().as_bytes());
+        let (status, challenge) = call(public, "POST", "/v1/auth/challenge", &[], Some(&json!({
+            "wallet": owner, "method": "POST", "path": path, "body_hash": body_hash}))).await;
+        assert_eq!(status, StatusCode::OK, "{challenge}");
+        let challenge: protocol::Challenge = serde_json::from_value(challenge).unwrap();
+        let payload = crate::auth::challenge_payload(&crate::auth::AuthPayload {
+            network: state.config.network.identity.clone(), provider_wallet: state.wallet.clone(),
+            wallet: owner.clone(), method: "POST".into(), path: path.into(), body_hash,
+            nonce: challenge.nonce.clone(), expires_at: challenge.expires_at,
+        }).unwrap();
+        let signature = wallet::sign_message(&key, &payload).unwrap();
+        let proof = [("x-chiral-owner".to_owned(), owner), ("x-chiral-nonce".to_owned(), challenge.nonce),
+            ("x-chiral-signature".to_owned(), signature)];
+        call(public, "POST", path, &proof, Some(&body)).await
+    }
+
+    /// Every row of every table of `connection`, by table name.
+    fn table_rows(connection: &rusqlite::Connection) -> Value {
+        let tables: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        tables.into_iter().map(|table| {
+            let mut statement = connection.prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid")).unwrap();
+            let columns = statement.column_count();
+            let rows: Vec<String> = statement
+                .query_map([], |row| (0..columns).map(|column| row.get::<_, rusqlite::types::Value>(column))
+                    .collect::<Result<Vec<_>, _>>()).unwrap()
+                .map(|row| format!("{:?}", row.unwrap())).collect();
+            (table, json!(rows))
+        }).collect::<serde_json::Map<_, _>>().into()
+    }
+
+    /// The deployment's ledger and wallet journal, every table and row, with the operator's
+    /// account, request and fee views: the durable state that a drain must leave unchanged.
+    fn durable_state(runtime: &ProviderRuntime) -> Value {
+        let journals = files_named(&runtime.state.config.data_dir, "transactions.sqlite3");
+        assert_eq!(journals.len(), 1, "{journals:?}");
+        json!({
+            "ledger": table_rows(&ledger_connection(runtime)),
+            "journal": table_rows(&rusqlite::Connection::open(&journals[0]).unwrap()),
+            "accounts": runtime.state.ledger.list_accounts().unwrap(),
+            "requests": runtime.state.ledger.list_requests().unwrap(),
+            "fees": runtime.state.ledger.fee_summary().unwrap(),
+        })
+    }
+
+    /// Asserts that the `durable_state` `after` equals `before`, naming only the tables and views
+    /// that differ, so that no stored credential digest reaches the failure message.
+    fn assert_unchanged(before: &Value, after: &Value, context: &str) {
+        let mut differing = Vec::new();
+        for part in ["ledger", "journal"] {
+            let tables: std::collections::BTreeSet<&String> = before[part].as_object().unwrap().keys()
+                .chain(after[part].as_object().unwrap().keys()).collect();
+            differing.extend(tables.into_iter().filter(|table| before[part][table.as_str()] != after[part][table.as_str()])
+                .map(|table| format!("{part}.{table}")));
+        }
+        differing.extend(["accounts", "requests", "fees"].into_iter().filter(|view| before[*view] != after[*view])
+            .map(str::to_owned));
+        assert!(differing.is_empty(), "{context}: changed {differing:?}");
+    }
+
+    /// The signed offers that `GET /admin/offers` lists, and the number that the DHT publishes.
+    async fn published(runtime: &Arc<ProviderRuntime>) -> (Vec<Value>, Value) {
+        let (status, offers) = admin(runtime, "GET", "/admin/offers").await;
+        assert_eq!(status, StatusCode::OK);
+        (offers["offers"].as_array().unwrap().clone(), runtime.dht.status().await["published_offers"].clone())
+    }
+
+    /// `/admin/status`'s admission, drain and new-funding readiness.
+    async fn admission(runtime: &Arc<ProviderRuntime>) -> (Value, Value, Value) {
+        let (status, view) = admin(runtime, "GET", "/admin/status").await;
+        assert_eq!(status, StatusCode::OK);
+        (view["accepting"].clone(), view["draining"].clone(), view["funding_ready"].clone())
+    }
+
+    /// inference-generation-performance's synthetic evidence for a chat model whose served
+    /// template is `template`, for the pinned engine version, persisted in `directory`: the
+    /// profiled model and its evidence file.
+    fn profiled_chat(directory: &std::path::Path, template: &str) -> (protocol::ModelSpec, PathBuf) {
+        use sha2::{Digest, Sha256};
+        let (mut model, mut report) = crate::performance::evidence_tests::fixture();
+        model.chat_template_sha256 = hex::encode(Sha256::digest(template));
+        let version = crate::engine_runtime::ENGINE_VERSION;
+        model.serving.as_mut().unwrap().engine_version = version.into();
+        report["runtime_observation"]["engine_version"] = json!(version);
+        let evidence = directory.join("evidence.json");
+        crate::performance::evidence_tests::persist(&mut model, &mut report, &evidence);
+        (model, evidence)
+    }
+
+    /// `unavailable_provider` with chain RPC `rpc`, whose only model is the profiled `model` with
+    /// its `evidence`, served by the engine at `engine_url`: a development provider that publishes
+    /// the model's offer through the DHT.
+    async fn profiled_chat_config(directory: &std::path::Path, rpc: String, model: &protocol::ModelSpec,
+        evidence: PathBuf, engine_url: &str) -> (ProviderConfig, tokio::task::JoinHandle<()>) {
+        let (mut config, unavailable) = unavailable_provider(directory).await;
+        config.network.rpc_url = rpc;
+        let deployment = &mut config.models[0];
+        deployment.model = model.clone();
+        deployment.engine_url = engine_url.into();
+        deployment.qualification_evidence_file = Some(evidence);
+        deployment.request_timeout_secs = 30;
+        (config, unavailable)
+    }
+
+    /// Arms the test-only pause point `point` of `runtime`'s next maintenance pass: the receiver
+    /// resolves once that pass has reached it, after the pass has decided admission and before
+    /// it publishes, and the pass continues once the sender is used.
+    fn pause_next_pass(runtime: &ProviderRuntime, point: PassPoint)
+        -> (tokio::sync::oneshot::Receiver<()>, tokio::sync::oneshot::Sender<()>) {
+        let (paused, reached) = tokio::sync::oneshot::channel();
+        let (release, resume) = tokio::sync::oneshot::channel();
+        *runtime.pass_pause.lock().unwrap() = Some((point, paused, resume));
+        (reached, release)
+    }
+
+    /// provider-daemon-lifecycle requirement 1 (task 3.1): the status is an unsigned operator
+    /// observation. Reading `GET /admin/status`, with the other read-only administration routes
+    /// and `GET /readyz`, again and again while the provider serves, after a settlement failure
+    /// and while it drains, changes no admission, new-funding readiness, drain or settlement
+    /// failure, no publication (the signed offers with their revisions, the DHT and the persisted
+    /// revision) and no durable ledger or wallet-journal state. The provider holds a credited
+    /// funding, marked as never checked, and its pending platform fee, so that a read that
+    /// rechecked funding or remitted fees would change the ledger.
+    #[tokio::test]
+    async fn reading_the_operator_status_changes_no_admission_publication_or_ledger_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (runtime, bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), settled_chain(receipts.clone()), false).await;
+        assert_eq!(embed(&runtime, &bearer, "before-the-reads").await.0, StatusCode::OK);
+        let (_, _, opening) = funded_account(&runtime.state, &receipts, "44", 1000);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        unchecked(&runtime, &opening);
+        assert_eq!(runtime.state.ledger.fee_summary().unwrap()["amounts_wei"]["pending"], "5");
+        let observed = || {
+            let runtime = runtime.clone();
+            async move {
+                let (offers, dht) = published(&runtime).await;
+                (json!({
+                    "accepting": runtime.state.accepting.load(Ordering::Acquire),
+                    "funding_ready": runtime.state.funding_ready.load(Ordering::Acquire),
+                    "drain_state": runtime.drain_state.load(Ordering::Acquire),
+                    "settlement_error": runtime.state.settlement_fault(),
+                    "refresh_error": runtime.refresh_error().await,
+                    "offers": offers, "dht": dht,
+                    "revision": std::fs::read_to_string(&runtime.revision_file).unwrap(),
+                }), durable_state(&runtime))
+            }
+        };
+        for case in ["serving", "after a settlement failure", "drained"] {
+            match case {
+                "after a settlement failure" =>
+                    runtime.state.record_settlement_fault(inference_gateway::DURABLE_SETTLEMENT_FAILED),
+                "drained" => assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK),
+                _ => {}
+            }
+            let (facts, durable) = observed().await;
+            let expected = match case {
+                "serving" => (true, true, OPEN, Value::Null),
+                "after a settlement failure" => (false, false, OPEN, json!(inference_gateway::DURABLE_SETTLEMENT_FAILED)),
+                _ => (false, false, DRAINING, json!(inference_gateway::DURABLE_SETTLEMENT_FAILED)),
+            };
+            assert_eq!((&facts["accepting"], &facts["funding_ready"], &facts["drain_state"], &facts["settlement_error"]),
+                (&json!(expected.0), &json!(expected.1), &json!(expected.2), &expected.3), "{case}");
+            // A settlement failure closes admission and new funding at once; its offer stays
+            // published until the next pass withdraws it, which reading the status never runs.
+            assert_eq!(facts["offers"].as_array().unwrap().len(), usize::from(case != "drained"), "{case}");
+            for _ in 0..3 {
+                for path in ["/admin/status", "/admin/runtime", "/admin/offers", "/admin/accounts", "/admin/requests",
+                    "/admin/fees"] {
+                    assert_eq!(admin(&runtime, "GET", path).await.0, StatusCode::OK, "{case}: {path}");
+                }
+                readyz(&runtime).await;
+            }
+            let (after, after_durable) = observed().await;
+            assert_eq!(after, facts, "{case}");
+            assert_unchanged(&durable, &after_durable, case);
+        }
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 3 (task 3.3), scenarios "Admitted work settles while
+    /// new work is refused", "Recovery and maintenance continue while draining" and "Drain changes
+    /// no money", with requirement 1's scenario "The status shows when in-flight work has settled"
+    /// (task 3.1). A development provider publishes the offer of its profiled chat model, served
+    /// by a stub engine. It holds a paid account funded through an acknowledged opening (large
+    /// enough that its platform fee is due at once), another acknowledged opening, a paid quote
+    /// without an intent and a free quote. One streamed chat request of the funded account is
+    /// admitted, and the engine holds it open after its first token. Then `POST /admin/drain`:
+    /// - changes no durable state (the admitted request's reservation included) and withdraws the
+    ///   offer before it answers; the status reports the drain and one admitted request not yet
+    ///   settled;
+    /// - a new request on the same account is refused as `provider_paused` before any record or
+    ///   engine contact; a quote proposal for the offer, a fresh funding intent and a free opening
+    ///   are refused as `provider_draining`; the acknowledged intent is recovered unchanged;
+    /// - the held stream completes and settles as `completed` with the engine's usage, and the
+    ///   status then reports no unsettled request;
+    /// - the owner reads the request's status, by the gateway and the control plane, and a
+    ///   receipt; a cancellation finds nothing in flight;
+    /// - the next maintenance pass rechecks the credited funding and attempts the due fee
+    ///   remittance (the stub refuses the submission, which the status reports), and reopens
+    ///   nothing;
+    /// - the owner settles a top-up of the existing agreement, credited with its own fee and
+    ///   recovered without a second credit, opens the acknowledged account and recovers it, and
+    ///   rotates a credential, whose new bearer reads the account;
+    /// - a second drain changes no durable state.
+    #[tokio::test]
+    async fn a_drain_refuses_new_work_while_admitted_work_settles_and_recovery_continues() {
+        use std::sync::atomic::AtomicUsize;
+        const TEMPLATE: &str = "{{ messages }}";
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (rpc, rpc_server) = serve(settled_chain(receipts.clone())).await;
+        let (model, evidence) = profiled_chat(directory.path(), TEMPLATE);
+        let held = HeldStream::new();
+        let contacted = Arc::new(AtomicUsize::new(0));
+        let engine = chat_engine_holding(model.clone(), TEMPLATE, Some(held.clone())).layer(middleware::from_fn({
+            let contacted = contacted.clone();
+            move |request: Request, next: Next| {
+                let contacted = contacted.clone();
+                async move {
+                    contacted.fetch_add(1, Ordering::SeqCst);
+                    next.run(request).await
+                }
+            }
+        }));
+        let (engine_url, engine_server) = serve(engine).await;
+        let (config, unavailable) = profiled_chat_config(directory.path(), rpc, &model, evidence, &engine_url).await;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let state = runtime.state.clone();
+        let public = runtime.public_router();
+        let (offers, dht) = published(&runtime).await;
+        assert_eq!((offers.len(), dht), (1, json!(1)));
+        let offer_id = runtime.published.lock().await.iter().next().unwrap().clone();
+        // 2 × 10^17 wei: its 50-basis-point platform fee, 10^15 wei, is the minimum remittance.
+        let (contract, credential, opening) = funded_account(&state, &receipts, "44", 200_000_000_000_000_000);
+        let acknowledged = stored_quote(&state, "55", 1000);
+        let (acknowledged_payment, acknowledgement) = acknowledged_opening(&state, &receipts, "55", &acknowledged);
+        let unacknowledged = stored_quote(&state, "66", 1000);
+        let fresh = signed_payment(&state, &receipts, "66", 0, 1000, &protocol::opening_data(&unacknowledged.payload).unwrap());
+        let free = stored_quote(&state, "77", 0);
+        // 300 output tokens is beyond the qualified workload envelope (256), so that holding the
+        // stream is not judged against the qualified speed, which would latch the model
+        // (inference-generation-performance).
+        let chat = |content: &str| json!({"model": "model", "messages": [{"role": "user", "content": content}],
+            "max_tokens": 300, "stream": true});
+
+        let admitted = tokio::spawn({
+            let (public, headers, body) = (public.clone(), keyed(&credential.bearer, "admitted-before-the-drain"), chat("held"));
+            async move { send(&public, "POST", "/v1/chat/completions", &headers, Some(&body)).await }
+        });
+        held.entered().await;
+        assert_eq!(state.ledger.request_view(&contract, "admitted-before-the-drain").unwrap().status, "reserved");
+        let before = durable_state(&runtime);
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        // The drain changed no durable state, the admitted request's reservation included, and
+        // withdrew the offer before it answered.
+        assert_unchanged(&before, &durable_state(&runtime), "the drain");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["draining"], &view["funding_ready"], &view["ledger"]["active_requests"]),
+            (&json!(false), &json!(true), &json!(false), &json!(1)), "{view}");
+        // Each fact stays its own: the drain is not reported as a model that is not ready, a
+        // latch, a settlement failure, a failed pass or a chain fault.
+        assert_eq!((&view["models"][0]["ready"], &view["models"][0]["performance_withdrawn"], &view["settlement_error"],
+            &view["refresh_error"], &view["chain_error"]),
+            (&json!(true), &json!(false), &Value::Null, &Value::Null, &Value::Null), "{view}");
+        assert!(view["models"][0]["detail"].as_str().unwrap().starts_with("Ready: "), "{view}");
+        assert_eq!(admin(&runtime, "GET", "/admin/runtime").await.1["models"][0]["ready"], true);
+        // A new request is refused, also on the account whose stream is in progress, before any
+        // record or engine contact.
+        let reached = contacted.load(Ordering::SeqCst);
+        let (status, answer) = call(&public, "POST", "/v1/chat/completions", &keyed(&credential.bearer, "after-the-drain"),
+            Some(&chat("hello"))).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")), "{answer}");
+        assert!(state.ledger.request_view(&contract, "after-the-drain").is_err());
+        assert_eq!(contacted.load(Ordering::SeqCst), reached, "the refused request reached the engine");
+
+        // The admitted stream completes and settles with the engine's usage.
+        held.release();
+        let (status, text) = within(admitted).await.unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(text.contains("\"OK\"") && text.contains("[DONE]"), "{text}");
+        let settled = within(async {
+            loop {
+                let view = state.ledger.request_view(&contract, "admitted-before-the-drain").unwrap();
+                if view.status != "reserved" {
+                    break view;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert_eq!(settled.status, "completed");
+        assert_eq!((settled.usage.prompt_tokens, settled.usage.completion_tokens), (2, 1));
+        // One ceiling-rounded charge at the agreement's rates: (2 × 1 + 1 × 2) / 1,000 wei.
+        assert_eq!(settled.cost_wei, "1");
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["draining"], &view["ledger"]["active_requests"]), (&json!(true), &json!(0)), "{view}");
+
+        // New agreements are refused: a quote proposal for the offer, a fresh funding intent and a
+        // free opening. The acknowledged intent is recovered as it was acknowledged.
+        let (status, answer) = call(&public, "POST", "/v1/contracts/propose", &[], Some(&json!({"offer_id": offer_id,
+            "consumer_wallet": wallet::address_from_private_key(&"88".repeat(32)).unwrap(), "funding_wei": "1000"}))).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_draining")), "{answer}");
+        let path = format!("/v1/contracts/{}/funding-intent", unacknowledged.payload.id);
+        let (status, answer) = owner_post(&public, &state, "66", &path, json!({"raw_transaction": fresh.raw_transaction})).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_draining")), "{answer}");
+        assert!(state.ledger.funding_intent(&unacknowledged.payload, &fresh.raw_transaction).unwrap().is_none());
+        let (status, answer) = owner_post(&public, &state, "77", "/v1/contracts/open", json!({"quote_id": free.payload.id})).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_draining")), "{answer}");
+        assert!(state.ledger.account(&free.payload.id).is_err());
+        let path = format!("/v1/contracts/{}/funding-intent", acknowledged.payload.id);
+        assert_eq!(owner_post(&public, &state, "55", &path, json!({"raw_transaction": acknowledged_payment.raw_transaction})).await,
+            (StatusCode::OK, acknowledgement));
+
+        // The owner reads the request's status and a receipt; nothing is in flight to cancel.
+        let read = bearer_header(&credential.bearer);
+        for path in ["/v1/requests/admitted-before-the-drain".to_owned(),
+            format!("/v1/contracts/{contract}/requests/admitted-before-the-drain")] {
+            let (status, view) = call(&public, "GET", &path, &read, None).await;
+            assert_eq!((status, &view["status"], &view["id"]), (StatusCode::OK, &json!("completed"), &json!(settled.id)), "{path}: {view}");
+        }
+        let (status, receipt) = call(&public, "GET", &format!("/v1/contracts/{contract}/receipt"), &read, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(receipt["payload"]["account"]["contract_id"], json!(contract));
+        assert!(receipt["payload"]["requests"].as_array().unwrap().iter()
+            .any(|request| request["id"] == json!(settled.id) && request["status"] == "completed"));
+        let (status, view) = call(&public, "POST", "/v1/requests/admitted-before-the-drain/cancel", &read, None).await;
+        assert_eq!((status, &view["status"]), (StatusCode::OK, &json!("completed")), "{view}");
+
+        // The next maintenance pass rechecks the credited funding and attempts the due platform-fee
+        // remittance, whose submission the stub chain refuses, and reopens nothing.
+        let since = unchecked(&runtime, &opening);
+        assert_eq!(runtime.refresh().await, Ok(0));
+        assert!(funding_checked(&runtime, &opening) >= since, "the pass did not recheck the credited funding");
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["draining"], &view["funding_ready"], &view["models"][0]["ready"],
+            &view["settlement_error"], &view["refresh_error"]),
+            (&json!(false), &json!(true), &json!(false), &json!(true), &Value::Null, &Value::Null), "{view}");
+        assert_eq!((&view["maintenance"]["funding_error"], &view["maintenance"]["funding_rechecks_quarantined"]),
+            (&Value::Null, &json!(0)), "{view}");
+        assert!(view["maintenance"]["fee_error"].as_str().is_some_and(|error| error.starts_with("Fee submission: ")), "{view}");
+        assert_eq!(state.ledger.fee_summary().unwrap()["amounts_wei"]["batched"], "1000000000000000");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+
+        // A top-up of the existing agreement settles, credited with its own fee only, and its
+        // recovery credits nothing more.
+        let account = serde_json::to_value(state.ledger.account(&contract).unwrap()).unwrap();
+        let fees = state.ledger.fee_summary().unwrap();
+        let topup = signed_payment(&state, &receipts, "44", 1, 1000, &protocol::topup_data(&contract).unwrap());
+        let path = format!("/v1/contracts/{contract}/topup");
+        let (status, credited) = owner_post(&public, &state, "44", &path, json!({"raw_transaction": topup.raw_transaction})).await;
+        assert_eq!(status, StatusCode::OK, "{credited}");
+        let plus = |value: &Value, amount: u128| json!((value.as_str().unwrap().parse::<u128>().unwrap() + amount).to_string());
+        let mut expected = account.clone();
+        expected["funded_wei"] = plus(&account["funded_wei"], 1000);
+        expected["fee_wei"] = plus(&account["fee_wei"], 5);
+        expected["available_wei"] = plus(&account["available_wei"], 995);
+        assert_eq!(credited, expected);
+        let mut expected = fees.clone();
+        expected["amounts_wei"]["pending"] = plus(&fees["amounts_wei"]["pending"], 5);
+        assert_eq!(state.ledger.fee_summary().unwrap(), expected);
+        assert_eq!(owner_post(&public, &state, "44", &path, json!({"raw_transaction": topup.raw_transaction})).await,
+            (StatusCode::OK, credited));
+        // The acknowledged opening completes, with a credential, and its recovery issues none.
+        let body = json!({"quote_id": acknowledged.payload.id, "raw_transaction": acknowledged_payment.raw_transaction});
+        let (status, opened) = owner_post(&public, &state, "55", "/v1/contracts/open", body.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!((&opened["account"]["status"], &opened["account"]["funded_wei"]), (&json!("active"), &json!("1000")));
+        assert!(opened["credential"]["bearer"].is_string());
+        let (status, recovered) = owner_post(&public, &state, "55", "/v1/contracts/open", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(recovered["account"], opened["account"]);
+        assert!(recovered["credential"].is_null());
+        // The owner rotates the account's credential, and the new bearer reads the account.
+        let path = format!("/v1/contracts/{contract}/credentials/{}/rotate", credential.id);
+        let (status, rotated) = owner_post(&public, &state, "44", &path, json!({"expires_at": protocol::now().unwrap() + 86_400,
+            "spend_cap_wei": null, "max_concurrency": 1, "scopes": ["infer", "read"]})).await;
+        assert_eq!(status, StatusCode::OK, "credential rotation failed: {}", rotated["error"]);
+        let rotated = rotated["bearer"].as_str().unwrap().to_owned();
+        assert!(rotated != credential.bearer, "the rotation kept the bearer");
+        let (status, view) = call(&public, "GET", &format!("/v1/contracts/{contract}"), &bearer_header(&rotated), None).await;
+        assert_eq!((status, &view["contract_id"]), (StatusCode::OK, &json!(contract)));
+
+        // A second drain has the effect of one: nothing durable changes.
+        let before = durable_state(&runtime);
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        assert_unchanged(&before, &durable_state(&runtime), "the second drain");
+        assert_eq!(admission(&runtime).await, (json!(false), json!(true), json!(false)));
+        drop(public);
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 3 (task 3.3): cancellation continues while draining.
+    /// An embedding request admitted before the drain waits in the engine; after `POST
+    /// /admin/drain`, its owner cancels it (202 `cancelling`), it ends as cancelled with unknown
+    /// usage and its status reads so, the status counts it as unsettled until then, and a new
+    /// request is still refused. The drain lasts until the daemon exits: a restart serves again.
+    #[tokio::test]
+    async fn a_request_admitted_before_a_drain_can_be_cancelled_while_draining() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        model.request_timeout_secs = 60;
+        let engine = Gate::new(Some("/v1/embeddings"));
+        let (engine_url, engine_server) = serve(engine.hold(embeddings_engine(model.model.clone()))).await;
+        model.engine_url = engine_url;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let (contract, bearer) = free_account(&runtime.state, "22");
+        let public = runtime.public_router();
+        let body = json!({"model": "model", "input": "hello"});
+        engine.arm();
+        let admitted = tokio::spawn({
+            let (public, headers, body) = (public.clone(), keyed(&bearer, "admitted-before-the-drain"), body.clone());
+            async move { call(&public, "POST", "/v1/embeddings", &headers, Some(&body)).await }
+        });
+        engine.entered().await;
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["ledger"]["active_requests"], 1);
+        let (status, answer) = call(&public, "POST", "/v1/requests/admitted-before-the-drain/cancel",
+            &bearer_header(&bearer), None).await;
+        assert_eq!((status, &answer["status"]), (StatusCode::ACCEPTED, &json!("cancelling")), "{answer}");
+        let (status, answer) = within(admitted).await.unwrap();
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::CONFLICT, &json!("request_cancelled")), "{answer}");
+        let view = runtime.state.ledger.request_view(&contract, "admitted-before-the-drain").unwrap();
+        assert_eq!(view.status, "cancelled_unknown_usage");
+        let (status, read) = call(&public, "GET", "/v1/requests/admitted-before-the-drain", &bearer_header(&bearer), None).await;
+        assert_eq!((status, &read["status"]), (StatusCode::OK, &json!("cancelled_unknown_usage")), "{read}");
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["draining"], &view["ledger"]["active_requests"]), (&json!(true), &json!(0)), "{view}");
+        let (status, answer) = call(&public, "POST", "/v1/embeddings", &keyed(&bearer, "after-the-drain"), Some(&body)).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")), "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "after-the-drain").is_err());
+        engine.release();
+        // A drain is a state of the running daemon (design decision 4): once the daemon exits,
+        // the next start serves the account again.
+        drop(public);
+        let config = (*runtime.state.config).clone();
+        runtime.dht.stop().await;
+        drop(runtime);
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert_eq!(admission(&runtime).await, (json!(true), json!(false), json!(true)));
+        let (status, answer) = embed(&runtime, &bearer, "after-the-restart").await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(runtime.state.ledger.request_view(&contract, "after-the-restart").unwrap().status, "completed");
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 2 (task 3.2), scenario "A live engine whose model is
+    /// not ready". A managed engine (the helper child) whose process is alive while its model fails
+    /// the template probe (the stub serves a template of another digest) is reported alive, with
+    /// the launcher's observation, and not ready. The row has no other member, and the observation
+    /// carries no signature, serving profile or qualification evidence and is no permission to
+    /// publish: nothing is published. Once the probe passes, the model is ready with the same
+    /// process; once that process exits, it is reported not alive and not ready.
+    #[tokio::test]
+    async fn admin_runtime_reports_a_live_engine_failing_its_template_probe_as_alive_and_not_ready() {
+        use crate::inference_backend::tests::{ProbeEngine, PROBE_TEMPLATE};
+        let directory = tempfile::tempdir().unwrap();
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        let (model, evidence) = profiled_chat(directory.path(), PROBE_TEMPLATE);
+        let engine = ProbeEngine::start(&model, 1).await;
+        engine.set_fault("template");
+        let (config, unavailable) = profiled_chat_config(directory.path(), rpc, &model, evidence, &engine.base).await;
+        let helper = crate::engine_runtime::ManagedEngine::helper_for_test(&model.id, &engine.base);
+        let pid = helper.observation.pid;
+        let _cleanup = KillOnPanic(pid);
+        let runtime = ProviderRuntime::start_with(config,
+            std::collections::HashMap::from([(model.id.clone(), Arc::new(helper))])).await.unwrap();
+        let observation = serde_json::to_value(&runtime.state.managed_engines["model"].observation).unwrap();
+        let row = |alive: bool, ready: bool| json!({"models": [{"model_id": "model", "managed": true, "alive": alive,
+            "ready": ready, "observation": observation}]});
+        assert_eq!(admin(&runtime, "GET", "/admin/runtime").await, (StatusCode::OK, row(true, false)));
+        assert_eq!(observation["pid"], pid);
+        for member in ["signature", "serving", "qualification", "evidence_sha256", "profile_sha256"] {
+            assert!(observation.get(member).is_none(), "{member}");
+        }
+        let status = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
+        assert_eq!(status["ready"], false, "{status}");
+        assert!(status["detail"].as_str().unwrap().starts_with("Not ready"), "{status}");
+        assert!(!runtime.state.funding_ready.load(Ordering::Acquire));
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        // The probes alone decide: the same live process, once the template matches.
+        engine.set_fault("");
+        assert_eq!(runtime.refresh().await, Ok(1));
+        assert_eq!(admin(&runtime, "GET", "/admin/runtime").await, (StatusCode::OK, row(true, true)));
+        runtime.state.managed_engines["model"].kill_for_test();
+        _cleanup.disarm();
+        let exited = within(async {
+            loop {
+                let answer = admin(&runtime, "GET", "/admin/runtime").await.1;
+                if answer["models"][0]["alive"] == false {
+                    break answer;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert_eq!(exited, row(false, false));
+        runtime.dht.stop().await;
+        runtime.stop_engines().await;
+        for server in [rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirements 1 and 2 (tasks 3.1 and 3.2), scenarios "An engine
+    /// exit is reported with its own reason" and "An exited engine is reported as not alive",
+    /// while a maintenance pass holds the lifecycle lock (the test holds it here), so that the
+    /// engine watcher, which has observed the exit and closed admission, cannot yet replace the
+    /// model's entry of the latest pass, which still reads ready. `/admin/status` reports the
+    /// model not ready with the engine exit as its reason, and `/admin/runtime` reports the
+    /// engine not alive and the model not ready: neither repeats the passed probes of the pass
+    /// before the exit. Once the lock is free, the watcher's entry agrees.
+    #[tokio::test]
+    async fn an_engine_exit_is_reported_while_a_pass_holds_the_lifecycle_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), Router::new().fallback(ready_chain), true).await;
+        let facts = || {
+            let runtime = runtime.clone();
+            async move {
+                let status = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
+                let row = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+                (status["ready"].clone(), status["detail"].clone(), row["alive"].clone(), row["ready"].clone())
+            }
+        };
+        let (ready, detail, alive, row_ready) = facts().await;
+        assert_eq!((&ready, &alive, &row_ready), (&json!(true), &json!(true), &json!(true)));
+        assert!(detail.as_str().unwrap().starts_with("Ready: "), "{detail}");
+        let lifecycle = runtime.lifecycle.lock().await;
+        runtime.state.managed_engines["model"].kill_for_test();
+        // The engine watcher has observed the exit and closed admission; it waits for the lock.
+        within(async {
+            while runtime.state.qualified_models.read().unwrap().contains("model") {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await;
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.health.read().await[0].ready, true, "the latest pass's entry was replaced under the lock");
+        assert_eq!(facts().await, (json!(false), json!(inference_backend::ENGINE_EXITED), json!(false), json!(false)),
+            "while a pass holds the lifecycle lock");
+        drop(lifecycle);
+        within(async {
+            while runtime.health.read().await[0].ready {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert_eq!(facts().await, (json!(false), json!(inference_backend::ENGINE_EXITED), json!(false), json!(false)),
+            "once the watcher holds the lock");
+        runtime.dht.stop().await;
+        runtime.stop_engines().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 4 (task 3.4), scenarios "Resume reopens a healthy
+    /// provider" and "Offer refresh does not end a drain", and a failed pass. A healthy provider
+    /// with a published offer and a credited funding is drained.
+    /// - `POST /admin/offers/refresh` runs a pass that rechecks the funding; the provider is still
+    ///   draining, admits nothing, is not new-funding ready and publishes nothing, and the answer
+    ///   says so.
+    /// - `POST /admin/resume` ends the drain, and its pass reopens admission and new funding and
+    ///   publishes the offer under a revision higher than any earlier one; the answer says so.
+    /// - Neither changes the funded account or its credentials.
+    /// - When the resume's pass fails (the offer revision cannot advance), the answer reports a
+    ///   failure, and the status shows the result: the drain has ended, the failed pass is named,
+    ///   admission is open for existing accounts (design observation 2), and there is no new
+    ///   funding and no offer. An offer refresh then fails the same way.
+    #[tokio::test]
+    async fn resume_reopens_only_through_its_pass_and_offer_refresh_does_not_end_a_drain() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (runtime, bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), settled_chain(receipts.clone()), false).await;
+        let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+        let (funded, _, opening) = funded_account(&runtime.state, &receipts, "44", 1000);
+        // The credited funding rechecks as accepted, and the offer stays published.
+        assert_eq!(runtime.refresh().await, Ok(1));
+        let revision = |offers: &[Value]| offers[0]["payload"]["revision"].as_u64().unwrap();
+        let first = revision(&published(&runtime).await.0);
+        let agreement = || json!([runtime.state.ledger.account(&funded).unwrap(), runtime.state.ledger.credentials(&funded).unwrap()]);
+        let before = agreement();
+
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        let since = unchecked(&runtime, &opening);
+        assert_eq!(admin(&runtime, "POST", "/admin/offers/refresh").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        assert!(funding_checked(&runtime, &opening) >= since, "the offer refresh did not recheck the credited funding");
+        assert_eq!(admission(&runtime).await, (json!(false), json!(true), json!(false)));
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["refresh_error"], Value::Null);
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        let (status, answer) = embed(&runtime, &bearer, "during-the-drain").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")));
+
+        assert_eq!(admin(&runtime, "POST", "/admin/resume").await,
+            (StatusCode::OK, json!({"accepting": true, "offers_published": 1})));
+        assert_eq!(admission(&runtime).await, (json!(true), json!(false), json!(true)));
+        let (offers, dht) = published(&runtime).await;
+        assert_eq!((offers.len(), dht), (1, json!(1)));
+        let resumed = revision(&offers);
+        assert!(resumed > first, "revision {resumed} after {first}");
+        assert_eq!(std::fs::read_to_string(&runtime.revision_file).unwrap().trim(), resumed.to_string());
+        assert_eq!(embed(&runtime, &bearer, "after-the-resume").await.0, StatusCode::OK);
+        assert_eq!(runtime.state.ledger.request_view(&contract, "after-the-resume").unwrap().status, "completed");
+        assert!(agreement() == before, "resume or offer refresh changed the funded account or its credentials");
+
+        // A resume whose pass fails at publication.
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        *runtime.revision.lock().await = u64::MAX;
+        for action in ["/admin/resume", "/admin/offers/refresh"] {
+            let (status, answer) = admin(&runtime, "POST", action).await;
+            assert_eq!((status, &answer["error"]["code"]), (StatusCode::INTERNAL_SERVER_ERROR, &json!("internal_error")), "{action}");
+            let view = admin(&runtime, "GET", "/admin/status").await.1;
+            assert_eq!((&view["accepting"], &view["draining"], &view["funding_ready"], &view["refresh_error"]),
+                (&json!(true), &json!(false), &json!(false), &json!("Persisting offer revision failed")), "{action}: {view}");
+            assert_eq!(published(&runtime).await, (vec![], json!(0)), "{action}");
+        }
+        assert!(agreement() == before, "a failed pass changed the funded account or its credentials");
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 4 (task 3.4), scenario "Resume does not pass a failed
+    /// gate", shared with managed-engine-runtime task 3.10. A drained provider whose only model
+    /// runs on a managed engine (the recording helper child) loses that engine. `POST
+    /// /admin/resume` ends the drain, and its pass keeps admission and new funding closed and
+    /// publishes nothing; a request is refused before any record; no engine process starts and no
+    /// launch is attempted, and the provider keeps the exited engine's handle.
+    #[tokio::test]
+    async fn resume_of_a_drained_provider_whose_engine_exited_ends_the_drain_and_reopens_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        let (engine_url, engine_server) = serve(embeddings_engine(model.model.clone())).await;
+        model.engine_url = engine_url.clone();
+        let spawn_log = directory.path().join("engine-spawns");
+        let helper = crate::engine_runtime::ManagedEngine::recording_helper_for_test("model", &engine_url, &spawn_log);
+        let pid = helper.observation.pid;
+        let _cleanup = KillOnPanic(pid);
+        let runtime = ProviderRuntime::start_with(config,
+            std::collections::HashMap::from([("model".to_owned(), Arc::new(helper))])).await.unwrap();
+        within(async { while engine_starts(&spawn_log).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await; } }).await;
+        let (contract, bearer) = free_account(&runtime.state, "22");
+        assert_eq!(published(&runtime).await.1, json!(1));
+
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        runtime.state.managed_engines["model"].kill_for_test();
+        _cleanup.disarm();
+        watcher_recorded_exit(&runtime).await;
+        let attempts = crate::engine_runtime::ManagedEngine::launch_attempts_for_test(&engine_url);
+        assert_eq!(admin(&runtime, "POST", "/admin/resume").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["draining"], &view["funding_ready"], &view["settlement_error"]),
+            (&json!(false), &json!(false), &json!(false), &Value::Null), "{view}");
+        assert_eq!((&view["models"][0]["ready"], &view["models"][0]["detail"]),
+            (&json!(false), &json!(inference_backend::ENGINE_EXITED)), "{view}");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        let (status, answer) = embed(&runtime, &bearer, "after-the-resume").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")), "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "after-the-resume").is_err());
+        let engine = &runtime.state.managed_engines["model"];
+        assert_eq!((engine.observation.pid, engine.is_alive()), (pid, false));
+        assert_eq!(engine_starts(&spawn_log), [pid.to_string()], "an engine process started again");
+        assert_eq!(crate::engine_runtime::ManagedEngine::launch_attempts_for_test(&engine_url), attempts,
+            "an engine launch was attempted");
+        let row = admin(&runtime, "GET", "/admin/runtime").await.1["models"][0].clone();
+        assert_eq!((&row["alive"], &row["ready"]), (&json!(false), &json!(false)), "{row}");
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 4 (task 3.4), shared with
+    /// inference-generation-performance: a latched report stays latched through `POST
+    /// /admin/drain`, `POST /admin/resume` and `POST /admin/offers/refresh`. A development
+    /// provider publishes its profiled chat model, which has a credited funding. Once the model's
+    /// evidence digest is latched, the resume's and the refresh's passes still run and recheck the
+    /// funding (requirement 5: passes continue while a model is latched) and publish nothing; the
+    /// latch is unchanged, the status names the withdrawal, and a request of the funded account is
+    /// refused before reservation. Requirement 1: when the latch cannot be read, the status reports
+    /// it as unavailable and still reports the other facts, and the model is not admissible.
+    #[tokio::test]
+    async fn a_latched_report_stays_latched_through_resume_and_offer_refresh() {
+        const TEMPLATE: &str = "{{ messages }}";
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (rpc, rpc_server) = serve(settled_chain(receipts.clone())).await;
+        let (model, evidence) = profiled_chat(directory.path(), TEMPLATE);
+        let (engine_url, engine_server) = serve(chat_engine(model.clone(), TEMPLATE)).await;
+        let (config, unavailable) = profiled_chat_config(directory.path(), rpc, &model, evidence, &engine_url).await;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let (contract, credential, opening) = funded_account(&runtime.state, &receipts, "44", 1000);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        let evidence_sha256 = model.serving.as_ref().unwrap().qualification.evidence_sha256.clone();
+        let latches = || ledger_connection(&runtime).query_row(
+            "SELECT json_group_array(json_array(model,evidence)) FROM performance_withdrawals", [],
+            |row| row.get::<_, String>(0)).unwrap();
+        ledger_connection(&runtime).execute("INSERT INTO performance_withdrawals(model,evidence) VALUES(?1,?2)",
+            rusqlite::params![model.id, evidence_sha256]).unwrap();
+        let latched = latches();
+        assert_eq!(latched, json!([[model.id, evidence_sha256]]).to_string());
+
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        for action in ["/admin/resume", "/admin/offers/refresh"] {
+            let since = unchecked(&runtime, &opening);
+            assert_eq!(admin(&runtime, "POST", action).await,
+                (StatusCode::OK, json!({"accepting": true, "offers_published": 0})), "{action}");
+            assert!(funding_checked(&runtime, &opening) >= since, "{action}: the pass did not recheck the funding");
+            assert_eq!(latches(), latched, "{action}");
+            let view = admin(&runtime, "GET", "/admin/status").await.1;
+            assert_eq!((&view["draining"], &view["models"][0]["performance_withdrawn"]), (&json!(false), &json!(true)),
+                "{action}: {view}");
+            assert!(view["models"][0]["detail"].as_str().unwrap().starts_with(PERFORMANCE_WITHDRAWN), "{action}: {view}");
+            assert!(runtime.state.qualified_model(&model).is_none(), "{action}");
+            assert_eq!(published(&runtime).await, (vec![], json!(0)), "{action}");
+            let key = format!("after-{}", action.replace('/', "-"));
+            let (status, answer) = chat_request(&runtime, &credential.bearer, &key).await;
+            assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("model_unqualified")),
+                "{action}: {answer}");
+            assert!(runtime.state.ledger.request_view(&contract, &key).is_err(), "{action}");
+        }
+
+        // An unreadable latch is reported as unavailable, beside every other fact, and fails closed.
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("ALTER TABLE performance_withdrawals RENAME TO performance_withdrawals_unreadable").unwrap();
+        let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!((&view["models"][0]["performance_withdrawn"], &view["models"][0]["ready"]), (&Value::Null, &json!(true)),
+            "{view}");
+        assert_eq!((&view["accepting"], &view["ledger"]["accounts"], &view["ledger_error"]), (&json!(true), &json!(1), &Value::Null),
+            "{view}");
+        assert!(runtime.state.qualified_model(&model).is_none());
+        ledger.execute_batch("ALTER TABLE performance_withdrawals_unreadable RENAME TO performance_withdrawals").unwrap();
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["models"][0]["performance_withdrawn"], true);
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 5 (task 3.5), scenarios "A drain during a pass leaves
+    /// nothing published" and "An engine exit during a pass leaves nothing published", with
+    /// requirement 3's "at once". A pass is held at a test-only pause point after it has decided
+    /// admission open, before it publishes: once before it stores that decision (`Decided`), and
+    /// once after (`Stored`).
+    /// - The operator drains: admission and new funding close at once, and a new request is
+    ///   refused, while the drain waits for the pass. The pass then stores its decision (at
+    ///   `Decided`) and publishes. After both have returned, admission and new funding are closed,
+    ///   the drain answered so, and neither `/admin/offers` nor the DHT holds an offer: the drain
+    ///   closes again and withdraws once it holds the lifecycle lock.
+    /// - The model's managed engine exits instead (the helper child is killed): once the engine
+    ///   watcher has observed it, admission and new funding are closed at once and a request is
+    ///   refused, while the watcher waits for the pass. The pass then completes, and admission and
+    ///   new funding are closed, nothing is published, the status names the exit, and a request is
+    ///   refused before any record.
+    #[tokio::test]
+    async fn a_drain_or_an_engine_exit_during_a_pass_leaves_nothing_admitted_or_published() {
+        for point in [PassPoint::Decided, PassPoint::Stored] {
+            for case in ["drain", "engine exit"] {
+                let context = format!("{case} at {point:?}");
+                let directory = tempfile::tempdir().unwrap();
+                let (runtime, bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+                    Arc::new(AtomicBool::new(true)), Router::new().fallback(ready_chain), case == "engine exit").await;
+                let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+                assert_eq!(published(&runtime).await.1, json!(1), "{context}");
+                let (paused, release) = pause_next_pass(&runtime, point);
+                let pass = tokio::spawn({
+                    let runtime = runtime.clone();
+                    async move { runtime.refresh().await }
+                });
+                within(paused).await.unwrap();
+                // The pass has decided admission open and has not yet published. At `Decided`, the
+                // previous pass's admission still stands, and new funding closed when the pass
+                // began; at `Stored`, the pass has opened both.
+                assert!(runtime.state.accepting.load(Ordering::Acquire), "{context}");
+                assert_eq!(runtime.state.funding_ready.load(Ordering::Acquire), point == PassPoint::Stored, "{context}");
+                let drain = if case == "drain" {
+                    let drain = tokio::spawn({
+                        let runtime = runtime.clone();
+                        async move { admin(&runtime, "POST", "/admin/drain").await }
+                    });
+                    drain_state_reaches(&runtime, |state| state == DRAINING).await;
+                    // The drain waits for the paused pass, which holds the lifecycle lock.
+                    assert!(!drain.is_finished(), "{context}: the drain did not wait for the pass");
+                    Some(drain)
+                } else {
+                    runtime.state.managed_engines["model"].kill_for_test();
+                    // The engine watcher has observed the exit; it then waits for the paused pass.
+                    within(async {
+                        while runtime.state.qualified_models.read().unwrap().contains("model") {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    }).await;
+                    None
+                };
+                // At once, before the drain or the watcher holds the lifecycle lock: on this
+                // current-thread runtime, each closes admission in the same poll in which it
+                // records the drain or removes the model, before it waits for the lock.
+                assert!(!runtime.state.accepting.load(Ordering::Acquire), "{context}: admission still open while the pass runs");
+                assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{context}: new funding still open while the pass runs");
+                let (status, answer) = embed(&runtime, &bearer, "while-the-pass-runs").await;
+                assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")),
+                    "{context}: {answer}");
+                assert!(runtime.state.ledger.request_view(&contract, "while-the-pass-runs").is_err(), "{context}");
+                release.send(()).unwrap();
+                let count = within(pass).await.unwrap().unwrap();
+                assert_eq!(count, usize::from(case == "drain"), "{context}: the pass's own publication");
+                if let Some(drain) = drain {
+                    assert_eq!(within(drain).await.unwrap(), (StatusCode::OK, json!({"accepting": false, "offers_published": 0})),
+                        "{context}");
+                } else {
+                    // The watcher has closed admission again under the lifecycle lock.
+                    watcher_recorded_exit(&runtime).await;
+                }
+                assert!(!runtime.state.accepting.load(Ordering::Acquire), "{context}");
+                assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{context}");
+                assert_eq!(admission(&runtime).await, (json!(false), json!(case == "drain"), json!(false)), "{context}");
+                assert_eq!(published(&runtime).await, (vec![], json!(0)), "{context}");
+                let (status, answer) = embed(&runtime, &bearer, "after-the-pass").await;
+                assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")),
+                    "{context}: {answer}");
+                assert!(runtime.state.ledger.request_view(&contract, "after-the-pass").is_err(), "{context}");
+                runtime.dht.stop().await;
+                runtime.stop_engines().await;
+                for server in servers {
+                    server.abort();
+                }
+            }
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 5 (task 3.5), scenario "Passes continue while drained
+    /// and after an engine failure", and a chain outage. A provider whose only model runs on a
+    /// managed engine has a credited funding, which a pass rechecks as accepted. The operator
+    /// drains it; then its engine exits; then its chain RPC fails. After each step, the next pass
+    /// (the periodic pass's body) still rechecks the credited funding, and the provider admits
+    /// nothing and publishes nothing; the status reports the outage's funding recheck result.
+    #[tokio::test]
+    async fn passes_keep_rechecking_credited_funding_while_drained_after_an_engine_exit_and_in_an_outage() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let outage = Arc::new(AtomicBool::new(false));
+        let chain = settled_chain(receipts.clone()).layer(middleware::from_fn({
+            let outage = outage.clone();
+            move |request: Request, next: Next| {
+                let outage = outage.clone();
+                async move {
+                    if outage.load(Ordering::Acquire) {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    } else {
+                        next.run(request).await
+                    }
+                }
+            }
+        }));
+        let (runtime, _bearer, servers) =
+            embedding_provider_on(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true)), chain, true).await;
+        let (_, _, opening) = funded_account(&runtime.state, &receipts, "44", 1000);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        for step in ["drained", "drained after an engine exit", "drained after an engine exit, in a chain outage"] {
+            match step {
+                "drained" => assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK),
+                "drained after an engine exit" => {
+                    runtime.state.managed_engines["model"].kill_for_test();
+                    watcher_recorded_exit(&runtime).await;
+                }
+                _ => outage.store(true, Ordering::Release),
+            }
+            let since = unchecked(&runtime, &opening);
+            assert_eq!(runtime.refresh().await, Ok(0), "{step}");
+            assert!(funding_checked(&runtime, &opening) >= since, "{step}: the pass did not recheck the credited funding");
+            let view = admin(&runtime, "GET", "/admin/status").await.1;
+            assert_eq!((&view["accepting"], &view["draining"], &view["funding_ready"]),
+                (&json!(false), &json!(true), &json!(false)), "{step}: {view}");
+            let funding_error = if step.ends_with("outage") {
+                json!("Funding recheck: configured RPC unavailable or canonical status untrusted")
+            } else {
+                Value::Null
+            };
+            assert_eq!(view["maintenance"]["funding_error"], funding_error, "{step}: {view}");
+            assert_eq!(published(&runtime).await, (vec![], json!(0)), "{step}");
+        }
+        runtime.dht.stop().await;
+        runtime.stop_engines().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 5 (task 3.5), the order of a pass: a pass publishes
+    /// only after its own reconciliation. A published provider has a credited funding whose
+    /// recheck the ledger refuses to apply (a trigger refuses the funding evidence update), so the
+    /// pass quarantines it. That same pass publishes nothing and is not new-funding ready, while
+    /// existing credit keeps serving; the status reports the quarantine as the funding result, and
+    /// the pass itself did not fail. Once the ledger accepts the observation, a pass releases the
+    /// quarantine and publishes again.
+    #[tokio::test]
+    async fn a_funding_recheck_the_ledger_quarantines_keeps_the_same_pass_from_publishing() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (runtime, _bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), settled_chain(receipts.clone()), false).await;
+        let (contract, credential, _) = funded_account(&runtime.state, &receipts, "44", 1000);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("CREATE TRIGGER refuse_funding_evidence BEFORE UPDATE OF evidence ON funding
+            BEGIN SELECT RAISE(ABORT,'injected funding evidence refusal'); END;").unwrap();
+        assert_eq!(runtime.refresh().await, Ok(0));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"]),
+            (&json!(true), &json!(false), &Value::Null), "{view}");
+        assert_eq!(view["maintenance"]["funding_rechecks_quarantined"], 1, "{view}");
+        assert_eq!(view["maintenance"]["funding_error"],
+            "Funding recheck: ledger refused a chain observation; payment held for operator review", "{view}");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        // Existing credit keeps serving.
+        let (status, answer) = embed(&runtime, &credential.bearer, "during-the-quarantine").await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(runtime.state.ledger.request_view(&contract, "during-the-quarantine").unwrap().status, "completed");
+        ledger.execute_batch("DROP TRIGGER refuse_funding_evidence").unwrap();
+        assert_eq!(runtime.refresh().await, Ok(1));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["funding_ready"], &view["maintenance"]["funding_rechecks_quarantined"],
+            &view["maintenance"]["funding_error"]), (&json!(true), &json!(0), &Value::Null), "{view}");
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 6 (task 3.6), scenario "Resume or restart reopens
+    /// admission", restart case, shared with inference-request-accounting task 3.1. A request's
+    /// settlement cannot be written, so admission closes and the request stays `reserved`. The
+    /// ledger accepts writes again, and the operator restarts the daemon instead of resuming. When
+    /// the start returns, before any new request, startup recovery has settled the request as
+    /// `restart_unknown_usage` with no usage and no charge; admission and new funding are open
+    /// through the starting pass, with no settlement failure reported and the offer published.
+    /// Re-sending the request returns its record and never generates it again, and a new request
+    /// on the same account, whose only concurrency slot the unsettled request held, completes.
+    #[tokio::test]
+    async fn a_restart_after_a_settlement_failure_recovers_the_request_before_admitting_again() {
+        use std::sync::atomic::AtomicUsize;
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        let generated = Arc::new(AtomicUsize::new(0));
+        let engine = embeddings_engine(model.model.clone()).layer(middleware::from_fn({
+            let generated = generated.clone();
+            move |request: Request, next: Next| {
+                let generated = generated.clone();
+                async move {
+                    if request.uri().path() == "/v1/embeddings" {
+                        generated.fetch_add(1, Ordering::SeqCst);
+                    }
+                    next.run(request).await
+                }
+            }
+        }));
+        let (engine_url, engine_server) = serve(engine).await;
+        model.engine_url = engine_url;
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        let (contract, bearer) = free_account(&runtime.state, "22");
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("CREATE TRIGGER refuse_settlement BEFORE UPDATE ON requests
+            WHEN OLD.status='reserved' AND NEW.status<>'reserved'
+            BEGIN SELECT RAISE(ABORT,'injected settlement write failure'); END;").unwrap();
+        let (status, answer) = embed(&runtime, &bearer, "unsettled").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{answer}");
+        assert_eq!(runtime.state.settlement_fault(), Some(inference_gateway::DURABLE_SETTLEMENT_FAILED));
+        assert_eq!(runtime.state.ledger.request_view(&contract, "unsettled").unwrap().status, "reserved");
+        // The answer arrives after the settlement's drop retried its write once.
+        ledger.execute_batch("DROP TRIGGER refuse_settlement").unwrap();
+        drop(ledger);
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        // Recovered by the start, before any new request.
+        let recovered = runtime.state.ledger.request_view(&contract, "unsettled").unwrap();
+        assert_eq!(recovered.status, "restart_unknown_usage");
+        assert_eq!((recovered.usage.prompt_tokens, recovered.usage.completion_tokens, recovered.cost_wei.as_str()),
+            (0, 0, "0"));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["settlement_error"], &view["ledger"]["active_requests"]),
+            (&json!(true), &json!(true), &Value::Null, &json!(0)), "{view}");
+        assert_eq!(published(&runtime).await.1, json!(1));
+        let (status, requests) = admin(&runtime, "GET", "/admin/requests").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests["requests"].as_array().unwrap().iter().map(|request| request["status"].clone()).collect::<Vec<_>>(),
+            [json!("restart_unknown_usage")]);
+        // The recovered request is never generated again.
+        let before = generated.load(Ordering::SeqCst);
+        let (status, answer) = embed(&runtime, &bearer, "unsettled").await;
+        assert_eq!((status, &answer["error"]["code"], &answer["error"]["request_status"]),
+            (StatusCode::CONFLICT, &json!("duplicate_request"), &json!("restart_unknown_usage")), "{answer}");
+        assert_eq!(generated.load(Ordering::SeqCst), before, "the recovered request was generated again");
+        let (status, answer) = embed(&runtime, &bearer, "after-the-restart").await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(generated.load(Ordering::SeqCst), before + 1);
+        assert_eq!(runtime.state.ledger.request_view(&contract, "after-the-restart").unwrap().status, "completed");
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 5 (task 3.5): the daemon's periodic pass
+    /// (`ProviderRuntime::maintenance`, whose period unit tests shorten) keeps running after a
+    /// failed pass and while the provider drains. A published provider with a credited funding can
+    /// no longer advance its offer revision, so each pass fails at publication: the status names
+    /// the failure, new funding is closed and nothing is published, while the existing account is
+    /// served. A periodic pass after such a failure still rechecks the credited funding; so does
+    /// one after the operator drains, which publishes nothing and keeps the drain.
+    #[tokio::test]
+    async fn the_periodic_pass_keeps_running_after_a_failed_pass_and_while_drained() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (runtime, bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), settled_chain(receipts.clone()), false).await;
+        let (_, _, opening) = funded_account(&runtime.state, &receipts, "44", 1000);
+        let rechecked_since = |since: u64| {
+            let (runtime, opening) = (runtime.clone(), opening.clone());
+            async move {
+                within(async {
+                    while funding_checked(&runtime, &opening) < since {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }).await
+            }
+        };
+        *runtime.revision.lock().await = u64::MAX;
+        let periodic = runtime.maintenance();
+        // A periodic pass fails at publication.
+        within(async {
+            while runtime.refresh_error().await.is_none() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await;
+        // A later periodic pass runs all the same: it rechecks the credited funding.
+        rechecked_since(unchecked(&runtime, &opening)).await;
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"]),
+            (&json!(true), &json!(false), &json!("Persisting offer revision failed")), "{view}");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        {
+            // The existing account is served between failed passes. A pass's readiness probe
+            // takes the model's only slot, which requests share, so the request is sent while
+            // the test holds the lifecycle lock: no pass is probing then.
+            let _no_pass = runtime.lifecycle.lock().await;
+            assert_eq!(embed(&runtime, &bearer, "between-failed-passes").await.0, StatusCode::OK);
+        }
+        // Drained, the periodic pass continues: it rechecks, succeeds without publishing, and the
+        // drain holds.
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        rechecked_since(unchecked(&runtime, &opening)).await;
+        within(async {
+            while runtime.refresh_error().await.is_some() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await;
+        assert_eq!(admission(&runtime).await, (json!(false), json!(true), json!(false)));
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        periodic.abort();
+        let _ = periodic.await;
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 5 (task 3.5), the ledger gate: admission is open only
+    /// when the pass's reconciliation could read and update the ledger. A published provider whose
+    /// credited-funding records cannot be read (the table is renamed through a second connection)
+    /// runs a pass that fails at reconciliation: admission and new funding close, the offer is
+    /// withdrawn, the status names the failed pass, and a request is refused before any record.
+    /// Once the ledger can be read again, a later pass reopens admission and publishes.
+    #[tokio::test]
+    async fn a_failed_reconciliation_closes_admission_and_publication_until_a_later_pass_succeeds() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+        assert_eq!(admission(&runtime).await, (json!(true), json!(false), json!(true)));
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("ALTER TABLE funding RENAME TO funding_unreadable").unwrap();
+        assert_eq!(runtime.refresh().await, Err("Funding ledger reconciliation failed".into()));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"]),
+            (&json!(false), &json!(false), &json!("Funding ledger reconciliation failed")), "{view}");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        let (status, answer) = embed(&runtime, &bearer, "unreadable-ledger").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")), "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "unreadable-ledger").is_err());
+        ledger.execute_batch("ALTER TABLE funding_unreadable RENAME TO funding").unwrap();
+        assert_eq!(runtime.refresh().await, Ok(1));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"]),
+            (&json!(true), &json!(true), &Value::Null), "{view}");
+        assert_eq!(embed(&runtime, &bearer, "readable-ledger").await.0, StatusCode::OK);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
         }
     }
 }
