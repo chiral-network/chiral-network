@@ -162,6 +162,7 @@ fn reopened_router(fixture: &Fixture, private_key: &str) -> axum::Router {
         private_key: Arc::new(private_key.to_owned()), wallet: original.wallet.clone(),
         offers: original.offers.clone(),
         accepting: AtomicBool::new(original.accepting.load(Ordering::Acquire)),
+        settlement_fault: Default::default(),
         funding_ready: AtomicBool::new(original.funding_ready.load(Ordering::Acquire)),
         qualified_models: RwLock::new(original.qualified_models.read().unwrap().clone()),
         embedding_dimensions: RwLock::new(original.embedding_dimensions.read().unwrap().clone()),

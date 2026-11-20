@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-20 (fifty-sixth round) — Code: settlement-failure stop waits for the operator; status reports drain, latch, ledger fault and engine exit
+
+- In step at `22195828`; whitepaper unchanged; no new answers.
+- Code step (provider-daemon-lifecycle 2.1, 2.3, 2.4 and 2.8; 2.2, 2.5–2.7 and 2.9 follow in later rounds).
+  - A durable settlement failure, or a clock failure, now records a fault that closes admission and new-funding readiness. No maintenance pass or offer refresh reopens them. `POST /admin/resume` clears the fault and runs a pass. The fault latches at the first refused write even when the drop retry records the request as `interrupted` (design observation 13).
+  - `/admin/status` now always answers. Additive members: `draining`, `settlement_error`, `ledger_error` (with `ledger: null` when the summary cannot be read) and each model's `performance_withdrawn`. A latched model's detail names the withdrawal.
+  - An engine exit sets the detail "Managed engine exited" in the same write that sets readiness false.
+  - The review found new-funding readiness left true during the stop, fixed it and strengthened the regression.
+  - Five regressions fail without their changes.
+- Recorded follow-up task 2.10: a resume can clear a fault recorded after the resume was requested.
+- Checks: full headless suite under `caffeinate` 561 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; `npm test` 70/70; strict validation passes.
+
 ## 2026-11-20 (fifty-fifth round) — Spec: the provider daemon lifecycle
 
 - In step at `35e93e91`; whitepaper unchanged; no new answers.
@@ -597,7 +609,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: provider-daemon-lifecycle 2.1–2.9; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: provider-daemon-lifecycle 2.2, 2.5–2.7, 2.9 and 2.10; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

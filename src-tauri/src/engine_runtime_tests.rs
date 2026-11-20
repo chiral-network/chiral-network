@@ -207,18 +207,7 @@ fn symlink_inventory_entries_are_rejected_before_execution() {
 fn managed_child_helper() { std::thread::sleep(Duration::from_secs(60)); }
 
 fn child() -> ManagedEngine {
-    let mut launch = command(&std::env::current_exe().unwrap());
-    launch.args(["--exact", "engine_runtime::tests::managed_child_helper", "--ignored", "--nocapture"]);
-    let child = launch.spawn().unwrap();
-    let pid = child.id().unwrap();
-    ManagedEngine { child:Mutex::new(child), ready:AtomicBool::new(true), observation:RuntimeObservation {
-        pid, engine_url:"http://127.0.0.1:1".into(), model_id:"test/helper".into(), context_length:512, max_concurrency:1,
-        artifact_manifest_sha256:"00".repeat(32), runtime_sha256:"11".repeat(32), engine_version:ENGINE_VERSION.into(),
-        platform:platform().into(), backend:"cpu".into(), memory_kind:"system".into(), devices:vec![], memory_reserve_mib:0,
-        gpu_layers:0, split_mode:"none".into(), tensor_split:vec![], cache_type_k:"f16".into(), cache_type_v:"f16".into(), flash_attention:false, batch_size:128, ubatch_size:64 },
-        #[cfg(windows)]
-        _job:WindowsJob::attach(pid).unwrap(),
-    }
+    ManagedEngine::helper_for_test("test/helper", "http://127.0.0.1:1")
 }
 
 #[tokio::test]

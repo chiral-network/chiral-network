@@ -358,6 +358,31 @@ impl ManagedEngine {
 }
 impl Drop for ManagedEngine { fn drop(&mut self) { self.terminate(); } }
 
+#[cfg(test)]
+impl ManagedEngine {
+    /// `managed-engine-runtime` task 3.10's test constructor: this test binary's ignored
+    /// `managed_child_helper`, which only sleeps, wrapped as a ready managed engine for
+    /// `model_id` at `engine_url`. No inventory, device or health check runs.
+    pub(crate) fn helper_for_test(model_id: &str, engine_url: &str) -> Self {
+        let mut launch = command(&std::env::current_exe().unwrap());
+        launch.args(["--exact", "engine_runtime::tests::managed_child_helper", "--ignored", "--nocapture"]);
+        let child = launch.spawn().unwrap();
+        let pid = child.id().unwrap();
+        Self { child:Mutex::new(child), ready:AtomicBool::new(true), observation:RuntimeObservation {
+            pid, engine_url:engine_url.into(), model_id:model_id.into(), context_length:512, max_concurrency:1,
+            artifact_manifest_sha256:"00".repeat(32), runtime_sha256:"11".repeat(32), engine_version:ENGINE_VERSION.into(),
+            platform:platform().into(), backend:"cpu".into(), memory_kind:"system".into(), devices:vec![], memory_reserve_mib:0,
+            gpu_layers:0, split_mode:"none".into(), tensor_split:vec![], cache_type_k:"f16".into(), cache_type_v:"f16".into(), flash_attention:false, batch_size:128, ubatch_size:64 },
+            #[cfg(windows)]
+            _job:WindowsJob::attach(pid).unwrap(),
+        }
+    }
+    /// Ends the helper child as an engine crash would, without the daemon's `stop`.
+    pub(crate) fn kill_for_test(&self) {
+        let _ = self.child.lock().unwrap().start_kill();
+    }
+}
+
 // Device observation helpers never use configured names, UUIDs, memory sizes or driver claims.
 async fn capture(executable: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = command(executable);

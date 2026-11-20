@@ -44,6 +44,11 @@ pub struct ProviderState {
     pub wallet: String,
     pub offers: Arc<OfferRegistry>,
     pub accepting: AtomicBool,
+    /// A durable settlement failure that closed admission (provider-daemon-lifecycle
+    /// requirement 6): a fixed, content-free reason. Only the operator's resume clears it,
+    /// and a restart starts without it; no maintenance pass or offer refresh reopens
+    /// admission while it is set.
+    pub settlement_fault: std::sync::Mutex<Option<&'static str>>,
     pub funding_ready: AtomicBool,
     pub qualified_models: std::sync::RwLock<HashSet<String>>,
     /// The native embedding dimension of each ready embedding model, measured by its
@@ -59,6 +64,34 @@ pub struct ProviderState {
 impl ProviderState {
     pub fn engine_alive(&self, model_id: &str) -> bool {
         self.managed_engines.get(model_id).is_none_or(|engine| engine.is_alive())
+    }
+    fn fault(&self) -> std::sync::MutexGuard<'_, Option<&'static str>> {
+        // A poisoned lock still holds the fault; settlement never panics over it.
+        self.settlement_fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// Closes admission, and with it new-funding readiness, after a durable settlement
+    /// failure and keeps them closed until the operator's resume (provider-daemon-lifecycle
+    /// requirement 6). The first fault is kept.
+    pub fn record_settlement_fault(&self, reason: &'static str) {
+        let mut fault = self.fault();
+        fault.get_or_insert(reason);
+        self.accepting.store(false, Ordering::Release);
+        self.funding_ready.store(false, Ordering::Release);
+    }
+    pub fn settlement_fault(&self) -> Option<&'static str> {
+        *self.fault()
+    }
+    /// Stores a maintenance pass's admission decision and its new-funding readiness, open
+    /// only with admission and `funding_gates`; a recorded settlement fault overrides both.
+    /// Serialized with `record_settlement_fault`, so that a fault recorded while the pass ran
+    /// is never overwritten by its earlier decision. Returns the new-funding readiness.
+    fn store_admission(&self, accepting: bool, funding_gates: bool) -> bool {
+        let fault = self.fault();
+        let accepting = accepting && fault.is_none();
+        let funding_ready = accepting && funding_gates;
+        self.accepting.store(accepting, Ordering::Release);
+        self.funding_ready.store(funding_ready, Ordering::Release);
+        funding_ready
     }
     pub fn slots(config: &ProviderConfig) -> std::collections::HashMap<String, Arc<tokio::sync::Semaphore>> {
         config.models.iter().map(|model| (
@@ -116,6 +149,16 @@ pub struct ProviderRuntime {
 
 impl ProviderRuntime {
     pub async fn start(config: ProviderConfig) -> Result<Arc<Self>, String> {
+        Self::start_with(config, std::collections::HashMap::new()).await
+    }
+
+    /// `start`, holding `managed_engines` for the models they name besides the runtimes it
+    /// launches. Only tests pass engines here (`managed-engine-runtime` task 3.10's helper
+    /// child); the daemon starts with none.
+    async fn start_with(
+        config: ProviderConfig,
+        mut managed_engines: std::collections::HashMap<String, Arc<crate::engine_runtime::ManagedEngine>>,
+    ) -> Result<Arc<Self>, String> {
         config.validate()?;
         // Before anything, and so before any engine, starts.
         config.verify_separate_engine_keys()?;
@@ -178,7 +221,6 @@ impl ProviderRuntime {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
             Err(e) => return Err(format!("cannot read offer revision: {e}")),
         };
-        let mut managed_engines = std::collections::HashMap::new();
         for model in &config.models {
             if model.runtime.is_some() {
                 let engine = crate::engine_runtime::ManagedEngine::start(model).await?;
@@ -195,6 +237,7 @@ impl ProviderRuntime {
             wallet,
             offers,
             accepting: AtomicBool::new(false),
+            settlement_fault: Default::default(),
             funding_ready: AtomicBool::new(false),
             qualified_models: std::sync::RwLock::new(HashSet::new()),
             embedding_dimensions: std::sync::RwLock::new(Default::default()),
@@ -240,8 +283,13 @@ impl ProviderRuntime {
                 let _lifecycle = runtime.lifecycle.lock().await;
                 runtime.state.accepting.store(false, Ordering::Release);
                 runtime.state.funding_ready.store(false, Ordering::Release);
+                // The reason agrees with the readiness until the next pass replaces the entry
+                // (provider-daemon-lifecycle requirement 1, design code difference 8).
                 for health in runtime.health.write().await.iter_mut() {
-                    if failed.contains(&health.model_id) { health.ready = false; }
+                    if failed.contains(&health.model_id) {
+                        health.ready = false;
+                        health.detail = inference_backend::ENGINE_EXITED.into();
+                    }
                 }
                 runtime.withdraw_published().await;
             }
@@ -275,8 +323,27 @@ impl ProviderRuntime {
         Ok(next)
     }
 
+    /// One maintenance pass: the periodic pass and `POST /admin/offers/refresh`. It never
+    /// ends a drain or a settlement-failure stop.
     pub async fn refresh(&self) -> Result<usize, String> {
+        self.pass(false).await
+    }
+
+    /// `POST /admin/resume`: ends a drain and a settlement-failure stop, then runs one
+    /// maintenance pass, which alone may reopen admission (provider-daemon-lifecycle
+    /// requirements 4 and 6).
+    pub async fn resume(&self) -> Result<usize, String> {
+        self.draining.store(false, Ordering::Release);
+        self.pass(true).await
+    }
+
+    async fn pass(&self, resume: bool) -> Result<usize, String> {
         let _lifecycle = self.lifecycle.lock().await;
+        if resume {
+            // Under the lifecycle lock: only a pass that starts after the operator's
+            // resume can reopen admission that a settlement failure closed.
+            *self.state.fault() = None;
+        }
         let result = self.refresh_inner().await;
         *self.refresh_error.write().await = result.as_ref().err().cloned();
         if result.is_err() {
@@ -359,11 +426,9 @@ impl ProviderRuntime {
             && self.state.managed_engines.values().all(|engine| engine.is_alive())
             && health.iter().any(|model| model.ready);
         *self.health.write().await = health;
-        self.state.accepting.store(accepting, Ordering::Release);
-        let funding_ready = accepting && chain_ready && funding_safe;
-        self.state
-            .funding_ready
-            .store(funding_ready, Ordering::Release);
+        // A durable settlement failure keeps admission, and so new funding and publication,
+        // closed until the operator resumes (provider-daemon-lifecycle requirement 6).
+        let funding_ready = self.state.store_admission(accepting, chain_ready && funding_safe);
         let mut next = HashSet::new();
         if funding_ready {
             let revision = self
@@ -585,19 +650,52 @@ async fn admin_auth(
     response
 }
 
-async fn admin_status(
-    State(runtime): State<Arc<ProviderRuntime>>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(
+/// The status entry of a model whose report is latched (provider-daemon-lifecycle
+/// requirement 1); its latest readiness result follows.
+pub(crate) const PERFORMANCE_WITHDRAWN: &str = "Performance-withdrawn: a durable withdrawal latch for this model's qualification evidence blocks its admission; resume and offer refresh do not clear it.";
+/// `ledger_error` when the ledger summary cannot be read; the other facts are still reported.
+pub(crate) const LEDGER_UNAVAILABLE: &str = "Ledger summary unavailable";
+
+impl ProviderRuntime {
+    /// Each model's latest readiness, or a later observed engine exit, and whether a durable
+    /// performance-withdrawal latch blocks its admission: read from the ledger now, because a
+    /// settlement can latch a report between passes; `null` when the ledger cannot answer.
+    async fn model_status(&self) -> Vec<Value> {
+        let health = self.health.read().await;
+        health.iter().map(|model| {
+            let withdrawn = self.state.config.models.iter()
+                .find(|configured| configured.model.id == model.model_id)
+                .and_then(|configured| self.state.ledger.performance_withdrawn(&configured.model).ok());
+            let detail = if withdrawn == Some(true) {
+                format!("{PERFORMANCE_WITHDRAWN} Latest readiness result: {}", model.detail)
+            } else {
+                model.detail.clone()
+            };
+            json!({"model_id": model.model_id, "ready": model.ready, "detail": detail,
+                "performance_withdrawn": withdrawn})
+        }).collect()
+    }
+}
+
+/// Reports each lifecycle fact separately; one that cannot be read is reported as
+/// unavailable while the others are still reported (provider-daemon-lifecycle requirement 1).
+async fn admin_status(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value> {
+    let (ledger, ledger_error) = match runtime.state.ledger.admin_summary() {
+        Ok(summary) => (summary, None),
+        Err(_) => (Value::Null, Some(LEDGER_UNAVAILABLE)),
+    };
+    Json(
         json!({"accepting":runtime.state.accepting.load(Ordering::Acquire),
+        "draining":runtime.draining.load(Ordering::Acquire),
+        "settlement_error":runtime.state.settlement_fault(),
         "funding_ready":runtime.state.funding_ready.load(Ordering::Acquire),
         "chain_error":&*runtime.chain_error.read().await,
         "maintenance":&*runtime.maintenance_status.read().await,
         "refresh_error":&*runtime.refresh_error.read().await,
         "network":runtime.state.config.network.identity,"provider_wallet":runtime.state.wallet,
-        "models":&*runtime.health.read().await,"dht":runtime.dht.status().await,
-        "ledger":runtime.state.ledger.admin_summary()?}),
-    ))
+        "models":runtime.model_status().await,"dht":runtime.dht.status().await,
+        "ledger":ledger,"ledger_error":ledger_error}),
+    )
 }
 async fn admin_offers(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value> {
     let ids = runtime.published.lock().await;
@@ -631,8 +729,7 @@ async fn admin_drain(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value>
 async fn admin_resume(
     State(runtime): State<Arc<ProviderRuntime>>,
 ) -> Result<Json<Value>, ApiError> {
-    runtime.draining.store(false, Ordering::Release);
-    let count = runtime.refresh().await.map_err(ApiError::internal)?;
+    let count = runtime.resume().await.map_err(ApiError::internal)?;
     Ok(Json(
         json!({"accepting":runtime.state.accepting.load(Ordering::Acquire),"offers_published":count}),
     ))
@@ -876,8 +973,21 @@ mod tests {
         capabilities: &[&str],
         healthy: Arc<AtomicBool>,
     ) -> (Arc<ProviderRuntime>, String, Vec<tokio::task::JoinHandle<()>>) {
+        embedding_provider_on(directory, capabilities, healthy, Router::new().fallback(ready_chain), false).await
+    }
+
+    /// `embedding_provider` whose chain RPC is `chain`. With `managed`, its model also runs on
+    /// a managed engine: `managed-engine-runtime` task 3.10's helper child, whose liveness
+    /// gates the model while `embeddings_engine` answers its readiness probes.
+    async fn embedding_provider_on(
+        directory: &std::path::Path,
+        capabilities: &[&str],
+        healthy: Arc<AtomicBool>,
+        chain: Router,
+        managed: bool,
+    ) -> (Arc<ProviderRuntime>, String, Vec<tokio::task::JoinHandle<()>>) {
         let (mut config, unavailable) = unavailable_provider(directory).await;
-        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        let (rpc, rpc_server) = serve(chain).await;
         config.network.rpc_url = rpc;
         config.development = false;
         config.public_endpoint = "https://inference.example.org/".into();
@@ -899,13 +1009,24 @@ mod tests {
         ));
         let (engine, engine_server) = serve(engine).await;
         model.engine_url = engine;
-        let runtime = ProviderRuntime::start(config).await.unwrap();
-        let state = &runtime.state;
+        let mut engines = std::collections::HashMap::new();
+        if managed {
+            let helper = crate::engine_runtime::ManagedEngine::helper_for_test(&model.model.id, &model.engine_url);
+            engines.insert(model.model.id.clone(), Arc::new(helper));
+        }
+        let runtime = ProviderRuntime::start_with(config, engines).await.unwrap();
+        let (_, bearer) = free_account(&runtime.state, "22");
+        (runtime, bearer, vec![engine_server, rpc_server, unavailable])
+    }
+
+    /// Opens a free, one-request-at-a-time account for the first model, owned by the wallet of
+    /// signing key `consumer` repeated: its contract identifier and bearer.
+    fn free_account(state: &ProviderState, consumer: &str) -> (String, String) {
         let now = protocol::now().unwrap();
         let quote = protocol::sign(protocol::QUOTE_DOMAIN, Quote {
             id: protocol::random_id(), network: state.config.network.identity.clone(),
             offer_id: protocol::random_id(), provider_wallet: state.wallet.clone(),
-            consumer_wallet: wallet::address_from_private_key(&"22".repeat(32)).unwrap(),
+            consumer_wallet: wallet::address_from_private_key(&consumer.repeat(32)).unwrap(),
             model: state.config.models[0].model.clone(),
             price: PriceSchedule { input_wei_per_1k: "0".into(), output_wei_per_1k: "0".into() },
             funding_wei: "0".into(), platform_wallet: state.config.platform_wallet.clone(),
@@ -914,7 +1035,7 @@ mod tests {
         }, &state.private_key).unwrap();
         state.ledger.store_quote(&quote, now).unwrap();
         let bearer = state.ledger.open_account(&quote, None, now).unwrap().credential.unwrap().bearer;
-        (runtime, bearer, vec![engine_server, rpc_server, unavailable])
+        (quote.payload.id, bearer)
     }
 
     /// `GET /admin/offers` and `GET /v1/models` with `bearer`: the published offers'
@@ -1311,5 +1432,358 @@ mod tests {
         restarted.dht.stop().await;
         second.dht.stop().await;
         server.abort();
+    }
+
+    /// `method path` on the administration router with the operator bearer: the status and
+    /// the JSON answer.
+    async fn admin(runtime: &Arc<ProviderRuntime>, method: &str, path: &str) -> (StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = runtime.admin_router().oneshot(Request::builder().method(method).uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {OPERATOR_TOKEN}"))
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// `GET /readyz` on the public router.
+    async fn readyz(runtime: &Arc<ProviderRuntime>) -> StatusCode {
+        use tower::ServiceExt;
+        runtime.public_router().oneshot(Request::builder().uri("/readyz")
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    /// One embedding request with `Idempotency-Key: key` through the public router.
+    async fn embed(runtime: &Arc<ProviderRuntime>, bearer: &str, key: &str) -> (StatusCode, Value) {
+        use tower::ServiceExt;
+        let response = runtime.public_router().oneshot(Request::builder().method("POST")
+            .uri("/v1/embeddings")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("idempotency-key", key)
+            .body(axum::body::Body::from(json!({"model": "model", "input": "hello"}).to_string()))
+            .unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// The deployment's ledger, for a second connection that injects faults.
+    fn ledger_connection(runtime: &ProviderRuntime) -> rusqlite::Connection {
+        let path = runtime.state.config.runtime_data_dir().unwrap()
+            .join(&runtime.state.wallet).join(runtime.dht.peer_id()).join("ledger.sqlite3");
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection.busy_timeout(Duration::from_secs(5)).unwrap();
+        connection
+    }
+
+    /// provider-daemon-lifecycle requirements 1 and 6 (task 2.1, design code difference 1):
+    /// admission closed by a durable settlement failure stays closed through a maintenance
+    /// pass and `POST /admin/offers/refresh` after the ledger accepts writes again, the status
+    /// names the failure, and only `POST /admin/resume` reopens admission, through its pass.
+    /// In the second case the ledger refuses only the `completed` write, so that the
+    /// settlement's single retry on drop records the request as `interrupted` (design
+    /// observation 13); admission stays closed all the same.
+    #[tokio::test]
+    async fn a_settlement_failure_keeps_admission_closed_until_the_operator_resumes() {
+        for (refused, recorded) in [("NEW.status<>'reserved'", "reserved"), ("NEW.status='completed'", "interrupted")] {
+            let directory = tempfile::tempdir().unwrap();
+            let (runtime, bearer, servers) =
+                embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+            assert!(runtime.state.accepting.load(Ordering::Acquire));
+            assert_eq!(runtime.dht.status().await["published_offers"], 1);
+            let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+            let ledger = ledger_connection(&runtime);
+            ledger.execute_batch(&format!("CREATE TRIGGER refuse_settlement BEFORE UPDATE ON requests
+                WHEN OLD.status='reserved' AND {refused}
+                BEGIN SELECT RAISE(ABORT,'injected settlement write failure'); END;")).unwrap();
+            let (status, answer) = embed(&runtime, &bearer, "settlement-fault-1").await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{refused}: {answer}");
+            assert!(!runtime.state.accepting.load(Ordering::Acquire), "{refused}");
+            // New funding closes with admission at once, not at the next pass: the status
+            // and `/readyz` never report new-funding readiness while admission is closed.
+            assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{refused}");
+            let view = admin(&runtime, "GET", "/admin/status").await.1;
+            assert_eq!((&view["accepting"], &view["funding_ready"], &view["settlement_error"]),
+                (&json!(false), &json!(false), &json!(inference_gateway::DURABLE_SETTLEMENT_FAILED)),
+                "{refused}: {view}");
+            // The answer arrives after the settlement's drop retried its write once.
+            ledger.execute_batch("DROP TRIGGER refuse_settlement").unwrap();
+
+            // Neither the periodic pass nor an offer refresh reopens admission.
+            runtime.refresh().await.unwrap();
+            assert!(!runtime.state.accepting.load(Ordering::Acquire), "{refused}");
+            let (status, refreshed) = admin(&runtime, "POST", "/admin/offers/refresh").await;
+            assert_eq!(status, StatusCode::OK, "{refused}");
+            assert_eq!(refreshed, json!({"accepting": false, "offers_published": 0}), "{refused}");
+            assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{refused}");
+            assert_eq!(runtime.dht.status().await["published_offers"], 0, "{refused}");
+            let (status, answer) = embed(&runtime, &bearer, "settlement-fault-2").await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{refused}: {answer}");
+            assert_eq!(answer["error"]["code"], "provider_paused", "{refused}");
+            assert!(runtime.state.ledger.request_view(&contract, "settlement-fault-2").is_err(), "{refused}");
+            let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+            assert_eq!(status, StatusCode::OK, "{refused}");
+            assert_eq!(view["settlement_error"], inference_gateway::DURABLE_SETTLEMENT_FAILED, "{refused}: {view}");
+            assert_eq!((&view["accepting"], &view["draining"]), (&json!(false), &json!(false)), "{refused}");
+            let (_, requests) = admin(&runtime, "GET", "/admin/requests").await;
+            let requests = requests["requests"].as_array().unwrap();
+            assert_eq!(requests.len(), 1, "{refused}: {requests:?}");
+            assert_eq!(requests[0]["status"], recorded, "{refused}: {requests:?}");
+
+            // The operator's resume clears the failure and reopens admission through its pass.
+            let (status, resumed) = admin(&runtime, "POST", "/admin/resume").await;
+            assert_eq!(status, StatusCode::OK, "{refused}");
+            assert_eq!(resumed, json!({"accepting": true, "offers_published": 1}), "{refused}");
+            assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["settlement_error"], Value::Null);
+            let (status, answer) = embed(&runtime, &bearer, "settlement-fault-3").await;
+            let completed = if recorded == "reserved" {
+                // The unsettled request, never generated again, still holds its account's only
+                // concurrency slot until restart recovery settles it; another account is admitted.
+                assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}: {answer}");
+                assert_eq!(answer["error"]["code"], "rate_limit_exceeded", "{refused}");
+                let (other, other_bearer) = free_account(&runtime.state, "33");
+                let (status, answer) = embed(&runtime, &other_bearer, "settlement-fault-3").await;
+                assert_eq!(status, StatusCode::OK, "{refused}: {answer}");
+                other
+            } else {
+                assert_eq!(status, StatusCode::OK, "{refused}: {answer}");
+                contract.clone()
+            };
+            assert_eq!(runtime.state.ledger.request_view(&completed, "settlement-fault-3").unwrap().status, "completed");
+            assert_eq!(runtime.state.ledger.request_view(&contract, "settlement-fault-1").unwrap().status, recorded);
+            runtime.dht.stop().await;
+            for server in servers {
+                server.abort();
+            }
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 1 (task 2.3, design code difference 3): the status
+    /// tells a drain from a rejected chain identity, which also closes admission.
+    #[tokio::test]
+    async fn admin_status_distinguishes_a_drain_from_a_rejected_chain_identity() {
+        let facts = |view: &Value| (view["accepting"].clone(), view["draining"].clone());
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        assert_eq!(facts(&admin(&runtime, "GET", "/admin/status").await.1), (json!(true), json!(false)));
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!(facts(&view), (json!(false), json!(true)), "{view}");
+        assert_eq!(view["funding_ready"], false);
+        assert_eq!(view["chain_error"], Value::Null);
+        assert_eq!(admin(&runtime, "POST", "/admin/resume").await.0, StatusCode::OK);
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!(facts(&view), (json!(true), json!(false)), "{view}");
+        assert_eq!(view["funding_ready"], true);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+
+        // The configured RPC is unavailable at start, then reports another genesis. No drain.
+        let rejected = Arc::new(AtomicBool::new(false));
+        let chain = {
+            let rejected = rejected.clone();
+            Router::new().fallback(move |request: Json<Value>| {
+                let rejected = rejected.clone();
+                async move {
+                    if !rejected.load(Ordering::Acquire) {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    if request["method"] == "eth_getBlockByNumber" && request["params"][0] == "0x0" {
+                        let genesis = json!({"number": "0x0", "hash": format!("0x{}", "99".repeat(32)), "timestamp": "0x0"});
+                        return Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": genesis})).into_response();
+                    }
+                    ready_chain(request).await
+                }
+            })
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) = embedding_provider_on(
+            directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true)), chain, false).await;
+        // An outage withholds only new funding.
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!(facts(&view), (json!(true), json!(false)), "{view}");
+        rejected.store(true, Ordering::Release);
+        let _ = runtime.refresh().await;
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!(facts(&view), (json!(false), json!(false)), "{view}");
+        assert_eq!(view["chain_error"], "Configured RPC network identity was rejected", "{view}");
+        assert_eq!(view["funding_ready"], false);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// A private engine that passes the chat readiness probes of one-slot `model`, whose
+    /// served chat template is `template`.
+    fn chat_engine(model: protocol::ModelSpec, template: &'static str) -> Router {
+        let id = model.id.clone();
+        let props = json!({"build_info": "b1-cd959ba", "total_slots": 1, "model_alias": model.id,
+            "default_generation_settings": {"n_ctx": model.context_length}, "chat_template": template});
+        Router::new()
+            .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
+            .route("/v1/models", get(move || async move { Json(json!({"data": [{"id": id}]})) }))
+            .route("/props", get(move || async move { Json(props) }))
+            .route("/apply-template", post(|| async { Json(json!({"prompt": "rendered"})) }))
+            .route("/tokenize", post(|| async { Json(json!({"tokens": [1, 2]})) }))
+            .route("/v1/chat/completions", post(|request: Json<Value>| async move {
+                let usage = json!({"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3});
+                if request["stream"] != true {
+                    return Json(json!({"id": "probe", "object": "chat.completion", "model": request["model"],
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"},
+                            "finish_reason": "length"}], "usage": usage})).into_response();
+                }
+                let token = json!({"id": 7, "token": "OK", "logprob": -0.1,
+                    "top_logprobs": [{"token": "OK", "logprob": -0.1}]});
+                let chunk = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"},
+                        "logprobs": {"content": [token]}, "finish_reason": "length"}]});
+                let last = json!({"id": "probe", "object": "chat.completion.chunk", "model": request["model"],
+                    "choices": [], "usage": usage});
+                ([(header::CONTENT_TYPE, "text/event-stream")],
+                    format!("data: {chunk}\n\ndata: {last}\n\ndata: [DONE]\n\n")).into_response()
+            }))
+    }
+
+    /// provider-daemon-lifecycle requirement 1 (task 2.3, design code difference 3): a profiled
+    /// model whose readiness probes pass and whose report is latched is reported as
+    /// performance-withdrawn, and its probe result is still reported, also when every slot is
+    /// busy and the pass ran no probe.
+    #[tokio::test]
+    async fn admin_status_names_a_performance_withdrawn_model_and_keeps_its_readiness() {
+        use sha2::{Digest, Sha256};
+        const TEMPLATE: &str = "{{ messages }}";
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        // inference-generation-performance's synthetic evidence, for the pinned engine
+        // version and the stub engine's chat template.
+        let (mut model, mut report) = crate::performance::evidence_tests::fixture();
+        model.chat_template_sha256 = hex::encode(Sha256::digest(TEMPLATE));
+        let version = crate::engine_runtime::ENGINE_VERSION;
+        model.serving.as_mut().unwrap().engine_version = version.into();
+        report["runtime_observation"]["engine_version"] = json!(version);
+        let evidence = directory.path().join("evidence.json");
+        crate::performance::evidence_tests::persist(&mut model, &mut report, &evidence);
+        let (engine, engine_server) = serve(chat_engine(model.clone(), TEMPLATE)).await;
+        let deployment = &mut config.models[0];
+        deployment.model = model.clone();
+        deployment.engine_url = engine;
+        deployment.qualification_evidence_file = Some(evidence);
+        deployment.request_timeout_secs = 30;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let entry = |view: Value| view["models"][0].clone();
+        let detail = |entry: &Value| entry["detail"].as_str().unwrap().to_owned();
+        // Control: the probes pass, and no report is latched.
+        let control = entry(admin(&runtime, "GET", "/admin/status").await.1);
+        assert_eq!(control["ready"], true, "{control}");
+        assert_eq!(control["performance_withdrawn"], false, "{control}");
+        assert!(detail(&control).starts_with("Ready: "), "{control}");
+        assert!(runtime.state.qualified_model(&model).is_some());
+
+        // Latch the admitted report's evidence digest through a second connection.
+        let evidence_sha256 = model.serving.as_ref().unwrap().qualification.evidence_sha256.clone();
+        ledger_connection(&runtime).execute(
+            "INSERT INTO performance_withdrawals(model,evidence) VALUES(?1,?2)",
+            rusqlite::params![model.id, evidence_sha256]).unwrap();
+        assert!(runtime.state.qualified_model(&model).is_none());
+        // Read at once, before any pass; then after passes that probe and that find every slot busy.
+        let latched = entry(admin(&runtime, "GET", "/admin/status").await.1);
+        assert_eq!(latched["performance_withdrawn"], true, "{latched}");
+        assert_eq!(latched["ready"], true, "{latched}");
+        assert!(detail(&latched).starts_with(PERFORMANCE_WITHDRAWN), "{latched}");
+        assert!(detail(&latched).ends_with(&format!("Latest readiness result: {}", detail(&control))), "{latched}");
+        for busy in [false, true, false] {
+            let held = busy.then(|| runtime.state.model_slots[&model.id].clone().try_acquire_owned().unwrap());
+            runtime.refresh().await.unwrap();
+            drop(held);
+            let latched = entry(admin(&runtime, "GET", "/admin/status").await.1);
+            assert_eq!(latched["performance_withdrawn"], true, "{latched}");
+            // The pass's own result: its probes passed, or every slot was busy.
+            assert_eq!(latched["ready"], !busy, "{latched}");
+            let text = detail(&latched);
+            assert!(text.starts_with(PERFORMANCE_WITHDRAWN), "{text}");
+            let result = if busy { "Initial qualification awaits idle engine capacity" } else { "Ready: " };
+            assert!(text.contains(&format!("Latest readiness result: {result}")), "{text}");
+            assert!(runtime.state.qualified_model(&model).is_none());
+        }
+        runtime.dht.stop().await;
+        engine_server.abort();
+        unavailable.abort();
+    }
+
+    /// provider-daemon-lifecycle requirement 1 (task 2.4, design code difference 4): when the
+    /// ledger summary cannot be read, the status answers, reports the ledger as unavailable and
+    /// still reports every other fact; `/readyz` answers 503 (`inference-offer-discovery`).
+    #[tokio::test]
+    async fn admin_status_reports_an_unreadable_ledger_and_every_other_fact() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!((&view["ledger"]["accounts"], &view["ledger_error"]), (&json!(1), &Value::Null), "{view}");
+        assert_eq!(readyz(&runtime).await, StatusCode::OK);
+
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("ALTER TABLE accounts RENAME TO accounts_unreadable").unwrap();
+        assert!(runtime.state.ledger.admin_summary().is_err());
+        let (status, view) = admin(&runtime, "GET", "/admin/status").await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        assert_eq!(view["ledger"], Value::Null, "{view}");
+        assert_eq!(view["ledger_error"], LEDGER_UNAVAILABLE, "{view}");
+        for member in ["models", "accepting", "draining", "settlement_error", "funding_ready", "chain_error",
+            "maintenance", "refresh_error", "network", "provider_wallet", "dht"] {
+            assert!(view.get(member).is_some(), "{member}: {view}");
+        }
+        assert_eq!(view["models"][0]["ready"], true, "{view}");
+        assert_eq!((&view["accepting"], &view["funding_ready"]), (&json!(true), &json!(true)), "{view}");
+        assert_eq!(view["dht"]["published_offers"], 1, "{view}");
+        assert_eq!(readyz(&runtime).await, StatusCode::SERVICE_UNAVAILABLE);
+
+        ledger.execute_batch("ALTER TABLE accounts_unreadable RENAME TO accounts").unwrap();
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["ledger"]["accounts"], &view["ledger_error"]), (&json!(1), &Value::Null), "{view}");
+        assert_eq!(readyz(&runtime).await, StatusCode::OK);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 1 (task 2.8, design code difference 8): after its
+    /// managed engine exits, and before any further pass, the status reports the model not
+    /// ready with the engine exit as its reason, not the passed probes of the last pass.
+    #[tokio::test]
+    async fn admin_status_reports_an_engine_exit_with_its_own_reason() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, _bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), Router::new().fallback(ready_chain), true).await;
+        let model = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
+        assert_eq!(model["ready"], true, "{model}");
+        assert!(model["detail"].as_str().unwrap().starts_with("Ready: "), "{model}");
+        assert_eq!(readyz(&runtime).await, StatusCode::OK);
+
+        runtime.state.managed_engines["model"].kill_for_test();
+        // `/readyz` sees the exit at once; the status once the engine watcher has observed it.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let model = loop {
+            let model = admin(&runtime, "GET", "/admin/status").await.1["models"][0].clone();
+            if readyz(&runtime).await == StatusCode::SERVICE_UNAVAILABLE && model["ready"] == false {
+                break model;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "the engine exit was not observed: {model}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(model["detail"], inference_backend::ENGINE_EXITED, "{model}");
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 0);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
     }
 }

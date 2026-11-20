@@ -111,7 +111,7 @@ impl PreparedProvider {
             model_slots: ProviderState::slots(&config), managed_engines: Default::default(),
             chain: Arc::new(ChainClient::new(network, data_dir).unwrap()),
             config: Arc::new(config), ledger, private_key: Arc::new(key), wallet: provider_wallet,
-            offers, accepting: AtomicBool::new(true), funding_ready: AtomicBool::new(true),
+            offers, accepting: AtomicBool::new(true), settlement_fault: Default::default(), funding_ready: AtomicBool::new(true),
             // Unprofiled development model admitted as a prerequisite, not measured qualification.
             qualified_models: RwLock::new([offer.payload.model.id.clone()].into_iter().collect()),
             embedding_dimensions: RwLock::new(Default::default()),

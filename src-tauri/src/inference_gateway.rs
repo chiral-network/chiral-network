@@ -32,6 +32,12 @@ use tokio::time::Instant;
 
 const MAX_BODY_READERS: usize = 64;
 const BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// The operator's reasons for a settlement-failure stop (provider-daemon-lifecycle
+/// requirement 6), reported by `GET /admin/status` until `POST /admin/resume`.
+pub const DURABLE_SETTLEMENT_FAILED: &str =
+    "Durable settlement failed; admission stays stopped until the operator resumes the provider";
+pub const SETTLEMENT_CLOCK_FAILED: &str =
+    "Accounting clock unavailable at settlement; admission stays stopped until the operator resumes the provider";
 
 struct ModelRuntime {
     backend: Result<Backend, ()>,
@@ -381,10 +387,7 @@ impl Settlement {
         let now = match protocol::now() {
             Ok(now) => now,
             Err(_) => {
-                self.gateway
-                    .provider
-                    .accepting
-                    .store(false, Ordering::Release);
+                self.gateway.provider.record_settlement_fault(SETTLEMENT_CLOCK_FAILED);
                 return Err(ApiError::internal("Accounting clock unavailable"));
             }
         };
@@ -416,10 +419,9 @@ impl Settlement {
             Err(_) => {
                 // Never acknowledge a successful completion with an unpersisted debit.
                 // A repeated settle is idempotent; restart recovery remains authoritative.
-                self.gateway
-                    .provider
-                    .accepting
-                    .store(false, Ordering::Release);
+                // Admission stays closed until the operator resumes, also when the drop's
+                // single retry then records the request (design observation 13).
+                self.gateway.provider.record_settlement_fault(DURABLE_SETTLEMENT_FAILED);
                 Err(ApiError::internal(
                     "Durable settlement failed; provider admission has been stopped",
                 ))
@@ -1217,6 +1219,7 @@ mod tests {
             wallet: offer.provider_wallet,
             offers: Arc::new(OfferRegistry::new(offer.network, true)),
             accepting: AtomicBool::new(true),
+            settlement_fault: Default::default(),
             funding_ready: AtomicBool::new(true),
             qualified_models: std::sync::RwLock::new(Default::default()),
             embedding_dimensions: std::sync::RwLock::new(Default::default()),

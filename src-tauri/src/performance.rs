@@ -517,12 +517,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod evidence_tests {
+pub(crate) mod evidence_tests {
     use super::*;
     use serde_json::{json, Value};
 
     // Synthetic parser/accounting inputs only, never a hardware qualification.
-    fn fixture() -> (ModelSpec, Value) {
+    pub(crate) fn fixture() -> (ModelSpec, Value) {
         let mut model = crate::offer_registry::tests::offer().payload.model;
         model.capabilities = vec!["chat".into()];
         let mut profile = test_profile();
@@ -572,7 +572,7 @@ mod evidence_tests {
         (model, report)
     }
 
-    fn persist(model: &mut ModelSpec, report: &mut Value, path: &Path) {
+    pub(crate) fn persist(model: &mut ModelSpec, report: &mut Value, path: &Path) {
         let identity = profile_sha256(model).unwrap();
         report["profile_sha256"] = json!(identity);
         report["runtime_identity_sha256"] = json!(hex::encode(Sha256::digest(

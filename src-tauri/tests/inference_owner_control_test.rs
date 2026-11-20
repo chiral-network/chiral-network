@@ -2355,6 +2355,7 @@ async fn free_account_final_slot(ledger_wide: bool) {
         config: source.config.clone(), private_key: source.private_key.clone(), wallet: source.wallet.clone(),
         offers: source.offers.clone(),
         accepting: AtomicBool::new(source.accepting.load(Ordering::Acquire)),
+        settlement_fault: Default::default(),
         funding_ready: AtomicBool::new(source.funding_ready.load(Ordering::Acquire)),
         qualified_models: std::sync::RwLock::new(source.qualified_models.read().unwrap().clone()),
         embedding_dimensions: std::sync::RwLock::new(source.embedding_dimensions.read().unwrap().clone()),

@@ -1899,6 +1899,7 @@ async fn fee_recheck_time_advances_after_unavailable_and_faulted_outcomes() {
         wallet: q.provider_wallet.clone(),
         offers: Arc::new(OfferRegistry::new(network(), true)),
         accepting: AtomicBool::new(true),
+        settlement_fault: Default::default(),
         funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(Default::default()),
         embedding_dimensions: std::sync::RwLock::new(Default::default()),
@@ -2278,6 +2279,7 @@ async fn rpc_outage_fee_gas_failure_and_reorg_keep_distinct_admission_states() {
         wallet: q.payload.provider_wallet.clone(),
         offers: Arc::new(OfferRegistry::new(network(), true)),
         accepting: AtomicBool::new(true),
+        settlement_fault: Default::default(),
         funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(
             [q.payload.model.id.clone()].into_iter().collect(),
@@ -3065,6 +3067,7 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
         wallet: q.payload.provider_wallet.clone(),
         offers: Arc::new(OfferRegistry::new(network(), true)),
         accepting: AtomicBool::new(true),
+        settlement_fault: Default::default(),
         funding_ready: AtomicBool::new(true),
         qualified_models: std::sync::RwLock::new(Default::default()),
         embedding_dimensions: std::sync::RwLock::new(Default::default()),

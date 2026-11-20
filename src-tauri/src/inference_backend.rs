@@ -1402,6 +1402,9 @@ pub(crate) fn unprobeable_capabilities(capabilities: &[String]) -> Vec<&'static 
     }
     unprobeable
 }
+/// The readiness reason of a model whose managed engine has exited, from the readiness
+/// pass or, until the next pass, from the engine watcher.
+pub const ENGINE_EXITED: &str = "Managed engine exited";
 /// Parent caches publication readiness; this performs real inference, not a TCP probe.
 pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth> {
     let config = &state.config;
@@ -1422,7 +1425,7 @@ pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth>
 
 async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> ModelHealth {
     if !state.engine_alive(&model.model.id) {
-        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Managed engine exited".into(), embedding_dimensions: None };
+        return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: ENGINE_EXITED.into(), embedding_dimensions: None };
     }
     // A capability set that can never pass readiness is a configuration problem; name it
     // for the operator instead of reporting a generic probe failure (task 2.5).

@@ -216,3 +216,7 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-19 — unprobeable capability rule
 
 - `inference_backend::tests::unprobeable_capabilities_names_each_capability_without_a_probe` — **replaceable**: `unprobeable_capabilities` is now a pure function of a capability list, so a Verus lemma could prove the rule for every set (`streaming` named exactly when neither `chat` nor `completions` is present; `tools` and `structured_output` named exactly when `chat` is absent). Not replaced, because Verus is unavailable on this machine (report entry of 2026-11-15). This supersedes the "no pure seam" note of the round-53 judgment.
+
+## Judged 2026-11-20 — daemon status and settlement-failure stop
+
+- `app::tests::a_settlement_failure_keeps_admission_closed_until_the_operator_resumes`, `admin_status_distinguishes_a_drain_from_a_rejected_chain_identity`, `admin_status_names_a_performance_withdrawn_model_and_keeps_its_readiness`, `admin_status_reports_an_unreadable_ledger_and_every_other_fact` and `admin_status_reports_an_engine_exit_with_its_own_reason` — **not replaceable**: a running provider runtime, admin routes, SQLite ledgers, stub engines and a managed helper process. The latch rule (a recorded fault overrides a pass's admission decision until resume) is small, but it is applied under a mutex inside async runtime code.
