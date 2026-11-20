@@ -80,26 +80,101 @@
 
 Task 3.N corresponds to requirement N in the spec and to row N of the design coverage table. A task is checked only when existing passing tests prove every statement and scenario of its requirement. An unchecked task names the missing case.
 
-- [ ] 3.1 The public inference surface is the implemented endpoint set, with no engine or out-of-scope route.
+- [x] 3.1 The public inference surface is the implemented endpoint set, with no engine or out-of-scope route.
   - Existing evidence: `inference_gateway::tests::llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage` (unauthenticated `GET` of five engine paths answers 404 from the inference router).
   - Missing: a test of the merged `ProviderRuntime::public_router` in which `/tokenize`, `/apply-template`, `/props`, `/metrics`, `/slots`, `/completion`, `/lora-adapters` and `/infill`, with and without a valid bearer and with `GET` and `POST`, and `POST /v1/responses`, `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/files`, `/v1/batches` and `/v1/fine_tuning/jobs` with a valid bearer, each answer as an unknown endpoint, while a counting engine fixture receives no request and no request record is created.
+
+  Done 2026-11-20: library test `app::tests::the_public_router_serves_no_engine_or_out_of_scope_route`. It runs through the merged `ProviderRuntime::public_router` of a started, ready, non-development provider with one external embedding deployment and one free account. The engine stub records every request it receives. It answers every path it does not otherwise serve with a private marker, including `/apply-template`, `/metrics`, `/slots` and `/completion`, so a forwarded path would reach it and show in the answer.
+  - Engine and arbitrary paths (21): `/tokenize`, `/detokenize`, `/apply-template`, `/props`, `/metrics`, `/slots`, `/slots/0?action=erase`, `/completion`, `/completions`, `/chat/completions`, `/infill`, `/embedding`, `/embeddings`, `/rerank`, `/v1/rerank`, `/lora-adapters`, `/health`, `/models`, `/models/load`, `/v1/engine/props` and `/engine/v1/chat/completions`. Each is sent with `GET` and `POST`, and with no bearer, an invalid bearer and the account's valid bearer.
+  - Out-of-scope surfaces (11): `/v1/responses`, `/v1/images/generations`, `/v1/images/edits`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/audio/speech`, `/v1/videos`, `/v1/files`, `/v1/uploads`, `/v1/batches` and `/v1/fine_tuning/jobs`. Each is sent with `GET` and `POST` and the valid bearer.
+  - Every one of these requests answers exactly the unknown-endpoint error (404 `not_found`, design decision 4), without the marker or the bearer. After each one, the engine's request log, the account view and the ledger's request list are unchanged.
+  - Positive control on the same router, showing that the six implemented endpoints are served:
+    - `GET /v1/models` lists `model`;
+    - `POST /v1/embeddings` completes, and the engine receives only `/health`, `/tokenize` and `/v1/embeddings` for it;
+    - `GET /v1/requests/:id` and `POST /v1/requests/:id/cancel` answer for that request;
+    - `POST /v1/chat/completions` and `/v1/completions` are routed, and are refused before reservation (400 `unsupported_parameter`) because the model advertises only `embeddings`.
+
+  It would catch an engine or out-of-scope route mounted on, or forwarded by, the public router or any router merged into it, and a fallback that forwards unknown paths. Mutation: routing `/embedding` to the embeddings handler in `inference_gateway::router` fails it (`GET /embedding` answers 405, not 404). The file was restored by copy with a fresh mtime and compared byte-identical.
+
+  Review 2026-11-20: the tick stands; every statement and both scenarios are proven. Further mutation: a public-router fallback that forwards each unknown path to the engine and then answers the exact unknown-endpoint error fails it ("GET /tokenize with no bearer: the engine, the account or the requests changed"). So a forwarded path is caught by the engine's log even when its answer cannot be told apart. Each answer is now checked for the bearer before any failure message can show it.
 - [ ] 3.2 Generation routes serve stock OpenAI-compatible clients in non-streaming and SSE modes.
   - Existing evidence: `llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage`, `internal_stream_preserves_nonstream_text_and_authoritative_logprobs` and the three disconnect tests (chat over real HTTP/1).
   - Missing: a router test of `/v1/completions` in both modes through a stub engine, with only a bearer and no Chiral header; a streaming test with `stream_options.include_usage` that receives exactly one usage event; and an automated run of `examples/openai_client.py` and `examples/openai-client.mjs` against a loopback development provider (shared with `account-credentials` task 3.8).
-- [ ] 3.3 The model listing is scoped to the credential's agreement.
+- [x] 3.3 The model listing is scoped to the credential's agreement.
   - Existing evidence: `renewed_qualification_keeps_existing_model_visible_without_rewriting_agreement` (one account lists its own current model). `inference_owner_consumer_test::native_issue_keeps_a_hidden_valid_default_while_the_provider_admits_nothing` covers the empty answer while nothing is admitted, which is implementation behaviour (design decisions 4 and 10), not this requirement.
   - Missing: a router test with two models and one account on each, in which each bearer lists only its own model and never the other.
-- [ ] 3.4 Requests are admitted only within the contracted model's advertised capabilities.
+
+  Done 2026-11-20: library test `inference_gateway::tests::each_bearer_lists_only_its_own_agreement_model`. It uses the new fixture `two_models`: deployments `alpha` and `beta`, each qualified and served by its own `CountingEngine`, with one free account on each.
+  - The test first confirms that both models are ready.
+  - Each bearer's `GET /v1/models` then lists exactly one model, its own, with that model's signed terms in the `chiral` extension. The answer's text contains no mention of the other deployment.
+  - Neither engine receives a request.
+
+  It would catch a listing of another account's model, of the provider's other deployments, or of anything besides the agreement's model. Mutation: listing the first configured model instead of the account's fails it (`beta`'s bearer lists `alpha`). The file was restored and compared byte-identical. The empty answer while nothing is admitted remains implementation behaviour (design decisions 4 and 10).
+
+  Review 2026-11-20: the tick stands. The review added a case to the same test. While only the other deployment is ready, a bearer still lists nothing of it, and the other bearer still lists exactly its own model. Whether the bearer's own model is then listed is implementation behaviour (design decisions 4 and 10), and the test does not assert it. Mutation: falling back to the first ready deployment when the account's own model is not ready fails it (`alpha`'s bearer lists `beta`). The test without the addition does not catch this, because both models are ready in its cases. `answer_of` now checks every answer for a bearer before any failure message can show the answer.
+- [x] 3.4 Requests are admitted only within the contracted model's advertised capabilities.
   - Existing evidence: `inference_backend::tests::rejects_expansion_and_media_before_tokenization` and `embedding_batch_and_schema_boundaries` (through `prepare` only).
   - Missing: router tests with a counting stub engine, each asserting refusal, no request record for the key and no engine call:
     - a chat request naming another model;
     - a completions-only agreement sending chat and embedding requests;
     - an agreement without `tools` or `structured_output` sending `tools`, a `tool`-role message, an assistant `tool_calls` message, and `response_format` of types `json_schema` and `json_object`;
     - each engine-only member of the unit test sent to `/v1/completions` as well as to chat.
-- [ ] 3.5 Public inference authenticates before reading a body and bounds body reading separately from generation.
+
+  Done 2026-11-20: library tests in `inference_gateway::tests`. They use the new engine stub `CountingEngine`, which records every request it receives as `METHOD path`, and the new fixtures `counted_fixture` and `two_models`. Each refusal is checked by `Counted::refused` or `assert_refused`:
+  - the answer is an error object and nothing else, and does not contain the bearer;
+  - no request exists for the request's `Idempotency-Key`;
+  - the account view and request list are unchanged;
+  - the engine received nothing.
+
+  The tests:
+  - `a_request_naming_another_model_is_refused_as_a_model_mismatch_before_reservation`. The `alpha` account names `beta` (another account's deployed, qualified model), `gamma` (no deployment) or `ALPHA`, and the `beta` account names `alpha`, on chat, completions and embeddings. Each answers 403 `model_scope`, and neither account nor either engine is touched. Control: each account naming its own model is served by its own engine alone. Mutation: dropping the model check in `prepare` fails it (the request reaches `alpha`'s engine and answers 502).
+  - `a_route_the_agreement_model_does_not_advertise_is_refused_before_reservation`. For completions-only, chat-only and embeddings-only agreements, each of the two other routes is refused (400 `unsupported_parameter`). Each agreement's own route completes, and only that request reaches the engine. Mutation: ignoring `capability(model, endpoint.capability())` fails it (a completions-only agreement's chat request completes).
+  - `tools_and_json_output_without_their_capabilities_are_refused_before_reservation`. Five chat requests: a `tools` array, a `tool`-role message, an assistant `tool_calls` message, and `response_format` of types `json_schema` and `json_object`. Every agreement advertises `chat` and `completions`; the four agreements add neither capability, only `tools`, only `structured_output`, or both. A request whose capability is absent is refused (400 `unsupported_parameter`). A request whose capability is present is admitted and completes, so the refusals come from the capability and not from the request's shape. Mutation: accepting `json_object` without `structured_output` fails it.
+  - `engine_only_members_are_refused_on_every_inference_route_and_never_reach_the_engine`. The members are the 13 of the unit test plus `add_generation_prompt`, `continue_final_message`, `timings_per_token`, `post_sampling_probs`, `id_slot`, `grammar`, `samplers` and `embd_normalize`. Each, with a plausible value, is sent on chat and completions and, for the requirement's "member outside the supported OpenAI subset", on embeddings. Each request is refused (400 `unsupported_parameter`), and the engine's log stays empty. The same requests without the member complete. Mutation: allowlisting `chat_template` for chat fails it (the request completes, with the member forwarded).
+
+  Each mutated file was restored by copy with a fresh mtime and compared byte-identical. `n` other than 1 and the other expansion members stay with `inference-request-accounting` and the unit test.
+
+  Review 2026-11-20: the tick stands. The review found three gaps, strengthened the tests and added one test:
+  - `engine_only_members_are_refused_on_every_inference_route_and_never_reach_the_engine` now also sends 14 further native members on all three routes:
+    - `n_predict`, the engine's own output limit; `ignore_eos` and `t_max_predict_ms`;
+    - `json_schema`, which constrains output without the `structured_output` capability;
+    - `image_data` and `multimodal_data`, which carry media;
+    - `n_keep`, `n_discard`, `top_k`, `min_p`, `typical_p`, `repeat_penalty`, `mirostat` and `dry_multiplier`.
+
+    Mutation: allowlisting `n_predict` fails it.
+  - `a_route_the_agreement_model_does_not_advertise_is_refused_before_reservation` now also sends each generation request without `max_tokens`. With `max_tokens: 4` alone, an embeddings-only agreement's zero output maximum refused the request with the same code, standing in for a missing capability check. Mutation: skipping the route capability check only for an embeddings-only model fails it. The request `embeddings-agreement-chat-default-limit` is reserved and dispatched, and answers 502 `engine_usage_mismatch`.
+  - `tools_and_json_output_without_their_capabilities_are_refused_before_reservation` now also sends `tools`, `tool_choice` and `response_format` (`json_object` and `json_schema`) to `/v1/completions`. Each is refused under all four capability combinations. Without the capability, this is the requirement. With it, the refusal is implementation behaviour: design decision 4's per-route allowlist gives completions neither member. Mutations:
+    - making `tools`, `tool_choice` and `response_format` members of every generation route fails it (a completion request's JSON output is forwarded unchecked);
+    - dropping the `tools` check for a `tool`-role message fails it.
+  - New test `nested_members_outside_the_subset_are_refused_before_reservation` (requirements 4 and 12). The model advertises every capability, so only the nested member is wrong. Each of these is refused before reservation (400 `unsupported_parameter`), with no request recorded, the account unchanged and nothing sent to the engine:
+    - a message carrying `reasoning_content`, `prefix` or `audio`;
+    - a text content part carrying `image_url`;
+    - `stream_options.continuous_usage_stats`, on chat and on completions;
+    - `grammar` inside `response_format` or inside a tool.
+
+    Each request without its nested member completes. Mutation: dropping the per-part member check (`fields(part, &["type", "text"])`) fails it.
+- [x] 3.5 Public inference authenticates before reading a body and bounds body reading separately from generation.
   - Existing evidence: `unauthenticated_incomplete_inference_bodies_are_not_polled`, `authorized_body_deadline_is_independent_of_generation_timeout`, `body_reader_saturation_never_queues_and_reclaims_slots_on_all_errors` and `sse_rejects_oversized_and_non_sse_events`.
   - Missing: a test that an authenticated request with `Content-Type: text/plain` and an incomplete body is refused without its body being polled.
-- [ ] 3.6 Inference failures surface honestly.
+
+  Done 2026-11-20: three library tests in `inference_gateway::tests`. The first is the missing case. The other two cover statements of the requirement that no existing test proved.
+  - `the_body_of_a_request_refused_for_its_content_type_or_scope_is_never_polled`. Each request declares a 100,000-byte body and sends only its first byte. On each inference route, these requests are refused within 1 s, while a body read would wait for the 5 s body deadline:
+    - an authenticated request with `Content-Type: text/plain`, with `multipart/form-data`, or with no `Content-Type` (415 `invalid_content_type`);
+    - a request with a `read`-only bearer and `application/json` (403 `credential_scope`).
+
+    Each body is never polled, and no request is recorded. Control: the same incomplete body with `application/json` and the `infer` bearer is polled. Mutations: skipping the `Content-Type` check fails it ("the refusal waited for the body"), and so does checking the `read` scope instead of `infer` in `infer`.
+  - `an_oversized_body_is_refused_with_or_without_a_declared_length_and_reserves_nothing`. On each route of a qualified model, a body of 256 KiB + 1 byte is streamed in two chunks, with and without `Content-Length`. The body is valid JSON padded with spaces, so that only its size is wrong. Each is refused with 413 `invalid_request_body`, with no request recorded, the account unchanged and no engine request. Control: the same body padded to exactly 256 KiB is admitted and completes. A declared length alone is not refused before its bytes arrive (current implementation behaviour): the refusal comes when the received bytes exceed the bound. Mutation: a limit one byte higher fails it.
+  - `a_slow_complete_upload_does_not_consume_the_generation_deadline_or_the_performance_clock`. With a 2 s generation timeout, a chat request whose body arrives in two parts 3 s apart completes, and its recorded elapsed time is below 2 s. Mutations: a generation deadline measured from the handler's start fails it (504 `tokenization_timeout`), and so does starting the performance clock before the body is read (elapsed 3,007,737 µs).
+
+  Existing evidence covers the rest of the requirement:
+  - `unauthenticated_incomplete_inference_bodies_are_not_polled`: authentication before the body;
+  - `body_reader_saturation_never_queues_and_reclaims_slots_on_all_errors`: refusal without queueing at the reader bound, and release of reader capacity on abort, transport error, oversize, malformed JSON and the deadline;
+  - `authorized_body_deadline_is_independent_of_generation_timeout`: the body deadline is independent of the generation timeout.
+
+  Task 3.6's saturation test also shows model admission without queueing. Each mutated file was restored by copy with a fresh mtime and compared byte-identical.
+
+  Review 2026-11-20: the tick stands. The original test did not prove "refused as soon as it exceeds the byte bound ... before anything beyond the bound is buffered": both of its oversized bodies end right after the excess byte. The review added a case to `an_oversized_body_is_refused_with_or_without_a_declared_length_and_reserves_nothing`. On each route, a body that exceeds the bound by one byte and then stalls, with more to come, is refused with 413 `invalid_request_body` within 1 s. Waiting for the rest would run into the 5 s body deadline. What follows the excess byte is never polled, and nothing is recorded or sent to the engine. Mutation: reading the body without a bound and checking its length afterwards (`DefaultBodyLimit::disable()` plus a length check) fails it ("the refusal waited for the rest of the body"). The test's two complete oversized bodies pass under that mutation, so only the new case catches it.
+- [x] 3.6 Inference failures surface honestly.
   - Existing evidence: `unauthenticated_incomplete_inference_bodies_are_not_polled`, `credential_cap_is_payment_error_not_ledger_failure`, `tokenized_input_must_leave_room_for_authorized_output`, `llama_streams_preserve_public_modes_hide_metadata_and_settle_only_valid_usage` (overshoot) and `body_reader_saturation_never_queues_and_reclaims_slots_on_all_errors`.
   - Missing, besides tasks 2.2, 2.3 and 2.4, router tests with a stub engine:
     - a paid account whose available balance is below the request's maximum cost is refused as insufficient credit, with no hold and no generation call;
@@ -107,6 +182,47 @@ Task 3.N corresponds to requirement N in the spec and to row N of the design cov
     - an engine whose `/health` fails makes a request fail as an unavailable engine before reservation, with no generated text;
     - a prompt whose tokens plus the output limit exceed the context is refused before reservation;
     - an engine stream that emits output and then an `error` event yields an error event to a reading client, and the request is not recorded as completed.
+
+  Done 2026-11-20: library tests in `inference_gateway::tests`. Each refusal is checked as in task 3.4: an error object only, no request for its key, and the account and its requests unchanged.
+  - `insufficient_prepaid_credit_is_refused_before_any_hold_or_generation`. It uses a paid account from the new helper `paid_account`: 1,000 wei of funding, 995 wei available, at 100 wei per token.
+    - A chat request whose maximum cost is 1,000 wei is refused with 402 `insufficient_balance`, and no hold is placed. Only `/health`, `/apply-template` and `/tokenize`, which price the request, reach the engine.
+    - A request of 900 wei is admitted and settled at the actual 300 wei.
+    - With 695 wei left, a completion of 700 wei is refused and one of 600 wei is admitted.
+
+    Mutation: removing the balance check in `BillingStore::reserve` fails it (500 `ledger_unavailable`).
+  - `a_request_while_the_model_slot_is_busy_is_refused_as_saturation_without_queueing`. One account's chat holds the model's only slot: one token has been streamed and the stream stays open. Meanwhile, another account's chat and completion requests are each answered within 2 s with 429 `model_saturated`, with no request recorded, no account change and no engine request. Once the held request is cancelled, the same account's request completes. Mutation: waiting for the slot (`acquire_owned().await` instead of `try_acquire_owned`) fails it ("queued behind the busy slot").
+  - `an_engine_failing_its_health_check_fails_the_request_before_reservation_without_generated_text`. For a qualified model whose engine's `/health` answers 503, chat and completion requests answer 503 `engine_unavailable`, and only the health check reaches the engine. For an engine whose origin no longer listens, they answer 502 `engine_error`. Neither case leaves a request record or generated text. Control: the healthy engine serves the request. Mutation: skipping `engine.ready()` fails it (the request completes with text from an engine that reported itself unhealthy).
+  - `a_prompt_plus_output_limit_beyond_the_context_is_refused_before_reservation`. With a context of 8 tokens and prompts that tokenize to two tokens:
+    - an output limit of 7 is refused with 400 `context_length_exceeded` on chat and completions, and nothing is dispatched for generation;
+    - a request without `max_tokens` is refused the same way, because its output limit defaults to the model's maximum of 8 (an implementation value of design decision 4);
+    - an output limit of 6 is admitted.
+
+    Mutation: loosening the gateway's context check fails it. The ledger's own check then refuses the request, but as 500 `ledger_unavailable`, not as a context overflow.
+  - `an_engine_stream_that_fails_after_output_began_reports_an_error_not_a_completion`. The engine streams `OK` and then an error, either as a `data:` event or as a non-SSE `error:` line.
+    - A client that keeps reading receives the output, then one error event with `engine_error` and type `server_error`, and no finish. None of the engine's own text reaches it. The request is recorded as `failed_unknown_usage`.
+    - A non-streaming request answers 502 `engine_error` with an error object only and no partial `OK`, and is recorded as `failed_unknown_usage` at cost 0.
+
+    Mutation: dropping the error event in `stream_worker` fails it (the stream ends cleanly after the output).
+
+  With tasks 2.2 to 2.4 and the existing evidence, each named failure is now covered:
+  - authentication: `unauthenticated_incomplete_inference_bodies_are_not_polled` and `bearers_outside_their_scope_or_lifetime_change_nothing_on_any_route`;
+  - invalid options and model mismatch: task 3.4's tests, and tasks 2.2 and 2.4;
+  - insufficient credit, saturation, context overflow and an unavailable engine: the tests above;
+  - a failed stream: the last test above, and task 2.3 for a client that stopped reading;
+  - an engine failure is reported as an engine failure, not as a client error: the last test above, task 3.12's `an_engine_failure_fails_on_the_contracted_engine_without_rerouting_or_retrying` and `app::tests::the_engine_origin_is_never_advertised_or_echoed`.
+
+  Each mutated file was restored by copy with a fresh mtime and compared byte-identical.
+
+  Review 2026-11-20: the tick stands.
+  - The scenario "An input that prepares to no tokens is not a context overflow" is proven by task 2.4's `a_prompt_prepared_into_no_tokens_is_refused_as_invalid_input_before_reservation`. That test checks the refusal code, no request record and no generation dispatch.
+  - The stream test accepted either one error event or an abnormal end, although the note above claims an error event. A client that keeps reading always has room in the bounded queue. The test now requires exactly one error event (`engine_error`, `server_error`) as the last event, so the failure is named to the client. An abnormal end alone is the fallback for a client that stopped reading (task 2.3).
+  - The stream test's failure messages no longer show the bearer.
+  - Further mutations, each caught:
+    - a context check off by one (`>=` in `Backend::tokenize`) fails the context test (the request at 2 + 6 = 8 is refused);
+    - taking the model slot only after the health check, template rendering and tokenization fails the saturation test (the refused request reaches the engine);
+    - tokenizing before the health check fails the health test (more than `GET /health` reaches the engine);
+    - a failed stream that ends with only `data: [DONE]` fails the stream test;
+    - reporting `insufficient_funds` as a ledger fault fails the credit test.
 - [ ] 3.7 GGUF provisioning derives endpoint capabilities from the task and the selected template.
   - Existing evidence: `test_generation_identity_and_embedded_template`, `test_embeddings_do_not_publish_chat_even_with_embedded_template`, `test_named_template_is_explicit_and_bound`, `test_template_identity_uses_effective_source_without_trimming_content`, `test_generation_rejects_embedding_model`, `engine_runtime::tests::embedding_inventory_rejects_selected_templates_even_when_hashes_match` and `immutable_template_and_base_model_must_match_configuration`.
   - Missing: a `scripts/test_provision_artifacts.py` test that a generation GGUF without any embedded template validates with capabilities `["completions"]` and no template file; and one that provisioning with the named `tool_use` template selected yields `["chat","completions"]`, without `tools`. Engine-side tokenization (no separate tokenizer) holds by inspection of `Backend::tokenize`.
@@ -133,9 +249,47 @@ Task 3.N corresponds to requirement N in the spec and to row N of the design cov
 - [ ] 3.11 Tool and structured-output requests are descriptions, and their results are data the provider never executes.
   - Existing evidence: `embedding_batch_and_schema_boundaries` (remote `$ref` refused).
   - Missing: a router test with a `tools` model and a stub engine streaming a `ping` call in fragments, in which a non-streaming response carries `message.tool_calls` with the reassembled name and arguments; a `prepare` test refusing a remote `$ref` inside a tool's `parameters` and inside `response_format.json_schema.schema`. That the provider executes nothing holds by inspection: no code path contacts anything but the configured engine.
-- [ ] 3.12 Requests stay within whole-model text inference on the provider's own engine.
+- [x] 3.12 Requests stay within whole-model text inference on the provider's own engine.
   - Existing evidence: `rejects_expansion_and_media_before_tokenization` (an `image_url` part).
   - Missing: `prepare` or router tests refusing `input_audio` and `file` content parts and a `lora` member before reservation. That a failed request is never sent to another provider or engine holds by inspection of `Backend::dispatch`.
+
+  Done 2026-11-20: library tests in `inference_gateway::tests`.
+  - `non_text_content_and_adapter_members_are_refused_before_reservation`. The refused requests are:
+    - chat content parts `image_url` (remote and data URL), `input_audio`, `file` (by identifier and as inline data) and `video_url`, each alone and after a text part;
+    - a `lora` member on chat, completions and embeddings.
+
+    Each is refused with 400 `unsupported_parameter`, with no request recorded, no account change and the engine's log empty. A message of two text parts completes. Mutations: skipping the content-part checks fails it (an `image_url` request completes), and so does allowlisting `lora`.
+  - `an_engine_failure_fails_on_the_contracted_engine_without_rerouting_or_retrying`. `alpha`'s engine fails every inference dispatch. The `alpha` account's chat (non-streaming and streaming), completion and embedding requests each answer 502 `engine_error` and are recorded as `failed_unknown_usage`. `alpha`'s engine received exactly one dispatch per request, and `beta`'s engine received nothing. `beta`'s account is then served by `beta`'s engine. Mutation: retrying a failed dispatch once in `execute` fails it ("chat: retried").
+
+  Each mutated file was restored by copy with a fresh mtime and compared byte-identical. Related evidence elsewhere:
+  - task 3.1's test answers file uploads and adapter or model loading (`/v1/files`, `/v1/uploads`, `/lora-adapters`, `/models/load`) as unknown endpoints;
+  - task 3.5's test refuses a multipart body.
+
+  That nothing is sent to another provider holds by inspection. The inference path sends requests only through `Backend`, whose client is built for the configured engine origin and refuses a non-private origin (`Backend::new`).
+
+  Review 2026-11-20: the tick stands. As the task's own text allows, one point rests on inspection: no request goes to another *provider*, because the gateway has no client for one. Further evidence and mutations:
+  - Mutation: rerouting a failed dispatch to another configured deployment's engine fails the rerouting test. The `alpha` chat answers 200 from `beta`'s engine.
+  - Mutation: dropping the per-part member check fails task 3.4's new `nested_members_outside_the_subset_are_refused_before_reservation`. A text part carrying `image_url` reaches the engine.
+  - Related evidence: `inference_backend::tests::an_engine_redirect_is_an_engine_failure_and_its_target_is_never_contacted` (`outbound-http-safeguards` task 3.7). An engine's redirect is not followed, so the contracted engine cannot send a request on to another listener.
+
+  Verification for tasks 3.1, 3.3 to 3.6 and 3.12, 2026-11-20:
+  - Changes: test code only, in `src-tauri/src/inference_gateway.rs` and `src-tauri/src/app.rs`. The existing helper `keyed` now takes a non-static key. No new test exposed a contradiction between the code and the spec, so no code difference was added to `design.md`.
+  - Mutations: 19, each caught by its test. Each mutated file was restored by copy with a fresh mtime and compared byte-identical.
+  - The library suite passed: 383 tests, with 12 ignored, all of them pre-existing subprocess helpers.
+  - `cargo check --locked --no-default-features --bins --tests` passes; the only warnings are pre-existing ones in integration-test support files.
+  - No integration target was changed. `inference_owner_control_test` was neither run nor edited.
+  - `openspec validate specify-public-inference-api --strict --no-interactive` passes.
+  - The whitepaper is unchanged (SHA-256 `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933`).
+
+  Review verification for tasks 3.1, 3.3 to 3.6 and 3.12, 2026-11-20:
+  - Ticks: all six stand. Each review note above names what was missing and what was added.
+  - Changes: test code only, in the test modules of `src-tauri/src/inference_gateway.rs` and `src-tauri/src/app.rs`. The product code of `inference_gateway.rs`, `inference_backend.rs`, `app.rs` and `billing_store.rs` is identical to `HEAD`. No new test exposed a contradiction between the code and the spec, so no code difference was added to `design.md`.
+  - Hygiene: no failure message can show a bearer. `assert_no_bearer` matches `chiral_` followed by 64 hexadecimal digits. `answer_of`, `assert_refused` and the stream and nested-member tests check each answer before any message can show it, and the 3.1 test checks each answer for its bearer in the same way.
+  - Mutations: 14 further mutations, each caught by its test. The runner restored each mutated file by copy with a fresh mtime and compared it byte-identical. The SHA-256 of each product file was then confirmed unchanged.
+  - The library suite passed: 384 tests, with 12 ignored, the same pre-existing subprocess helpers.
+  - `cargo check --locked --no-default-features --bins --tests` passes; its only warnings are pre-existing ones in `tests/support/proposal.rs` and `tests/inference_owner_control_test.rs`, which were not edited.
+  - No integration target was changed. `inference_owner_control_test` was neither run nor edited.
+  - `openspec validate specify-public-inference-api --strict --no-interactive` passes, and the whitepaper is unchanged (same SHA-256).
 
 ## 4. Qualify and integrate
 

@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-20 (sixty-seventh round) — Acceptance: public surface, agreement-scoped listing, capability admission, body handling, honest failures, text-only inference
+
+- In step at `08fcbbd3`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-public-inference-api` 3.1, 3.3, 3.4, 3.5, 3.6 and 3.12; 3.2 and 3.7–3.11 follow). Sixteen new tests on a counting, recording stub engine (`CountingEngine`):
+  - 3.1: the merged `ProviderRuntime::public_router` answers 404 to 21 engine and arbitrary paths (GET and POST, with no, an invalid and the valid bearer) and to 11 out-of-scope OpenAI surfaces, with no engine request and no record.
+  - 3.3: with two ready deployments and one account on each, each bearer lists only its own model, including when only the other deployment is ready.
+  - 3.4: another model, a route the agreement does not advertise (with and without `max_tokens`), tools and structured output without their capabilities (also on `/v1/completions`), 35 engine-only members and members nested inside allowed ones are refused before reservation with no engine call.
+  - 3.5: requests refused for their content type or scope never have their body polled; an oversized body is refused with or without a declared length, including one that stalls after the excess byte; a slow upload consumes neither the generation deadline nor the performance clock.
+  - 3.6: insufficient credit (402, no hold), a busy slot (429 without queueing), a failed health check (before reservation), a context overflow (before reservation) and a stream that fails after output began (exactly one error event, last, and `failed_unknown_usage`) surface honestly.
+  - 3.12: image, audio, file and video parts and a `lora` member are refused before reservation; an engine failure fails on the contracted engine after one dispatch, with no retry or reroute.
+- The first review stopped when the login expired. I checked that every product file was identical to HEAD (no mutation left applied) and resumed it with a note about its unfinished test edits; the second review completed them. Together the reviews found mutations that passed (a fallback to another ready deployment, an allowlisted `n_predict`, a missing capability check masked by an embedding output limit of zero, an unbounded body read, a dropped per-part member check, an abnormal end accepted instead of an error event) and added cases until each failed. Failure messages check for bearers before showing an answer.
+- No product code changed and no code difference was found. Recorded as implementation behaviour: a declared `Content-Length` over the bound is refused only when the bytes arrive, and `/v1/completions` refuses tools and `response_format` even when advertised. Never sending a request to another provider holds by inspection (the gateway has no client for one).
+- Checks: `--lib` 384 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; strict validation passes. The integration suite was not rerun: every change is in library test modules (no non-test hunk, checked), which integration targets and binaries do not compile.
+
 ## 2026-11-20 (sixty-sixth round) — Acceptance: native credential store, credential commands, rotating the default
 
 - In step at `2ce79dc5`; whitepaper unchanged; no new answers.
@@ -739,7 +753,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api 3.2 and 3.7–3.11, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

@@ -3122,4 +3122,153 @@ mod tests {
             server.abort();
         }
     }
+
+    /// public-inference-api requirement 1 (task 3.1), through the merged public router
+    /// (`ProviderRuntime::public_router`) of a ready, non-development provider with one external
+    /// embedding deployment and one free account. Its private engine records every request it
+    /// receives; besides `/tokenize`, `/props`, `/health`, `/v1/models` and `/v1/embeddings` it
+    /// answers every other path, `/apply-template`, `/metrics`, `/slots` and `/completion`
+    /// included, with a private marker, so a forwarded path would reach it.
+    /// - Engine paths (tokenization, template rendering, properties, metrics, slots and a slot
+    ///   action, the native completion, infill, embedding and rerank routes and their aliases,
+    ///   adapter loading, health, model loading and management) and arbitrary paths, each with
+    ///   `GET` and `POST`, with no bearer, an invalid one and the account's valid bearer, are
+    ///   answered as an unknown endpoint (404 `not_found`, design decision 4) without the
+    ///   marker.
+    /// - The out-of-scope OpenAI surfaces (Responses, images, audio, video, files and uploads,
+    ///   batches, fine-tuning), with `GET` and `POST` and the valid bearer, are answered the same
+    ///   way.
+    ///
+    /// Throughout, the engine receives no request, no request is recorded and the account is
+    /// unchanged. Positive control: the same router serves the six implemented endpoints:
+    /// `GET /v1/models` lists the model, `POST /v1/embeddings` completes through the engine,
+    /// `GET /v1/requests/:id` and `POST /v1/requests/:id/cancel` answer for that request, and
+    /// `POST /v1/chat/completions` and `POST /v1/completions` are routed, and refused before
+    /// reservation because the model advertises only `embeddings`.
+    #[tokio::test]
+    async fn the_public_router_serves_no_engine_or_out_of_scope_route() {
+        use tower::ServiceExt;
+        const MARKER: &str = "private-engine-route";
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let (rpc, rpc_server) = serve(Router::new().fallback(ready_chain)).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        let reached = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let engine = embeddings_engine(model.model.clone())
+            .fallback(|| async { Json(json!({ "route": MARKER })) })
+            .layer(middleware::from_fn({
+                let reached = reached.clone();
+                move |request: Request, next: Next| {
+                    let reached = reached.clone();
+                    async move {
+                        reached.lock().unwrap().push(format!("{} {}", request.method(), request.uri()));
+                        next.run(request).await
+                    }
+                }
+            }));
+        let (engine_url, engine_server) = serve(engine).await;
+        model.engine_url = engine_url;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert!(runtime.health.read().await[0].ready);
+        let (contract, bearer) = free_account(&runtime.state, "22");
+        let app = runtime.public_router();
+        let observed = || json!({
+            "engine": reached.lock().unwrap().clone(),
+            "account": runtime.state.ledger.account(&contract).unwrap(),
+            "requests": runtime.state.ledger.list_requests().unwrap(),
+        });
+        let call = |method: &str, path: &str, credential: Option<&str>| {
+            let mut request = Request::builder().method(method).uri(path);
+            if let Some(credential) = credential {
+                request = request.header(header::AUTHORIZATION, format!("Bearer {credential}"));
+            }
+            let body = if method == "POST" {
+                request = request.header(header::CONTENT_TYPE, "application/json")
+                    .header("idempotency-key", protocol::random_id());
+                axum::body::Body::from(json!({"model": "model", "input": "hello"}).to_string())
+            } else {
+                axum::body::Body::empty()
+            };
+            let app = app.clone();
+            let request = request.body(body).unwrap();
+            let credential = credential.map(str::to_owned);
+            async move {
+                let response = app.oneshot(request).await.unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                // Checked before any failure message can show the answer.
+                assert!(credential.is_none_or(|credential| !text.contains(&credential)), "the answer contains the bearer");
+                (status, text)
+            }
+        };
+        let before = observed();
+        let engine_paths = [
+            "/tokenize", "/detokenize", "/apply-template", "/props", "/metrics", "/slots",
+            "/slots/0?action=erase", "/completion", "/completions", "/chat/completions", "/infill",
+            "/embedding", "/embeddings", "/rerank", "/v1/rerank", "/lora-adapters", "/health",
+            "/models", "/models/load", "/v1/engine/props", "/engine/v1/chat/completions",
+        ];
+        let out_of_scope = [
+            "/v1/responses", "/v1/images/generations", "/v1/images/edits", "/v1/audio/transcriptions",
+            "/v1/audio/translations", "/v1/audio/speech", "/v1/videos", "/v1/files", "/v1/uploads",
+            "/v1/batches", "/v1/fine_tuning/jobs",
+        ];
+        let credentials = [None, Some("invalid-account-bearer"), Some(bearer.as_str())];
+        let cases = engine_paths.iter().flat_map(|path| credentials.iter().map(move |credential| (*path, *credential)))
+            .chain(out_of_scope.iter().map(|path| (*path, Some(bearer.as_str()))));
+        for (path, credential) in cases {
+            for method in ["GET", "POST"] {
+                let case = format!("{method} {path} with {}", match credential {
+                    None => "no bearer",
+                    Some(credential) if credential == bearer => "the valid bearer",
+                    Some(_) => "an invalid bearer",
+                });
+                let (status, text) = call(method, path, credential).await;
+                assert!(!text.contains(&bearer), "{case}: the answer contains the bearer");
+                assert_eq!(status, StatusCode::NOT_FOUND, "{case}: {text}");
+                let answer: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(answer, json!({"error": {"message": "Unknown API endpoint",
+                    "type": "invalid_request_error", "param": null, "code": "not_found"}}), "{case}");
+                assert!(!text.contains(MARKER), "{case}: forwarded to the engine");
+                assert_eq!(observed(), before, "{case}: the engine, the account or the requests changed");
+            }
+        }
+
+        // Positive control: the implemented endpoints are served by the same router.
+        let (status, text) = call("GET", "/v1/models", Some(&bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["data"][0]["id"], "model");
+        let response = app.clone().oneshot(Request::builder().method("POST").uri("/v1/embeddings")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("idempotency-key", "served")
+            .body(axum::body::Body::from(json!({"model": "model", "input": "hello"}).to_string()))
+            .unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let engine = reached.lock().unwrap().clone();
+        assert_eq!(engine[before["engine"].as_array().unwrap().len()..], ["GET /health", "POST /tokenize", "POST /v1/embeddings"]);
+        for (method, path) in [("GET", "/v1/requests/served"), ("POST", "/v1/requests/served/cancel")] {
+            let (status, text) = call(method, path, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::OK, "{method} {path}: {text}");
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["status"], "completed", "{method} {path}");
+        }
+        for path in ["/v1/chat/completions", "/v1/completions"] {
+            let (status, text) = call("POST", path, Some(&bearer)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {text}");
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["error"]["code"], "unsupported_parameter");
+        }
+        assert_eq!(*reached.lock().unwrap(), engine);
+        assert_eq!(runtime.state.ledger.list_requests().unwrap().len(), 1);
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
+            server.abort();
+        }
+    }
 }
