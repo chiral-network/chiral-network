@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-20 (sixty-sixth round) — Acceptance: native credential store, credential commands, rotating the default
+
+- In step at `2ce79dc5`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-account-credentials` 3.7, 3.8 and 3.9). New tests:
+  - 3.7 (Unix): after a native opening, issuance, rotation and one dispatch, the consumer root, account directory and account file are owner-only and network-scoped, and no other file under `data_dir` holds any issued secret in its contents or its name (request-key file, wallet journal, temporary files included); an account file or directory that is group- or other-accessible, or replaced by a symbolic link, makes export, list, issue, rotate, revoke and infer fail closed with no provider request and nothing repaired.
+  - 3.8: native issue and rotate return only `{contract_id, expires_at, id}`, revoke only `{revoked}`, and lists no secret member; only `credential_export` returns the secret; eight failure paths hold no secret. New integration target `inference_cli_credentials_test` runs each `chiral credentials` command as a process against the production routers: one JSON document of metadata and an empty stderr on success, empty stdout and one `chiral:` line on failure, and `export` prints exactly the five members with an `api_key` that authenticates as that credential.
+  - 3.9: rotating an expired or provider-revoked default with `infer` (alone or with `read`) makes the replacement the default for export and native inference, across a restart, with no fallback to another stored credential; a read-only rotation never becomes the default (the review added the infer-only case).
+- The review found three mutations that passed (protection checks ignoring "other" permission bits, a request-key file named after the bearer, activation requiring both scopes) and added cases until each failed.
+- No product code changed and no code difference was found. 3.9 is ticked. 3.7 stays open only for the native Windows run; 3.8 only for the automated runs of `examples/openai_client.py` and `examples/openai-client.mjs`, blocked because neither the Python nor the Node `openai` package is installed here (not installed, per the rules). Refusal of a store owned by another user holds by inspection of the uid checks (a test would need a second account).
+- Observation, not a code difference: the consumer root is checked only when a `Consumer` is created, so a long-running desktop consumer does not recheck it per operation (the account directory and file are checked on every operation, and the CLI rechecks the root in every process). Replacing the root needs the same user's privileges; no scenario of the spec covers it.
+- Checks: `--lib` 367 passed, 12 ignored (helpers), 0 failed; `inference_cli_credentials_test` 1/1; bins build and `cargo check --tests` pass; strict validation passes. Other integration targets were not rerun: the only other change is library test code, which they do not compile.
+
 ## 2026-11-20 (sixty-fifth round) — Acceptance: credential options, hashed secrets, bearer scope and lifetime, rotation, limits, management without admission
 
 - In step at `7fdc4436`; whitepaper unchanged; no new answers.
@@ -727,7 +739,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials 3.7–3.9 (3.1–3.6 done), public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api, provider-daemon-lifecycle and no-background-start. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
 

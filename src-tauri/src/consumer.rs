@@ -2991,6 +2991,9 @@ mod tests {
         balance: std::sync::Mutex<u128>,
         /// Every provider control request received, challenges included, as method and path.
         controls: std::sync::Mutex<Vec<String>>,
+        /// Every inference request received: the identifier of the provider credential whose
+        /// secret it presented (`unknown` for none) and the request body.
+        inferences: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3351,12 +3354,22 @@ mod tests {
     async fn funding_infer(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
         headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
     ) -> (axum::http::StatusCode, axum::Json<Value>) {
         let bearer = headers
             .get("authorization")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "));
         let credentials = state.credentials.lock().unwrap();
+        let presented = credentials
+            .iter()
+            .find(|(key, _)| Some(key.bearer.as_str()) == bearer)
+            .map_or_else(|| "unknown".to_string(), |(key, _)| key.id.clone());
+        state
+            .inferences
+            .lock()
+            .unwrap()
+            .push((presented, body.to_vec()));
         let valid = credentials.iter().any(|(key, view)| {
             Some(key.bearer.as_str()) == bearer
                 && !view.revoked
@@ -3437,6 +3450,7 @@ mod tests {
             credited_topups: std::sync::Mutex::new(std::collections::HashMap::new()),
             balance: std::sync::Mutex::new(u128::MAX),
             controls: std::sync::Mutex::new(Vec::new()),
+            inferences: std::sync::Mutex::new(Vec::new()),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -3819,6 +3833,600 @@ mod tests {
                 consumer.infer(id, "chat", json!({})).await.unwrap()["accepted"],
                 true
             );
+            task.abort();
+        }
+    }
+    /// Whether `haystack` holds `secret`, as given or in upper case.
+    fn holds_secret(haystack: &[u8], secret: &str) -> bool {
+        [secret.to_owned(), secret.to_uppercase()]
+            .iter()
+            .any(|form| haystack.windows(form.len()).any(|window| window == form.as_bytes()))
+    }
+    /// Every secret the fixture provider issued for its account, revoked ones included.
+    fn provider_secrets(state: &FundingFixture) -> Vec<String> {
+        state
+            .credentials
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(credential, _)| credential.bearer.clone())
+            .collect()
+    }
+    /// The fixture provider's secret for one credential identifier.
+    fn provider_secret(state: &FundingFixture, id: &str) -> String {
+        state
+            .credentials
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(credential, _)| credential.id == id)
+            .map(|(credential, _)| credential.bearer.clone())
+            .unwrap()
+    }
+    /// `error`, for a failure message, once it is shown to hold none of the fixture
+    /// provider's secrets.
+    fn shown(state: &FundingFixture, error: &str) -> String {
+        assert!(
+            provider_secrets(state)
+                .iter()
+                .all(|secret| !holds_secret(error.as_bytes(), secret)),
+            "an error holds a credential secret"
+        );
+        error.to_owned()
+    }
+    /// The message of an expected refusal. A success panics with this text alone, never
+    /// with the returned value, which could carry a secret.
+    const REFUSAL: &str = "the operation succeeded instead of being refused";
+    /// The members of a JSON object.
+    fn members(value: &Value) -> std::collections::BTreeSet<String> {
+        value.as_object().unwrap().keys().cloned().collect()
+    }
+    fn names(list: &[&str]) -> std::collections::BTreeSet<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+    /// Every entry under `root`, without following links: its path, kind, permission bits,
+    /// and the contents of a file or the target of a link.
+    #[cfg(unix)]
+    fn store_snapshot(root: &Path) -> Vec<(PathBuf, &'static str, u32, Vec<u8>)> {
+        use std::os::unix::fs::MetadataExt;
+        let mut entries = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            let (kind, content) = if metadata.file_type().is_symlink() {
+                let target = fs::read_link(&path).unwrap();
+                ("link", target.to_string_lossy().into_owned().into_bytes())
+            } else if metadata.is_dir() {
+                for entry in fs::read_dir(&path).unwrap() {
+                    pending.push(entry.unwrap().path());
+                }
+                ("directory", Vec::new())
+            } else {
+                ("file", fs::read(&path).unwrap())
+            };
+            entries.push((path, kind, metadata.mode() & 0o7777, content));
+        }
+        entries.sort();
+        entries
+    }
+    /// account-credentials requirement 7 (task 3.7), on Unix. After a native paid opening,
+    /// two issuances, a rotation and one inference dispatch, the account store's
+    /// directories and its account file belong to this user with no group or other
+    /// permission, the account file is a regular file holding each stored secret, and no
+    /// other file under the profile's `data_dir` (the request-key file, the wallet journal,
+    /// the wallet key and the lock file included), no file or directory name there, and not
+    /// the inference body, holds any secret the provider issued, the rotated-away one
+    /// included.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_credential_secrets_live_only_in_the_owner_only_account_file() {
+        use std::os::unix::fs::MetadataExt;
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let root = consumer.credential_export(id, None).unwrap()["credential_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let issued = consumer
+            .credential_issue(id, credential_options(&["infer", "read"]))
+            .await
+            .unwrap();
+        let read_only = consumer
+            .credential_issue(id, credential_options(&["read"]))
+            .await
+            .unwrap();
+        let replacement = consumer
+            .credential_rotate(id, read_only["id"].as_str().unwrap(), credential_options(&["read"]))
+            .await
+            .unwrap();
+        let prompt = json!({"messages":[{"role":"user","content":"protected store check"}]});
+        assert_eq!(consumer.infer(id, "chat", prompt).await.unwrap()["accepted"], true);
+        let inferences = state.inferences.lock().unwrap().clone();
+        assert_eq!(inferences.len(), 1);
+        assert_eq!(inferences[0].0, root, "the dispatch presented the native default");
+        assert_eq!(
+            consumer.local_requests(id).unwrap()["requests"].as_array().unwrap().len(),
+            1
+        );
+
+        let euid = unsafe { libc::geteuid() };
+        let account_path = consumer.account_path(id).unwrap();
+        let account_directory = consumer.account_directory().unwrap();
+        assert_eq!(account_path.parent(), Some(account_directory.as_path()));
+        // The store is scoped to the profile's network identity.
+        let scoped = consumer.config.network.scoped_dir(directory.path());
+        assert_ne!(scoped, directory.path());
+        assert!(account_path.starts_with(scoped.join("consumer")));
+        for path in [&consumer.root, &account_directory] {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.is_dir() && !metadata.file_type().is_symlink(), "{}", path.display());
+            assert_eq!(metadata.mode() & 0o077, 0, "{} has group or other permission", path.display());
+            assert_eq!(metadata.uid(), euid, "{} is not owned by this user", path.display());
+        }
+        let metadata = fs::symlink_metadata(&account_path).unwrap();
+        assert!(metadata.file_type().is_file(), "the account file is not a regular file");
+        assert_eq!(metadata.mode() & 0o077, 0, "the account file has group or other permission");
+        assert_eq!(metadata.uid(), euid, "the account file is not owned by this user");
+
+        // Each stored secret is the provider's, is in the account file and is exportable.
+        let stored = fs::read(&account_path).unwrap();
+        for credential in [
+            root.as_str(),
+            issued["id"].as_str().unwrap(),
+            replacement["id"].as_str().unwrap(),
+        ] {
+            let exported = consumer.credential_export(id, Some(credential)).unwrap();
+            let secret = provider_secret(&state, credential);
+            assert!(exported["api_key"] == secret.as_str(), "{credential}: export is not the provider's secret");
+            assert!(holds_secret(&stored, &secret), "{credential}: secret is not in the account file");
+        }
+
+        let secrets = provider_secrets(&state);
+        assert_eq!(secrets.len(), 4, "opening, two issuances and one rotation");
+        let entries = store_snapshot(directory.path());
+        assert!(
+            entries.iter().all(|(_, kind, _, _)| *kind != "link"),
+            "a symbolic link under data_dir"
+        );
+        // No name under data_dir holds a secret. This runs before any message names a path,
+        // and its own message names none, since such a path would hold the secret.
+        for (path, ..) in &entries {
+            for secret in &secrets {
+                assert!(
+                    !holds_secret(path.to_string_lossy().as_bytes(), secret),
+                    "a file or directory name under data_dir holds a credential secret"
+                );
+            }
+        }
+        let files: Vec<_> = entries.iter().filter(|(_, kind, _, _)| *kind == "file").collect();
+        for (path, _, _, bytes) in &files {
+            if *path == account_path {
+                continue;
+            }
+            for secret in &secrets {
+                assert!(!holds_secret(bytes, secret), "{} holds a credential secret", path.display());
+            }
+        }
+        // The search covered the request-key file, the wallet journal, the key and the lock.
+        let requests = account_directory.join("requests");
+        assert_eq!(
+            files.iter().filter(|(path, ..)| path.parent() == Some(requests.as_path())).count(),
+            1,
+            "one request-key file"
+        );
+        for searched in ["wallet-journal", "wallet.key", "consumer.lock"] {
+            assert!(
+                files.iter().any(|(path, ..)| path.components().any(|part| part.as_os_str() == searched)),
+                "{searched} is searched"
+            );
+        }
+        for secret in &secrets {
+            assert!(!holds_secret(&inferences[0].1, secret), "the inference body holds a secret");
+        }
+        task.abort();
+    }
+    /// account-credentials requirement 7 (task 3.7), on Unix. An account file readable by
+    /// the user's group, one readable by others only, an account file replaced by a
+    /// symbolic link to a protected copy, an account directory with group permission, one
+    /// with other permission only, and an account directory replaced by a symbolic link to
+    /// a protected copy each make export (default and named), the credential list,
+    /// issuance, rotation, revocation and inference fail with that protection error before
+    /// any provider request. The file, the directory, the link and its target are left
+    /// exactly as found (not widened, repaired or replaced). Repaired by hand, the same
+    /// store then works again, so the refusal came from the protection alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unprotected_or_linked_account_store_fails_closed_without_contacting_the_provider() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, true).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let original = consumer.credential_export(id, None).unwrap();
+        let credential_id = original["credential_id"].as_str().unwrap().to_owned();
+        let account_path = consumer.account_path(id).unwrap();
+        let account_directory = account_path.parent().unwrap().to_path_buf();
+        // A protected place outside the store for the targets of the links.
+        let elsewhere = directory.path().join("elsewhere");
+        wallet::secure_directory(&elsewhere).unwrap();
+        let linked_file = elsewhere.join("account.json");
+        let linked_directory = elsewhere.join("accounts");
+        let provider = || -> Vec<(String, bool, u64)> {
+            state
+                .credentials
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(credential, view)| (credential.id.clone(), view.revoked, view.expires_at))
+                .collect()
+        };
+        let provider_before = provider();
+        fn mode(path: &Path, bits: u32) {
+            fs::set_permissions(path, fs::Permissions::from_mode(bits)).unwrap()
+        }
+        for case in [
+            "group-readable file",
+            "other-readable file",
+            "linked file",
+            "group-accessible directory",
+            "other-accessible directory",
+            "linked directory",
+        ] {
+            let expected = match case {
+                "group-readable file" => {
+                    mode(&account_path, 0o640);
+                    "secret file must be owned by this user with no group/other permissions"
+                }
+                "other-readable file" => {
+                    mode(&account_path, 0o604);
+                    "secret file must be owned by this user with no group/other permissions"
+                }
+                "linked file" => {
+                    fs::rename(&account_path, &linked_file).unwrap();
+                    symlink(&linked_file, &account_path).unwrap();
+                    "cannot open protected secret file"
+                }
+                "group-accessible directory" => {
+                    mode(&account_directory, 0o750);
+                    "private directory must belong to this user and have mode 0700"
+                }
+                "other-accessible directory" => {
+                    mode(&account_directory, 0o705);
+                    "private directory must belong to this user and have mode 0700"
+                }
+                _ => {
+                    fs::rename(&account_directory, &linked_directory).unwrap();
+                    symlink(&linked_directory, &account_directory).unwrap();
+                    "private directory cannot be a symlink"
+                }
+            };
+            let store = || (store_snapshot(&consumer.root), store_snapshot(&elsewhere));
+            let found = store();
+            state.controls.lock().unwrap().clear();
+            state.inferences.lock().unwrap().clear();
+            let outcomes = [
+                ("export", consumer.credential_export(id, None).map(drop)),
+                (
+                    "export by identifier",
+                    consumer.credential_export(id, Some(&credential_id)).map(drop),
+                ),
+                ("list", consumer.credentials(id).await.map(drop)),
+                (
+                    "issue",
+                    consumer
+                        .credential_issue(id, credential_options(&["infer", "read"]))
+                        .await
+                        .map(drop),
+                ),
+                (
+                    "rotate",
+                    consumer
+                        .credential_rotate(id, &credential_id, credential_options(&["infer", "read"]))
+                        .await
+                        .map(drop),
+                ),
+                ("revoke", consumer.credential_revoke(id, &credential_id).await.map(drop)),
+                (
+                    "infer",
+                    consumer.infer(id, "chat", json!({"messages":[]})).await.map(drop),
+                ),
+            ];
+            for (operation, outcome) in outcomes {
+                let Err(error) = outcome else {
+                    panic!("{case}: {operation} succeeded");
+                };
+                assert_eq!(shown(&state, &error), expected, "{case}: {operation}");
+            }
+            assert!(
+                state.controls.lock().unwrap().is_empty(),
+                "{case}: a provider control request was sent"
+            );
+            assert!(
+                state.inferences.lock().unwrap().is_empty(),
+                "{case}: an inference request was sent"
+            );
+            assert_eq!(provider(), provider_before, "{case}: provider credentials changed");
+            assert!(store() == found, "{case}: the store, the link or its target changed");
+            match case {
+                "group-readable file" | "other-readable file" => mode(&account_path, 0o600),
+                "linked file" => {
+                    fs::remove_file(&account_path).unwrap();
+                    fs::rename(&linked_file, &account_path).unwrap();
+                }
+                "group-accessible directory" | "other-accessible directory" => {
+                    mode(&account_directory, 0o700)
+                }
+                _ => {
+                    fs::remove_file(&account_directory).unwrap();
+                    fs::rename(&linked_directory, &account_directory).unwrap();
+                }
+            }
+            assert!(
+                consumer.credential_export(id, None).unwrap() == original,
+                "{case}: the repaired store does not export its default"
+            );
+        }
+        task.abort();
+    }
+    /// account-credentials requirement 8 (task 3.8). The native operations that the CLI
+    /// commands `credentials list`, `issue`, `rotate` and `revoke` and the desktop
+    /// operations `credentials`, `credential_issue`, `credential_rotate` and
+    /// `credential_revoke` return (desktop.rs passes their results and errors through)
+    /// carry metadata only, and so do their failures, before any provider request and at a
+    /// lost provider. Issuance and rotation return exactly the identifier, account and
+    /// expiry. The rotation's replacement secret is stored and only `credential_export`
+    /// returns it, with the base URL and the model.
+    #[tokio::test]
+    async fn native_credential_management_returns_metadata_and_only_export_reveals_a_secret() {
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, true).await;
+        let id = &saved.quote.payload.id;
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let root = consumer.credential_export(id, None).unwrap()["credential_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut results = vec![("list", consumer.credentials(id).await.unwrap())];
+        let issued = consumer
+            .credential_issue(id, credential_options(&["infer", "read"]))
+            .await
+            .unwrap();
+        let issued_id = issued["id"].as_str().unwrap().to_owned();
+        results.push(("issue", issued));
+        let rotated = consumer
+            .credential_rotate(id, &issued_id, credential_options(&["infer", "read"]))
+            .await
+            .unwrap();
+        let rotated_id = rotated["id"].as_str().unwrap().to_owned();
+        results.push(("rotate", rotated));
+        let spare = consumer
+            .credential_issue(id, credential_options(&["read"]))
+            .await
+            .unwrap();
+        let spare_id = spare["id"].as_str().unwrap().to_owned();
+        results.push(("issue read-only", spare));
+        let revoked = consumer.credential_revoke(id, &spare_id).await.unwrap();
+        assert!(revoked == json!({"revoked":true}), "the revocation result is not {{\"revoked\":true}}");
+        results.push(("revoke", revoked));
+        results.push(("list again", consumer.credentials(id).await.unwrap()));
+
+        let metadata = names(&["contract_id", "expires_at", "id"]);
+        for (operation, result) in &results[1..4] {
+            assert_eq!(members(result), metadata, "{operation}");
+            assert_eq!(result["contract_id"], id.as_str(), "{operation}");
+        }
+        let listed = results[5].1.as_array().unwrap();
+        assert_eq!(listed.len(), 4);
+        for entry in listed {
+            let entry = members(entry);
+            for member in ["bearer", "api_key", "token_hash", "secret"] {
+                assert!(!entry.contains(member), "a list entry carries {member}");
+            }
+            assert!(entry.contains("id") && entry.contains("scopes") && entry.contains("revoked"));
+        }
+
+        // The rotation's replacement: stored, exportable, the provider's secret.
+        let exported = consumer.credential_export(id, Some(&rotated_id)).unwrap();
+        assert_eq!(
+            members(&exported),
+            names(&["api_key", "base_url", "contract_id", "credential_id", "model"])
+        );
+        let replacement_secret = provider_secret(&state, &rotated_id);
+        assert!(exported["api_key"] == replacement_secret.as_str(), "export is not the replacement's secret");
+        assert_eq!(exported["credential_id"], rotated_id.as_str());
+        assert_eq!(exported["model"], saved.quote.payload.model.id.as_str());
+        assert_eq!(exported["base_url"], format!("{}/v1", saved.offer.payload.endpoint));
+        assert!(holds_secret(
+            &private_read(&consumer.account_path(id).unwrap()).unwrap(),
+            &replacement_secret
+        ));
+
+        // Failing runs, before any provider request, and then at a lost provider.
+        let positional = json!([protocol::now().unwrap() + 3600, null, 1, ["read"]]);
+        let mut errors = vec![
+            (
+                "issue with positional options",
+                consumer.credential_issue(id, positional.clone()).await.err().expect(REFUSAL),
+            ),
+            (
+                "rotate with positional options",
+                consumer.credential_rotate(id, &rotated_id, positional).await.err().expect(REFUSAL),
+            ),
+            (
+                "export of an unknown credential",
+                consumer.credential_export(id, Some("unknown-credential")).err().expect(REFUSAL),
+            ),
+            (
+                "list of an unknown account",
+                consumer.credentials(&format!("0x{}", "02".repeat(32))).await.err().expect(REFUSAL),
+            ),
+        ];
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        errors.push(("list", consumer.credentials(id).await.err().expect(REFUSAL)));
+        errors.push((
+            "issue",
+            consumer.credential_issue(id, credential_options(&["infer"])).await.err().expect(REFUSAL),
+        ));
+        errors.push((
+            "rotate",
+            consumer
+                .credential_rotate(id, &rotated_id, credential_options(&["infer"]))
+                .await
+                .err().expect(REFUSAL),
+        ));
+        errors.push(("revoke", consumer.credential_revoke(id, &rotated_id).await.err().expect(REFUSAL)));
+
+        let secrets = provider_secrets(&state);
+        assert_eq!(secrets.len(), 4, "opening, two issuances and one rotation");
+        for (operation, result) in &results {
+            let text = result.to_string();
+            for secret in &secrets {
+                assert!(!holds_secret(text.as_bytes(), secret), "the {operation} result holds a secret");
+            }
+        }
+        for (operation, error) in &errors {
+            for secret in &secrets {
+                assert!(!holds_secret(error.as_bytes(), secret), "the failed {operation} holds a secret");
+            }
+        }
+        assert_eq!(errors[0].1, "invalid credential options");
+        assert_eq!(errors[4].1, "owner challenge unavailable");
+        // The failures changed nothing stored: the default and the replacement remain.
+        assert_eq!(consumer.credential_export(id, None).unwrap()["credential_id"], root.as_str());
+        assert!(consumer.credential_export(id, Some(&rotated_id)).unwrap()["api_key"] == replacement_secret.as_str());
+    }
+    /// account-credentials requirement 9 (task 3.9). Rotating a native default that has
+    /// expired (at its provider and in its stored record), or that its provider has
+    /// revoked, with `infer` and `read` makes the replacement the default: native inference
+    /// presents the replacement's secret and an export without an identifier returns it,
+    /// also after a restart. Any replacement with `infer` becomes the default, so a valid
+    /// default rotated with `infer` alone is replaced the same way. A read-only replacement
+    /// of a valid default is never the default. Until a rotation restores the default, no
+    /// other stored credential, not even a valid inference-capable one, silently takes its
+    /// place.
+    #[tokio::test]
+    async fn rotating_the_native_default_keeps_a_usable_default() {
+        for case in ["expired", "revoked", "infer-only replacement", "read-only replacement"] {
+            let directory = tempfile::tempdir().unwrap();
+            let (consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, true).await;
+            let id = &saved.quote.payload.id;
+            consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+            let original = consumer.credential_export(id, None).unwrap();
+            let default = original["credential_id"].as_str().unwrap().to_owned();
+            // A valid, inference-capable stored credential that is not the default.
+            let spare = consumer
+                .credential_issue(id, credential_options(&["infer", "read"]))
+                .await
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(
+                consumer.credential_export(id, None).unwrap() == original,
+                "{case}: issuance replaced a valid default"
+            );
+            let now = protocol::now().unwrap();
+            for (credential, view) in state.credentials.lock().unwrap().iter_mut() {
+                if credential.id == default {
+                    match case {
+                        "expired" => view.expires_at = now - 1,
+                        "revoked" => view.revoked = true,
+                        _ => {}
+                    }
+                }
+            }
+            if case == "expired" {
+                let mut stored = consumer.load_account(id).unwrap();
+                stored
+                    .credentials
+                    .iter_mut()
+                    .find(|credential| credential.id == default)
+                    .unwrap()
+                    .expires_at = now - 1;
+                consumer.save_account(&stored).unwrap();
+            }
+            let dispatched = || -> Vec<String> {
+                state.inferences.lock().unwrap().iter().map(|(id, _)| id.clone()).collect()
+            };
+            state.inferences.lock().unwrap().clear();
+            if matches!(case, "expired" | "revoked") {
+                // Before the rotation nothing replaces the unusable default.
+                let refused = consumer.infer(id, "chat", json!({"messages":[]})).await.err().expect(REFUSAL);
+                if case == "expired" {
+                    assert!(refused.starts_with("credential expired"), "{case}: {}", shown(&state, &refused));
+                    assert!(dispatched().is_empty(), "{case}: {:?}", dispatched());
+                    let refused = consumer.credential_export(id, None).err().expect(REFUSAL);
+                    assert!(refused.starts_with("credential expired"), "{case}: {}", shown(&state, &refused));
+                } else {
+                    assert!(refused.starts_with("invalid_credential:"), "{case}: {}", shown(&state, &refused));
+                    assert_eq!(dispatched(), [default.clone()], "{case}: only the default was presented");
+                    assert_eq!(consumer.credential_export(id, None).unwrap()["credential_id"], default.as_str());
+                }
+            }
+            let scopes: &[&str] = match case {
+                "read-only replacement" => &["read"],
+                "infer-only replacement" => &["infer"],
+                _ => &["infer", "read"],
+            };
+            let replacement = consumer
+                .credential_rotate(id, &default, credential_options(scopes))
+                .await
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(replacement != default && replacement != spare, "{case}");
+            {
+                let credentials = state.credentials.lock().unwrap();
+                let view = |wanted: &str| {
+                    credentials.iter().find(|(c, _)| c.id == wanted).unwrap().1.clone()
+                };
+                assert!(view(&default).revoked, "{case}: the rotated default is still valid");
+                assert_eq!(view(&replacement).scopes, scopes, "{case}");
+            }
+            state.inferences.lock().unwrap().clear();
+            if case == "read-only replacement" {
+                let refused = consumer.credential_export(id, None).err().expect(REFUSAL);
+                assert!(refused.starts_with("no active inference credential"), "{}", shown(&state, &refused));
+                let refused = consumer.infer(id, "chat", json!({"messages":[]})).await.err().expect(REFUSAL);
+                assert!(refused.starts_with("no active inference credential"), "{}", shown(&state, &refused));
+                assert!(dispatched().is_empty(), "{case}: a stored credential was used: {:?}", dispatched());
+                let named = consumer.credential_export(id, Some(&replacement)).unwrap();
+                assert_eq!(named["credential_id"], replacement.as_str());
+                assert!(named["api_key"] == provider_secret(&state, &replacement).as_str());
+            } else {
+                let exported = consumer.credential_export(id, None).unwrap();
+                assert_eq!(exported["credential_id"], replacement.as_str(), "{case}");
+                assert!(
+                    exported["api_key"] == provider_secret(&state, &replacement).as_str(),
+                    "{case}: the export is not the replacement's secret"
+                );
+                assert_eq!(
+                    consumer.infer(id, "chat", json!({"messages":[]})).await.unwrap()["accepted"],
+                    true
+                );
+                assert_eq!(dispatched(), [replacement.clone()], "{case}: inference did not use the replacement");
+            }
+            // The choice is durable, and the spare stays stored but is never the default.
+            let config = consumer.config.clone();
+            drop(consumer);
+            let restarted = Consumer::new(config).unwrap();
+            match case {
+                "read-only replacement" => {
+                    let refused = restarted.credential_export(id, None).err().expect(REFUSAL);
+                    assert!(refused.starts_with("no active inference credential"), "{}", shown(&state, &refused));
+                }
+                _ => assert_eq!(
+                    restarted.credential_export(id, None).unwrap()["credential_id"],
+                    replacement.as_str(),
+                    "{case}: the restored default did not survive a restart"
+                ),
+            }
+            assert_eq!(restarted.credential_export(id, Some(&spare)).unwrap()["credential_id"], spare.as_str());
             task.abort();
         }
     }

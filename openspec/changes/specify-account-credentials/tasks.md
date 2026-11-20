@@ -214,14 +214,94 @@ Task 3.N corresponds to requirement N in the spec and to row N of the design cov
     - no other file under the profile's `data_dir` contains either secret, including the request-key file.
   - Missing: a test in which an account file of mode 0640, and one replaced by a symbolic link, makes `credential_export`, `credential_issue`, `credential_rotate`, `credential_revoke` and `infer` fail without contacting the provider, with the file mode, the link and its target unchanged.
   - Missing: a native Windows run in which an account file readable by another account is refused.
+
+  Portable part done 2026-11-20. Only the native Windows run remains. It cannot run on this macOS host, and its code path (`wallet_windows.rs`: `validate`, `create` and `directory`) is not exercised here. Two new Unix library tests in `consumer::tests` use the funding fixture. The fixture now also records each inference request: the identifier of the credential whose secret it presented, and the body.
+  - `native_credential_secrets_live_only_in_the_owner_only_account_file` runs a paid native opening, an `infer`+`read` issuance, a `read` issuance rotated with `read`, and one chat dispatch, which presents the default and records one request key. Then:
+    - the consumer root and the account directory are directories, not links, owned by this user with no group or other permission. The account file is a regular file with the same protection, under the network-scoped `<data_dir>/<network-hash>/consumer/`;
+    - each stored secret (the opening's, the issuance's and the rotation's replacement) equals the provider's, is in the account file and is exportable;
+    - no other file under `data_dir` holds any of the four secrets the provider issued, including the rotated-away one, whole or in upper case. The test requires that the search covered the request-key file, the wallet journal, the wallet key and the lock file. No symbolic link exists under `data_dir`, and the inference body holds no secret.
+
+    It would catch a secret written to any other file (a request-key file, a leftover temporary file, the wallet journal), a secret in the inference body, a store directory or account file with group or other permission, and a store outside the network-scoped directory.
+  - `an_unprotected_or_linked_account_store_fails_closed_without_contacting_the_provider` covers six cases (the 0604 and 0705 cases were added by the adversarial review below):
+    - an account file of mode 0640;
+    - an account file of mode 0604 (other permission only);
+    - the account file replaced by a symbolic link to a protected (0600) copy in another protected directory;
+    - the account directory at mode 0750;
+    - the account directory at mode 0705 (other permission only);
+    - the account directory replaced by a symbolic link to a protected copy.
+
+    In each case, `credential_export` (default and named), `credentials` (the list), `credential_issue`, `credential_rotate`, `credential_revoke` and `infer` fail with the store's protection error. These errors are current implementation values: "secret file must be owned by this user with no group/other permissions", "cannot open protected secret file", "private directory must belong to this user and have mode 0700" and "private directory cannot be a symlink". No error holds the secret. The fixture records no control or inference request, and the provider's credentials are unchanged. Every entry under the consumer root and under the link targets' directory is unchanged: its kind, permission bits, contents and link target. So nothing was widened, repaired or replaced. After a manual repair, the same store exports its default again, so each refusal came from the protection alone.
+
+  Mutations, each failing its test, restored by copy with a fresh mtime and compared byte-identical (`cmp`):
+  - a protected copy of the bearer written beside the account file at dispatch fails the first test ("… holds a credential secret"). Adding the bearer to the request-key record also fails it, earlier, because `local_requests` can no longer decode the record;
+  - `private_write` copying instead of renaming, so its temporary file remains, fails the first test at the leftover `.tmp` file;
+  - `open_secret_file` without `O_NOFOLLOW` fails the second test ("linked file: export succeeded");
+  - `validate_secret_file` without the group/other check fails the second test ("group-readable file: export succeeded");
+  - `private_read` narrowing an unprotected file to 0600 and retrying, which is a repair, fails the second test (the same message).
+
+  "No secret on a command line, in a log or in a diagnostic" holds by inspection and by the task 3.8 tests. `consumer.rs` starts no process and makes no print or logging call, no CLI argument takes a secret, and no `chiral credentials` command prints a secret on stderr. Protecting an operator's backup is the operator's responsibility (book lines 474 and 673) and has no code path. Network scoping across identities is also shown by `network_scoping_and_process_mutation_locks`.
+
+  Adversarial review, 2026-11-20. Three further mutations passed both tests:
+  - `validate_secret_file` checking only group permission (`mode & 0o070`), so an account file readable by others is accepted;
+  - `secure_directory` checking the same way, so an account directory open to others is accepted;
+  - the request-key file named after the presented bearer (`<bearer>-<request_key>.json`), so a secret is written into a file name under `data_dir`.
+
+  The tests now cover these. The fail-closed test adds the 0604 file and 0705 directory cases, and also runs the credential list in every case. The store test now requires that no file or directory name under `data_dir` holds a secret. That check runs before any assertion message names a path, and its own message names none. With the same mutations, the tests now fail with "other-readable file: export succeeded", "other-accessible directory: export succeeded" and "a file or directory name under data_dir holds a credential secret". A fourth mutation, `secure_directory` following links (`fs::metadata` instead of `fs::symlink_metadata`), already failed the second test ("linked directory: export succeeded"). Each was restored by copy with a fresh mtime and compared byte-identical. Not exercised: refusal of a file or directory owned by another user. Creating one needs another account's privileges, so this holds by inspection of the `uid` checks in `validate_secret_file` and `secure_directory` (wallet.rs).
 - [ ] 3.8 Native credential commands output metadata, and only an explicit export reveals a secret.
   - Existing evidence: `native_lost_free_opening_recovers_without_issuing_or_rotating_credentials` (issuance result), the two `credential_export_*` tests and `agreement_exposes_only_public_disclosure_terms`.
   - Missing: a CLI process test, in the style of `inference_cli_fund_disclosure_test`, against a loopback development provider. `chiral credentials <contract> list`, `issue`, `rotate` and `revoke`, plus a failing `revoke` of an unknown identifier, print one JSON document or an error, and no secret appears on stdout or stderr. `export --id <id>` prints exactly one JSON document with `api_key`, `base_url`, `model`, `contract_id` and `credential_id`, and its stderr contains no secret.
   - Missing: a consumer test that the result of `credential_rotate` carries no `api_key`, `bearer` or other member holding the replacement's secret, while the secret is stored and exportable.
   - Missing: an automated run of `examples/openai_client.py` and `examples/openai-client.mjs` against a loopback development provider, once with a successful request and once with a failing or interrupted one. It must check that the exported secret appears on neither stdout nor stderr. Today this holds only by inspection (design coverage row 8).
-- [ ] 3.9 Rotating the native default keeps a usable default.
+
+  Portable part done 2026-11-20. Only the automated SDK-example run remains. It needs the Python and Node `openai` SDK packages, and neither is installed on this host: `python3 -c 'import openai'` fails with `ModuleNotFoundError`, and Node's `import('openai')` fails with `ERR_MODULE_NOT_FOUND`. Nothing was installed, so the examples' rule still holds by inspection only (design coverage row 8).
+  - New CLI process test `src-tauri/tests/inference_cli_credentials_test.rs`, `credential_commands_print_metadata_and_only_export_prints_a_secret`. The production control and inference routers (`PreparedProvider`) run on isolated loopback. A native free opening runs in process from the same development profile, and then every command runs as its own `chiral` process. Failure messages never print a secret: command output is shown only masked (hex runs of 64 or more digits replaced), and other values only after they are shown to hold no secret.
+    - Each of these exits 0 with exactly one JSON document on stdout and nothing on stderr: `list`, `issue --options <file>` (cap 900, concurrency 2, both scopes), `rotate` with the CLI defaults, a read-only `issue`, `revoke` (`{"revoked":true}`), `rotate` of the native default and a final `list`. `issue` and `rotate` print exactly `{contract_id, expires_at, id}`. List entries carry no `api_key`, `bearer`, `secret` or `token_hash` member, and the final list shows each credential's revocation state.
+    - `export`, both default and with `--id`, prints exactly one JSON document with exactly `api_key`, `base_url` (the offer origin plus `/v1`), `contract_id`, `credential_id` and `model`, and stderr is empty. Each exported secret has the `chiral_` shape and authenticates at the provider's ledger as exactly that account, credential and scopes. It appears exactly once on its own export's stdout, and no other secret does.
+    - Failing runs while the provider answers: `revoke` and `rotate` of an unknown identifier, `issue` with a positional options file, and `export --id` of an unknown identifier. Failing runs at a lost provider: `list`, `issue`, `rotate` and `revoke`. Each exits non-zero with an empty stdout and one `chiral:` line on stderr, and the account file is unchanged. The lines are pinned as current implementation values: `invalid_credential: … (HTTP 401)` twice, `invalid credential options`, `credential is not stored locally`, then `owner challenge unavailable` four times.
+    - No management output, successful or failed, holds any of the five secrets on stdout or stderr: not whole, not as its 64 hex digits in either case, and no `chiral_` plus 64-hex string at all.
+    - Rotating the default makes the replacement the export without `--id`, and the old default stops authenticating (requirement 9 at the CLI).
+
+    It would catch a secret printed by any management command or in any error line, a second document or diagnostic on stdout, an export with missing or extra members, and an export whose secret is not the named credential's.
+  - Library test `consumer::tests::native_credential_management_returns_metadata_and_only_export_reveals_a_secret` covers the functions behind both the CLI commands and the desktop operations `credentials`, `credential_issue`, `credential_rotate` and `credential_revoke`, which desktop.rs passes through unchanged (desktop.rs:100–108 and 170–182, by inspection; the desktop module is not built headless):
+    - `credential_issue` and `credential_rotate` return exactly `{contract_id, expires_at, id}`, revocation returns `{"revoked":true}`, and list entries carry no secret member;
+    - the rotation's replacement secret is in the account file, and only `credential_export` returns it, with the base URL and the model, equal to the provider's secret;
+    - eight failures hold no secret: positional options for issuance and rotation, an unknown credential's export, an unknown account's list, and list, issue, rotate and revoke at a lost provider;
+    - no result holds any of the four secrets the provider issued, and the stored default and replacement survive the failures.
+
+    It would catch a rotation, issuance, revocation or list result that carries a secret, an error that carries one, and an export that is not the provider's secret.
+
+  Mutations, each failing its test, restored by copy with a fresh mtime and compared byte-identical (`cmp`):
+  - `credential_rotate` returning the whole credential: the library test fails at the member set (`bearer` present);
+  - a revocation error that appends a stored secret: the library test fails ("the failed revoke holds a secret");
+  - `chiral credentials issue` printing the new credential's export: the CLI test fails at the issue's member set;
+  - `chiral credentials revoke` appending the default's exported secret to its error: the CLI test fails ("revoke unknown: stderr holds a secret-shaped string").
+
+  "No CLI argument accepts a secret" still holds by inspection of the clap definitions (bin/chiral.rs). The credential commands take the contract, a credential identifier and `--options <file>`, and the wallet commands take files only.
+
+  Adversarial review, 2026-11-20. A further mutation fails the CLI test: `chiral credentials export` also writing one diagnostic line to stderr, which holds only the key's length. It fails at the export's empty-stderr check. Restored and compared byte-identical. No test was changed for this task.
+- [x] 3.9 Rotating the native default keeps a usable default.
   - Existing evidence: `issuance_recovers_remote_revocation_and_expiry_but_read_only_rotation_never_becomes_default` and `explicit_credential_issue_recovers_default_without_rotating_on_resume`.
   - Missing: a consumer test in which the native default is expired, in a second case revoked at the provider, and is rotated with `infer` and `read`. Native `infer` must then succeed with the replacement, and `credential_export(id, None)` must return the replacement's identifier.
+
+  Done 2026-11-20: library test `consumer::tests::rotating_the_native_default_keeps_a_usable_default`. It uses the funding fixture with a free opening, plus a valid `infer`+`read` spare credential that is not the default. There are three cases, plus the `infer`-only case added by the adversarial review below:
+  - **Expired.** The default's `expires_at` is one second past, both at the provider and in the stored record. Before the rotation, `infer` fails with "credential expired" and sends no inference request, and `credential_export(id, None)` fails the same way.
+  - **Revoked at the provider only.** `infer` presents only the default and fails with `invalid_credential`. It is not retried with the spare, and `credential_export(id, None)` still returns the default.
+  - In both of these cases, `credential_rotate` with `infer` and `read` then has these effects:
+    - the provider lists the old default revoked and the replacement with both scopes;
+    - `credential_export(id, None)` returns the replacement's identifier and the provider's secret for it;
+    - native `infer` succeeds and presents exactly the replacement;
+    - after a restart, the export without an identifier still returns the replacement.
+  - **Read-only replacement.** Rotating a valid default with only `read` leaves no default. `credential_export(id, None)` and `infer` fail with "no active inference credential" and send no inference request, and after a restart the export without an identifier still fails. An export naming the replacement returns its provider secret.
+  - In every case the valid spare stays stored and exportable by its identifier, and is never selected.
+
+  The task 3.8 CLI process test adds the same rule through the production routers: `chiral credentials <id> rotate <default>` makes the export without `--id` return the replacement, which authenticates with both scopes, and the old default no longer authenticates. Refusals in this test go through a check that panics with fixed text, never with a returned value that could hold a secret.
+
+  Mutations, each failing the test, restored by copy with a fresh mtime and compared byte-identical (`cmp`):
+  - rotation never activating its replacement: fails at the expired case's export without an identifier;
+  - activating the replacement whatever its scopes: fails at the read-only case's export, which succeeds;
+  - `credential()` falling back to the newest unexpired stored credential when there is no default: fails at the read-only case's export.
+
+  Adversarial review, 2026-11-20. One mutation passed the test: a rotation's replacement becomes the default only if it has both `infer` and `read`. Requirement 9 makes any replacement with `infer` the default. The test now has a fourth case, **`infer`-only replacement**: a valid default is rotated with `infer` alone. The provider then lists the old default revoked and the replacement with `["infer"]`. The export without an identifier returns the replacement and its provider secret, native `infer` presents exactly the replacement, and after a restart the export still returns it. With the mutation, the test now fails at that case's export without an identifier ("no active inference credential"). Restored by copy with a fresh mtime and compared byte-identical.
 
 ## 4. Qualify and integrate
 
