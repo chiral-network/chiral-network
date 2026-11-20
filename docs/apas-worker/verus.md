@@ -197,3 +197,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-19 — policy URL query refusal
 
 - `consumer::tests::policy_url_with_a_query_is_refused_at_profile_load_before_any_request` — **not replaceable** as written: it checks that no request reaches an async HTTP fixture. The refusal predicate itself (`network::validate_endpoint`) is pure URL logic that a future Verus lemma could cover, but no verified URL model exists in `verified/`.
+
+## Judged 2026-11-19 — outbound HTTP answer-set rule and credential export
+
+- `offer_registry::tests::development_localhost_origin_requires_every_answer_to_be_loopback` — **replaceable in principle**: `check_resolved_answers` is a pure function of an address list and two flags, so a Verus lemma over an IP-address model could prove the rule (a refusal when the set is empty, has more than 32 answers, or has any answer outside loopback or outside the public predicate). It is not replaced: Verus is unavailable on this machine (report entry of 2026-11-15) and `verified/` has no IP-address model.
+- `consumer::tests::credential_export_refuses_a_saved_origin_that_no_longer_validates`, `credential_export_base_url_is_the_validated_origin_plus_v1` — **not replaceable**: protected files, the credential store and byte-identity of the account file.

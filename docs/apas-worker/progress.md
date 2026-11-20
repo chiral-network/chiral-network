@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-19 (forty-ninth round) — Code: development `localhost` resolves only to loopback; export validates the origin
+
+- In step at `033168d6`; whitepaper unchanged; no new answers.
+- Code step (outbound-http-safeguards 2.1 and 2.2).
+  - `safe_http_client`'s answer-set decision is now the pure `offer_registry::check_resolved_answers`. Under the development `localhost` exception, every answer must be loopback (message suggests `127.0.0.1` or `::1`). Other origins keep the empty, more-than-32 and non-public rules and their message.
+  - `credential_export` validates the saved offer origin under the current mode before selecting a credential or building `base_url`. On refusal it returns the validator's error, the account file is unchanged, and `load_account` stays lenient for recovery.
+  - The review added IPv4-mapped and 32/33-answer cases to the regression and corrected wording about when secrets are read.
+  - Three regressions fail without their changes.
+  - Not tested: that `safe_http_client` calls the function. There is no resolver seam yet; task 3.4 plans one.
+- Checks: full headless suite under `caffeinate` 540 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; strict validation passes.
+
 ## 2026-11-19 (forty-eighth round) — Spec: outbound HTTP safeguards and the private engine origin boundary
 
 - In step at `e39f954a`; whitepaper unchanged; no new answers.
@@ -480,7 +491,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: outbound-http-safeguards 2.1 and 2.2; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 12–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 12–14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

@@ -2212,12 +2212,20 @@ impl Consumer {
         Ok(metadata)
     }
     /// Explicit secret export only. Normal list/issue/rotate outputs contain metadata only.
+    /// An SDK reaches `base_url` through its own HTTP stack, without the pinned client, so
+    /// the saved origin must pass the full origin rule under the current development mode
+    /// before a credential is selected or returned. Loading stays lenient so that recovery
+    /// remains reachable.
     pub fn credential_export(
         &self,
         id: &str,
         credential_id: Option<&str>,
     ) -> Result<Value, String> {
         let saved = self.load_account(id)?;
+        crate::offer_registry::validate_endpoint(
+            &saved.offer.payload.endpoint,
+            self.config.development,
+        )?;
         let credential = self.credential(&saved, credential_id)?;
         let base = endpoint_url(
             &saved.offer.payload.endpoint,
@@ -3515,6 +3523,86 @@ mod tests {
 
     fn credential_options(scopes: &[&str]) -> Value {
         json!({"expires_at":protocol::now().unwrap()+3600,"spend_cap_wei":null,"max_concurrency":1,"scopes":scopes})
+    }
+    /// Save signed terms for `endpoint` with one active stored credential, under a profile
+    /// with the given development mode. No provider or chain is contacted.
+    fn account_with_credential(
+        directory: &Path,
+        endpoint: &str,
+        development: bool,
+        secret: &str,
+    ) -> (Consumer, String) {
+        let mut config = configuration(directory);
+        config.development = development;
+        let consumer = Consumer::new(config).unwrap();
+        consumer.wallet_create().unwrap();
+        let key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &key, endpoint, false, false);
+        let id = quote.payload.id.clone();
+        let mut saved = saved_funding(offer, quote);
+        let credential = Credential {
+            id: "credential-a".into(),
+            bearer: secret.into(),
+            contract_id: id.clone(),
+            expires_at: protocol::now().unwrap() + 3600,
+        };
+        consumer.store_credential(&mut saved, credential, true).unwrap();
+        consumer.save_account(&saved).unwrap();
+        (consumer, id)
+    }
+    #[test]
+    fn credential_export_refuses_a_saved_origin_that_no_longer_validates() {
+        let secret = "sk-chiral-export-secret-0123456789abcdef";
+        for (endpoint, saved_in_development) in
+            [("https://intranet./", false), ("https://localhost:8443", true)]
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let (consumer, id) =
+                account_with_credential(directory.path(), endpoint, saved_in_development, secret);
+            if saved_in_development {
+                // Exported while development is on, the localhost origin is admitted.
+                let exported = consumer.credential_export(&id, None).unwrap();
+                assert_eq!(exported["base_url"], "https://localhost:8443/v1");
+                assert_eq!(exported["api_key"], secret);
+            }
+            // Reload the same data directory with development off.
+            let config = configuration(directory.path());
+            drop(consumer);
+            let consumer = Consumer::new(config).unwrap();
+            let path = consumer.account_path(&id).unwrap();
+            let before = fs::read(&path).unwrap();
+            let expected = crate::offer_registry::validate_endpoint(endpoint, false).unwrap_err();
+            for credential_id in [None, Some("credential-a")] {
+                let error = consumer.credential_export(&id, credential_id).unwrap_err();
+                assert_eq!(error, expected, "{endpoint}/{credential_id:?}");
+                assert!(!error.contains(secret), "{endpoint}: error carries the secret");
+            }
+            assert_eq!(fs::read(&path).unwrap(), before, "{endpoint}: account file changed");
+            // Loading stays lenient, so the signed terms and credential remain recoverable.
+            let loaded = consumer.load_account(&id).unwrap();
+            assert_eq!(loaded.offer.payload.endpoint, endpoint);
+            assert_eq!(loaded.active_credential.as_deref(), Some("credential-a"));
+            assert_eq!(loaded.credentials.len(), 1);
+            assert_eq!(fs::read(&path).unwrap(), before, "{endpoint}: account file changed");
+        }
+    }
+    #[test]
+    fn credential_export_base_url_is_the_validated_origin_plus_v1() {
+        let secret = "sk-chiral-export-secret-0123456789abcdef";
+        for (endpoint, development, base_url) in [
+            ("https://provider.example", false, "https://provider.example/v1"),
+            ("http://127.0.0.1:9419", true, "http://127.0.0.1:9419/v1"),
+            ("http://[::1]:9419", true, "http://[::1]:9419/v1"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let (consumer, id) =
+                account_with_credential(directory.path(), endpoint, development, secret);
+            let exported = consumer.credential_export(&id, None).unwrap();
+            assert_eq!(exported["base_url"], base_url, "{endpoint}");
+            assert_eq!(exported["api_key"], secret, "{endpoint}");
+            assert_eq!(exported["credential_id"], "credential-a", "{endpoint}");
+            assert_eq!(exported["contract_id"], id.as_str(), "{endpoint}");
+        }
     }
     #[tokio::test]
     async fn explicit_credential_issue_recovers_default_without_rotating_on_resume() {

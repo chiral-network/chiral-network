@@ -188,6 +188,29 @@ pub fn validate_endpoint(endpoint: &str, development: bool) -> Result<url::Url, 
     }
     Ok(url)
 }
+/// Decide whether a resolved answer set may be pinned for a validated origin.
+/// `loopback_origin` says that the origin's host is a literal loopback address or exactly
+/// `localhost`. Every origin needs between 1 and 32 answers. Under the development
+/// exception every answer must be loopback: the exception never authorizes remote
+/// cleartext HTTP, so a resolver that also answers `localhost` with a public or private
+/// address refuses the origin. Every other origin needs only public answers.
+fn check_resolved_answers(
+    answers: &[IpAddr],
+    development: bool,
+    loopback_origin: bool,
+) -> Result<(), String> {
+    if answers.is_empty() || answers.len() > 32 {
+        return Err("endpoint resolves to forbidden addresses".into());
+    }
+    if development && loopback_origin {
+        if answers.iter().any(|ip| !ip.is_loopback()) {
+            return Err("a development localhost origin must resolve only to loopback addresses; use 127.0.0.1 or ::1".into());
+        }
+    } else if answers.iter().any(|ip| !public_ip(*ip)) {
+        return Err("endpoint resolves to forbidden addresses".into());
+    }
+    Ok(())
+}
 /// Resolve once, validate every result, pin addresses and disable both redirects and
 /// environment proxies. Call for each origin; do not reuse across unvalidated hosts.
 pub async fn safe_http_client(
@@ -211,14 +234,8 @@ pub async fn safe_http_client(
     .map_err(|e| e.to_string())?
     .take(33)
     .collect();
-    if addresses.is_empty()
-        || addresses.len() > 32
-        || addresses.iter().any(|a| {
-            !public_ip(a.ip()) && !(development && loopback_origin && a.ip().is_loopback())
-        })
-    {
-        return Err("endpoint resolves to forbidden addresses".into());
-    }
+    let answers: Vec<IpAddr> = addresses.iter().map(SocketAddr::ip).collect();
+    check_resolved_answers(&answers, development, loopback_origin)?;
     reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -489,6 +506,94 @@ pub(crate) mod tests {
             assert!(validate_endpoint(endpoint, true).is_err(), "{endpoint}");
         }
         assert!(validate_endpoint("http://localhost:8080", true).is_ok());
+    }
+    #[test]
+    fn development_localhost_origin_requires_every_answer_to_be_loopback() {
+        let ips = |answers: &[&str]| -> Vec<IpAddr> {
+            answers.iter().map(|a| a.parse().unwrap()).collect()
+        };
+        // A public or private answer beside loopback would carry development cleartext
+        // HTTP off the host if the loopback port is closed.
+        for answers in [
+            ips(&["127.0.0.1", "93.184.216.34"]),
+            ips(&["::1", "2606:4700:4700::1111"]),
+            ips(&["93.184.216.34"]),
+            ips(&["127.0.0.1", "10.0.0.5"]),
+        ] {
+            let error = check_resolved_answers(&answers, true, true).unwrap_err();
+            assert!(
+                error.contains("development localhost origin must resolve only to loopback")
+                    && error.contains("127.0.0.1")
+                    && error.contains("::1"),
+                "{answers:?}: {error}"
+            );
+        }
+        assert!(check_resolved_answers(&ips(&["127.0.0.1", "::1"]), true, true).is_ok());
+        // An IPv4-mapped answer is not a loopback address to the rule: a mapped public
+        // answer (public to the old rule) is refused, and mapped loopback stays refused, as
+        // `validate_endpoint` refuses the literal `[::ffff:127.0.0.1]` as an exception origin.
+        for answer in ["::ffff:93.184.216.34", "::ffff:127.0.0.1"] {
+            let error =
+                check_resolved_answers(&ips(&["127.0.0.1", answer]), true, true).unwrap_err();
+            assert!(
+                error.contains("must resolve only to loopback"),
+                "{answer}: {error}"
+            );
+        }
+        assert!(validate_endpoint("http://[::ffff:127.0.0.1]:9419", true).is_err());
+        // A literal loopback origin resolves to itself and stays admitted.
+        assert!(check_resolved_answers(&ips(&["127.0.0.1"]), true, true).is_ok());
+        assert!(check_resolved_answers(&ips(&["::1"]), true, true).is_ok());
+        // Other origins keep the public rule and its message, with or without development.
+        for development in [false, true] {
+            assert!(check_resolved_answers(&ips(&["93.184.216.34"]), development, false).is_ok());
+            for answers in [
+                Vec::new(),
+                ips(&["93.184.216.34", "10.0.0.5"]),
+                ips(&["127.0.0.1"]),
+            ] {
+                assert_eq!(
+                    check_resolved_answers(&answers, development, false).unwrap_err(),
+                    "endpoint resolves to forbidden addresses",
+                    "{development}/{answers:?}"
+                );
+            }
+        }
+        // Without development the loopback flag grants nothing.
+        assert_eq!(
+            check_resolved_answers(&ips(&["127.0.0.1"]), false, true).unwrap_err(),
+            "endpoint resolves to forbidden addresses"
+        );
+        // The empty-answer rule also holds under the exception.
+        assert_eq!(
+            check_resolved_answers(&[], true, true).unwrap_err(),
+            "endpoint resolves to forbidden addresses"
+        );
+        // The 32-answer bound is unchanged for both kinds of origin and is checked first.
+        let loopback: Vec<IpAddr> = (1..=33u8)
+            .map(|n| IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, n)))
+            .collect();
+        let public: Vec<IpAddr> = (1..=33u8)
+            .map(|n| IpAddr::V4(std::net::Ipv4Addr::new(93, 184, 216, n)))
+            .collect();
+        for (answers, development, loopback_origin) in [
+            (&loopback, true, true),
+            (&public, false, false),
+            (&public, true, false),
+        ] {
+            assert!(check_resolved_answers(&answers[..32], development, loopback_origin).is_ok());
+            assert_eq!(
+                check_resolved_answers(answers, development, loopback_origin).unwrap_err(),
+                "endpoint resolves to forbidden addresses",
+                "{development}/{loopback_origin}"
+            );
+        }
+        let mut mixed = loopback[..32].to_vec();
+        mixed.push("93.184.216.34".parse().unwrap());
+        assert_eq!(
+            check_resolved_answers(&mixed, true, true).unwrap_err(),
+            "endpoint resolves to forbidden addresses"
+        );
     }
     #[test]
     fn expired_watermarks_can_be_evicted_without_replaying_old_signatures() {
