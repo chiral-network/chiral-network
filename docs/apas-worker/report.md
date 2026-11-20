@@ -474,3 +474,47 @@ Separately, the spec records four code differences, not questions (tasks 2.1–2
 Difference 2 depends partly on question 3. The review also notes that the code may hash the raw engine template while provisioning uses the normalized digest; only a pinned-engine run can settle that (task 4.1).
 
 Nonblocking: no requirement or task waits on these answers. Option (a) of questions 1, 2 or 4, or option (a) or (b) of question 3, would add a task.
+
+## 2026-11-20 — Provider daemon lifecycle: drain across restarts, reopening after a settlement failure, startup publication, a lost ledger, automatic restarts and hang-up signals
+
+Status: open
+
+Where: `docs/chiral-book.md`, *Native provider provisioning and operations* (lines 605–680), chiefly lines 623, 627, 630–634, 642, 667, 673 and 675. Spec: the new change `specify-provider-daemon-lifecycle` (capability `provider-daemon-lifecycle`), design open questions 1–6. Code: `src-tauri/src/app.rs:128–152`, `219`, `356–362`, `588–601` and `631–647`; `src-tauri/src/inference_gateway.rs:381–427`; `src-tauri/src/bin/chiral_daemon.rs:36–66` and `153–181`; `docker-compose.yml:10`.
+
+What it says now: the provider daemon's lifecycle is now specified (comparison item 14). Its twelve requirements cover:
+- separate status facts;
+- runtime observation as liveness, not readiness;
+- operator drain;
+- resume and refresh only through a complete maintenance pass;
+- the ordered maintenance pass;
+- a settlement-failure stop that waits for the operator;
+- startup refusals;
+- one daemon per deployment;
+- the ledger's own schema, network and provider;
+- no re-terming of agreements on restart or configuration change;
+- an orderly shutdown;
+- content-free logs and diagnostics.
+
+Backup and cutover procedures are recorded as operator procedures, not daemon behaviour.
+
+Questions (the spec adopts each proposed default):
+
+1. **Does an operator drain survive a restart?** Options: (a) no, it is state of the running daemon (as now); (b) a durable drain that only `resume` clears; (c) a start-drained option. Proposed default: (a), the book text.
+2. **What may reopen admission after a durable settlement failure?** Options: (a) only `POST /admin/resume` or a restart; (b) a pass that proves the ledger can be written; (c) any pass (as now). Proposed default: (a), from lines 630 and 677. This is task 2.1.
+3. **Is a publication failure in the starting pass a failed startup?** Options: (a) no: start, serve existing accounts and report it, as after the same failure later; (b) yes, exit (as now). Proposed default: (a), from lines 623 and 630. This is task 2.5.
+4. **Should a missing ledger be refused when other deployment state remains?** If `ledger.sqlite3` is lost while the offer revision and DHT identity remain, the daemon creates an empty ledger and earlier consumers' bearers stop working. Options: (a) refuse unless the operator explicitly confirms; (b) create it, leaving line 675 to operator procedure (as now). Proposed default: (b), the book text.
+5. **May deployment machinery restart the daemon automatically?** The reference Compose service uses `restart: unless-stopped`. Options: (a) yes, as a restart under line 634 with startup recovery (as now); (b) no, the operator reconciles first (line 632). Proposed default: (a).
+6. **Is a terminal hang-up or a Windows console event a normal shutdown?** Options: (a) every interceptable termination request takes the shutdown path, including `SIGHUP`, Ctrl-Break and console close; (b) only `SIGTERM`, `SIGINT` and Ctrl-C (as now). Proposed default: (a), because line 642 allows a macOS engine orphan only after `SIGKILL`. This is task 2.2.
+
+Separately, the spec records nine code differences, not questions (tasks 2.1–2.9):
+- a settlement failure closes admission only until the next pass and is never reported;
+- `SIGHUP`, Ctrl-Break and console close skip the shutdown path, so on macOS the engine is orphaned;
+- `/admin/status` omits the drain and the performance latch;
+- `/admin/status` fails as a whole when the ledger summary cannot be read;
+- a publication failure in the starting pass aborts startup;
+- the deployment lock is taken after the DHT node joins under the deployment's identity;
+- `/admin/runtime` reports engine liveness as `ready`;
+- an engine exit keeps a "Ready" status detail until the next pass;
+- a resume racing shutdown can reopen admission after the shutdown drain.
+
+Nonblocking: no requirement or task waits on these answers. A different answer to question 2, 3 or 6 would change task 2.1, 2.5 or 2.2. Option (a) of question 4, or (b) or (c) of question 1, would add a task.

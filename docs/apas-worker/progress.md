@@ -1,5 +1,30 @@
 # APAS progress
 
+## 2026-11-20 (fifty-fifth round) — Spec: the provider daemon lifecycle
+
+- In step at `35e93e91`; whitepaper unchanged; no new answers.
+- Specification step (comparison item 14, book lines 605–680). New change `specify-provider-daemon-lifecycle`: 12 requirements and 36 scenarios. They cover:
+  - separate status facts;
+  - runtime liveness that is not readiness;
+  - operator drain;
+  - resume and refresh only through a complete pass;
+  - the ordered maintenance pass;
+  - an operator-attended stop after a settlement failure;
+  - startup refusals;
+  - one daemon per deployment;
+  - the ledger's own schema, network and provider;
+  - no re-terming on restart or configuration change;
+  - an orderly shutdown;
+  - content-free logs.
+  Discovery, engine launch, performance, renewal, request accounting, funding, remittance, version policy, listeners, the RPC gateway and credentials are referenced from their owners. Backup and cutover are recorded as operator procedures.
+- The review:
+  - fixed an untestable lock scenario and a wrong single-refusal scenario;
+  - narrowed one difference;
+  - found two more (an engine exit keeps a "Ready" detail; a resume racing shutdown reopens admission);
+  - added the book-671 rule that no request content is retained.
+- Nine code differences recorded as tasks 2.1–2.9, and a report entry with six nonblocking questions.
+- Checks: `openspec validate specify-provider-daemon-lifecycle --strict` passes; no code changed. The review reran 5 library tests and 2 integration suites (40 tests), and all passed.
+
 ## 2026-11-20 (fifty-fourth round) — Code: name an unprobeable capability set in the health detail (public-inference-api 2.5)
 
 - In step at `d16a52c0`; whitepaper unchanged; no new answers.
@@ -572,7 +597,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: provider-daemon-lifecycle 2.1–2.9; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:
