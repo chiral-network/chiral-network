@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-20 (fifty-seventh round) — Code: hang-up and console events shut down cleanly; resume cannot reopen during shutdown or clear later faults
+
+- In step at `d337d481`; whitepaper unchanged; no new answers.
+- Code step (provider-daemon-lifecycle 2.2, 2.9 and 2.10).
+  - `SIGHUP`, and on Windows Ctrl-Break and console close, take the same shutdown path as `SIGTERM`, during engine startup and while serving. A daemon started with `SIGHUP` ignored (`nohup`) keeps ignoring it. The review found the first patch broke this and fixed it with a `sigaction` read before any handler is installed.
+  - The drain state is now open, draining or shutting down, and it only rises during shutdown. `POST /admin/resume` answers 409 `shutting_down` once shutdown begins, and no pass admits outside the open state.
+  - Settlement failures carry sequence numbers, and a resume clears only those recorded before its request arrived.
+  - The Windows paths are verified by reading only; no Windows target exists on this machine.
+  - Regressions fail without their changes, including the macOS engine-orphan reproduction for `SIGHUP`.
+- Behaviour change: `SIGHUP` now stops the daemon, so it cannot be used to reload. No tracked deployment file does that.
+- Checks: full headless suite under `caffeinate` 568 passed, 2 ignored, 0 failed across 26 targets (`daemon_engine_process_test` 8/8); `cargo test --lib desktop::` (desktop feature) 4 passed; no daemon or engine process left running; strict validation passes.
+
 ## 2026-11-20 (fifty-sixth round) — Code: settlement-failure stop waits for the operator; status reports drain, latch, ledger fault and engine exit
 
 - In step at `22195828`; whitepaper unchanged; no new answers.
@@ -609,7 +621,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: provider-daemon-lifecycle 2.2, 2.5–2.7, 2.9 and 2.10; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: provider-daemon-lifecycle 2.5–2.7; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (item 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

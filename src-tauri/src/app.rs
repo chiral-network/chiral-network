@@ -28,7 +28,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -44,11 +44,11 @@ pub struct ProviderState {
     pub wallet: String,
     pub offers: Arc<OfferRegistry>,
     pub accepting: AtomicBool,
-    /// A durable settlement failure that closed admission (provider-daemon-lifecycle
-    /// requirement 6): a fixed, content-free reason. Only the operator's resume clears it,
-    /// and a restart starts without it; no maintenance pass or offer refresh reopens
-    /// admission while it is set.
-    pub settlement_fault: std::sync::Mutex<Option<&'static str>>,
+    /// Durable settlement failures that closed admission (provider-daemon-lifecycle
+    /// requirement 6), each with a fixed, content-free reason. Only the operator's resume
+    /// clears them, and only those recorded before it was requested; a restart starts without
+    /// them. No maintenance pass or offer refresh reopens admission while one is set.
+    pub settlement_fault: std::sync::Mutex<SettlementFaults>,
     pub funding_ready: AtomicBool,
     pub qualified_models: std::sync::RwLock<HashSet<String>>,
     /// The native embedding dimension of each ready embedding model, measured by its
@@ -61,25 +61,56 @@ pub struct ProviderState {
     pub managed_engines: std::collections::HashMap<String, Arc<crate::engine_runtime::ManagedEngine>>,
 }
 
+/// The durable settlement failures recorded since start (provider-daemon-lifecycle
+/// requirement 6). Each has a sequence number, so that a resume clears only the failures
+/// recorded before the operator asked for it (task 2.10).
+#[derive(Debug, Default)]
+pub struct SettlementFaults {
+    /// Failures recorded since start: the sequence number of the latest.
+    recorded: u64,
+    /// The failure that keeps admission closed, with its sequence number: the first one that
+    /// no resume has cleared or, after a resume that a later failure outlived, that later one.
+    open: Option<(u64, &'static str)>,
+    /// The latest failure's reason.
+    latest: Option<&'static str>,
+}
+
+impl SettlementFaults {
+    fn record(&mut self, reason: &'static str) {
+        self.recorded = self.recorded.saturating_add(1);
+        self.open.get_or_insert((self.recorded, reason));
+        self.latest = Some(reason);
+    }
+    /// Clears the failures numbered up to `recorded`, the count when the operator asked to
+    /// resume. A failure recorded later, for example by a request admitted before the first
+    /// failure that settles while the resume waits for a running pass, stays open.
+    fn clear_through(&mut self, recorded: u64) {
+        if self.open.is_some_and(|(sequence, _)| sequence <= recorded) {
+            self.open = (self.recorded > recorded).then_some(self.recorded).zip(self.latest);
+        }
+    }
+}
+
 impl ProviderState {
     pub fn engine_alive(&self, model_id: &str) -> bool {
         self.managed_engines.get(model_id).is_none_or(|engine| engine.is_alive())
     }
-    fn fault(&self) -> std::sync::MutexGuard<'_, Option<&'static str>> {
-        // A poisoned lock still holds the fault; settlement never panics over it.
+    fn fault(&self) -> std::sync::MutexGuard<'_, SettlementFaults> {
+        // A poisoned lock still holds the faults; settlement never panics over it.
         self.settlement_fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     /// Closes admission, and with it new-funding readiness, after a durable settlement
     /// failure and keeps them closed until the operator's resume (provider-daemon-lifecycle
-    /// requirement 6). The first fault is kept.
+    /// requirement 6). The first fault is the one reported.
     pub fn record_settlement_fault(&self, reason: &'static str) {
         let mut fault = self.fault();
-        fault.get_or_insert(reason);
+        fault.record(reason);
         self.accepting.store(false, Ordering::Release);
         self.funding_ready.store(false, Ordering::Release);
     }
+    /// The reason of the settlement failure that keeps admission closed, if any.
     pub fn settlement_fault(&self) -> Option<&'static str> {
-        *self.fault()
+        self.fault().open.map(|(_, reason)| reason)
     }
     /// Stores a maintenance pass's admission decision and its new-funding readiness, open
     /// only with admission and `funding_gates`; a recorded settlement fault overrides both.
@@ -87,7 +118,7 @@ impl ProviderState {
     /// is never overwritten by its earlier decision. Returns the new-funding readiness.
     fn store_admission(&self, accepting: bool, funding_gates: bool) -> bool {
         let fault = self.fault();
-        let accepting = accepting && fault.is_none();
+        let accepting = accepting && fault.open.is_none();
         let funding_ready = accepting && funding_gates;
         self.accepting.store(accepting, Ordering::Release);
         self.funding_ready.store(funding_ready, Ordering::Release);
@@ -130,6 +161,21 @@ impl ProviderState {
     }
 }
 
+/// `ProviderRuntime::drain_state` values.
+const OPEN: u8 = 0;
+const DRAINING: u8 = 1;
+const SHUTTING_DOWN: u8 = 2;
+
+/// Why `POST /admin/resume` did not reopen the provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumeError {
+    /// The shutdown path has drained the provider. Nothing reopens it; a restart serves again
+    /// (provider-daemon-lifecycle requirement 11).
+    ShuttingDown,
+    /// The maintenance pass failed, with its sanitized error.
+    Pass(String),
+}
+
 pub struct ProviderRuntime {
     pub state: Arc<ProviderState>,
     pub dht: Arc<DhtService>,
@@ -138,7 +184,10 @@ pub struct ProviderRuntime {
     chain_error: RwLock<Option<&'static str>>,
     maintenance_status: RwLock<contracts::MaintenanceReport>,
     refresh_error: RwLock<Option<String>>,
-    draining: AtomicBool,
+    /// `OPEN`, `DRAINING` (the operator's drain) or `SHUTTING_DOWN` (the shutdown path's
+    /// drain, which nothing ends: provider-daemon-lifecycle requirement 11). It only rises,
+    /// except that a resume ends an operator drain.
+    drain_state: AtomicU8,
     admin_token: String,
     published: Mutex<HashSet<String>>,
     lifecycle: Mutex<()>,
@@ -250,7 +299,7 @@ impl ProviderRuntime {
             chain_error: RwLock::new(None),
             maintenance_status: RwLock::new(contracts::MaintenanceReport::default()),
             refresh_error: RwLock::new(None),
-            draining: AtomicBool::new(false),
+            drain_state: AtomicU8::new(OPEN),
             admin_token,
             published: Mutex::new(HashSet::new()),
             lifecycle: Mutex::new(()),
@@ -326,24 +375,38 @@ impl ProviderRuntime {
     /// One maintenance pass: the periodic pass and `POST /admin/offers/refresh`. It never
     /// ends a drain or a settlement-failure stop.
     pub async fn refresh(&self) -> Result<usize, String> {
-        self.pass(false).await
+        let lifecycle = self.lifecycle.lock().await;
+        self.pass(&lifecycle).await
     }
 
-    /// `POST /admin/resume`: ends a drain and a settlement-failure stop, then runs one
-    /// maintenance pass, which alone may reopen admission (provider-daemon-lifecycle
-    /// requirements 4 and 6).
-    pub async fn resume(&self) -> Result<usize, String> {
-        self.draining.store(false, Ordering::Release);
-        self.pass(true).await
-    }
-
-    async fn pass(&self, resume: bool) -> Result<usize, String> {
-        let _lifecycle = self.lifecycle.lock().await;
-        if resume {
-            // Under the lifecycle lock: only a pass that starts after the operator's
-            // resume can reopen admission that a settlement failure closed.
-            *self.state.fault() = None;
+    /// `POST /admin/resume`: ends an operator drain and the settlement-failure stops recorded
+    /// before the request, then runs one maintenance pass, which alone may reopen admission
+    /// (provider-daemon-lifecycle requirements 4 and 6). Once the shutdown path has drained,
+    /// it refuses without a pass, also when it was received before (requirement 11).
+    pub async fn resume(&self) -> Result<usize, ResumeError> {
+        // When the operator asked: a failure recorded after this, for example by an earlier
+        // admitted request while this resume waits for a running pass, is not cleared.
+        let recorded = self.state.fault().recorded;
+        // Ends only an operator drain, never the shutdown drain.
+        if let Err(SHUTTING_DOWN) =
+            self.drain_state.compare_exchange(DRAINING, OPEN, Ordering::AcqRel, Ordering::Acquire)
+        {
+            return Err(ResumeError::ShuttingDown);
         }
+        let lifecycle = self.lifecycle.lock().await;
+        // Under the lifecycle lock: a resume that waited behind the shutdown drain, or whose
+        // drain ending raced it, is refused and runs no pass, so it never reopens admission.
+        if self.drain_state.load(Ordering::Acquire) == SHUTTING_DOWN {
+            return Err(ResumeError::ShuttingDown);
+        }
+        // Only a pass that starts after the operator's resume can reopen admission that a
+        // settlement failure closed.
+        self.state.fault().clear_through(recorded);
+        self.pass(&lifecycle).await.map_err(ResumeError::Pass)
+    }
+
+    /// One maintenance pass, under the lifecycle lock that `_lifecycle` holds.
+    async fn pass(&self, _lifecycle: &tokio::sync::MutexGuard<'_, ()>) -> Result<usize, String> {
         let result = self.refresh_inner().await;
         *self.refresh_error.write().await = result.as_ref().err().cloned();
         if result.is_err() {
@@ -422,7 +485,7 @@ impl ProviderRuntime {
                 .is_ok_and(|status| status != "required");
         let accepting = !self.chain_rejected.load(Ordering::Acquire)
             && version_allowed
-            && !self.draining.load(Ordering::Acquire)
+            && self.drain_state.load(Ordering::Acquire) == OPEN
             && self.state.managed_engines.values().all(|engine| engine.is_alive())
             && health.iter().any(|model| model.ready);
         *self.health.write().await = health;
@@ -489,13 +552,28 @@ impl ProviderRuntime {
         for engine in self.state.managed_engines.values() { engine.stop().await; }
     }
 
+    /// `POST /admin/drain`: stops new admission and new funding and withdraws the published
+    /// offers (provider-daemon-lifecycle requirement 3). A resume ends it.
     pub async fn drain(&self) {
-        self.draining.store(true, Ordering::Release);
+        self.close(DRAINING).await;
+    }
+
+    /// The shutdown path's drain (provider-daemon-lifecycle requirement 11, design code
+    /// difference 9): `drain`, which nothing ends. From here, a resume, also one received
+    /// before, is refused, and no maintenance pass or offer refresh reopens admission or
+    /// new-funding readiness or publishes. The state is set before the lifecycle lock is
+    /// taken, so a resume that waits for the lock behind a running pass sees it too.
+    pub async fn drain_for_shutdown(&self) {
+        self.close(SHUTTING_DOWN).await;
+    }
+
+    async fn close(&self, state: u8) {
+        self.drain_state.fetch_max(state, Ordering::AcqRel);
         self.state.accepting.store(false, Ordering::Release);
         self.state.funding_ready.store(false, Ordering::Release);
         let _lifecycle = self.lifecycle.lock().await;
         // A refresh already in progress may have computed admission before the
-        // drain flag changed. Reassert it after serializing with that refresh.
+        // drain state changed. Reassert it after serializing with that refresh.
         self.state.accepting.store(false, Ordering::Release);
         self.state.funding_ready.store(false, Ordering::Release);
         let mut published = self.published.lock().await;
@@ -686,7 +764,7 @@ async fn admin_status(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value
     };
     Json(
         json!({"accepting":runtime.state.accepting.load(Ordering::Acquire),
-        "draining":runtime.draining.load(Ordering::Acquire),
+        "draining":runtime.drain_state.load(Ordering::Acquire) != OPEN,
         "settlement_error":runtime.state.settlement_fault(),
         "funding_ready":runtime.state.funding_ready.load(Ordering::Acquire),
         "chain_error":&*runtime.chain_error.read().await,
@@ -729,7 +807,11 @@ async fn admin_drain(State(runtime): State<Arc<ProviderRuntime>>) -> Json<Value>
 async fn admin_resume(
     State(runtime): State<Arc<ProviderRuntime>>,
 ) -> Result<Json<Value>, ApiError> {
-    let count = runtime.resume().await.map_err(ApiError::internal)?;
+    let count = runtime.resume().await.map_err(|error| match error {
+        ResumeError::ShuttingDown => ApiError::new(StatusCode::CONFLICT, "shutting_down",
+            "The provider is shutting down; restart the daemon to serve again"),
+        ResumeError::Pass(error) => ApiError::internal(error),
+    })?;
     Ok(Json(
         json!({"accepting":runtime.state.accepting.load(Ordering::Acquire),"offers_published":count}),
     ))
@@ -850,8 +932,13 @@ mod tests {
     /// A private engine serving one embeddings model well enough to pass its readiness
     /// probe: two tokens per input and one-dimensional embeddings.
     fn embeddings_engine(model: protocol::ModelSpec) -> Router {
+        embeddings_engine_with_slots(model, 1)
+    }
+
+    /// `embeddings_engine` reporting `slots` engine slots, for a model of that concurrency.
+    fn embeddings_engine_with_slots(model: protocol::ModelSpec, slots: u32) -> Router {
         let id = model.id.clone();
-        let props = json!({"build_info": "b1-cd959ba", "total_slots": 1, "model_alias": model.id,
+        let props = json!({"build_info": "b1-cd959ba", "total_slots": slots, "model_alias": model.id,
             "default_generation_settings": {"n_ctx": model.context_length}});
         Router::new()
             .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
@@ -1783,6 +1870,287 @@ mod tests {
         assert_eq!(runtime.dht.status().await["published_offers"], 0);
         runtime.dht.stop().await;
         for server in servers {
+            server.abort();
+        }
+    }
+
+    /// Holds the next request that it lets through, on `path` when one is given, until
+    /// `release`: a stub engine or chain RPC that is slow exactly once.
+    #[derive(Clone)]
+    struct Gate {
+        path: Option<&'static str>,
+        armed: Arc<AtomicBool>,
+        entered: Arc<tokio::sync::watch::Sender<bool>>,
+        open: Arc<tokio::sync::watch::Sender<bool>>,
+    }
+
+    impl Gate {
+        fn new(path: Option<&'static str>) -> Self {
+            Self {
+                path,
+                armed: Arc::new(AtomicBool::new(false)),
+                entered: Arc::new(tokio::sync::watch::channel(false).0),
+                open: Arc::new(tokio::sync::watch::channel(false).0),
+            }
+        }
+        /// Holds the next request that reaches the gate.
+        fn arm(&self) {
+            self.open.send_replace(false);
+            self.entered.send_replace(false);
+            self.armed.store(true, Ordering::Release);
+        }
+        /// Returns once the held request has arrived, within 30 seconds.
+        async fn entered(&self) {
+            within(self.entered.subscribe().wait_for(|entered| *entered)).await.unwrap();
+        }
+        fn release(&self) {
+            self.open.send_replace(true);
+        }
+        fn hold(&self, router: Router) -> Router {
+            let gate = self.clone();
+            router.layer(middleware::from_fn(move |request: Request, next: Next| {
+                let gate = gate.clone();
+                async move {
+                    if gate.path.is_none_or(|path| request.uri().path() == path)
+                        && gate.armed.swap(false, Ordering::AcqRel)
+                    {
+                        gate.entered.send_replace(true);
+                        let _ = gate.open.subscribe().wait_for(|open| *open).await;
+                    }
+                    next.run(request).await
+                }
+            }))
+        }
+    }
+
+    /// `future`, which must finish within 30 seconds.
+    async fn within<F: std::future::Future>(future: F) -> F::Output {
+        tokio::time::timeout(Duration::from_secs(30), future).await.expect("timed out")
+    }
+
+    /// Waits until the provider's drain state satisfies `reached`, within 30 seconds.
+    async fn drain_state_reaches(runtime: &ProviderRuntime, reached: impl Fn(u8) -> bool) {
+        within(async {
+            while !reached(runtime.drain_state.load(Ordering::Acquire)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+    }
+
+    /// Nothing has reopened since the shutdown drain: admission and new funding are closed,
+    /// the status reports the drain, `/admin/offers` and the DHT hold no offer, and a new
+    /// embedding request under `key` is refused as `provider_paused` before any record.
+    async fn assert_shut(runtime: &Arc<ProviderRuntime>, bearer: &str, contract: &str, key: &str) {
+        assert!(!runtime.state.accepting.load(Ordering::Acquire), "{key}");
+        assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{key}");
+        let (status, view) = admin(runtime, "GET", "/admin/status").await;
+        assert_eq!(status, StatusCode::OK, "{key}");
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["draining"]),
+            (&json!(false), &json!(false), &json!(true)), "{key}: {view}");
+        assert_eq!(admin(runtime, "GET", "/admin/offers").await, (StatusCode::OK, json!({"offers": []})), "{key}");
+        assert_eq!(runtime.dht.status().await["published_offers"], 0, "{key}");
+        let (status, answer) = embed(runtime, bearer, key).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{key}: {answer}");
+        assert_eq!(answer["error"]["code"], "provider_paused", "{key}");
+        assert!(runtime.state.ledger.request_view(contract, key).is_err(), "{key}");
+    }
+
+    /// provider-daemon-lifecycle requirement 11 (task 2.9, design code difference 9): once the
+    /// shutdown path has drained, a `POST /admin/resume` and a `POST /admin/offers/refresh` reopen
+    /// nothing. In the first case they arrive after the shutdown drain has returned; the resume is
+    /// refused (409 `shutting_down`) without ending the drain, and the refresh runs a pass that
+    /// keeps admission closed. In the second, the resume was received before: it has ended an
+    /// operator drain and waits for the lifecycle lock behind a running pass when the shutdown
+    /// drain begins, and is refused when it gets the lock. `POST /admin/drain` and the read-only
+    /// routes keep answering.
+    #[tokio::test]
+    async fn a_resume_during_shutdown_does_not_reopen_the_provider() {
+        let directory = tempfile::tempdir().unwrap();
+        let (runtime, bearer, servers) =
+            embedding_provider(directory.path(), &["embeddings"], Arc::new(AtomicBool::new(true))).await;
+        let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        runtime.drain_for_shutdown().await;
+        let (status, answer) = admin(&runtime, "POST", "/admin/resume").await;
+        assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+        assert_eq!(answer["error"]["code"], "shutting_down", "{answer}");
+        assert_eq!(admin(&runtime, "POST", "/admin/offers/refresh").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        for path in ["/admin/requests", "/admin/accounts", "/admin/fees", "/admin/runtime"] {
+            assert_eq!(admin(&runtime, "GET", path).await.0, StatusCode::OK, "{path}");
+        }
+        assert_eq!(admin(&runtime, "POST", "/admin/resume").await.0, StatusCode::CONFLICT);
+        // A periodic pass that was not yet stopped reopens nothing either.
+        runtime.refresh().await.unwrap();
+        assert_shut(&runtime, &bearer, &contract, "after-shutdown-drain").await;
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+
+        // The operator drains for maintenance, then resumes while a periodic pass runs, and the
+        // daemon is told to stop while that resume waits for the pass.
+        let directory = tempfile::tempdir().unwrap();
+        let chain = Gate::new(None);
+        let (runtime, bearer, servers) = embedding_provider_on(directory.path(), &["embeddings"],
+            Arc::new(AtomicBool::new(true)), chain.hold(Router::new().fallback(ready_chain)), false).await;
+        let contract = runtime.state.ledger.list_accounts().unwrap()[0].contract_id.clone();
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        chain.arm();
+        let pass = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.refresh().await }
+        });
+        chain.entered().await;
+        let resume = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { admin(&runtime, "POST", "/admin/resume").await }
+        });
+        // The resume has ended the operator drain and waits for the lifecycle lock.
+        drain_state_reaches(&runtime, |state| state == OPEN).await;
+        let shutdown = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.drain_for_shutdown().await }
+        });
+        drain_state_reaches(&runtime, |state| state != OPEN).await;
+        chain.release();
+        within(pass).await.unwrap().unwrap();
+        within(shutdown).await.unwrap();
+        let (status, answer) = within(resume).await.unwrap();
+        assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+        assert_eq!(answer["error"]["code"], "shutting_down", "{answer}");
+        assert_eq!(admin(&runtime, "POST", "/admin/offers/refresh").await,
+            (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        assert_shut(&runtime, &bearer, &contract, "racing-resume").await;
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 6 (task 2.10): the failures a resume clears are those
+    /// numbered up to the count when it was requested. A later one stays open and is reported,
+    /// also when no failure preceded the request; the first open failure is the one reported.
+    #[test]
+    fn a_resume_clears_only_the_settlement_failures_recorded_before_it() {
+        use inference_gateway::{DURABLE_SETTLEMENT_FAILED as DURABLE, SETTLEMENT_CLOCK_FAILED as CLOCK};
+        let mut faults = SettlementFaults::default();
+        faults.clear_through(0);
+        assert_eq!(faults.open, None);
+        // None was recorded when the resume was requested; one recorded while it waited stays.
+        faults.record(DURABLE);
+        faults.clear_through(0);
+        assert_eq!(faults.open, Some((1, DURABLE)));
+        faults.record(CLOCK);
+        assert_eq!(faults.open, Some((1, DURABLE)));
+        faults.clear_through(2);
+        assert_eq!(faults.open, None);
+        // A failure after the request outlives the earlier ones that the resume clears.
+        faults.record(DURABLE);
+        faults.record(CLOCK);
+        faults.clear_through(3);
+        assert_eq!(faults.open, Some((4, CLOCK)));
+        faults.clear_through(4);
+        assert_eq!((faults.open, faults.recorded), (None, 4));
+    }
+
+    /// provider-daemon-lifecycle requirement 6 (task 2.10, found in the round-56 review): a
+    /// resume clears only the settlement failures recorded before the operator asked for it. A
+    /// request is admitted and waits in the engine; a first failure (the accounting clock at
+    /// another settlement, recorded as the gateway records it) closes admission; a periodic
+    /// pass holds the lifecycle lock; `POST /admin/resume` arrives and waits for it; the
+    /// admitted request's settlement then fails as well. After the lock is released, the resume
+    /// answers that admission is still closed, nothing is published, and the status names the
+    /// second failure. A resume requested after that failure reopens admission.
+    #[tokio::test]
+    async fn a_resume_keeps_a_settlement_failure_recorded_while_it_waits() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut config, unavailable) = unavailable_provider(directory.path()).await;
+        let chain = Gate::new(None);
+        let (rpc, rpc_server) = serve(chain.hold(Router::new().fallback(ready_chain))).await;
+        config.network.rpc_url = rpc;
+        config.development = false;
+        config.public_endpoint = "https://inference.example.org/".into();
+        let model = &mut config.models[0];
+        model.model.capabilities = vec!["embeddings".into()];
+        model.model.max_output_tokens = 0;
+        model.price.output_wei_per_1k = "0".into();
+        // Two slots, so that the pass runs while a request waits in the engine, and time enough
+        // for that request to wait.
+        model.max_concurrency = 2;
+        model.request_timeout_secs = 60;
+        let engine = Gate::new(Some("/v1/embeddings"));
+        let (engine_url, engine_server) =
+            serve(engine.hold(embeddings_engine_with_slots(model.model.clone(), 2))).await;
+        model.engine_url = engine_url;
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert!(runtime.state.accepting.load(Ordering::Acquire));
+        assert_eq!(runtime.dht.status().await["published_offers"], 1);
+        let (contract, bearer) = free_account(&runtime.state, "22");
+        let (earlier, earlier_bearer) = free_account(&runtime.state, "33");
+
+        engine.arm();
+        let admitted = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { embed(&runtime, &earlier_bearer, "admitted-before-the-failures").await }
+        });
+        engine.entered().await;
+        runtime.state.record_settlement_fault(inference_gateway::SETTLEMENT_CLOCK_FAILED);
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("CREATE TRIGGER refuse_settlement BEFORE UPDATE ON requests
+            WHEN OLD.status='reserved' AND NEW.status<>'reserved'
+            BEGIN SELECT RAISE(ABORT,'injected settlement write failure'); END;").unwrap();
+        chain.arm();
+        let pass = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { runtime.refresh().await }
+        });
+        chain.entered().await;
+        let resume = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { admin(&runtime, "POST", "/admin/resume").await }
+        });
+        // The resume has arrived and waits for the lifecycle lock that the pass holds.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!resume.is_finished());
+        // While it waits, the admitted request's settlement fails: a second failure.
+        engine.release();
+        let (status, answer) = within(admitted).await.unwrap();
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{answer}");
+        // The first failure is still the one reported until the resume runs.
+        assert_eq!(runtime.state.settlement_fault(), Some(inference_gateway::SETTLEMENT_CLOCK_FAILED));
+        // The answer arrives after the settlement's drop retried its write once.
+        ledger.execute_batch("DROP TRIGGER refuse_settlement").unwrap();
+        chain.release();
+        within(pass).await.unwrap().unwrap();
+        let resumed = within(resume).await.unwrap();
+        assert_eq!(resumed, (StatusCode::OK, json!({"accepting": false, "offers_published": 0})));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!(view["settlement_error"], inference_gateway::DURABLE_SETTLEMENT_FAILED, "{view}");
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["draining"]),
+            (&json!(false), &json!(false), &json!(false)), "{view}");
+        assert_eq!(admin(&runtime, "GET", "/admin/offers").await, (StatusCode::OK, json!({"offers": []})));
+        assert_eq!(runtime.dht.status().await["published_offers"], 0);
+        let (status, answer) = embed(&runtime, &bearer, "after-the-first-resume").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
+        assert_eq!(answer["error"]["code"], "provider_paused");
+        assert!(runtime.state.ledger.request_view(&contract, "after-the-first-resume").is_err());
+        assert_eq!(runtime.state.ledger.request_view(&earlier, "admitted-before-the-failures").unwrap().status, "reserved");
+
+        // A resume requested after the second failure clears it, and the provider admits again.
+        assert_eq!(admin(&runtime, "POST", "/admin/resume").await,
+            (StatusCode::OK, json!({"accepting": true, "offers_published": 1})));
+        assert_eq!(admin(&runtime, "GET", "/admin/status").await.1["settlement_error"], Value::Null);
+        let (status, answer) = embed(&runtime, &bearer, "after-the-second-resume").await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(runtime.state.ledger.request_view(&contract, "after-the-second-resume").unwrap().status, "completed");
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
             server.abort();
         }
     }

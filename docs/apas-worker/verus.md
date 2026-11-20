@@ -220,3 +220,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-20 — daemon status and settlement-failure stop
 
 - `app::tests::a_settlement_failure_keeps_admission_closed_until_the_operator_resumes`, `admin_status_distinguishes_a_drain_from_a_rejected_chain_identity`, `admin_status_names_a_performance_withdrawn_model_and_keeps_its_readiness`, `admin_status_reports_an_unreadable_ledger_and_every_other_fact` and `admin_status_reports_an_engine_exit_with_its_own_reason` — **not replaceable**: a running provider runtime, admin routes, SQLite ledgers, stub engines and a managed helper process. The latch rule (a recorded fault overrides a pass's admission decision until resume) is small, but it is applied under a mutex inside async runtime code.
+
+## Judged 2026-11-20 — daemon shutdown signals and resume ordering
+
+- `app::tests::a_resume_clears_only_the_settlement_failures_recorded_before_it` — **replaceable in principle**: `SettlementFaults` is a small sequence-number state machine (record, `clear_through(n)`), and a Verus lemma could prove that `clear_through(n)` never clears a failure numbered above `n` and always clears those at or below it. Not replaced, because Verus is unavailable (report entry of 2026-11-15).
+- `app::tests::a_resume_during_shutdown_does_not_reopen_the_provider`, `a_resume_keeps_a_settlement_failure_recorded_while_it_waits` and the `daemon_engine_process_test` signal tests (`sighup_*`, `sigterm_while_serving_*`, `sighup_stays_ignored_when_the_daemon_starts_ignoring_it`) — **not replaceable**: runtime interleavings, real child processes and POSIX signals.

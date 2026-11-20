@@ -20,17 +20,32 @@ struct Args {
     check: bool,
 }
 
-/// Termination requests (`SIGTERM` or `SIGINT` on Unix, Ctrl-C on Windows). tokio installs a
-/// handler only when a stream is created, so these exist before any engine starts: a request
-/// during startup must stop the engines already started instead of ending the daemon by the
-/// default action, which on macOS orphans them (book lines 634 and 642).
+/// Termination requests that the daemon can intercept: `SIGTERM`, `SIGINT` and a terminal
+/// hang-up (`SIGHUP`) on Unix; Ctrl-C, Ctrl-Break and closing the console window on Windows.
+/// Each takes the shutdown path, during startup as while serving (provider-daemon-lifecycle
+/// requirement 11, design decision 7). tokio installs a handler only when a stream is created,
+/// so these exist before any engine starts: a request during startup must stop the engines
+/// already started instead of ending the daemon by the default action, which on macOS orphans
+/// them (book lines 634 and 642). `SIGQUIT` keeps its default action (design observation 9).
+/// A `SIGHUP` that the daemon started ignoring, as under `nohup`, stays ignored (design, Risks):
+/// tokio's handler would replace that disposition, so no hang-up stream is created then.
+/// On Windows, the system ends the process a short, system-defined time after a console close
+/// (tokio keeps its handler from returning until then), so the path can be cut short there; the
+/// job object and startup recovery cover the rest.
 struct Termination {
     #[cfg(unix)]
     terminate: tokio::signal::unix::Signal,
     #[cfg(unix)]
     interrupt: tokio::signal::unix::Signal,
+    /// `None` when the daemon started with `SIGHUP` ignored.
+    #[cfg(unix)]
+    hangup: Option<tokio::signal::unix::Signal>,
     #[cfg(windows)]
     ctrl_c: tokio::signal::windows::CtrlC,
+    #[cfg(windows)]
+    ctrl_break: tokio::signal::windows::CtrlBreak,
+    #[cfg(windows)]
+    ctrl_close: tokio::signal::windows::CtrlClose,
 }
 
 impl Termination {
@@ -41,12 +56,16 @@ impl Termination {
             Ok(Self {
                 terminate: signal(SignalKind::terminate())?,
                 interrupt: signal(SignalKind::interrupt())?,
+                hangup: if hangup_ignored() { None } else { Some(signal(SignalKind::hangup())?) },
             })
         }
         #[cfg(windows)]
         {
+            use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
             Ok(Self {
-                ctrl_c: tokio::signal::windows::ctrl_c()?,
+                ctrl_c: ctrl_c()?,
+                ctrl_break: ctrl_break()?,
+                ctrl_close: ctrl_close()?,
             })
         }
         #[cfg(not(any(unix, windows)))]
@@ -57,11 +76,41 @@ impl Termination {
 
     async fn requested(&mut self) {
         #[cfg(unix)]
-        tokio::select! { _ = self.terminate.recv() => {}, _ = self.interrupt.recv() => {} }
+        tokio::select! {
+            _ = self.terminate.recv() => {},
+            _ = self.interrupt.recv() => {},
+            _ = next_or_never(self.hangup.as_mut()) => {},
+        }
         #[cfg(windows)]
-        let _ = self.ctrl_c.recv().await;
+        tokio::select! {
+            _ = self.ctrl_c.recv() => {},
+            _ = self.ctrl_break.recv() => {},
+            _ = self.ctrl_close.recv() => {},
+        }
         #[cfg(not(any(unix, windows)))]
         let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Whether this process started with `SIGHUP` ignored, as `nohup` starts it. Read before any
+/// hang-up handler is installed.
+#[cfg(unix)]
+fn hangup_ignored() -> bool {
+    // SAFETY: with a null new action, `sigaction` only reads the current disposition into
+    // `current`, a plain C struct for which all-zero bytes are valid.
+    let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+    let read = unsafe { libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut current) };
+    read == 0 && current.sa_sigaction == libc::SIG_IGN
+}
+
+/// The next delivery of `signal`, or never when its stream was not created.
+#[cfg(unix)]
+async fn next_or_never(signal: Option<&mut tokio::signal::unix::Signal>) {
+    match signal {
+        Some(signal) => {
+            signal.recv().await;
+        }
+        None => std::future::pending().await,
     }
 }
 
@@ -157,7 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     maintenance.abort();
     let _ = maintenance.await;
-    runtime.drain().await;
+    // The shutdown drain: from here no administration action, including a `POST /admin/resume`
+    // already received on an accepted connection, reopens admission or publishes
+    // (provider-daemon-lifecycle requirement 11, design code difference 9).
+    runtime.drain_for_shutdown().await;
     stop_tx.send_replace(true);
     // Existing generation may finish and settle, but shutdown cannot hang indefinitely.
     let joined = tokio::time::timeout(Duration::from_secs(75), async {

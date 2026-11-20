@@ -1,11 +1,13 @@
 //! Process tests of `chiral_daemon` with a development configuration whose CPU managed runtime's
 //! `llama-server` is a full copy of this test binary, inventoried (`managed-engine-runtime`
-//! requirements 6 and 11, tasks 2.1 and 2.3).
+//! requirements 6 and 11, tasks 2.1 and 2.3; `provider-daemon-lifecycle` requirement 11, task 2.2).
 //!
 //! This target has `harness = false` (Cargo.toml): libtest would reject the launcher's
 //! `llama-server` arguments, so `main` acts as the stub engine when it runs under that name: it
-//! records its process id next to its key file and sleeps without answering health. Under any
-//! other name it runs the tests below in sequence; a name given on the command line filters them.
+//! records its process id next to its key file and sleeps without answering health, or, when the
+//! file `SERVES_HEALTH` is next to its key file, answers `GET /health` on its configured address,
+//! so that the daemon starts and serves. Under any other name it runs the tests below in
+//! sequence; a name given on the command line filters them.
 use chiral_network::{
     engine_runtime::{ENGINE_VERSION, SOURCE_REVISION},
     network::{ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
@@ -13,7 +15,7 @@ use chiral_network::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::ExitStatus;
@@ -22,6 +24,8 @@ use std::time::{Duration, Instant};
 
 const ENGINE: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
 const HELPER_PID: &str = "engine-helper.pid";
+/// Beside the engine key file: the stub engine answers its health check.
+const SERVES_HEALTH: &str = "engine-serves-health";
 // Test-only credentials. The signing key has letters, so that letter case matters.
 const SIGNING_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ADMIN_TOKEN: &str = "private-test-operator-token-32-bytes";
@@ -56,6 +60,10 @@ fn main() {
     tests.extend([
         ("sigterm_during_engine_startup_stops_the_engine", sigterm_during_engine_startup_stops_the_engine as fn(&Runtime)),
         ("sigint_during_engine_startup_stops_the_engine", sigint_during_engine_startup_stops_the_engine),
+        ("sighup_during_engine_startup_stops_the_engine", sighup_during_engine_startup_stops_the_engine),
+        ("sigterm_while_serving_stops_the_engine_and_keeps_the_deployment", sigterm_while_serving_stops_the_engine_and_keeps_the_deployment),
+        ("sighup_while_serving_stops_the_engine_and_keeps_the_deployment", sighup_while_serving_stops_the_engine_and_keeps_the_deployment),
+        ("sighup_stays_ignored_when_the_daemon_starts_ignoring_it", sighup_stays_ignored_when_the_daemon_starts_ignoring_it),
     ]);
     // Nothing here is ignored; `--ignored` selects no test, as under libtest.
     tests.retain(|(name, _)| {
@@ -80,18 +88,49 @@ fn main() {
     }
 }
 
-/// The stub engine: answers nothing, so the daemon waits for its health until the startup timeout.
+/// The stub engine: answers nothing, so the daemon waits for its health until the startup timeout,
+/// unless `SERVES_HEALTH` is beside its key file.
 fn engine_stub() {
     let arguments: Vec<_> = std::env::args_os().collect();
-    let key = arguments.iter().position(|a| a == "--api-key-file").and_then(|i| arguments.get(i + 1));
-    if let Some(directory) = key.map(Path::new).and_then(Path::parent) {
+    let value = |name: &str| arguments.iter().position(|a| a == name).and_then(|i| arguments.get(i + 1));
+    let directory = value("--api-key-file").map(Path::new).and_then(Path::parent);
+    if let Some(directory) = directory {
         let temporary = directory.join(format!("{HELPER_PID}.tmp"));
         if std::fs::write(&temporary, std::process::id().to_string()).is_ok() {
             let _ = std::fs::rename(&temporary, directory.join(HELPER_PID));
         }
     }
+    if directory.is_some_and(|directory| directory.join(SERVES_HEALTH).exists()) {
+        let host = value("--host").and_then(|host| host.to_str()).unwrap_or("127.0.0.1");
+        let port = value("--port").and_then(|port| port.to_str()).and_then(|port| port.parse::<u16>().ok());
+        if let Some(listener) = port.and_then(|port| std::net::TcpListener::bind((host, port)).ok()) {
+            std::thread::spawn(move || serve_health(listener));
+        }
+    }
     // Bounded, so that a failed run cannot leave the stub behind for long.
     std::thread::sleep(Duration::from_secs(120));
+}
+
+/// Answers `GET /health` with 200 and anything else with 404, so the daemon's startup health
+/// check passes and its readiness probes fail: the daemon serves with the model not ready.
+fn serve_health(listener: std::net::TcpListener) {
+    for mut stream in listener.incoming().flatten() {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 4096];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") && request.len() < 65536 {
+            match stream.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => request.extend_from_slice(&buffer[..read]),
+            }
+        }
+        let response: &[u8] = if request.starts_with(b"GET /health ") {
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
+        } else {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        };
+        let _ = stream.write_all(response);
+    }
 }
 
 /// One inventoried runtime and artifact shared by every case; the daemon only reads them.
@@ -186,13 +225,17 @@ impl Runtime {
             "dht": { "listen": "/ip4/127.0.0.1/tcp/0", "bootstrap": [], "identity_file": "dht.key" },
             "development": true
         })).unwrap()).unwrap();
-        Provider { directory, config }
+        Provider { directory, config, public, engine }
     }
 }
 
 struct Provider {
     directory: PathBuf,
     config: PathBuf,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    public: u16,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    engine: u16,
 }
 
 impl Provider {
@@ -281,8 +324,12 @@ impl Drop for Cleanup<'_> {
 }
 
 fn spawn(provider: &Provider) -> Cleanup<'_> {
+    spawn_command(provider, provider.daemon(false))
+}
+
+fn spawn_command(provider: &Provider, mut command: Command) -> Cleanup<'_> {
     let log = |name: &str| std::fs::File::create(provider.directory.join(name)).unwrap();
-    let daemon = provider.daemon(false).stdin(Stdio::null()).stdout(log("daemon.stdout")).stderr(log("daemon.stderr")).spawn().unwrap();
+    let daemon = command.stdin(Stdio::null()).stdout(log("daemon.stdout")).stderr(log("daemon.stderr")).spawn().unwrap();
     Cleanup { daemon, provider }
 }
 
@@ -367,4 +414,149 @@ fn sigterm_during_engine_startup_stops_the_engine(runtime: &Runtime) {
 #[cfg(unix)]
 fn sigint_during_engine_startup_stops_the_engine(runtime: &Runtime) {
     termination_during_engine_startup_stops_the_engine(runtime, libc::SIGINT, "sigint");
+}
+
+#[cfg(unix)]
+fn sighup_during_engine_startup_stops_the_engine(runtime: &Runtime) {
+    termination_during_engine_startup_stops_the_engine(runtime, libc::SIGHUP, "sighup");
+}
+
+/// `GET /healthz` on the daemon's public listener answers 200.
+#[cfg(unix)]
+fn healthz(port: u16) -> bool {
+    let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return false };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    if stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    let _ = stream.read_to_string(&mut response);
+    response.starts_with("HTTP/1.1 200")
+}
+
+/// Waits until the daemon has printed its start line, then checks that `/healthz` answers 200:
+/// the daemon serves. Returns the peer identity from the start line.
+#[cfg(unix)]
+fn served(provider: &Provider, run: &mut Cleanup<'_>, case: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let peer = loop {
+        let report = logs(provider);
+        if let Some(line) = report.lines().find(|line| line.contains("Chiral provider public=")) {
+            break line.rsplit_once("peer_id=").map(|(_, peer)| peer.trim().to_owned()).unwrap();
+        }
+        assert!(run.daemon.try_wait().unwrap().is_none(), "{case}: the daemon exited before serving\n{report}");
+        assert!(Instant::now() < deadline, "{case}: the daemon did not serve\n{report}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(healthz(provider.public), "{case}: /healthz did not answer\n{}", logs(provider));
+    peer
+}
+
+/// The deployment's ledger: `data/<network>/<wallet>/<peer id>/ledger.sqlite3`.
+#[cfg(unix)]
+fn ledgers(provider: &Provider) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![provider.directory.join("data")];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() { pending.push(path); } else if path.file_name() == Some(std::ffi::OsStr::new("ledger.sqlite3")) { found.push(path); }
+        }
+    }
+    found
+}
+
+/// Task 2.2 (`provider-daemon-lifecycle` requirement 11, design code difference 2): a termination
+/// request while the daemon serves, with a managed engine that passed its health check, takes the
+/// shutdown path. The daemon exits by itself with status 0 within its shutdown bound (75 seconds
+/// for admitted requests, then the engine stop), the engine process no longer exists and its port
+/// is free, and the deployment's state is kept: the DHT identity is unchanged and the ledger is
+/// still there, and a restart serves the same deployment (the same peer identity), which it then
+/// leaves the same way. The `SIGTERM` case is the control: `SIGHUP` must exit like it.
+#[cfg(unix)]
+fn termination_while_serving_stops_the_engine_and_keeps_the_deployment(runtime: &Runtime, signal: libc::c_int, name: &str) {
+    let provider = runtime.provider(name, "engine.token", None);
+    std::fs::write(provider.directory.join(SERVES_HEALTH), b"").unwrap();
+    let mut deployment = None;
+    for start in ["start", "restart"] {
+        let _ = std::fs::remove_file(provider.directory.join(HELPER_PID));
+        let mut run = spawn(&provider);
+        let peer = served(&provider, &mut run, start);
+        let helper = provider.helper().unwrap_or_else(|| panic!("{start}: no engine\n{}", logs(&provider)));
+        assert!(exists(helper), "{start}");
+        let identity = std::fs::read(provider.directory.join("dht.key")).unwrap();
+        let ledger = ledgers(&provider);
+        assert_eq!(ledger.len(), 1, "{start}: {ledger:?}");
+        assert!(ledger[0].to_string_lossy().contains(&peer), "{start}: {ledger:?} {peer}");
+        let state = (peer, identity, ledger);
+        if let Some(earlier) = &deployment {
+            assert_eq!(earlier, &state, "{start}: the restart did not serve the same deployment");
+        }
+
+        let signalled = Instant::now();
+        assert_eq!(unsafe { libc::kill(run.daemon.id() as libc::pid_t, signal) }, 0);
+        let status = wait(&mut run.daemon, Duration::from_secs(90));
+        let exited = signalled.elapsed();
+        while exists(helper) && signalled.elapsed() < exited + Duration::from_secs(5) { std::thread::sleep(Duration::from_millis(20)); }
+        let engine_survived = exists(helper);
+        let port_free = std::net::TcpListener::bind(("127.0.0.1", provider.engine)).is_ok();
+        let report = format!("{start}: status {status:?} after {exited:?}, engine survived {engine_survived}, engine port free {port_free}\n{}", logs(&provider));
+        // Exited by itself through the shutdown path, not by the signal's default action.
+        let status = status.unwrap_or_else(|| panic!("the daemon did not exit\n{report}"));
+        assert_eq!(status.code(), Some(0), "{report}");
+        assert!(!engine_survived, "the engine child outlived the daemon\n{report}");
+        assert!(port_free, "the engine port is still occupied\n{report}");
+        assert_eq!(std::fs::read(provider.directory.join("dht.key")).unwrap(), state.1, "{report}");
+        assert_eq!(ledgers(&provider), state.2, "{report}");
+        deployment = Some(state);
+    }
+}
+
+#[cfg(unix)]
+fn sigterm_while_serving_stops_the_engine_and_keeps_the_deployment(runtime: &Runtime) {
+    termination_while_serving_stops_the_engine_and_keeps_the_deployment(runtime, libc::SIGTERM, "sigterm-serving");
+}
+
+#[cfg(unix)]
+fn sighup_while_serving_stops_the_engine_and_keeps_the_deployment(runtime: &Runtime) {
+    termination_while_serving_stops_the_engine_and_keeps_the_deployment(runtime, libc::SIGHUP, "sighup-serving");
+}
+
+/// Task 2.2 and the design's Risks: a daemon started with `SIGHUP` ignored, as `nohup` starts it,
+/// keeps ignoring it. Closing the terminal stops neither the daemon nor its engine; `SIGTERM` still
+/// takes the shutdown path. Without the check, tokio's handler replaces the inherited disposition
+/// and the hang-up ends the daemon through the shutdown path within a fraction of a second.
+#[cfg(unix)]
+fn sighup_stays_ignored_when_the_daemon_starts_ignoring_it(runtime: &Runtime) {
+    use std::os::unix::process::CommandExt;
+    let provider = runtime.provider("sighup-nohup", "engine.token", None);
+    std::fs::write(provider.directory.join(SERVES_HEALTH), b"").unwrap();
+    let mut command = provider.daemon(false);
+    // SAFETY: `signal` is async-signal-safe, as `pre_exec` requires; `nohup` does the same.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::signal(libc::SIGHUP, libc::SIG_IGN) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut run = spawn_command(&provider, command);
+    served(&provider, &mut run, "nohup");
+    let helper = provider.helper().unwrap_or_else(|| panic!("no engine\n{}", logs(&provider)));
+    assert_eq!(unsafe { libc::kill(run.daemon.id() as libc::pid_t, libc::SIGHUP) }, 0);
+    // The SIGHUP and SIGTERM serving cases exit within a fraction of a second of the signal.
+    std::thread::sleep(Duration::from_secs(2));
+    let status = run.daemon.try_wait().unwrap();
+    assert!(status.is_none(), "the daemon stopped on a hang-up it started ignoring: {status:?}\n{}", logs(&provider));
+    assert!(healthz(provider.public), "/healthz stopped answering after the hang-up\n{}", logs(&provider));
+    assert!(exists(helper), "the engine stopped after the hang-up\n{}", logs(&provider));
+
+    let signalled = Instant::now();
+    assert_eq!(unsafe { libc::kill(run.daemon.id() as libc::pid_t, libc::SIGTERM) }, 0);
+    let status = wait(&mut run.daemon, Duration::from_secs(90));
+    while exists(helper) && signalled.elapsed() < Duration::from_secs(95) { std::thread::sleep(Duration::from_millis(20)); }
+    let report = format!("status {status:?}, engine survived {}\n{}", exists(helper), logs(&provider));
+    assert_eq!(status.and_then(|status| status.code()), Some(0), "{report}");
+    assert!(!exists(helper), "the engine child outlived the daemon\n{report}");
 }
