@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-20 (fifty-fourth round) — Code: name an unprobeable capability set in the health detail (public-inference-api 2.5)
+
+- In step at `d16a52c0`; whitepaper unchanged; no new answers.
+- Code step (public-inference-api 2.5, from the round-53 review). The capability rule is now the pure `unprobeable_capabilities`. `probe_model` reports the named capabilities and why they cannot be probed, in place of the generic probe-failure detail, before taking capacity or contacting the engine. Configuration acceptance is unchanged. A new unit test covers nine sets, and the app regression asserts the detail. It fails when the new branch is neutralised.
+- The pure function is a seam a future Verus lemma could cover (verus.md).
+- Checks: full headless suite under `caffeinate` 556 passed, 2 ignored, 0 failed across 26 targets; `cargo test --lib desktop::` (desktop feature) 4 passed; strict validation passes.
+
 ## 2026-11-19 (fifty-third round) — Code: unprobed capabilities, embedding dimensions, failed streams, empty tokenization
 
 - In step at `3a9611f1`; whitepaper unchanged; no new answers.
@@ -565,7 +572,7 @@
 
 Code differences, then missing specifications (spec before code):
 
-1. Code differences: public-inference-api 2.5; otherwise none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
+1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). Then the remaining missing specifications in `docs/apas-worker/comparison-2026-11-18.md` (items 14 and 16). Then acceptance tests, starting with `specify-managed-engine-launch` 3.x.
 2. Work through `docs/apas-worker/comparison-2026-11-18.md`: code differences first (comparison item 6 goes with the reputation spec, item 10; `specify-offer-discovery` task 2.4 needs a design choice; items 2–5 and 7 are done), then the missing specifications in its order. `specify-profile-path-resolution` keeps tasks 3.1 (provider, relay and gateway path tests) and 3.5 (desktop refusal test) open.
 
 Earlier open work, unchanged:

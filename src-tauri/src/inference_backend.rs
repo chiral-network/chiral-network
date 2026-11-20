@@ -748,10 +748,7 @@ impl Backend {
         // `streaming` is exercised by the streamed chat or completion probes below,
         // `tools` and `structured_output` by chat probes. Checked here so that it does
         // not depend on the probe order or on whether inference is repeated.
-        let advertises = |name: &str| self.config.model.capabilities.iter().any(|c| c == name);
-        if (advertises("streaming") && !advertises("chat") && !advertises("completions"))
-            || ((advertises("tools") || advertises("structured_output")) && !advertises("chat"))
-        {
+        if !unprobeable_capabilities(&self.config.model.capabilities).is_empty() {
             return Err(upstream_error());
         }
         if !probe_inference { return Ok(None); }
@@ -1388,6 +1385,23 @@ pub struct ModelHealth {
     #[serde(skip)]
     pub embedding_dimensions: Option<u64>,
 }
+/// The advertised capabilities that no readiness probe can exercise on the model's
+/// endpoints (public-inference-api requirement 8): `streaming` is probed only by the
+/// streamed chat or completion probes, `tools` and `structured_output` only by chat
+/// probes. A model advertising any of them can never become ready.
+pub(crate) fn unprobeable_capabilities(capabilities: &[String]) -> Vec<&'static str> {
+    let advertises = |name: &str| capabilities.iter().any(|c| c == name);
+    let mut unprobeable = Vec::new();
+    if advertises("streaming") && !advertises("chat") && !advertises("completions") {
+        unprobeable.push("streaming");
+    }
+    for name in ["tools", "structured_output"] {
+        if advertises(name) && !advertises("chat") {
+            unprobeable.push(name);
+        }
+    }
+    unprobeable
+}
 /// Parent caches publication readiness; this performs real inference, not a TCP probe.
 pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth> {
     let config = &state.config;
@@ -1409,6 +1423,20 @@ pub async fn model_health(state: &crate::app::ProviderState) -> Vec<ModelHealth>
 async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> ModelHealth {
     if !state.engine_alive(&model.model.id) {
         return ModelHealth { model_id: model.model.id.clone(), ready: false, detail: "Managed engine exited".into(), embedding_dimensions: None };
+    }
+    // A capability set that can never pass readiness is a configuration problem; name it
+    // for the operator instead of reporting a generic probe failure (task 2.5).
+    let unprobeable = unprobeable_capabilities(&model.model.capabilities);
+    if !unprobeable.is_empty() {
+        return ModelHealth {
+            model_id: model.model.id.clone(),
+            ready: false,
+            detail: format!(
+                "Not ready: advertised capabilities without a probe on this model's endpoints: {}; streaming needs chat or completions, and tools and structured_output need chat",
+                unprobeable.join(", ")
+            ),
+            embedding_dimensions: None,
+        };
     }
     let permit = state.model_slots[&model.model.id].clone().try_acquire_many_owned(model.max_concurrency).ok();
     if permit.is_none() && state.qualified_model(&model.model).is_none() {
@@ -1792,6 +1820,25 @@ mod tests {
                 assert_eq!(request.body["prompt"], json!([1]));
             }
             server.abort();
+        }
+    }
+    /// public-inference-api task 2.5: the pure rule names exactly the advertised
+    /// capabilities that no probe can exercise, so the health detail can name them.
+    #[test]
+    fn unprobeable_capabilities_names_each_capability_without_a_probe() {
+        let set = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        for (capabilities, expected) in [
+            (&["embeddings", "streaming"][..], &["streaming"][..]),
+            (&["streaming"], &["streaming"]),
+            (&["embeddings", "tools", "structured_output", "streaming"], &["streaming", "tools", "structured_output"]),
+            (&["completions", "streaming", "tools"], &["tools"]),
+            (&["completions", "structured_output"], &["structured_output"]),
+            (&["chat", "completions", "streaming", "tools", "structured_output"], &[]),
+            (&["completions", "streaming"], &[]),
+            (&["chat", "streaming"], &[]),
+            (&["embeddings"], &[]),
+        ] {
+            assert_eq!(unprobeable_capabilities(&set(capabilities)), expected, "{capabilities:?}");
         }
     }
     /// public-inference-api requirement 8 (task 2.1, design code difference 1): the rule

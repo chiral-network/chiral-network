@@ -957,6 +957,9 @@ mod tests {
             let health = runtime.health.read().await.clone();
             assert_eq!(health.len(), 1);
             assert!(!health[0].ready, "{capabilities:?}: {health:?}");
+            // Task 2.5: the operator's health detail names the capability without a probe.
+            assert!(health[0].detail.contains("without a probe"), "{capabilities:?}: {health:?}");
+            assert!(health[0].detail.contains(capabilities[1]), "{capabilities:?}: {health:?}");
             assert!(runtime.state.qualified_model(&runtime.state.config.models[0].model).is_none());
             assert!(runtime.state.embedding_dimensions.read().unwrap().is_empty());
             assert!(!runtime.state.funding_ready.load(Ordering::Acquire), "{capabilities:?}");
