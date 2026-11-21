@@ -2817,6 +2817,239 @@ async fn overbooked_quotes_change_no_opening_capacity_and_still_need_admission()
     assert!(client_server.await.unwrap_err().is_cancelled());
 }
 
+/// specify-opening-funding-intent 2.3.2, archived inference-proposal-admission scenario
+/// "Another caller cannot spend a named wallet's quote allowance". Fourteen unrelated
+/// public proposals (no owner proof) name one owner in both canonical spellings, paid and
+/// free, past BOTH former wallet ceilings (eight live pending and twelve committed per
+/// minute). Each returns exact provider-signed terms with a 300-second lifetime and allocates
+/// no paid lease, free account or credential. Committed issuance and signing work each move
+/// only their single provider-wide counter, and no quote or challenge bucket names the owner.
+/// The owner, using its own fresh proofs, is then decided by its own rules only. Its paid
+/// original on one of those quotes is acknowledged and takes the first lease. A second
+/// original reusing that sender nonce gets 409 `conflict`. Eight free openings succeed, and
+/// the ninth and a later free quote's opening get 429 at its owned-account bound. That later
+/// quote is still issued at the full bound. Its twelfth challenge is issued and the thirteenth
+/// refused by its own challenge budget, while another wallet's challenge succeeds.
+/// Authenticated admission charges no quote work or issuance; unopened quotes are retained
+/// exactly. Explicit-time ledger admissions pin the committed and challenge minutes, and
+/// restored work evidence pins the work minute, ahead of wall time, so every count is
+/// deterministic without sleeps. RPC observations are synthetic. Would catch a reinstated
+/// wallet pending/rate gate, quotes charging the named wallet's challenge or opening
+/// allowance, or removal of the owner's own nonce, owned-account or challenge rule.
+#[tokio::test]
+async fn unrelated_quotes_beyond_both_former_wallet_ceilings_leave_the_owner_only_its_own_rules() {
+    use rusqlite::OptionalExtension;
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 78_000, 100).await;
+    fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+    let owner = fixture.rpc.payer.clone();
+    let owner_key = fixture.owner_key.clone();
+    let alias = format!("0x{}", owner[2..].to_ascii_uppercase());
+    assert_ne!(owner, alias);
+    let provider_key = fixture.provider.state.private_key.to_string();
+    let ledger = fixture.provider.state.ledger.clone();
+    let ledger_path = fixture.provider.ledger_path.clone();
+    let paid_offer = fixture.provider.offer.clone();
+    let paid_offer_id = fixture.provider.offer_id.clone();
+    let mut free_terms = paid_offer.payload.clone();
+    free_terms.deployment_id = "test-provider-free".into();
+    free_terms.price.input_wei_per_1k = "0".into();
+    free_terms.price.output_wei_per_1k = "0".into();
+    let free_offer = protocol::sign(protocol::OFFER_DOMAIN, free_terms, &provider_key).unwrap();
+    let free_offer_id = fixture.provider.state.offers.insert(free_offer.clone()).unwrap();
+
+    // One genuine ledger admission each, at an explicit later sample, pins the committed and
+    // challenge minutes; restored evidence pins work in another minute. Wall-time route
+    // samples stay below every watermark. That later sample also reclaims the fixture's
+    // initial quote as expired at that time; this test does not use it.
+    let minute = protocol::now().unwrap() / 60 + 10;
+    let work_minute = minute + 10;
+    let pinned = minute * 60;
+    let bystander = wallet::address_from_private_key(&format!("{:064x}", 140_000)).unwrap();
+    let mut terms = fixture.quote.payload.clone();
+    terms.id = protocol::random_id();
+    terms.nonce = protocol::random_id();
+    terms.consumer_wallet = bystander.clone();
+    terms.issued_at = pinned;
+    terms.expires_at = pinned + 300;
+    let pin_quote = protocol::sign(protocol::QUOTE_DOMAIN, terms, &provider_key).unwrap();
+    ledger.store_quote(&pin_quote, pinned).unwrap();
+    ledger.create_challenge(&AuthPayload {
+        network: pin_quote.payload.network.clone(), provider_wallet: pin_quote.payload.provider_wallet.clone(),
+        wallet: bystander.clone(), method: "GET".into(), path: format!("/v1/contracts/{}", pin_quote.payload.id),
+        body_hash: protocol::hash_hex(b""), nonce: protocol::random_id(), expires_at: pinned + 120,
+    }, pinned).unwrap();
+    proposal::restore_quote_work(&ledger_path, work_minute, 100);
+
+    let db = Connection::open(&ledger_path).unwrap();
+    let rates = || db.prepare("SELECT bucket,window,count FROM rate_limits ORDER BY bucket").unwrap()
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?)))
+        .unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    // One committed-issuance and one work bucket; challenge buckets only for wallets that
+    // actually obtained challenges, all in the pinned minute.
+    let expected_rates = |issued: u64, work: u64, challenges: &[(&str, u64)]| {
+        let total = challenges.iter().map(|(_, count)| count).sum::<u64>();
+        let mut rows = vec![("quote:global".to_string(), minute, issued),
+            ("quote-work:global".to_string(), work_minute, work),
+            ("challenge:global".to_string(), minute, total), ("challenge-minute".to_string(), minute, total)];
+        rows.extend(challenges.iter().map(|(wallet, count)| (format!("challenge:{wallet}"), minute, *count)));
+        rows.sort();
+        rows
+    };
+    let clocks = || db.query_row("SELECT (SELECT value FROM metadata WHERE key='quote_committed_minute'),
+        (SELECT value FROM metadata WHERE key='quote_work_minute')", [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap();
+    // All intents, active leases, accounts, credentials, funding and fee obligations.
+    let opening = || db.query_row(
+        "SELECT (SELECT COUNT(*) FROM funding_intents),(SELECT COUNT(*) FROM funding_intents WHERE
+                 admission_until>?1 AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract)),
+                (SELECT COUNT(*) FROM accounts),(SELECT COUNT(*) FROM credentials),
+                (SELECT COUNT(*) FROM funding),(SELECT COUNT(*) FROM fee_obligations)",
+        [protocol::now().unwrap()],
+        |row| Ok([row.get::<_, u64>(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?])).unwrap();
+    let retained = |quote: &Signed<Quote>| db.query_row("SELECT record FROM quotes WHERE id=?1",
+        [&quote.payload.id], |row| row.get::<_, String>(0)).optional().unwrap();
+    let verify_terms = |quote: &Signed<Quote>, offer: &Signed<protocol::InferenceOffer>, offer_id: &str, funding: &str| {
+        protocol::verify(protocol::QUOTE_DOMAIN, quote, &paid_offer.payload.provider_wallet).unwrap();
+        let (terms, offer) = (&quote.payload, &offer.payload);
+        assert_eq!((terms.offer_id.as_str(), terms.consumer_wallet.as_str(), terms.funding_wei.as_str()),
+            (offer_id, owner.as_str(), funding));
+        assert_eq!((&terms.network, &terms.provider_wallet, &terms.model, &terms.price),
+            (&offer.network, &offer.provider_wallet, &offer.model, &offer.price));
+        assert_eq!((&terms.platform_wallet, terms.fee_bps, terms.max_concurrency),
+            (&offer.platform_wallet, offer.fee_bps, offer.max_concurrency));
+        assert_eq!(terms.expires_at.checked_sub(terms.issued_at), Some(300));
+        assert!(terms.issued_at / 60 < minute, "signed wall time, not a budget minute");
+        for identifier in [&terms.id, &terms.nonce] {
+            let hex = identifier.strip_prefix("0x").unwrap();
+            assert!(hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        }
+    };
+
+    // Unrelated anonymous callers name the owner, five paid and nine free.
+    let (mut paid, mut free) = (Vec::new(), Vec::new());
+    for index in 0..14_u64 {
+        let named = if index % 2 == 0 { &owner } else { &alias };
+        let (offer, offer_id, funding) = if index % 3 == 1 {
+            (&paid_offer, &paid_offer_id, (100 + index).to_string())
+        } else {
+            (&free_offer, &free_offer_id, "0".to_string())
+        };
+        let (status, document) = propose(&mut fixture.app, offer_id, named, &funding).await;
+        assert_eq!(status, StatusCode::OK, "unrelated proposal {} naming the owner: {document}", index + 1);
+        let quote: Signed<Quote> = serde_json::from_value(document).unwrap();
+        verify_terms(&quote, offer, offer_id, &funding);
+        if index % 3 == 1 { paid.push(quote) } else { free.push(quote) }
+    }
+    assert_eq!((paid.len(), free.len()), (5, 9));
+    for quote in paid.iter().chain(&free) {
+        assert_eq!(retained(quote), Some(serde_json::to_string(quote).unwrap()));
+    }
+    assert_eq!(opening(), [0; 6], "quotes allocate no paid lease, free account or credential");
+    assert_eq!(rates(), expected_rates(15, 114, &[(&bystander, 1)]),
+        "provider-wide counters only: no wallet quote or challenge bucket names the owner");
+    assert_eq!(clocks(), (minute.to_string(), work_minute.to_string()));
+    let challenges = || db.query_row("SELECT COUNT(*) FROM challenges", [], |row| row.get::<_, u64>(0)).unwrap();
+    assert_eq!(challenges(), 1, "quoting creates no owner challenge");
+
+    // The owner's own authenticated paid admission, on a quote an unrelated caller obtained.
+    fixture.rpc.observed_at.store(protocol::now().unwrap(), Ordering::Release);
+    let raw = signed_payment(&PaymentFields::opening(&paid[0].payload, 0, 11), &owner_key, 2, &[0xc0]);
+    let envelope = fixture.provider.state.chain.validate_payment_envelope(&raw, &owner,
+        &paid[0].payload.provider_wallet, &paid[0].payload.funding_wei,
+        &protocol::opening_data(&paid[0].payload).unwrap()).unwrap();
+    let (status, document) = authorized_intent(&mut fixture.app, &paid[0], &owner_key, &raw).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let ack: Signed<FundingIntent> = serde_json::from_value(document).unwrap();
+    protocol::verify(protocol::INTENT_DOMAIN, &ack, &paid[0].payload.provider_wallet).unwrap();
+    assert_eq!((ack.payload.quote_id.as_str(), ack.payload.consumer_wallet.as_str(), ack.payload.tx_hash.as_str()),
+        (paid[0].payload.id.as_str(), owner.as_str(), envelope.tx_hash.as_str()));
+    assert!((paid[0].payload.issued_at..paid[0].payload.expires_at).contains(&ack.payload.registered_at));
+    let intent = || db.query_row(
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce),admission_until FROM funding_intents",
+        [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))).unwrap();
+    let accepted = (json!([paid[0].payload.id, envelope.tx_hash, raw, serde_json::to_string(&ack).unwrap(),
+        serde_json::to_string(&paid[0]).unwrap(), owner, "0"]).to_string(), paid[0].payload.expires_at);
+    assert_eq!(intent(), accepted, "only authenticated admission allocates the first lease");
+    assert_eq!(retained(&paid[0]), None, "its standalone quote is handed off");
+    assert_eq!(opening(), [1, 1, 0, 0, 0, 0]);
+
+    // Own rule: its acknowledged sender nonce cannot fund another agreement.
+    let reused = signed_payment(&PaymentFields::opening(&paid[1].payload, 0, 11), &owner_key, 0, &[0xc0]);
+    let (status, document) = authorized_intent(&mut fixture.app, &paid[1], &owner_key, &reused).await;
+    assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::CONFLICT, Some("conflict")), "{document}");
+    assert_eq!(intent(), accepted);
+    assert_eq!(retained(&paid[1]), Some(serde_json::to_string(&paid[1]).unwrap()));
+
+    // Own rule: fewer than eight owned free accounts before first free opening.
+    let mut opened = Vec::new();
+    for (index, quote) in free.iter().enumerate() {
+        let body = serde_json::to_vec(&json!({"quote_id":quote.payload.id,"raw_transaction":null})).unwrap();
+        let headers = owner_headers(&mut fixture.app, &quote.payload, &owner_key, "/v1/contracts/open", &body).await;
+        let (status, document) = request(&mut fixture.app, "/v1/contracts/open", &headers, body).await;
+        if index < 8 {
+            assert_eq!(status, StatusCode::OK, "free opening {}: {document}", index + 1);
+            assert_eq!((document["account"]["contract_id"].as_str(), document["account"]["consumer_wallet"].as_str(),
+                document["account"]["status"].as_str()), (Some(quote.payload.id.as_str()), Some(owner.as_str()), Some("free")));
+            assert!(document["credential"]["bearer"].as_str().is_some_and(|bearer| bearer.starts_with("chiral_")));
+            opened.push(quote.payload.id.clone());
+        } else {
+            // Never echo the response: an unexpected success would carry a credential.
+            assert_eq!((status, document["error"]["message"].as_str()),
+                (StatusCode::TOO_MANY_REQUESTS, Some("rate_limit: free account limit reached")),
+                "the ninth free opening must meet the owner's own bound");
+            assert!(ledger.account(&quote.payload.id).unwrap_err().starts_with("not_found:"));
+            assert_eq!(retained(quote), Some(serde_json::to_string(quote).unwrap()));
+        }
+    }
+    assert_eq!(opening(), [1, 1, 8, 8, 0, 0]);
+    assert_eq!(rates(), expected_rates(15, 114, &[(&bystander, 1), (&owner, 11)]),
+        "authenticated admission charges no quote work or committed issuance");
+
+    // Quoting continues at the owner's full owned bound; the owner's opening is still refused.
+    let (status, document) = propose(&mut fixture.app, &free_offer_id, &alias, "0").await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let late: Signed<Quote> = serde_json::from_value(document).unwrap();
+    verify_terms(&late, &free_offer, &free_offer_id, "0");
+    assert_eq!(opening(), [1, 1, 8, 8, 0, 0], "a quote at the full owned bound allocates nothing");
+    let body = serde_json::to_vec(&json!({"quote_id":late.payload.id,"raw_transaction":null})).unwrap();
+    let headers = owner_headers(&mut fixture.app, &late.payload, &owner_key, "/v1/contracts/open", &body).await;
+    let (status, document) = request(&mut fixture.app, "/v1/contracts/open", &headers, body).await;
+    assert_eq!((status, document["error"]["message"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limit: free account limit reached")),
+        "a quote issued at the full bound must still meet the owner's own bound");
+
+    // Own rule: twelve challenges per wallet and minute. The quotes spent none of them.
+    let challenge = |wallet: &str| serde_json::to_vec(&json!({"wallet":wallet,"method":"POST",
+        "path":"/v1/contracts/open","body_hash":protocol::hash_hex(b"{}")})).unwrap();
+    let (status, document) = request(&mut fixture.app, "/v1/auth/challenge", &HeaderMap::new(), challenge(&owner)).await;
+    assert_eq!((status, document["error"]["message"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limit: control request limit exceeded")), "{document}");
+    let other = wallet::address_from_private_key(&format!("{:064x}", 140_001)).unwrap();
+    let (status, document) = request(&mut fixture.app, "/v1/auth/challenge", &HeaderMap::new(), challenge(&other)).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    assert_eq!(rates(), expected_rates(16, 115, &[(&bystander, 1), (&owner, 12), (&other, 1)]));
+    assert_eq!(clocks(), (minute.to_string(), work_minute.to_string()));
+
+    // Durable outcome: one owner lease, eight owner accounts, unopened quotes retained exactly.
+    assert_eq!(intent(), accepted);
+    assert_eq!(opening(), [1, 1, 8, 8, 0, 0]);
+    let column = |query: &str| db.prepare(query).unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+    opened.sort();
+    assert_eq!(column("SELECT id FROM accounts ORDER BY id"), opened);
+    assert_eq!(column("SELECT DISTINCT owner FROM accounts"), [owner.clone()]);
+    let unopened = paid[1..].iter().chain([&free[8], &late]).collect::<Vec<_>>();
+    let mut expected = unopened.iter().map(|quote| quote.payload.id.clone())
+        .chain([pin_quote.payload.id.clone()]).collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(column("SELECT id FROM quotes ORDER BY id"), expected);
+    for quote in unopened {
+        assert_eq!(retained(quote), Some(serde_json::to_string(quote).unwrap()));
+    }
+    fixture.observed_without_submission(Some("eth_getBalance"));
+}
+
 // One isolated RPC for the native client and the provider. Scripted observations, not
 // live-chain evidence: phase 0 has no receipt, phase 1 a successful receipt above the
 // safe frontier (block 10 > safe 9), phase 2 the same receipt at canonical block 8.

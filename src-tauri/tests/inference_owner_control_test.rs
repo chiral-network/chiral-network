@@ -2418,8 +2418,8 @@ async fn free_account_final_slot(ledger_wide: bool) {
     assert_eq!(opened_records[0].0, before_total + 1);
     assert_eq!(opened_records[1].0, before_total + 1, "one root per account, none for the refused quote");
 
-    // Account exhaustion is not a public-quote reservation. This stays below the
-    // separate, still-unmigrated named-wallet quote ceilings and claims no mitigation.
+    // Account exhaustion is not a public-quote reservation. The quote spends only
+    // provider-wide quote storage, work and issuance; no named-wallet quote ceiling exists.
     let overbooked = fixture.quote("0").await;
     let overbooked_before = pending(&overbooked.payload.id);
     assert_eq!(counts(), after_counts);

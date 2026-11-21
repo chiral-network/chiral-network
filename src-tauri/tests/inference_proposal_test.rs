@@ -728,6 +728,107 @@ async fn public_global_committed_rate_refusal_preserves_quotes_and_an_opened_agr
     assert!(!fixture.submitted.load(Ordering::Acquire));
 }
 
+/// specify-opening-funding-intent 2.3.2, archived inference-proposal-admission requirements
+/// "Public quote work is bounded before signing" and "Committed proposals consume a
+/// provider-wide minute budget": the 600/minute pre-signing work budget and the 600/minute
+/// committed-issuance budget are separate counters on separate non-regressing clocks, and
+/// each refusal charges only what its own contract says. Two isolated ledgers put the two
+/// clocks in opposite orders. In the first, committed issuance keeps allowance in a NEWER
+/// minute than exhausted work, and the real route refuses before signing without changing
+/// either counter. In the second, work keeps allowance in a newer minute than exhausted
+/// committed issuance: each refused proposal spends one work unit, no committed unit and
+/// stores nothing, until work is exhausted too. Every attempt names a different wallet and
+/// the last uses an independently reopened ledger/router. Explicit-time ledger admissions and
+/// restored work evidence are prerequisites, not observed HTTP signing; route samples (wall
+/// time) stay below both watermarks, so E = max(W, L) selects each budget's own L without a
+/// minute race. Would catch either budget reading the other's watermark, a work refund on a
+/// committed refusal, a committed charge outside a durable insertion, or a wallet-keyed
+/// quote bucket.
+#[tokio::test]
+async fn quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges() {
+    const WORK: &str = "rate_limit: quote signing work limit exceeded";
+    const COMMITTED: &str = "rate_limit: committed quote issuance limit exceeded";
+    let directory = tempfile::tempdir().unwrap();
+    let base = protocol::now().unwrap() / 60;
+    // (case, work minute, spent work, committed minute, committed proposals, outcomes);
+    // None = issued, Some(message) = refused with 429/`rate_limit` and that message.
+    for (case, work_minute, work_spent, committed_minute, committed_spent, outcomes) in [
+        (35, base + 10, 599, base + 20, 1, vec![None, Some(WORK), Some(WORK)]),
+        (36, base + 20, 597, base + 10, 599,
+            vec![None, Some(COMMITTED), Some(COMMITTED), Some(WORK), Some(WORK)]),
+    ] {
+        let fixture = Fixture::new(directory.path(), case, "1", "2").await;
+        let path = fixture.ledger_path.clone();
+        for index in 0..committed_spent {
+            fixture.commit_prerequisite(&format!("0x{:040x}", 300_000 + index), "100",
+                committed_minute * 60);
+        }
+        restore_quote_work(&path, work_minute, work_spent);
+        let db = rusqlite::Connection::open(&path).unwrap();
+        let committed = || db.query_row(
+            "SELECT value,window,count FROM metadata,rate_limits
+             WHERE key='quote_committed_minute' AND bucket='quote:global'", [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?, row.get::<_, u64>(2)?))).unwrap();
+        let retained = || db.prepare("SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id")
+            .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        let buckets = || db.prepare("SELECT bucket FROM rate_limits WHERE bucket GLOB 'quote*' ORDER BY bucket")
+            .unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        let (mut work, mut issued) = (work_spent, committed_spent);
+        assert_eq!(committed(), (committed_minute.to_string(), committed_minute, issued));
+        assert_eq!(quote_work_evidence(&path), (work_minute.to_string(), work_minute, work));
+        let last = outcomes.len() - 1;
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            let payer = format!("0x{:040x}", 400_000 + index);
+            let mut request = fixture.request("100");
+            request["consumer_wallet"] = json!(payer);
+            let before = retained();
+            let (status, body) = if index == last {
+                let response = route_proposal(reopened_router(&fixture, &fixture.state.private_key),
+                    &request).await;
+                let status = response.status().as_u16();
+                let bytes = axum::body::to_bytes(response.into_body(), 96 * 1024).await.unwrap();
+                (status, serde_json::from_slice::<Value>(&bytes).unwrap())
+            } else {
+                let response = fixture.post(PROPOSE, &request).await;
+                (response.status().as_u16(), response.json::<Value>().await.unwrap())
+            };
+            let attempt = format!("case {case}, attempt {index}");
+            match outcome {
+                None => {
+                    assert_eq!(status, 200, "{attempt}: {body}");
+                    let signed: Signed<Quote> = serde_json::from_value(body).unwrap();
+                    fixture.verify_quote(&signed, &payer, "100");
+                    assert!(signed.payload.issued_at / 60 < work_minute.min(committed_minute),
+                        "{attempt}: signed wall time, not a budget minute");
+                    work += 1;
+                    issued += 1;
+                    let after = retained();
+                    assert_eq!(after.len(), before.len() + 1, "{attempt}");
+                    assert!(after.iter().any(|record| record.contains(&signed.payload.id)), "{attempt}");
+                }
+                Some(message) => {
+                    assert_eq!((status, body["error"]["code"].as_str(), body["error"]["message"].as_str()),
+                        (429, Some("rate_limit"), Some(message)), "{attempt}");
+                    // Work is claimed before signing and never refunded; committed issuance
+                    // charges only a durable insertion. A work refusal precedes signing.
+                    if message == COMMITTED { work += 1; }
+                    assert_eq!(retained(), before, "{attempt}: a refused proposal stores nothing");
+                }
+            }
+            assert_eq!(quote_work_evidence(&path), (work_minute.to_string(), work_minute, work),
+                "{attempt}: signing work");
+            assert_eq!(committed(), (committed_minute.to_string(), committed_minute, issued),
+                "{attempt}: committed issuance");
+            assert_eq!(buckets(), ["quote-work:global", "quote:global"], "{attempt}: no wallet bucket");
+        }
+        assert_eq!(work, 600);
+        assert!(!fixture.submitted.load(Ordering::Acquire));
+        fixture.stop().await;
+    }
+}
+
 #[tokio::test]
 async fn saved_signed_agreements_reject_conflicting_funding_calls_without_remote_side_effects() {
     let directory = tempfile::tempdir().unwrap();

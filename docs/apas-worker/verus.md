@@ -337,3 +337,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-21 — callouts wrap long exact values
 
 - `tests/exactStatements.test.ts` › `Usage wraps the exact provider-loss amount, which appears only in its warning, at phone width` — **not replaceable**: rendered Svelte markup and CSS layout, outside Verus's scope.
+
+## Judged 2026-11-21 — non-reserving quote cutover (opening-intent 2.3.2)
+
+- `inference_proposal_test::quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges` — **replaceable in part**: the rule that each budget's effective minute is max(floor(t/60), its own watermark), and that a refusal of one budget never moves the other's counter or watermark, is pure state-transition arithmetic a Verus model of two independent counters could prove; the SQLite transactions, routers and reopening are outside it.
+- `inference_funding_admission_test::unrelated_quotes_beyond_both_former_wallet_ceilings_leave_the_owner_only_its_own_rules` — **not replaceable**: HTTP routes, owner proofs, ledger tables and signed quotes.

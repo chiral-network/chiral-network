@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-21 (eighty-fourth round) — Acceptance: opening-intent 2.3.2 (non-reserving quote cutover) and parent 2.3
+
+- In step at `4c26d6e2`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-opening-funding-intent` 2.3.2), through a workflow: write tests, then adversarial review. Both public named-wallet gates are gone. `sign_quote` claims one provider-wide `quote-work:global` unit on its own `quote_work_minute` clock. `store_quote` enforces only the 10,000-record storage limit and the `quote:global` 600-per-minute committed-issuance budget, on its own `quote_committed_minute` clock. The handoff fixtures were already migrated to 10,000 provider-wide records by the parent's task 3.5. Three stale design descriptions and two stale test comments (owner-consumer, owner-control) now say so; no assertion changed.
+- New tests (no product code changed):
+  - `inference_funding_admission_test::unrelated_quotes_beyond_both_former_wallet_ceilings_leave_the_owner_only_its_own_rules`: 14 anonymous quotes naming one owner (5 paid, 9 free, both address spellings) go beyond the former limits of 8 live and 12 per minute. They allocate no lease, account, credential or wallet bucket and spend none of the owner's challenge budget. The owner is then refused only by its own rules: its intent is acknowledged; its reused nonce gets 409; its 9th free opening gets 429; its 13th challenge gets 429. Quoting continues at its full 8-account limit.
+  - `inference_proposal_test::quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges`: two ledgers whose work and committed clocks run in opposite orders. A work-exhausted route refuses before signing and changes neither counter. A committed-exhausted route spends one work unit per refusal and no committed unit, stores nothing, and continues through a reopened ledger and router.
+  - Eighteen mutations fail them or the cited tests. Among them: a reintroduced 8-quote wallet gate; quotes charging the owner's challenge budget; free-account limits counting quotes; the 8-account, nonce-conflict and 12-challenge rules removed or raised; the two clocks cross-reading; a work refund after a committed refusal; committed issuance charged outside the durable insertion; quotes refused at full paid, owned or ledger capacity; a charge-only wallet bucket; a 301-second lifetime.
+- 2.3.2 and parent 2.3 ticked: each part of 2.3's own text maps to passing tests (capacity and two-writer admission, lease expiry, cached recovery, nonce conflicts, raw-string replay, response loss). HTTP quoting at the ledger-wide 10,000-account limit is `inference_owner_control_test::independent_free_openings_compete_for_the_last_ledger_account_slot`, which passed in round 81's full suite; product code is unchanged since then.
+- Checks (test and comment changes only): bins build passes; `cargo check --tests` passes (existing support-helper warnings only); `inference_funding_admission_test` 39/39, `inference_proposal_test` 15/15, `inference_owner_consumer_test` 13/13; the workflow's `--lib` run 429 passed, 12 ignored, plus `inference_proposal_quota_test` 23/23 and `inference_quote_acceptance_test` 17/17; strict validation passes.
+
 ## 2026-11-21 (eighty-third round) — Code: callouts wrap long exact values at phone width
 
 - In step at `091f324c`; whitepaper unchanged; no new answers.
@@ -925,7 +936,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

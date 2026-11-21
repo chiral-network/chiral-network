@@ -650,7 +650,7 @@ async fn native_free_opening_and_full_refusal_never_prepare_or_submit_payment() 
             observed.controls.clear();
         }
         // A public quote can still be issued with all eight owned account slots full.
-        // Its old named-wallet quote budgets remain unexhausted, not mitigated here.
+        // It spends only provider-wide quote storage, work and issuance; no wallet allowance exists.
         let refused = fixture.consumer.quote(&fixture.provider.offer, "0").await.unwrap();
         assert!(fixture.observations.lock().unwrap().controls.is_empty());
         assert!(fixture.observations.lock().unwrap().challenges.is_empty());
