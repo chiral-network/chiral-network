@@ -1183,6 +1183,477 @@ fn pending_capacity_rejects_new_intents_without_losing_accepted_obligations() {
     assert_eq!(active_intents(&store, 30 * 86_400), 1);
 }
 
+/// specify-non-reserving-quotes 3.3/4.3 (requirement "Authenticated paid admission
+/// preserves accepted commitments"): the paid bound counts only un-opened originals
+/// whose deadline is strictly later than the transaction time; a full refusal leaves
+/// no partial acceptance; replaying an accepted original neither allocates, re-counts
+/// nor extends its lease, before or after expiry and across reopening. Filler leases
+/// are restored prerequisites, not observed admissions; payments are ledger inputs
+/// after the chain verification boundary. Would catch counting a lease at its
+/// deadline (`>=`), a replay that renews its lease, or cached recovery placed behind
+/// the capacity decision.
+#[test]
+fn paid_lease_bound_is_strict_at_deadlines_and_replay_never_renews_a_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lease-boundary.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    // An opened agreement keeps its intent permanently without occupying a lease.
+    let (opened_quote, opened_payment, opened) = paid(&store);
+    let original = quote(1000, false); // issued 100, deadline 400
+    store.store_quote(&original, 100).unwrap();
+    let original_payment = payment(&original.payload, true, 1000, 2);
+    let ack = register(&store, &original, &original_payment, 101);
+    let candidate = |issued_at: u64, expires_at: u64| {
+        let mut terms = quote(1000, false).payload;
+        terms.issued_at = issued_at;
+        terms.expires_at = expires_at;
+        protocol::sign(protocol::QUOTE_DOMAIN, terms, PROVIDER_KEY).unwrap()
+    };
+    let first = candidate(390, 700);
+    let second = candidate(390, 800);
+    for pending in [&first, &second] {
+        store.store_quote(pending, 390).unwrap();
+    }
+    let first_payment = payment(&first.payload, true, 1000, 3);
+    let second_payment = payment(&second.payload, true, 1000, 4);
+    store.transaction(|tx| {
+        // 9,998 later deadlines plus one boundary lease ending at 450.
+        for (index, deadline) in (0..9_998).map(|n| (n, 500)).chain([(9_998, 450)]) {
+            tx.execute("INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) VALUES(?1,?2,'0x00',?3,?4,?5,'0',?6)",
+                params![format!("lease-{index}"), format!("lease-hash-{index}"), encode(&ack)?, encode(&original)?,
+                    format!("lease-sender-{index}"), deadline]).map_err(sql)?;
+        }
+        Ok(())
+    }).unwrap();
+    let attempt = |store: &BillingStore, terms: &Signed<Quote>, funding: &VerifiedPayment, now: u64| {
+        let nonce = u64::from_str_radix(&funding.raw_transaction[2..], 16).unwrap();
+        store.register_funding_intent(terms, &terms.payload.consumer_wallet, &funding.raw_transaction,
+            &funding.tx_hash, nonce, PROVIDER_KEY, || Ok(now), true, &terms.payload.model)
+    };
+    let replay = |store: &BillingStore| {
+        // Cached recovery samples no time and needs no open admission gate.
+        let cached = store.register_funding_intent(&original, &original.payload.consumer_wallet,
+            &original_payment.raw_transaction, &original_payment.tx_hash, 2, PROVIDER_KEY,
+            || panic!("cached recovery must not sample registration time"), false,
+            &original.payload.model).unwrap();
+        assert_eq!(encode(&cached).unwrap(), encode(&ack).unwrap());
+    };
+    let lease = |store: &BillingStore, id: &str| -> u64 {
+        store.db.lock().unwrap().query_row("SELECT admission_until FROM funding_intents WHERE contract=?1",
+            [id], |row| row.get(0)).unwrap()
+    };
+    assert_eq!(active_intents(&store, 399), MAX_PENDING as u64);
+
+    // Full at 399: refusal creates no intent, nonce, account, credit or quote handoff.
+    let before = quote_work_protected_snapshot(&store);
+    let refused = attempt(&store, &first, &first_payment, 399).unwrap_err();
+    assert!(refused.starts_with("rate_limit:"), "{refused}");
+    assert_eq!(quote_work_protected_snapshot(&store), before);
+    // Cached replay is not behind the full bound and changes nothing, lease included.
+    replay(&store);
+    assert_eq!(quote_work_protected_snapshot(&store), before);
+    assert_eq!(lease(&store, &original.payload.id), 400);
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(quote_work_protected_snapshot(&store), before);
+
+    // At its exact deadline the original's lease no longer counts, so the refused
+    // original is admitted unchanged; a deadline equal to the time is not active.
+    let first_ack = attempt(&store, &first, &first_payment, 400).unwrap();
+    assert_eq!(first_ack.payload.registered_at, 400);
+    assert_eq!(lease(&store, &first.payload.id), 700);
+    assert_eq!(active_intents(&store, 400), MAX_PENDING as u64);
+    for _ in 0..2 {
+        replay(&store);
+        assert_eq!(lease(&store, &original.payload.id), 400, "replay must not renew an expired lease");
+        assert_eq!(active_intents(&store, 449), MAX_PENDING as u64);
+    }
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    replay(&store);
+    let before = quote_work_protected_snapshot(&store);
+    let refused = attempt(&store, &second, &second_payment, 449).unwrap_err();
+    assert!(refused.starts_with("rate_limit:"), "{refused}");
+    assert_eq!(quote_work_protected_snapshot(&store), before);
+    // The boundary lease ends at 450; a renewed original would still fill the bound.
+    let second_ack = attempt(&store, &second, &second_payment, 450).unwrap();
+    assert_eq!(second_ack.payload.registered_at, 450);
+    assert_eq!(active_intents(&store, 450), MAX_PENDING as u64);
+
+    // Expired acceptance still opens with its post-verification payment while the
+    // bound is full, without a new lease; the earlier opened agreement is untouched.
+    replay(&store);
+    let credited = store.open_account(&original, Some(&original_payment), 451).unwrap();
+    assert_eq!(credited.account.funded_wei, "1000");
+    assert_eq!(credited.account.fee_wei, "5");
+    assert!(credited.credential.is_some());
+    assert_eq!(active_intents(&store, 451), MAX_PENDING as u64);
+    replay(&store);
+    assert_eq!(encode(&store.open_account(&opened_quote, Some(&opened_payment), 452).unwrap().account).unwrap(),
+        encode(&opened.account).unwrap());
+    assert_eq!(store.admin_summary().unwrap()["pending_funding_intents"], MAX_PENDING + 1);
+}
+
+/// specify-non-reserving-quotes 4.3 (final free slot competition): authenticated free
+/// openings decide the owned (8) and ledger-wide (10,000) account bounds atomically
+/// across independent connections. Exactly one contender gets an account and root
+/// credential; the loser keeps its standalone quote and gains nothing, before and
+/// after reopening, and the winner's recovery issues no further credential. Once
+/// either bound is full, a later free quote is still retained without an account or
+/// credential and its opening is refused. The ledger-wide case restores 9,999 account
+/// rows as prerequisites, not openings. Would catch an off-by-one bound, quote storage
+/// gated by either full free-account bound, and (by natural race, not a deterministic
+/// schedule) a count read without the write lock. A count split into a separately
+/// locked transaction from the insert is not distinguishable here; the deterministic
+/// `paused_free_opening_holds_the_final_owned_and_ledger_slot_checks_until_its_account_commits`
+/// proves that case.
+#[test]
+fn free_openings_compete_for_the_final_owned_and_ledger_slots_across_connections() {
+    for ledger_wide in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("free-slots.sqlite");
+        let mut store = BillingStore::open(&path, &network()).unwrap();
+        if ledger_wide {
+            let template = quote(0, true);
+            store.transaction(|tx| {
+                for index in 0..MAX_PENDING - 1 {
+                    tx.execute("INSERT INTO accounts(id,owner,quote,account,created) VALUES(?1,?2,?3,'{}',100)",
+                        params![format!("restored-{index}"), format!("0x{index:040x}"), encode(&template)?]).map_err(sql)?;
+                }
+                Ok(())
+            }).unwrap();
+        } else {
+            for _ in 0..7 {
+                let earlier = quote(0, true);
+                store.store_quote(&earlier, 100).unwrap();
+                assert!(store.open_account(&earlier, None, 101).unwrap().credential.is_some());
+            }
+        }
+        let contenders = [quote(0, true), quote(0, true)];
+        for contender in &contenders {
+            store.store_quote(contender, 100).unwrap();
+        }
+        let before = quote_work_protected_snapshot(&store);
+        let barrier = Arc::new(Barrier::new(2));
+        let workers = contenders.iter().map(|contender| {
+            let ledger = BillingStore::open(&path, &network()).unwrap();
+            let contender = contender.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                ledger.open_account(&contender, None, 102)
+            })
+        }).collect::<Vec<_>>();
+        let outcomes = workers.into_iter().map(|worker| worker.join().unwrap()).collect::<Vec<_>>();
+        let winner = match (&outcomes[0], &outcomes[1]) {
+            (Ok(_), Err(error)) if error.starts_with("rate_limit:") => 0,
+            (Err(error), Ok(_)) if error.starts_with("rate_limit:") => 1,
+            _ => panic!("exactly one final free slot must commit (ledger_wide={ledger_wide}): {:?}",
+                outcomes.iter().map(|outcome| outcome.as_ref().map(|_| "opened").map_err(Clone::clone)).collect::<Vec<_>>()),
+        };
+        let (won, lost) = (&contenders[winner], &contenders[1 - winner]);
+        let opened = outcomes[winner].as_ref().unwrap();
+        assert_eq!(opened.account.status, "free");
+        let root = opened.credential.as_ref().unwrap();
+        let assert_only_winner = |store: &BillingStore| {
+            let after = quote_work_protected_snapshot(store);
+            for index in [0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 13] {
+                assert_eq!(after[index], before[index], "ledger_wide={ledger_wide}: table {index}");
+            }
+            let mut quotes = before[2].clone();
+            quotes.retain(|record| !record.contains(&won.payload.id));
+            assert_eq!(after[2], quotes, "only the winner's standalone quote is handed off");
+            assert!(after[2].iter().any(|record| record.contains(&lost.payload.id)));
+            for (index, table) in [(4, "accounts"), (5, "credentials")] {
+                let added = after[index].iter().filter(|row| !before[index].contains(row)).collect::<Vec<_>>();
+                assert_eq!(after[index].len(), before[index].len() + 1, "{table}");
+                assert_eq!(added.len(), 1, "{table}");
+                assert!(added[0].contains(&won.payload.id) && !added[0].contains(&lost.payload.id), "{table}");
+            }
+        };
+        assert_only_winner(&store);
+        drop(store);
+        store = BillingStore::open(&path, &network()).unwrap();
+        assert_only_winner(&store);
+        let refused = store.open_account(lost, None, 103).unwrap_err();
+        assert!(refused.starts_with("rate_limit:"), "{refused}");
+        let recovered = store.open_account(won, None, 103).unwrap();
+        assert!(recovered.credential.is_none(), "existing-account recovery issues no credential");
+        assert_eq!(encode(&recovered.account).unwrap(), encode(&opened.account).unwrap());
+        assert_eq!(store.authenticate(&root.bearer, 103).unwrap().account.contract_id, won.payload.id);
+        assert_only_winner(&store);
+
+        // Quoting is not gated by the now-full free-account bound, owned or ledger-wide:
+        // a later free quote for the same owner is retained without an account,
+        // credential or reservation, and its own authenticated opening is still refused.
+        // Compared without printing credential rows on failure.
+        let late = quote(0, true);
+        let full = quote_work_protected_snapshot(&store);
+        store.store_quote(&late, 103).unwrap();
+        let quoted = quote_work_protected_snapshot(&store);
+        assert!(quoted[4] == full[4] && quoted[5] == full[5],
+            "ledger_wide={ledger_wide}: a quote must not allocate an account or credential");
+        assert!(quoted[2].iter().any(|record| record.contains(&late.payload.id)));
+        let refused = store.open_account(&late, None, 104).unwrap_err();
+        assert!(refused.starts_with("rate_limit:"), "{refused}");
+        assert!(quote_work_protected_snapshot(&store) == quoted,
+            "ledger_wide={ledger_wide}: a refused opening leaves no partial state");
+    }
+}
+
+/// Arms `store`'s test-only admission pause point `point`: the first receiver resolves once
+/// a transaction of `store` has passed that final capacity check, still inside its write
+/// transaction, and the transaction continues once the returned sender is used or dropped.
+fn pause_next_admission(store: &BillingStore, point: AdmissionPoint)
+    -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (reached, reports) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    *store.admission_pause.lock().unwrap() = Some((point, reached, resume));
+    (reports, release)
+}
+
+/// The deterministic final-slot schedule of specify-non-reserving-quotes 3.3/4.3. Two
+/// writers, each its own `BillingStore` connection to the ledger at `path`, are armed at
+/// `point`. Writer A runs `first` until it has passed its final capacity check and paused
+/// inside its write transaction, before inserting. Only then does writer B start `second`.
+/// While A stays paused, B must neither reach its own pause point (it cannot pass its own
+/// capacity check) nor return: under the ledger's 5-second busy timeout it waits for A's
+/// write lock instead of failing with "database is locked". An independent connection then
+/// finds the write lock held. A is released, B's pause point is released with it (so a B
+/// that wrongly passes its check later returns instead of blocking the test), and both
+/// results are returned; B must not reach its pause point afterwards either. Results are
+/// not printed, since an opening's result carries a credential secret.
+fn race_paused_admission<T: Send + 'static>(
+    path: &Path,
+    point: AdmissionPoint,
+    first: impl FnOnce(&BillingStore) -> Result<T, String> + Send + 'static,
+    second: impl FnOnce(&BillingStore) -> Result<T, String> + Send + 'static,
+    context: &str,
+) -> (Result<T, String>, Result<T, String>) {
+    use std::{sync::mpsc::{self, RecvTimeoutError}, time::Duration};
+    let writer_a = BillingStore::open(path, &network()).unwrap();
+    let writer_b = BillingStore::open(path, &network()).unwrap();
+    let (a_reached, a_release) = pause_next_admission(&writer_a, point);
+    let (b_reached, b_release) = pause_next_admission(&writer_b, point);
+    let a = std::thread::spawn(move || first(&writer_a));
+    if let Err(error) = a_reached.recv_timeout(Duration::from_secs(10)) {
+        panic!("{context}: writer A must pass its final capacity check and pause: {error:?}");
+    }
+    let (started, b_started) = mpsc::channel();
+    let b = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        second(&writer_b)
+    });
+    b_started.recv_timeout(Duration::from_secs(10)).unwrap();
+    // The bounded negative: B is running and A holds the final slot between its check
+    // and its insertion. B must not pass its own capacity check in this window.
+    match b_reached.recv_timeout(Duration::from_millis(500)) {
+        Err(RecvTimeoutError::Timeout) => {}
+        Ok(()) => panic!("{context}: writer B passed its own capacity check while writer A \
+            was paused between its check and its insertion"),
+        Err(RecvTimeoutError::Disconnected) => panic!("{context}: writer B returned while \
+            writer A was paused instead of waiting for its write lock: {:?}",
+            b.join().unwrap().err()),
+    }
+    assert!(!b.is_finished(), "{context}: writer B must wait for writer A's write \
+        transaction under the busy timeout, not return while A is paused");
+    let probe = Connection::open(path).unwrap();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    match probe.execute_batch("BEGIN IMMEDIATE") {
+        Err(rusqlite::Error::SqliteFailure(code, _))
+            if code.code == rusqlite::ErrorCode::DatabaseBusy => {}
+        other => panic!("{context}: paused writer A must hold the ledger write lock from \
+            its capacity check to its insertion: {other:?}"),
+    }
+    drop(probe);
+    a_release.send(()).unwrap();
+    // B's seam is released before joining: a B that passes its capacity check after A's
+    // commit (an off-by-one bound, or a count read before the write lock) then returns
+    // and is reported below, instead of waiting at its seam on this thread forever.
+    drop(b_release);
+    let first = a.join().unwrap();
+    let second = b.join().unwrap();
+    assert!(b_reached.try_recv().is_err(),
+        "{context}: writer B must be refused by its capacity check, never pass it");
+    (first, second)
+}
+
+/// Asserts that the protected ledger snapshot `after` differs from `before` only by the
+/// winner's standalone-quote handoff (the loser keeps its quote) and by exactly one added
+/// row, naming the winner and not the loser, in each table of `added`. Rows are compared
+/// without being printed, since credential rows are protected.
+fn assert_only_winner_added(before: &[Vec<String>], after: &[Vec<String>], won: &str,
+    lost: &str, added: &[usize], context: &str) {
+    assert_eq!(after.len(), before.len());
+    for index in 0..before.len() {
+        if index == 2 {
+            let mut quotes = before[2].clone();
+            quotes.retain(|record| !record.contains(won));
+            assert!(quotes.len() + 1 == before[2].len() && after[2] == quotes,
+                "{context}: only the winner's standalone quote is handed off");
+            assert!(after[2].iter().any(|record| record.contains(lost)),
+                "{context}: the refused writer keeps its standalone quote");
+        } else if added.contains(&index) {
+            let previous = before[index].iter().collect::<std::collections::HashSet<_>>();
+            let new = after[index].iter().filter(|row| !previous.contains(row)).collect::<Vec<_>>();
+            assert!(after[index].len() == before[index].len() + 1 && new.len() == 1
+                && new[0].contains(won) && !new[0].contains(lost),
+                "{context}: table {index} must gain exactly one row, the winner's");
+        } else {
+            assert!(after[index] == before[index], "{context}: table {index} changed");
+        }
+    }
+}
+
+/// specify-non-reserving-quotes 3.3/4.3, requirement "Authenticated paid admission preserves
+/// accepted commitments": "The final check and accepted-evidence insertion SHALL be atomic
+/// across writers", scenario *Writers compete for the last paid admission lease*, by a
+/// deterministic schedule rather than a natural race. With exactly one paid lease left
+/// (9,999 active leases, restored prerequisites besides one registered original), writer A
+/// passes the active-lease check and pauses inside its write transaction before inserting;
+/// writer B, an independently qualifying original on another connection, starts and cannot
+/// pass its own check while A is paused, and an independent connection finds the write
+/// lock held. Released, A commits the only acknowledgement and lease; B gets `rate_limit`
+/// after waiting (not a lock error) and leaves no intent, nonce, account or credit, and its
+/// quote is retained; a later retry and reopening change nothing. Would catch the count and
+/// the insert split into two separately committed transactions, and a count read without
+/// the write lock (a deferred transaction), both of which reach B's pause point while A is
+/// paused; and a count read before the write lock is taken, or an off-by-one bound, both of
+/// which let B pass its check after A's commit (B's seam is released with A, so these fail
+/// rather than hang). B's exact refusal shows the active-lease check itself refused it.
+#[test]
+fn paused_paid_registration_holds_the_final_lease_check_until_its_acknowledgement_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("paused-paid-lease.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let seed = quote(1000, false);
+    store.store_quote(&seed, 100).unwrap();
+    let seed_ack = register(&store, &seed, &payment(&seed.payload, true, 1000, 1), 101);
+    store.transaction(|tx| {
+        for index in 0..MAX_PENDING - 2 {
+            tx.execute("INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) VALUES(?1,?2,'0x00',?3,?4,?5,'0',400)",
+                params![format!("lease-{index}"), format!("lease-hash-{index}"), encode(&seed_ack)?,
+                    encode(&seed)?, format!("lease-sender-{index}")]).map_err(sql)?;
+        }
+        Ok(())
+    }).unwrap();
+    assert_eq!(active_intents(&store, 102), MAX_PENDING as u64 - 1, "exactly one lease left");
+    let contenders = [quote(1000, false), quote(1000, false)];
+    let payments = [payment(&contenders[0].payload, true, 1000, 2),
+        payment(&contenders[1].payload, true, 1000, 3)];
+    for contender in &contenders {
+        store.store_quote(contender, 100).unwrap();
+    }
+    let attempt = |index: usize| {
+        let (terms, funding) = (contenders[index].clone(), payments[index].clone());
+        move |ledger: &BillingStore| ledger.register_funding_intent(&terms,
+            &terms.payload.consumer_wallet, &funding.raw_transaction, &funding.tx_hash,
+            index as u64 + 2, PROVIDER_KEY, || Ok(102), true, &terms.payload.model)
+    };
+    let before = quote_work_protected_snapshot(&store);
+    let (first, second) = race_paused_admission(&path, AdmissionPoint::PaidLease,
+        attempt(0), attempt(1), "final paid lease");
+    let acknowledged = first.expect("the paused writer keeps the final lease");
+    let refused = second.expect_err("the second writer must be refused");
+    // Refused by the active-lease check itself, after A's commit, not by another gate.
+    assert_eq!(refused, "rate_limit: active funding intent capacity reached");
+    assert_eq!(acknowledged.payload.quote_id, contenders[0].payload.id);
+    assert_eq!(acknowledged.payload.tx_hash, payments[0].tx_hash);
+    assert_eq!(acknowledged.payload.registered_at, 102);
+    assert_eq!(active_intents(&store, 102), MAX_PENDING as u64);
+    let after = quote_work_protected_snapshot(&store);
+    assert_only_winner_added(&before, &after, &contenders[0].payload.id,
+        &contenders[1].payload.id, &[9], "final paid lease");
+    let stored = store.funding_intent(&contenders[0].payload, &payments[0].raw_transaction)
+        .unwrap().expect("the winner's acknowledgement is durable");
+    assert_eq!(encode(&stored).unwrap(), encode(&acknowledged).unwrap());
+    assert!(store.funding_intent(&contenders[1].payload, &payments[1].raw_transaction)
+        .unwrap().is_none(), "the refused original has no acknowledgement");
+    let retried = attempt(1)(&store).expect_err("the refused original stays refused");
+    assert_eq!(retried, "rate_limit: active funding intent capacity reached");
+    assert!(quote_work_protected_snapshot(&store) == after, "a refused retry leaves no state");
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    assert!(quote_work_protected_snapshot(&store) == after, "reopening preserves exactly one");
+}
+
+/// specify-non-reserving-quotes 4.3 (final free slot competition) and the atomic final
+/// check of requirement "Authenticated paid admission preserves accepted commitments",
+/// applied to authenticated free first openings, by a deterministic schedule rather than a
+/// natural race. With one owned free slot left (seven earlier openings) and, separately,
+/// one ledger-wide slot left (9,999 restored account rows), writer A passes the owned (8)
+/// and ledger-wide (10,000) account checks and pauses inside its write transaction before
+/// inserting its account; writer B, another free quote of the same owner on another
+/// connection, starts and cannot pass its own checks while A is paused, and an independent
+/// connection finds the write lock held. Released, A commits the only account and root
+/// credential; B gets `rate_limit` after waiting (not a lock error) with no account or
+/// credential and keeps its quote; a later retry changes nothing. Would catch the counts
+/// and the insert split into two separately committed transactions, and counts read
+/// without the write lock (a deferred transaction), both of which reach B's pause point
+/// while A is paused; and an owned or ledger-wide count read before the write lock is taken,
+/// or an off-by-one owned bound, which let B pass its checks after A's commit (B's seam is
+/// released with A, so these fail rather than hang). B's exact refusal shows the account
+/// check itself refused it.
+#[test]
+fn paused_free_opening_holds_the_final_owned_and_ledger_slot_checks_until_its_account_commits() {
+    for ledger_wide in [false, true] {
+        let context = if ledger_wide { "final ledger-wide free slot" } else { "final owned free slot" };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paused-free-slot.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        if ledger_wide {
+            let template = quote(0, true);
+            store.transaction(|tx| {
+                for index in 0..MAX_PENDING - 1 {
+                    tx.execute("INSERT INTO accounts(id,owner,quote,account,created) VALUES(?1,?2,?3,'{}',100)",
+                        params![format!("restored-{index}"), format!("0x{index:040x}"), encode(&template)?]).map_err(sql)?;
+                }
+                Ok(())
+            }).unwrap();
+        } else {
+            for _ in 0..7 {
+                let earlier = quote(0, true);
+                store.store_quote(&earlier, 100).unwrap();
+                assert!(store.open_account(&earlier, None, 101).unwrap().credential.is_some());
+            }
+        }
+        let contenders = [quote(0, true), quote(0, true)];
+        for contender in &contenders {
+            store.store_quote(contender, 100).unwrap();
+        }
+        let attempt = |index: usize| {
+            let terms = contenders[index].clone();
+            move |ledger: &BillingStore| ledger.open_account(&terms, None, 102)
+        };
+        let before = quote_work_protected_snapshot(&store);
+        let (first, second) = race_paused_admission(&path, AdmissionPoint::FreeAccount,
+            attempt(0), attempt(1), context);
+        let opened = match first {
+            Ok(opened) => opened,
+            Err(error) => panic!("{context}: the paused writer keeps the final slot: {error}"),
+        };
+        let refused = match second {
+            Err(error) => error,
+            Ok(_) => panic!("{context}: the second writer must be refused"),
+        };
+        // Refused by the owned/ledger-wide account check itself, after A's commit.
+        assert_eq!(refused, "rate_limit: free account limit reached", "{context}");
+        assert_eq!(opened.account.contract_id, contenders[0].payload.id);
+        assert_eq!(opened.account.status, "free");
+        assert!(opened.credential.is_some(), "{context}: the winner gets its root credential");
+        let after = quote_work_protected_snapshot(&store);
+        assert_only_winner_added(&before, &after, &contenders[0].payload.id,
+            &contenders[1].payload.id, &[4, 5], context);
+        let retried = match attempt(1)(&store) {
+            Err(error) => error,
+            Ok(_) => panic!("{context}: the refused opening stays refused"),
+        };
+        assert_eq!(retried, "rate_limit: free account limit reached", "{context}");
+        assert!(quote_work_protected_snapshot(&store) == after,
+            "{context}: a refused retry leaves no state");
+    }
+}
+
 #[test]
 fn intent_owner_challenge_binds_body_payer_network_provider_and_consumes_once() {
     let store = memory();

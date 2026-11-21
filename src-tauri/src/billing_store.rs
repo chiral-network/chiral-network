@@ -28,9 +28,30 @@ const FEE_BATCH_CHECKED: &str = "fee-batch-checked:";
 const FEE_SEAL_CHUNK: i64 = 1_000;
 const CREDENTIAL_TTL_MAX: u64 = 90 * 86_400;
 
+/// The test-only pause points of the ledger's admission write transactions
+/// (specify-non-reserving-quotes 3.3/4.3), each after a final capacity check has passed and
+/// before the accepted evidence is inserted, inside the same write transaction.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionPoint {
+    /// `register_funding_intent` has passed the active paid-lease check and has not yet
+    /// inserted the acknowledgement and intent.
+    PaidLease,
+    /// `open_account`'s first free opening has passed the owned and ledger-wide account
+    /// checks and has not yet inserted the account.
+    FreeAccount,
+}
+
 pub struct BillingStore {
     db: Mutex<Connection>,
     network: NetworkIdentity,
+    /// Test-only pause point of the admission transactions: when armed, the next transaction
+    /// of this store that reaches the armed `AdmissionPoint` reports on the sender and
+    /// continues once the receiver resolves (or its sender is dropped).
+    #[cfg(test)]
+    admission_pause: Mutex<
+        Option<(AdmissionPoint, std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+    >,
 }
 
 #[derive(Debug, Clone)]
@@ -381,7 +402,31 @@ impl BillingStore {
         Ok(Self {
             db: Mutex::new(db),
             network: network.clone(),
+            #[cfg(test)]
+            admission_pause: Mutex::new(None),
         })
+    }
+
+    /// The test-only pause point `point` of an admission transaction, when it is the armed
+    /// one: reports that the transaction has reached it and waits, still inside that write
+    /// transaction, until the test lets it continue.
+    #[cfg(test)]
+    fn pause_for_test(&self, point: AdmissionPoint) {
+        let armed = {
+            let mut pause = self
+                .admission_pause
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pause.as_ref().is_some_and(|(armed, _, _)| *armed == point) {
+                pause.take()
+            } else {
+                None
+            }
+        };
+        if let Some((_, reached, resume)) = armed {
+            let _ = reached.send(());
+            let _ = resume.recv();
+        }
     }
 
     fn transaction<T>(
@@ -823,6 +868,8 @@ impl BillingStore {
                     let count: i64 = tx.query_row("SELECT COUNT(*) FROM accounts WHERE owner=?1", [&q.consumer_wallet], |r| r.get(0)).map_err(sql)?;
                     let total: i64 = tx.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).map_err(sql)?;
                     if count >= 8 || total >= MAX_PENDING { return Err("rate_limit: free account limit reached".into()); }
+                    #[cfg(test)]
+                    self.pause_for_test(AdmissionPoint::FreeAccount);
                 } else {
                     let verified = payment.ok_or("invalid_payment: funding transaction required")?;
                     validate_payment(q, verified, true)?;
@@ -2035,6 +2082,8 @@ impl BillingStore {
             if committed {return Err("conflict: sender nonce already has an acknowledged funding agreement".into());}
             let pending:i64=tx.query_row("SELECT COUNT(*) FROM funding_intents WHERE admission_until>?1 AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract)",[now],|r|r.get(0)).map_err(sql)?;
             if pending >= MAX_PENDING { return Err("rate_limit: active funding intent capacity reached".into()); }
+            #[cfg(test)]
+            self.pause_for_test(AdmissionPoint::PaidLease);
             let ack=protocol::sign(protocol::INTENT_DOMAIN,FundingIntent{network:q.network.clone(),provider_wallet:q.provider_wallet.clone(),consumer_wallet:q.consumer_wallet.clone(),quote_id:q.id.clone(),tx_hash:hash.into(),registered_at:now},key)?;
             protocol::verify(protocol::INTENT_DOMAIN,&ack,&q.provider_wallet)?;
             tx.execute("INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![q.id,hash,raw,encode(&ack)?,encode(quote)?,owner,nonce.to_string(),q.expires_at]).map_err(sql)?;

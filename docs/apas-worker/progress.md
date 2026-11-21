@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-21 (seventy-sixth round) — Acceptance: quotes overbook opening capacity; paid admission is atomic and accepted originals survive reply loss, restart and expiry
+
+- In step at `b02e974f`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-non-reserving-quotes` 3.3 and 4.3). The evidence map in the change's design.md ties every statement and scenario of both requirements to a passing test, most of them reused. New tests:
+  - `inference_funding_admission_test::overbooked_quotes_change_no_opening_capacity_and_still_need_admission`: with 10,000 active paid leases and the owner's eight free accounts, paid and free quotes for the owner and unrelated wallets are still signed and change no lease, intent, account or credential. The holder still needs an owner proof and a valid payment, then gets 429 after the spendability check; the free opening and the native `fund` get 429, with no RPC, acknowledgement or submission.
+  - `inference_funding_admission_test::native_accepted_original_recovers_after_expiry_restart_and_refill_until_safe_credit`: an acknowledged original whose reply was lost survives quote and lease expiry, two restarts, 10,000 refilled leases, full quote storage, exhausted signing work and issuance, and a second genuinely lost reply. Recovery returns the same acknowledgement without a new lease or any replacement quote, payment or journal operation, and credit waits for the safe frontier.
+  - `billing_store::tests::paid_lease_bound_is_strict_at_deadlines_and_replay_never_renews_a_lease` and `free_openings_compete_for_the_final_owned_and_ledger_slots_across_connections`.
+  - The first review found that splitting the capacity count and the insert into two locked transactions passed every test. A follow-up added a `#[cfg(test)]` pause point between the passed check and the insert, inside the same write transaction, and `paused_paid_registration_holds_the_final_lease_check_until_its_acknowledgement_commits` and `paused_free_opening_holds_the_final_owned_and_ledger_slot_checks_until_its_account_commits`. A second writer must be refused by the capacity check itself; the split and an unlocked count now fail them. The second review fixed a helper that hung, instead of failing, when a mutant let the second writer through. It also confirmed from the binaries' section hashes that the seam compiles to nothing.
+- No code difference was found and no production behaviour changed. Recorded limits: the deterministic proof depends on the pause point staying between check and insert. The expired commit uses the ledger's explicit-time clock, because the route samples wall time. Restored prerequisites and scripted RPC are not live-chain evidence.
+- 3.3 and 4.3 are ticked; only 4.4 (report update, final checks, archive) remains. `specify-opening-funding-intent` 2.3.4 and 2.3.4.3 are ticked with this evidence. The stale ownership blockers in its 2.3.2 and 2.5.3 now state what is true: 2.3.2 awaits its own review, and 2.5.3 still needs a seam between the acknowledgement write and the start-marker write.
+- Checks: full suite under caffeinate: bins build passes; 30 headless test targets, 739 passed, 12 ignored (helpers), 0 failed (`--lib` 428; `inference_funding_admission_test` 38/38; `inference_owner_control_test` 61/61); desktop `--lib desktop::` 5/5; `npm test` 80/80 in 17 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 76 OK; strict validation of both changes passes. No `pmset` sleep during the run.
+
 ## 2026-11-21 (seventy-fifth round) — Archive: `specify-challenge-rate-budgets`
 
 - In step at `759f699d`; whitepaper unchanged; no new answers.
@@ -853,7 +865,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Non-reserving 4.4 (report update and archive; 3.3/4.3 done in round 76), opening-intent 2.3.2 review, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
