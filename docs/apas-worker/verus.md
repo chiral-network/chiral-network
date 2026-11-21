@@ -380,3 +380,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `exhausted_quote_signing_work_leaves_existing_requests_and_inference_gates_intact` and `exhausted_committed_quote_issuance_leaves_existing_requests_and_inference_gates_intact` — **replaceable in part**: that the inference admission predicate and settlement transitions read and write no quote-budget state, and that each quote budget's counter and minute change only under its own claim, is a frame condition over a modeled state that Verus could prove; the SQLite rows, pending-state cleanup, reopening and signed receipts are outside it.
 - `exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference_and_reads_continue` — **not replaceable**: HTTP routers, the real clock, bearer authentication and a loopback engine.
+
+## Judged 2026-11-21 — inference settlement at full opening capacity (opening-intent 2.8.2.6)
+
+- `full_paid_opening_capacity_leaves_existing_requests_and_inference_gates_intact`, `full_owned_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` and `full_global_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` — **replaceable in part**: that settlement, release and recovery transitions read and write no lease, account-count or quote state (a frame condition), and that the opening predicates (fewer than 10,000 active leases; fewer than 8 owned and 10,000 total accounts) are unchanged by them, could be proved over a modeled ledger state in Verus; the 10,000-row SQLite fills, reopening and signed receipts are outside it.
+- `full_opening_capacity_leaves_gateway_settlement_reads_and_inference_intact` — **not replaceable**: HTTP routers, bearer scopes, the real clock and a loopback engine.

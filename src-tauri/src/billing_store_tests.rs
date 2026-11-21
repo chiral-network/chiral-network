@@ -5899,26 +5899,30 @@ fn inconsistent_challenge_rate_evidence_fails_closed_without_erasing_state() {
 
 type ExpiryRows = std::collections::BTreeMap<&'static str, Vec<Value>>;
 
+/// Each ledger table and the query that reads all of its rows, in a fixed order, with JSON
+/// record columns decoded.
+const LEDGER_TABLES: [(&str, &str); 14] = [
+    ("metadata", "SELECT json_array(key,value) FROM metadata ORDER BY key"),
+    ("rate_limits", "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket"),
+    ("quotes", "SELECT json_array(id,owner,expires,json(record)) FROM quotes ORDER BY id"),
+    ("challenges", "SELECT json_array(nonce,wallet,expires,json(record)) FROM challenges ORDER BY nonce"),
+    ("accounts", "SELECT json_array(id,owner,json(quote),json(account),sequence,created) FROM accounts ORDER BY id"),
+    ("credentials", "SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id"),
+    ("requests", "SELECT json_array(id,contract,request_key,credential,status,created,json(record)) FROM requests ORDER BY id"),
+    ("funding", "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash"),
+    ("funding_attempts", "SELECT json_array(tx_hash,contract,record,raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash"),
+    ("funding_intents", "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract"),
+    ("fee_obligations", "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash"),
+    ("fee_batches", "SELECT json_array(id,status,record) FROM fee_batches ORDER BY id"),
+    ("performance_observations", "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence"),
+    ("performance_withdrawals", "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence"),
+];
+
 /// Every row of every ledger table, read through an independent connection, with JSON
 /// record columns decoded so that expected financial changes can be applied field by
 /// field. Fails if the ledger has a table this list does not read.
 fn expiry_ledger_rows(path: &Path) -> ExpiryRows {
-    const TABLES: [(&str, &str); 14] = [
-        ("metadata", "SELECT json_array(key,value) FROM metadata ORDER BY key"),
-        ("rate_limits", "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket"),
-        ("quotes", "SELECT json_array(id,owner,expires,json(record)) FROM quotes ORDER BY id"),
-        ("challenges", "SELECT json_array(nonce,wallet,expires,json(record)) FROM challenges ORDER BY nonce"),
-        ("accounts", "SELECT json_array(id,owner,json(quote),json(account),sequence,created) FROM accounts ORDER BY id"),
-        ("credentials", "SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id"),
-        ("requests", "SELECT json_array(id,contract,request_key,credential,status,created,json(record)) FROM requests ORDER BY id"),
-        ("funding", "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash"),
-        ("funding_attempts", "SELECT json_array(tx_hash,contract,record,raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash"),
-        ("funding_intents", "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract"),
-        ("fee_obligations", "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash"),
-        ("fee_batches", "SELECT json_array(id,status,record) FROM fee_batches ORDER BY id"),
-        ("performance_observations", "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence"),
-        ("performance_withdrawals", "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence"),
-    ];
+    const TABLES: [(&str, &str); 14] = LEDGER_TABLES;
     let db = Connection::open(path).unwrap();
     let tables: Vec<String> = db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -10620,6 +10624,14 @@ fn account_records(rows: &ExpiryRows, account: &str) -> Vec<Value> {
 /// identifier, the account's list holds exactly those records newest first, and no read
 /// changes a row.
 fn assert_ledger_reads(store: &BillingStore, path: &Path, expected: &ExpiryRows, account: &str, case: &str) {
+    check_ledger_reads(store, expected, account, case);
+    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a read changed the ledger");
+}
+
+/// The reads of `assert_ledger_reads`, without the final comparison of every row: each request
+/// of `account` in `expected` reads back exactly by key and by opaque identifier, and the
+/// account's list holds exactly those records newest first.
+fn check_ledger_reads(store: &BillingStore, expected: &ExpiryRows, account: &str, case: &str) {
     let records = account_records(expected, account);
     assert!(!records.is_empty() && records.len() <= 100, "{case}");
     for record in &records {
@@ -10632,13 +10644,20 @@ fn assert_ledger_reads(store: &BillingStore, path: &Path, expected: &ExpiryRows,
     let mut sorted = listed;
     sorted.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     assert_eq!(sorted, records, "{case}: the request list");
-    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a read changed the ledger");
 }
 
 /// Issues a receipt for `account` at `at` and checks it: signed by the provider for the
 /// network, binding the account and every request record of `expected` with the next
 /// sequence. Applies that sequence to `expected`, which must then be every row.
 fn assert_ledger_receipt(store: &BillingStore, path: &Path, expected: &mut ExpiryRows, account: &str, at: u64, case: &str) {
+    check_ledger_receipt(store, expected, account, at, case);
+    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a receipt changed more than its sequence");
+}
+
+/// The receipt of `assert_ledger_receipt`, without the final comparison of every row: issues
+/// it, checks its signature, network, provider, account and every request of `expected`, and
+/// applies its sequence to `expected`.
+fn check_ledger_receipt(store: &BillingStore, expected: &mut ExpiryRows, account: &str, at: u64, case: &str) {
     let provider = crate::wallet::address_from_private_key(PROVIDER_KEY).unwrap();
     let receipt = store.receipt(account, PROVIDER_KEY, at).unwrap();
     protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &provider).unwrap();
@@ -10651,7 +10670,6 @@ fn assert_ledger_receipt(store: &BillingStore, path: &Path, expected: &mut Expir
     bound.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     assert_eq!(bound, account_records(expected, account), "{case}: the receipt's requests");
     expiry_row(expected, "accounts", account)[4] = json!(sequence);
-    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a receipt changed more than its sequence");
 }
 
 /// inference-request-accounting task 3.3, one quote budget exhausted at the ledger. Times are
@@ -11265,5 +11283,776 @@ async fn exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference
         assert_eq!(quote_rows(&fixture.rows()), quotes, "{case}: inference or reads touched a quote budget");
         fixture.engine.untouched("reads");
         assert_proposal_refused(&fixture, &proposal, refusal, &mut work, &format!("{case}: final")).await;
+    }
+}
+
+// opening-intent task 2.8.2.6: the two cells that inference-request-accounting's
+// reconciliation with opening-intent 2.8.2 (task 3.4) left open. Existing paid requests settle,
+// release, recover at restart and read back while fresh opening capacity is full: 10,000
+// active paid admission leases, an owner's eight accounts, or 10,000 ledger accounts. Ledger
+// steps pass explicit logical times. Restored records are complete signed storage
+// prerequisites, not observed historical admissions or openings.
+
+const PAID_CAPACITY_REFUSAL: &str = "rate_limit: active funding intent capacity reached";
+const FREE_CAPACITY_REFUSAL: &str = "rate_limit: free account limit reached";
+
+/// Restored records: their account or agreement identifiers start with this prefix, which no
+/// `protocol::random_id` plausibly has.
+const RESTORED_PREFIX: &str = "0xf111ed0000000000";
+
+/// The tables that hold restored records, the column naming each row's restored account or
+/// agreement, and the query that reads every column of each restored row, undecoded.
+const RESTORED_TABLES: [(&str, &str, &str); 3] = [
+    ("accounts", "id",
+        "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts WHERE id GLOB ?1 ORDER BY id"),
+    ("credentials", "contract",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials WHERE contract GLOB ?1 ORDER BY id"),
+    ("funding_intents", "contract",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents WHERE contract GLOB ?1 ORDER BY contract"),
+];
+
+/// Every row of every ledger table. Restored rows are kept apart as the undecoded text of all
+/// their columns, so that 10,000 of them are compared exactly without decoding each one; every
+/// other row is decoded as `expiry_ledger_rows` decodes it.
+#[derive(Clone, PartialEq)]
+struct CapacityRows {
+    rows: ExpiryRows,
+    restored: std::collections::BTreeMap<&'static str, Vec<String>>,
+}
+
+impl std::fmt::Debug for CapacityRows {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let restored: Vec<(&str, usize)> = self.restored.iter().map(|(table, rows)| (*table, rows.len())).collect();
+        formatter.debug_struct("CapacityRows").field("rows", &self.rows).field("restored (counts)", &restored).finish()
+    }
+}
+
+/// `CapacityRows` of the ledger at `path`, read through an independent connection. Fails if
+/// the ledger has a table `LEDGER_TABLES` does not read.
+fn capacity_ledger_rows(path: &Path) -> CapacityRows {
+    let db = Connection::open(path).unwrap();
+    let tables: Vec<String> = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut read: Vec<String> = LEDGER_TABLES.iter().map(|(table, _)| table.to_string()).collect();
+    read.sort();
+    assert_eq!(tables, read, "the snapshot must read every ledger table");
+    let pattern = format!("{RESTORED_PREFIX}*");
+    let text = |query: &str, restricted: bool| -> Vec<String> {
+        let mut statement = db.prepare(query).unwrap();
+        let get = |row: &rusqlite::Row<'_>| row.get::<_, String>(0);
+        let rows: Result<Vec<String>, _> = if restricted {
+            statement.query_map([&pattern], get).unwrap().collect()
+        } else {
+            statement.query_map([], get).unwrap().collect()
+        };
+        rows.unwrap()
+    };
+    let mut snapshot = CapacityRows { rows: ExpiryRows::new(), restored: Default::default() };
+    for (table, query) in LEDGER_TABLES {
+        let decoded = match RESTORED_TABLES.iter().find(|(name, _, _)| *name == table) {
+            None => text(query, false),
+            Some((_, column, restored)) => {
+                snapshot.restored.insert(table, text(restored, true));
+                let (head, order) = query.split_once(" ORDER BY ").unwrap();
+                text(&format!("{head} WHERE {column} NOT GLOB ?1 ORDER BY {order}"), true)
+            }
+        };
+        snapshot.rows.insert(table, decoded.iter().map(|row| serde_json::from_str(row).unwrap()).collect());
+    }
+    snapshot
+}
+
+/// Asserts that `actual` equals `expected`. A changed restored table is named with its counts
+/// and first differing row index, rather than printing 10,000 rows.
+fn assert_capacity_rows(actual: &CapacityRows, expected: &CapacityRows, context: &str) {
+    for (table, rows) in &expected.restored {
+        let found = &actual.restored[table];
+        if found != rows {
+            let first = found.iter().zip(rows).position(|(found, row)| found != row);
+            panic!("{context}: restored {table} rows changed: {} rows, expected {}, first difference at {first:?}",
+                found.len(), rows.len());
+        }
+    }
+    assert_eq!(actual.restored.len(), expected.restored.len(), "{context}");
+    assert_eq!(actual.rows, expected.rows, "{context}");
+}
+
+/// The opening-capacity state of `snapshot`, which settlement, release, recovery, reads and
+/// fresh inference on `account` must leave unchanged: every restored row; every quote,
+/// challenge, funding-intent (admission lease), funding, fee, rate-limit and metadata row; and
+/// every account row, `account`'s balances and receipt sequence aside.
+fn capacity_state(snapshot: &CapacityRows, account: &str) -> CapacityRows {
+    let mut state = snapshot.clone();
+    state.rows.retain(|table, _| !["credentials", "requests", "performance_observations"].contains(table));
+    for row in state.rows.get_mut("accounts").unwrap().iter_mut().filter(|row| row[0] == account) {
+        row[3] = Value::Null;
+        row[4] = Value::Null;
+    }
+    state
+}
+
+/// (active paid admission leases at `at`, accounts of `owner`, all accounts, the most accounts
+/// any one owner has, standalone quotes) of the ledger at `path`.
+fn opening_counts(path: &Path, owner: &str, at: u64) -> (u64, u64, u64, u64, u64) {
+    Connection::open(path).unwrap().query_row(
+        "SELECT (SELECT COUNT(*) FROM funding_intents WHERE admission_until>?1
+                 AND NOT EXISTS(SELECT 1 FROM accounts WHERE id=contract)),
+                (SELECT COUNT(*) FROM accounts WHERE owner=?2),(SELECT COUNT(*) FROM accounts),
+                (SELECT COALESCE(MAX(owned),0) FROM (SELECT COUNT(*) AS owned FROM accounts GROUP BY owner)),
+                (SELECT COUNT(*) FROM quotes)",
+        params![at, owner], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).unwrap()
+}
+
+/// `quote`'s terms for `wallet`, issued at `issued_at` and expiring at `expires_at`, signed by
+/// the provider.
+fn quote_for(funding: u128, wallet: &str, issued_at: u64, expires_at: u64) -> Signed<Quote> {
+    let mut terms = quote(funding, funding == 0).payload;
+    terms.consumer_wallet = wallet.into();
+    (terms.issued_at, terms.expires_at) = (issued_at, expires_at);
+    protocol::sign(protocol::QUOTE_DOMAIN, terms, PROVIDER_KEY).unwrap()
+}
+
+/// `make(n)` for each `n` in `0..count`, in order, computed on several threads: each restored
+/// record is signed on its own, which on one thread is slow in a debug build.
+fn signed_in_parallel<T: Send>(count: u64, make: impl Fn(u64) -> T + Sync) -> Vec<T> {
+    let threads = std::thread::available_parallelism().map_or(4, |threads| threads.get()).min(8) as u64;
+    let chunk = count.div_ceil(threads);
+    std::thread::scope(|scope| {
+        let make = &make;
+        let workers: Vec<_> = (0..threads)
+            .map(|thread| scope.spawn(move || (thread * chunk..((thread + 1) * chunk).min(count)).map(make).collect::<Vec<T>>()))
+            .collect();
+        workers.into_iter().flat_map(|worker| worker.join().unwrap()).collect()
+    })
+}
+
+/// Restores `count` complete signed unopened paid agreements on `template`'s terms, each with
+/// its own restored identifier and quote nonce, a distinct payer, an opaque original whose hash
+/// is its own, the provider's signed acknowledgement at the quote's issuance and an admission
+/// lease until the quote expires. Retained acceptance, not observed admissions.
+fn restore_paid_leases(store: &BillingStore, template: &Quote, count: u64) {
+    let records = signed_in_parallel(count, |n| {
+        let mut terms = template.clone();
+        terms.id = format!("{RESTORED_PREFIX}{n:048x}");
+        terms.nonce = format!("0x{:064x}", 0x9a1d_0000_u64 + n);
+        terms.consumer_wallet = format!("0x{:040x}", 0x9a1d_0000_u64 + n);
+        let raw = format!("0xf111{n:08x}");
+        let hash = raw_hash(&raw).unwrap();
+        let ack = protocol::sign(protocol::INTENT_DOMAIN, FundingIntent {
+            network: terms.network.clone(), provider_wallet: terms.provider_wallet.clone(),
+            consumer_wallet: terms.consumer_wallet.clone(), quote_id: terms.id.clone(),
+            tx_hash: hash.clone(), registered_at: terms.issued_at,
+        }, PROVIDER_KEY).unwrap();
+        let signed = protocol::sign(protocol::QUOTE_DOMAIN, terms, PROVIDER_KEY).unwrap();
+        (raw, hash, encode(&ack).unwrap(), signed)
+    });
+    store.transaction(|tx| {
+        let mut insert = tx.prepare("INSERT INTO funding_intents(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
+            VALUES(?1,?2,?3,?4,?5,?6,'0',?7)").map_err(sql)?;
+        for (raw, hash, ack, quote) in &records {
+            insert.execute(params![quote.payload.id, hash, raw, ack, encode(quote)?, quote.payload.consumer_wallet,
+                quote.payload.expires_at]).map_err(sql)?;
+        }
+        Ok(())
+    }).unwrap();
+}
+
+/// Restores `count` complete signed free accounts on the terms of the genuinely opened free
+/// account `seed`, each with its own restored identifier, quote nonce and distinct owner, its
+/// signed quote, `seed`'s account record and a root credential like `seed`'s with its own
+/// identifier and bearer hash, created when `seed` was. Storage prerequisites, not openings.
+fn restore_free_accounts(store: &BillingStore, seed: &crate::protocol::OpenResult, count: u64) {
+    let id = &seed.account.contract_id;
+    let terms = store.quote(id).unwrap().payload;
+    let root = store.credentials(id).unwrap().into_iter().find(|credential| credential.root).unwrap();
+    let created: u64 = store.db.lock().unwrap()
+        .query_row("SELECT created FROM accounts WHERE id=?1", [id], |row| row.get(0)).unwrap();
+    let records = signed_in_parallel(count, |n| {
+        let mut quote = terms.clone();
+        quote.id = format!("{RESTORED_PREFIX}{n:048x}");
+        quote.nonce = format!("0x{:064x}", 0x5e5e_0000_u64 + n);
+        quote.consumer_wallet = format!("0x{:040x}", 0x5e5e_0000_u64 + n);
+        let mut account = seed.account.clone();
+        account.contract_id = quote.id.clone();
+        account.consumer_wallet = quote.consumer_wallet.clone();
+        let mut credential = root.clone();
+        credential.id = protocol::random_id();
+        credential.contract_id = quote.id.clone();
+        let bearer = format!("chiral_{}", &protocol::random_id()[2..]);
+        (protocol::sign(protocol::QUOTE_DOMAIN, quote, PROVIDER_KEY).unwrap(), account, credential,
+            protocol::hash_hex(bearer.as_bytes()))
+    });
+    store.transaction(|tx| {
+        let mut account_insert = tx.prepare("INSERT INTO accounts(id,owner,quote,account,sequence,created) VALUES(?1,?2,?3,?4,0,?5)")
+            .map_err(sql)?;
+        let mut credential_insert = tx.prepare("INSERT INTO credentials(id,contract,token_hash,record,revoked) VALUES(?1,?2,?3,?4,0)")
+            .map_err(sql)?;
+        for (quote, account, credential, token_hash) in &records {
+            account_insert.execute(params![quote.payload.id, quote.payload.consumer_wallet, encode(quote)?, encode(account)?, created])
+                .map_err(sql)?;
+            credential_insert.execute(params![credential.id, credential.contract_id, token_hash, encode(credential)?]).map_err(sql)?;
+        }
+        Ok(())
+    }).unwrap();
+}
+
+/// The opening resource a task 2.8.2.6 case fills.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OpeningCapacity {
+    /// 10,000 active paid admission leases: 9,999 restored, the last a genuine registration.
+    Paid,
+    /// The owner's eight accounts: its paid account A, six genuine free openings and a last
+    /// genuine free opening.
+    OwnedFree,
+    /// 10,000 ledger accounts: A, a genuine free opening by another owner, 9,997 restored free
+    /// accounts of distinct owners and a last genuine free opening by A's owner, who then has
+    /// two accounts.
+    GlobalFree,
+}
+
+/// The openings of a task 2.8.2.6 case: candidates that a full resource must refuse, and the
+/// opening that takes its last unit.
+struct OpeningPressure {
+    capacity: OpeningCapacity,
+    /// Fresh openings of the full kind: the owner's acknowledged-paid registration (`Paid`) or
+    /// first free opening, and for `GlobalFree` also the first free opening of an owner with no
+    /// account.
+    candidates: Vec<Signed<Quote>>,
+    /// The original that the `Paid` candidate registers.
+    payment: VerifiedPayment,
+    /// The opening that takes the last unit.
+    last: Signed<Quote>,
+}
+
+/// A wallet of another owner than A's.
+fn other_owner(n: u64) -> String {
+    format!("0x{:040x}", 0x0c0f_fee0_u64 + n)
+}
+
+impl OpeningPressure {
+    /// On `store`, whose paid account A of the owner has `agreement`'s terms: quotes every
+    /// opening at `at` and takes every unit of `capacity` but the last. Candidates expire at
+    /// `candidate_end`; the filling leases and the last opening's quote at `lease_end`.
+    fn prepare(store: &BillingStore, capacity: OpeningCapacity, agreement: &Quote, at: u64, lease_end: u64,
+        candidate_end: u64) -> Self {
+        let owner = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
+        let quoted = |funding: u128, wallet: &str, expires_at: u64| {
+            let quote = quote_for(funding, wallet, at, expires_at);
+            store.store_quote(&quote, at).unwrap();
+            quote
+        };
+        let funding = if capacity == OpeningCapacity::Paid { 1000 } else { 0 };
+        let mut candidates = vec![quoted(funding, &owner, candidate_end)];
+        if capacity == OpeningCapacity::GlobalFree {
+            candidates.push(quoted(0, &other_owner(3), candidate_end));
+        }
+        let last = quoted(funding, &if capacity == OpeningCapacity::Paid { other_owner(1) } else { owner.clone() }, lease_end);
+        match capacity {
+            OpeningCapacity::Paid => {
+                let mut template = agreement.clone();
+                (template.issued_at, template.expires_at) = (at, lease_end);
+                restore_paid_leases(store, &template, 9_999);
+            }
+            OpeningCapacity::OwnedFree => {
+                for _ in 0..6 {
+                    assert!(store.open_account(&quoted(0, &owner, candidate_end), None, at).unwrap().credential.is_some());
+                }
+            }
+            OpeningCapacity::GlobalFree => {
+                let seed = store.open_account(&quoted(0, &other_owner(2), candidate_end), None, at).unwrap();
+                restore_free_accounts(store, &seed, 9_997);
+            }
+        }
+        let payment = payment(&candidates[0].payload, true, 1000, 0x50);
+        Self { capacity, candidates, payment, last }
+    }
+
+    /// Takes the last unit at `at`, genuinely: a registration or a free opening.
+    fn fill(&self, store: &BillingStore, at: u64) {
+        match self.capacity {
+            OpeningCapacity::Paid => {
+                let ack = register(store, &self.last, &payment(&self.last.payload, true, 1000, 0x51), at);
+                assert_eq!(ack.payload.registered_at, at);
+            }
+            _ => assert!(store.open_account(&self.last, None, at).unwrap().credential.is_some()),
+        }
+    }
+
+    /// Exactly the refusal of a fresh opening of the full kind.
+    fn refusal(&self) -> &'static str {
+        if self.capacity == OpeningCapacity::Paid { PAID_CAPACITY_REFUSAL } else { FREE_CAPACITY_REFUSAL }
+    }
+
+    /// `opening_counts` for the owner while the resource is full.
+    fn full_counts(&self) -> (u64, u64, u64, u64, u64) {
+        match self.capacity {
+            OpeningCapacity::Paid => (10_000, 1, 1, 1, 1),
+            OpeningCapacity::OwnedFree => (0, 8, 8, 8, 1),
+            OpeningCapacity::GlobalFree => (0, 2, 10_000, 2, 2),
+        }
+    }
+
+    /// The number of restored rows: leases, or accounts and their root credentials.
+    fn restored(&self) -> usize {
+        match self.capacity {
+            OpeningCapacity::Paid => 9_999,
+            OpeningCapacity::OwnedFree => 0,
+            OpeningCapacity::GlobalFree => 2 * 9_997,
+        }
+    }
+
+    /// Each candidate opening at `at` is refused with exactly `refusal`. The caller checks that
+    /// no row changed.
+    fn assert_refused(&self, store: &BillingStore, at: u64, context: &str) {
+        for candidate in &self.candidates {
+            let error = match self.capacity {
+                OpeningCapacity::Paid => store.register_funding_intent(candidate, &candidate.payload.consumer_wallet,
+                    &self.payment.raw_transaction, &self.payment.tx_hash, 0x50, PROVIDER_KEY, || Ok(at), true,
+                    &candidate.payload.model).unwrap_err(),
+                _ => store.open_account(candidate, None, at).unwrap_err(),
+            };
+            assert_eq!(error, self.refusal(), "{context}: at {at}");
+        }
+    }
+}
+
+/// opening-intent task 2.8.2.6, one opening resource full at the ledger. Times are logical:
+/// openings are quoted, and all but the last unit taken, at 950; existing holds are reserved at
+/// 990 (`BEFORE`); the last unit is taken genuinely at 1,000 (`FULL`).
+///
+/// Paid account A of the owner (995 wei available, one wei per token) has its root R,
+/// credential C (`infer`/`read`, four slots), F (`infer`, one slot) and a `read`-only
+/// credential. Before the fill it settles a 2-wei request and holds three 30-wei requests:
+/// two by C and one by F. While the resource is full it holds four more: two by C and two by R.
+///
+/// Fullness is proved by fresh openings of that kind (`OpeningPressure::candidates`). Each is
+/// refused with exactly its refusal and changes no row, right after the fill and after every
+/// later step, also right after reopening (before restart recovery) and after recovery, so no
+/// settlement, release, recovery, read or fresh inference frees capacity for an opening, and
+/// the resource is full when recovery runs. The fixture's own counts state each bound
+/// exactly, and that `GlobalFree` fills no owner's bound.
+///
+/// While full: one hold from before and one from during the fill each settle at known (10, 7)
+/// usage for 17 wei, and each releases its whole 30 wei with 30 wei of exposure as unknown
+/// usage; a further hold releases as invalid (10, 21) usage. Reads by key and opaque
+/// identifier, the request list and a signed receipt bind exactly the stored records and
+/// change only the receipt sequence. Fresh inference keeps its own rules: C is admitted and
+/// charged 15 wei, and beyond credit, `read`-only, F's held slot, changed serving terms and a
+/// held key are each refused by their own rule with every row unchanged. After reopening,
+/// restart recovery runs before any inference admission and releases both remaining holds, one from before and one from
+/// during the fill; F is then admitted again and charged 17 wei. Late outcomes return the first
+/// results, and the final reads and receipt agree with every row. A ends at 927 wei available,
+/// 68 spent, (41, 27) tokens, with its 5-wei fee and 1,000 funded. Complete rows are compared
+/// from fixed literals; the capacity state (`capacity_state`) equals its state at the fill
+/// throughout.
+///
+/// Non-vacuous controls: `Paid`'s refused original is admitted unchanged once every filling
+/// lease has ended; with the owner's bound full, another owner's first free opening is
+/// admitted. `GlobalFree` has none, because accounts are permanent.
+///
+/// Catches: settlement, release, restart recovery, reads, receipts or fresh reservation gated
+/// by a full opening resource; any of them freeing, consuming or rewriting opening capacity; a
+/// full resource waiving a fresh-inference gate.
+fn opening_capacity_case(capacity: OpeningCapacity) {
+    const QUOTED: u64 = 950;
+    const BEFORE: u64 = 990;
+    const FULL: u64 = 1_000;
+    const LEASE_END: u64 = 5_000;
+    const CANDIDATE_END: u64 = 9_000;
+    let case = format!("{capacity:?}");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let rows = || capacity_ledger_rows(&path);
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let owner = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
+    let usage = |prompt_tokens, completion_tokens| TokenUsage { prompt_tokens, completion_tokens };
+
+    // Paid account A of the owner holds the existing requests.
+    let (qa, _, opened) = paid(&store);
+    let a = qa.payload.id.clone();
+    let model = qa.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let issue = |slots: u32, scopes: &[&str]| store.issue_credential(&a, &CredentialIssueRequest {
+        expires_at: 1_000_000, spend_cap_wei: None, max_concurrency: slots,
+        scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+    }, 102).unwrap();
+    let c = issue(4, &["infer", "read"]);
+    let f = issue(1, &["infer"]);
+    let reader = issue(2, &["read"]);
+    let pressure = OpeningPressure::prepare(&store, capacity, &qa.payload, QUOTED, LEASE_END, CANDIDATE_END);
+    let assert_full = |at: u64, step: &str| {
+        assert_eq!(opening_counts(&path, &owner, at), pressure.full_counts(), "{case}, {step}");
+    };
+    // A fresh opening of the full kind is refused with exactly its refusal and changes no row.
+    let refused = |store: &BillingStore, at: u64, name: &str| {
+        let before = rows();
+        pressure.assert_refused(store, at, &format!("{case}, {name}"));
+        assert_capacity_rows(&rows(), &before, &format!("{case}, {name}: the refused opening at {at} changed a row"));
+    };
+    // Every row equals `expected`, and a fresh opening is still refused.
+    let step = |store: &BillingStore, expected: &CapacityRows, at: u64, name: &str| {
+        assert_capacity_rows(&rows(), expected, &format!("{case}: {name}"));
+        refused(store, at, name);
+    };
+
+    // Existing requests before the resource fills: a settled one and three holds.
+    let prior = store.reserve(&a, &root.id, "prior", 1, 1, BEFORE, &model).unwrap();
+    store.settle(&prior.id, &usage(1, 1), "completed", BEFORE).unwrap();
+    let before_known = store.reserve(&a, &c.id, "before-known", 10, 20, BEFORE, &model).unwrap();
+    let before_unknown = store.reserve(&a, &c.id, "before-unknown", 10, 20, BEFORE, &model).unwrap();
+    let before_restart = store.reserve(&a, &f.id, "before-restart", 10, 20, BEFORE, &model).unwrap();
+    assert!([&before_known, &before_unknown, &before_restart].iter().all(|hold| hold.max_cost_wei == "30"), "{case}");
+
+    // The last unit is taken genuinely at FULL; that changes none of A's rows.
+    let unfilled = rows();
+    pressure.fill(&store, FULL);
+    let full = rows();
+    for table in ["requests", "funding", "fee_obligations"] {
+        assert_eq!(full.rows[table], unfilled.rows[table], "{case}: the fill changed {table}");
+    }
+    let of_a = |snapshot: &CapacityRows| (
+        snapshot.rows["accounts"].iter().find(|row| row[0] == a.as_str()).cloned(),
+        snapshot.rows["credentials"].iter().filter(|row| row[1] == a.as_str()).cloned().collect::<Vec<_>>(),
+    );
+    assert_eq!(of_a(&full), of_a(&unfilled), "{case}: the fill changed A");
+    assert_full(FULL, "filled");
+    assert_eq!(full.restored.values().map(Vec::len).sum::<usize>(), pressure.restored(), "{case}: restored records");
+    refused(&store, FULL, "full");
+    let state = capacity_state(&full, &a);
+    let mut expected = full;
+
+    // Holds reserved while the resource is full.
+    let reserve = |store: &BillingStore, credential: &Credential, key: &str, at: u64, expected: &mut CapacityRows| {
+        let hold = store.reserve(&a, &credential.id, key, 10, 20, at, &model).unwrap();
+        expected.rows = gateway_reserved(&expected.rows, &rows().rows, key, &credential.id, 10, 20, 30, (at, at));
+        step(store, expected, at, key);
+        hold
+    };
+    let during_known = reserve(&store, &c, "during-known", FULL + 2, &mut expected);
+    let during_unknown = reserve(&store, &c, "during-unknown", FULL + 2, &mut expected);
+    let during_restart = reserve(&store, &root, "during-restart", FULL + 2, &mut expected);
+    let during_invalid = reserve(&store, &root, "during-invalid", FULL + 2, &mut expected);
+
+    // Known usage is charged; unknown and invalid usage release the whole hold with exposure.
+    for (at, hold) in [(FULL + 3, &before_known), (FULL + 4, &during_known)] {
+        expect_terminal(&mut expected.rows, &hold.id, "completed", Some((10, 7, 17)), at);
+        assert_eq!(store.settle(&hold.id, &usage(10, 7), "completed", at).unwrap().cost_wei, "17", "{case}");
+        step(&store, &expected, at, "known settlement");
+    }
+    for (at, hold) in [(FULL + 5, &before_unknown), (FULL + 6, &during_unknown)] {
+        expect_terminal(&mut expected.rows, &hold.id, "cancelled_unknown_usage", None, at);
+        let released = store.settle(&hold.id, &TokenUsage::default(), "cancelled_unknown_usage", at).unwrap();
+        assert_eq!((released.cost_wei.as_str(), released.provider_loss_wei.as_str()), ("0", "30"), "{case}");
+        step(&store, &expected, at, "unknown release");
+    }
+    expect_terminal(&mut expected.rows, &during_invalid.id, "invalid_usage_unknown_usage", None, FULL + 7);
+    let error = store.settle(&during_invalid.id, &usage(10, 21), "completed", FULL + 7).unwrap_err();
+    assert!(error.starts_with("usage_over_reservation:"), "{case}: {error}");
+    step(&store, &expected, FULL + 7, "invalid-usage release");
+
+    // Reads and a signed receipt bind exactly the stored records while full.
+    check_ledger_reads(&store, &expected.rows, &a, &format!("{case}: reads while full"));
+    step(&store, &expected, FULL + 8, "reads while full");
+    check_ledger_receipt(&store, &mut expected.rows, &a, FULL + 8, &format!("{case}: receipt while full"));
+    step(&store, &expected, FULL + 8, "receipt while full");
+    assert_capacity_rows(&capacity_state(&rows(), &a), &state, &format!("{case}: settlement and reads changed capacity"));
+
+    // Fresh inference is admitted and charged by its own rules...
+    let fresh = reserve(&store, &c, "fresh", FULL + 10, &mut expected);
+    expect_terminal(&mut expected.rows, &fresh.id, "completed", Some((10, 5, 15)), FULL + 11);
+    store.settle(&fresh.id, &usage(10, 5), "completed", FULL + 11).unwrap();
+    step(&store, &expected, FULL + 11, "fresh settlement");
+    // ...and refused by them, with every row unchanged.
+    let mut changed_terms = model.clone();
+    changed_terms.revision = "sha256:another-revision".into();
+    for (credential, key, (prompt, output), execution, prefix) in [
+        (&c.id, "over-credit", (1, 4096), &model, "insufficient_funds:"),
+        (&reader.id, "read-only", (10, 20), &model, "forbidden:"),
+        (&f.id, "slot-held", (10, 20), &model, "saturation:"),
+        (&c.id, "changed-terms", (10, 20), &changed_terms, "model_revision_unavailable:"),
+        (&c.id, "before-known", (10, 20), &model, "duplicate_request:"),
+        (&root.id, "during-known", (10, 20), &model, "duplicate_request:"),
+    ] {
+        let error = store.reserve(&a, credential, key, prompt, output, FULL + 12, execution).unwrap_err();
+        assert!(error.starts_with(prefix), "{case}: {key}: {error}");
+        step(&store, &expected, FULL + 12, key);
+    }
+    for key in ["over-credit", "read-only", "slot-held", "changed-terms"] {
+        assert!(store.request_view(&a, key).unwrap_err().starts_with("not_found:"), "{case}: {key}");
+    }
+
+    // Reopened, the resource is still full and a fresh opening is still refused; restart
+    // recovery runs before any inference admission and releases the hold from before the fill
+    // and the one from during it.
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    assert_capacity_rows(&rows(), &expected, &format!("{case}: reopening"));
+    assert_full(FULL + 20, "reopened");
+    refused(&store, FULL + 20, "reopened, before restart recovery");
+    for hold in [&before_restart, &during_restart] {
+        expect_terminal(&mut expected.rows, &hold.id, "restart_unknown_usage", None, FULL + 21);
+    }
+    assert_eq!(store.recover_requests(FULL + 21).unwrap(), 2, "{case}");
+    step(&store, &expected, FULL + 21, "restart recovery");
+    // F's slot is free again, so its own concurrency rule admits it.
+    let again = reserve(&store, &f, "f-after-restart", FULL + 22, &mut expected);
+    expect_terminal(&mut expected.rows, &again.id, "completed", Some((10, 7, 17)), FULL + 23);
+    store.settle(&again.id, &usage(10, 7), "completed", FULL + 23).unwrap();
+    step(&store, &expected, FULL + 23, "F admitted after recovery");
+
+    // First results survive late outcomes; final reads and receipt agree with every row.
+    for hold in [&before_known, &before_unknown, &before_restart, &during_known, &during_unknown, &during_restart,
+        &during_invalid, &fresh, &again] {
+        let record = request_record(&expected.rows, &hold.id);
+        for (late, status) in [(usage(10, 20), "completed"), (TokenUsage::default(), "failed_unknown_usage")] {
+            assert_eq!(serde_json::to_value(store.settle(&hold.id, &late, status, FULL + 24).unwrap()).unwrap(), record,
+                "{case}: late {status} for {}", hold.id);
+        }
+    }
+    assert_eq!(store.recover_requests(FULL + 24).unwrap(), 0, "{case}");
+    step(&store, &expected, FULL + 24, "late outcomes");
+    check_ledger_reads(&store, &expected.rows, &a, &format!("{case}: final reads"));
+    check_ledger_receipt(&store, &mut expected.rows, &a, FULL + 25, &format!("{case}: final receipt"));
+    step(&store, &expected, FULL + 25, "final receipt");
+    let account = store.account(&a).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str(),
+            account.usage.prompt_tokens, account.usage.completion_tokens, account.provider_loss_wei.as_str(),
+            account.fee_wei.as_str(), account.funded_wei.as_str()),
+        ("927", "0", "68", 41, 27, "0", "5", "1000"),
+        "{case}"
+    );
+    assert_capacity_rows(&capacity_state(&rows(), &a), &state, &format!("{case}: inference changed capacity"));
+    assert_full(FULL + 25, "final");
+
+    // Non-vacuous controls: the refusals above were the full resource's.
+    match capacity {
+        OpeningCapacity::Paid => {
+            assert_eq!(opening_counts(&path, &owner, LEASE_END).0, 0, "{case}: every filling lease ends");
+            let candidate = &pressure.candidates[0];
+            let ack = store.register_funding_intent(candidate, &owner, &pressure.payment.raw_transaction,
+                &pressure.payment.tx_hash, 0x50, PROVIDER_KEY, || Ok(LEASE_END), true, &model).unwrap();
+            assert_eq!((ack.payload.quote_id.as_str(), ack.payload.registered_at), (candidate.payload.id.as_str(), LEASE_END));
+        }
+        OpeningCapacity::OwnedFree => {
+            let another = quote_for(0, &other_owner(4), FULL + 26, CANDIDATE_END);
+            store.store_quote(&another, FULL + 26).unwrap();
+            assert!(store.open_account(&another, None, FULL + 26).unwrap().credential.is_some(), "{case}");
+            pressure.assert_refused(&store, FULL + 26, &case);
+        }
+        OpeningCapacity::GlobalFree => {}
+    }
+}
+
+/// Task 2.8.2.6 with 10,000 active paid admission leases; see `opening_capacity_case`.
+#[test]
+fn full_paid_opening_capacity_leaves_existing_requests_and_inference_gates_intact() {
+    opening_capacity_case(OpeningCapacity::Paid);
+}
+
+/// Task 2.8.2.6 with the owner's eight-account bound full; see `opening_capacity_case`.
+#[test]
+fn full_owned_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact() {
+    opening_capacity_case(OpeningCapacity::OwnedFree);
+}
+
+/// Task 2.8.2.6 with the 10,000-account ledger bound full; see `opening_capacity_case`.
+#[test]
+fn full_global_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact() {
+    opening_capacity_case(OpeningCapacity::GlobalFree);
+}
+
+/// Task 2.8.2.6 through the production public router and control reads, once per opening
+/// resource. The paid gateway fixture (995 wei available, one wei per token, four slots) and
+/// its controlled engine (test evidence only, not llama.cpp) serve one provider. The routers
+/// read the real clock, so openings are quoted, and the resource filled, at the current time,
+/// with `OpeningPressure` as in `opening_capacity_case`; filling leases last an hour.
+///
+/// Before the fill the root has a completed request (7 wei) and a chat request held in the
+/// engine (8 wei). Once full, a fresh opening of that kind is refused with exactly its
+/// refusal and changes no row, and a second chat request is held in the engine. Then, with
+/// the fresh opening still refused and no row changed after each step: the request from
+/// before the fill settles through the gateway at its known usage (7 wei); a cancellation
+/// releases the whole 8 wei of the one from during the fill, with 8 wei of exposure; a fresh
+/// request is admitted and charged 7 wei; a request beyond the balance (402
+/// `insufficient_balance`, no generation), a `read`-only bearer (403 `credential_scope`) and
+/// a held key (409 `duplicate_request`) record nothing. The public status by key and by
+/// identifier (root and `read` bearers), the control-plane request, request-list and account
+/// reads and a signed receipt binding every request return exactly the stored records and
+/// change only the receipt sequence; an `infer`-only bearer still gets 403 for the public
+/// status and the control request read. Complete rows come from fixed literals; the capacity state equals its
+/// state at the fill; no settlement fault is recorded and admission stays open. The account
+/// ends at 974 available and 21 spent. Restart recovery is the ledger case's.
+///
+/// Catches: gateway settlement, cancellation release, fresh admission or reads gated by, or
+/// freeing, a full opening resource, and a gateway gate skipped while one is full.
+#[tokio::test]
+async fn full_opening_capacity_leaves_gateway_settlement_reads_and_inference_intact() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    for capacity in [OpeningCapacity::Paid, OpeningCapacity::OwnedFree, OpeningCapacity::GlobalFree] {
+        let case = format!("{capacity:?}");
+        let mut fixture = gateway_fixture(false, 120).await;
+        let path = fixture.routes.path.clone();
+        let rows = || capacity_ledger_rows(&path);
+        let root = fixture.root.clone();
+        let contract = fixture.id();
+        let state = fixture.routes.state.clone();
+        let ledger = state.ledger.clone();
+        let reader = fixture.routes.issue(1, &["read"]);
+        let inferrer = fixture.routes.issue(1, &["infer"]);
+        let owner = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
+
+        // Existing requests before the fill: one completed, one held in the engine.
+        let mut expected = rows();
+        let start = protocol::now().unwrap();
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "settled-before", "settled before", 4, false)).await).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let before = fixture.spawn(gateway_chat(&root.bearer, "held-before", "held wait=before:after-output", 4, false));
+        assert_eq!(fixture.engine.event().await, "held before", "{case}");
+        let window = (start, protocol::now().unwrap());
+        expected.rows = gateway_reserved(&expected.rows, &rows().rows, "settled-before", &root.id, 4, 4, 8, window);
+        expected.rows = gateway_settled(&expected.rows, &rows().rows, &fixture.view("settled-before").id, "completed", Some((4, 3, 7)), window);
+        expected.rows = gateway_reserved(&expected.rows, &rows().rows, "held-before", &root.id, 4, 4, 8, window);
+        assert_capacity_rows(&rows(), &expected, &format!("{case}: existing requests"));
+        fixture.engine.take();
+
+        // The resource fills now, its last unit taken genuinely; that changes no money row.
+        let now = protocol::now().unwrap();
+        let pressure = OpeningPressure::prepare(&ledger, capacity, &fixture.routes.agreement.payload, now, now + 3600, now + 7200);
+        let unfilled = rows();
+        pressure.fill(&ledger, now);
+        let full = rows();
+        for table in ["requests", "funding", "fee_obligations"] {
+            assert_eq!(full.rows[table], unfilled.rows[table], "{case}: the fill changed {table}");
+        }
+        assert_eq!(full.rows["accounts"].iter().find(|row| row[0] == contract.as_str()),
+            unfilled.rows["accounts"].iter().find(|row| row[0] == contract.as_str()), "{case}");
+        assert_eq!(opening_counts(&path, &owner, protocol::now().unwrap()), pressure.full_counts(), "{case}");
+        assert_eq!(full.restored.values().map(Vec::len).sum::<usize>(), pressure.restored(), "{case}");
+        let refused = |name: &str| {
+            let before = rows();
+            pressure.assert_refused(&ledger, protocol::now().unwrap(), &format!("{case}, {name}"));
+            assert_capacity_rows(&rows(), &before, &format!("{case}, {name}: the refused opening changed a row"));
+        };
+        refused("full");
+        let capacity_at_fill = capacity_state(&full, &contract);
+        let mut expected = full;
+        let step = |expected: &CapacityRows, name: &str| {
+            assert_capacity_rows(&rows(), expected, &format!("{case}: {name}"));
+            refused(name);
+        };
+
+        // A request held in the engine while full.
+        let start = protocol::now().unwrap();
+        let during = fixture.spawn(gateway_chat(&root.bearer, "held-during", "cancelled stall=during:after-output", 4, false));
+        assert_eq!(fixture.engine.event().await, "held during", "{case}");
+        expected.rows = gateway_reserved(&expected.rows, &rows().rows, "held-during", &root.id, 4, 4, 8, (start, protocol::now().unwrap()));
+        step(&expected, "held while full");
+        fixture.engine.take();
+
+        // The held requests settle: known usage is charged, a cancellation releases its hold.
+        fixture.engine.release("before");
+        let (status, _, text) = gateway_answer(before.await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let known = fixture.settled("held-before").await;
+        expected.rows = gateway_settled(&expected.rows, &rows().rows, &known.id, "completed", Some((4, 3, 7)), (window.0, protocol::now().unwrap()));
+        step(&expected, "known settlement");
+        let target = fixture.view("held-during");
+        let (status, header, answer) = fixture.cancel(&root.bearer, "held-during").await;
+        assert_eq!((status, header.as_deref(), answer), (StatusCode::ACCEPTED, Some(target.id.as_str()),
+            json!({"id": target.id, "status": "cancelling"})), "{case}");
+        assert_eq!(fixture.engine.event().await, "dropped during", "{case}");
+        let (status, _, text) = gateway_answer(during.await.unwrap()).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("request_cancelled")), "{case}: {text}");
+        let released = fixture.settled("held-during").await;
+        assert_eq!((released.cost_wei.as_str(), released.provider_loss_wei.as_str()), ("0", "8"), "{case}");
+        expected.rows = gateway_settled(&expected.rows, &rows().rows, &released.id, "cancelled_unknown_usage", None, (start, protocol::now().unwrap()));
+        step(&expected, "unknown release");
+        fixture.engine.take();
+
+        // A fresh request is admitted and charged by its own rules...
+        let start = protocol::now().unwrap();
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "fresh", "fresh request", 4, false)).await).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let window = (start, protocol::now().unwrap());
+        expected.rows = gateway_reserved(&expected.rows, &rows().rows, "fresh", &root.id, 4, 4, 8, window);
+        expected.rows = gateway_settled(&expected.rows, &rows().rows, &fixture.view("fresh").id, "completed", Some((4, 3, 7)), window);
+        step(&expected, "fresh request");
+        assert_eq!(fixture.engine.take().generated.len(), 1, "{case}");
+        // ...and refused by them, recording nothing.
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "over-credit", "fresh request", 4096, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::PAYMENT_REQUIRED, Some("insufficient_balance")), "{case}: {text}");
+        assert!(fixture.engine.take().generated.is_empty(), "{case}: an over-credit request was dispatched");
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&reader.bearer, "read-only", "fresh request", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("credential_scope")), "{case}: {text}");
+        fixture.engine.untouched("read-only");
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "held-before", "held before", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("duplicate_request")), "{case}: {text}");
+        fixture.engine.untouched("duplicate");
+        for key in ["over-credit", "read-only"] {
+            assert!(!fixture.recorded(key), "{case}: {key}");
+        }
+        step(&expected, "refused requests");
+
+        // Reads return exactly the stored records and change only the receipt sequence.
+        for key in ["settled-before", "held-before", "held-during", "fresh"] {
+            let view = fixture.view(key);
+            let record = serde_json::to_value(&view).unwrap();
+            assert_eq!(record, request_record(&expected.rows, &view.id), "{case}: {key}");
+            for target in [key, view.id.as_str()] {
+                for bearer in [&root.bearer, &reader.bearer] {
+                    assert_eq!(fixture.status(bearer, target).await, (StatusCode::OK, record.clone()), "{case}: {target}");
+                }
+            }
+            let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/requests/{key}"),
+                Some(&reader.bearer)).await;
+            assert_eq!((status, document), (StatusCode::OK, record), "{case}: {key}");
+        }
+        // The control-plane list holds exactly the account's records, newest first, and read
+        // authority is not waived: an `infer`-only bearer still may not read a request.
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/requests"),
+            Some(&reader.bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {document}");
+        let mut listed = document.as_array().unwrap().clone();
+        assert!(listed.windows(2).all(|pair| pair[0]["created_at"].as_u64() >= pair[1]["created_at"].as_u64()), "{case}");
+        listed.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        assert_eq!(listed, account_records(&expected.rows, &contract), "{case}: the request list");
+        let (status, document) = fixture.status(&inferrer.bearer, "fresh").await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("credential_scope")),
+            "{case}: {document}");
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/requests/fresh"),
+            Some(&inferrer.bearer)).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")),
+            "{case}: {document}");
+        let account = expiry_row(&mut expected.rows, "accounts", &contract)[3].clone();
+        assert_eq!((&account["available_wei"], &account["reserved_wei"], &account["spent_wei"]),
+            (&json!("974"), &json!("0"), &json!("21")), "{case}");
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}"), Some(&reader.bearer)).await;
+        assert_eq!((status, document), (StatusCode::OK, account.clone()), "{case}");
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/receipt"), Some(&reader.bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {document}");
+        let payload = routed_receipt(&fixture.routes, document);
+        assert_eq!(payload["account"], account, "{case}");
+        let mut bound = payload["requests"].as_array().unwrap().clone();
+        bound.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        assert_eq!(bound, account_records(&expected.rows, &contract), "{case}: the receipt's requests");
+        let sequence = &mut expiry_row(&mut expected.rows, "accounts", &contract)[4];
+        *sequence = json!(sequence.as_u64().unwrap() + 1);
+        step(&expected, "reads");
+        fixture.engine.untouched("reads");
+        assert_capacity_rows(&capacity_state(&rows(), &contract), &capacity_at_fill,
+            &format!("{case}: gateway inference or reads changed capacity"));
+        assert_eq!(opening_counts(&path, &owner, protocol::now().unwrap()), pressure.full_counts(), "{case}");
+        assert!(state.settlement_fault().is_none() && state.accepting.load(Ordering::Acquire), "{case}");
     }
 }

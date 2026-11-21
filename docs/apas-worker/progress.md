@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-21 (ninety-third round) — Acceptance: opening-intent 2.8.2 complete (inference settlement at full opening capacity)
+
+- In step at `478aa99c`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-opening-funding-intent` new subtask 2.8.2.6), through a workflow: write tests, then an adversarial review. It fills the two cells that round 92's reconciliation left open. No product code changed and no code difference was found. Four new `billing_store::tests`:
+  - `full_paid_opening_capacity_leaves_existing_requests_and_inference_gates_intact` fills 10,000 active paid leases: 9,999 complete signed restored unopened agreements plus one genuine `register_funding_intent`.
+  - `full_owned_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` fills one owner's eight accounts, all genuine.
+  - `full_global_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` fills 10,000 ledger accounts: 9,997 complete signed restored free accounts with roots and distinct owners, the rest genuine.
+  - In each, a fresh opening of that kind gets its exact refusal with every row unchanged. That check runs after the fill, after every later step and after reopening, before recovery. Requests held before and during the fill settle at known usage, release unknown and invalid usage with exposure, are released as `restart_unknown_usage` by recovery after reopening, and read back by key, id, list and signed receipt. Fresh inference is admitted and charged, and still refused by its own rules. The capacity state (leases, quotes, accounts, funding, fees, rate limits) never changes.
+  - `full_opening_capacity_leaves_gateway_settlement_reads_and_inference_intact` covers all three pressures through the production public and control routers with the controlled engine. Under each it checks known settlement, a cancellation release, a charged fresh request, and refusals with 402, 403 and 409. Public status by key and id, the control request, list and account reads and a signed receipt all return the stored records, and an infer-only bearer gets 403 on reads.
+- The review added the refusal check right after reopening and the router list read with the infer-only refusals. Before that, a list refused while capacity was full passed the router test. Mutations: the author ran 11 and the review 12; each fails a named test. Test helpers were refactored without changing behaviour (`check_ledger_reads` and `check_ledger_receipt` split from the full-row asserts).
+- 2.8.2.6 ticked, and parent 2.8.2 ticked: all 20 reconciliation cells now cite a test. The statement's remaining sentence is a caveat, and its root-rotation blocker was resolved by owner-control 2.4.3. The cells that cite `inference_owner_control_test` passed in round 89's full suite (61/61); no product code or that target has changed since. request-accounting design.md's matrix and its 3.4 note now point to the new tests.
+- Recorded limits: no owner-proof read runs at full opening capacity, and there is no daemon restart at this pressure (recovery is checked on the ledger). The ledger account bound has no admission control because accounts are permanent. Restored leases carry opaque originals. No test has the native client recover a lost first paid opening reply.
+- Checks: `--lib` 467 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; desktop `--lib desktop::` 10/10; strict validation of both changes passes. Test-only change; round 89's full suite covers the product code.
+
 ## 2026-11-21 (ninety-second round) — Reconciliation: request-accounting 3.4 with opening-intent 2.8.2
 
 - In step at `3183a2de`; whitepaper unchanged; no new answers.
@@ -1049,7 +1063,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92), opening-intent 2.8.2's two open cells (inference settlement at full paid and at full free opening capacity) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84; 2.8.2 in round 93), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

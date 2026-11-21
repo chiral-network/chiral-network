@@ -450,6 +450,77 @@ Reopened repeated `fund` with the same original signed agreement reconciles the 
 
 This closes the native top-up path specifically under full standalone quote retention, not the other resource dimensions in parent 2.8.2. Restored opening/bulk history and scripted RPC responses are not observed historical admissions, live funding/execution, power-loss durability, fee remittance or inference-usage settlement. Original-journal corruption remains separately covered by 2.8.2.4; public quote-policy and owner-source blockers remain unchanged.
 
+## Task 2.8.2.6 inference settlement at full opening capacity
+
+Request-accounting task 3.4 mapped this task's four recovery kinds against five exhausted resources and left two of the twenty cells open: inference settlement at full paid opening capacity (P) and at full free opening capacity (F). Four new `billing_store::tests` fill them. No production code changed, and no code difference was found.
+
+### Ledger tests
+
+`full_paid_opening_capacity_leaves_existing_requests_and_inference_gates_intact`, `full_owned_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` and `full_global_free_opening_capacity_leaves_existing_requests_and_inference_gates_intact` run one case body, `opening_capacity_case`, once per resource, at explicit logical times. The owner's paid account A (995 wei available, one wei per token) holds the existing requests. `OpeningPressure` quotes every opening at 950 and takes every unit of the resource but the last. The last unit is taken genuinely at 1,000:
+
+- **Paid.** 9,999 complete signed restored unopened agreements, each with its own quote, distinct payer, opaque original, signed acknowledgement and admission lease. Then a genuine registration takes the 10,000th lease.
+- **Owned free.** A and six genuine free openings by the owner, then a seventh genuine opening: eight accounts.
+- **Global free.** A, a genuine free opening by another owner and 9,997 complete signed restored free accounts with root credentials and distinct owners. Then the owner's genuine free opening makes 10,000 accounts. No owner has more than two.
+
+Fullness is proved, not assumed. A fresh opening of that kind is refused with exactly `rate_limit: active funding intent capacity reached` or `rate_limit: free account limit reached`, and changes no row. The fresh opening is the owner's paid funding-intent registration, or the owner's first free opening; for the ledger bound, also the first free opening of an owner with no account. The check runs right after the fill and again after every later step, and also right after reopening, before restart recovery runs. So the resource is full whenever an inference operation runs, and nothing that follows frees capacity for an opening. The fixture's own counts state each bound exactly.
+
+Three 30-wei holds are reserved before the fill and four while the resource is full. While full:
+
+- one hold from each period settles at known (10, 7) usage for 17 wei;
+- one from each period releases as unknown usage, returning the whole 30 wei with 30 wei of exposure, and one more releases as invalid (10, 21) usage;
+- reads by key and by opaque identifier, the request list and a signed receipt bind exactly the stored records, and only the receipt sequence changes;
+- a fresh request is admitted and charged 15 wei. Requests beyond the credit, by a `read`-only credential, on a held slot, with changed serving terms and with held keys are each refused by their own rule, with every row unchanged.
+
+The store is then reopened. Restart recovery runs before any inference admission and releases the two remaining holds, one from each period. The freed slot is admitted again and charged 17 wei. Late outcomes return the first results. A ends at 927 wei available, 68 spent, (41, 27) tokens, with its 5-wei fee and 1,000 funded. Complete rows are compared with fixed literals throughout. The capacity state equals its state at the fill: restored rows, leases, quotes, accounts, funding, fees, rate limits and metadata.
+
+Two controls show the refusals are the full resource's. The refused paid original is admitted unchanged once every filling lease has ended. With the owner's bound full, another owner's first free opening is admitted. The ledger bound has no such control, because accounts are permanent.
+
+Restored rows are compared exactly as their undecoded text (`CapacityRows`), so no step decodes 10,000 records. The paid case takes about 5 seconds, the ledger bound about 9.
+
+### Router test
+
+`full_opening_capacity_leaves_gateway_settlement_reads_and_inference_intact` drives the production public router and control reads once per resource. It uses request-accounting 3.1's gateway fixture and controlled engine. The routers read the real clock, so the resource fills at the current time, and the filling leases last an hour. A request held in the engine before the fill settles at known usage (7 wei). A cancellation releases the 8-wei hold of a request held during the fill, with 8 wei of exposure. A fresh request is admitted and charged 7 wei. A request beyond the balance (402), a `read`-only bearer (403) and a held key (409) record nothing. Public status by key and by identifier with root and `read` bearers, the control-plane request, request-list and account reads and a signed receipt return exactly the stored records. An `infer`-only bearer still gets 403 for the public status (`credential_scope`) and the control request read (`forbidden`). After each step the fresh opening is still refused with every row unchanged. The account ends at 974 available and 21 spent. The router test does not restart; restart recovery is the ledger case's.
+
+### Mutations
+
+Each mutation of `billing_store.rs` was applied alone, run against the four tests, restored by copy with a fresh timestamp and checked by byte comparison. Each fails at least one test:
+
+1. Settlement (`settle_request`) refused while 10,000 paid leases are active: the paid ledger case at its first known settlement, and the router test's `Paid` case at the gateway settlement (500). The free cases pass.
+2. Settlement refused while the account's owner has eight accounts: the owned case and the router's `OwnedFree` case. The others pass.
+3. Settlement refused while the ledger has 10,000 accounts: the ledger-bound case and the router's `GlobalFree` case. The others pass.
+4. Restart recovery refused while any opening resource is full: all three ledger cases, at recovery. The router test passes, because it does not restart.
+5. Receipt issuance refused while any opening resource is full: all four, at the receipt (429 through the control route).
+6. Fresh reservation refused while any opening resource is full: all four. The ledger cases fail at the first hold reserved while full; the router test fails when that hold never reaches the engine.
+7. Request reads refused while any opening resource is full: all four. The ledger cases fail at the read by key; the router test fails at its first request read, while it waits for the known settlement.
+8. Settlement clearing every paid admission lease: the paid ledger case, where the 2-wei settlement before the fill empties the restored leases and the fill no longer fills, and the router's `Paid` case, at its known settlement while full.
+9. The paid lease bound at `> MAX_PENDING`: the paid ledger case and the router's `Paid` case, where the fresh registration is admitted.
+10. The owned bound at `count > 8`: the owned case and the router's `OwnedFree` case, where the fresh opening is admitted.
+11. The ledger bound at `total > MAX_PENDING`: the ledger-bound case and the router's `GlobalFree` case, likewise.
+
+Adversarial review tried nine further mutations of `billing_store.rs`, by the same procedure, and each fails at least one test:
+
+12. Restart recovery ends every unopened paid lease: the paid ledger case, at recovery.
+13. Reopening the ledger ends every unopened paid lease: the paid ledger case, at reopening.
+14. An unknown-usage release deletes every standalone quote: all four, at the first unknown release or cancellation while full.
+15. Restart recovery deletes free accounts that have no requests, with their credentials: the owned and ledger-bound cases, at recovery.
+16. The request list refused while any opening resource is full: the three ledger cases. The router test then also passed, because it read no list; review added its control-plane list read, which fails too.
+17. The account read refused while any opening resource is full: all four.
+18. A refused opening of a full kind commits the removal of its standalone quote, with the exact refusal: all four, at the first refusal, by the row comparison alone.
+19. A `read`-only credential may reserve while an opening resource is full: the three ledger cases. The router test passes, because the gateway refuses that bearer (403) before the ledger.
+20. Known usage charged nothing while an opening resource is full: all four.
+
+Review also added the refusal right after reopening and the router test's `infer`-only read refusals. Two mutations outside `billing_store.rs` show those reads are checked: the public status accepting an `infer`-only bearer (`inference_gateway.rs`), and control bearer reads accepting one (`contracts.rs`). Each fails the router test. Every mutated file was restored and matched its backup byte for byte.
+
+### Limits
+
+- Restored leases and accounts are complete signed storage prerequisites, not observed admissions or openings. Their raw originals are opaque ledger inputs after the chain-verification boundary.
+- Paid account A's opening credit is post-verification funding. Usage is supplied, and the controlled engine is test evidence, not llama.cpp, chain or hardware evidence.
+- Authorization here is credential scope, concurrency and bearer reads. No owner-proof read runs at full opening capacity. Owner-proof request reads are covered by `request_accounting_and_receipts_recover_at_full_quote_storage`, at full quote storage only. Inference settlement, restart recovery and bearer reads need no owner proof. The challenge budget is not exhausted.
+- Process-kill and fsync durability and daemon startup ordering are not established.
+- This does not cover native recovery of a lost first paid opening reply (*Acceptance gaps and evidence limits* below).
+
+With these tests every cell of request-accounting's reconciliation matrix names a test, and parent 2.8.2 is complete.
+
 ## Acceptance gaps and evidence limits
 
 - Inventory existing schema/signature/envelope tests before adding consumer-visible missing cases. Use real fixture signatures, explicit times and isolated disk state; preserve any unrelated uncommitted work. Committed native source now permits private deterministic seams without widening public APIs.
