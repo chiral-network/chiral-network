@@ -627,4 +627,127 @@ mod tests {
         }
         assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
+
+    /// A CPU runtime that passes validation; its two directories are the only path fields.
+    fn cpu_runtime(runtime_dir: PathBuf, artifact_dir: PathBuf) -> crate::engine_runtime::EngineRuntimeConfig {
+        crate::engine_runtime::EngineRuntimeConfig {
+            runtime_dir,
+            artifact_dir,
+            backend: "cpu".into(),
+            device_ids: vec![],
+            memory_reserve_mib: 0,
+            gpu_layers: 0,
+            split_mode: "none".into(),
+            tensor_split: vec![],
+            cache_type_k: "f16".into(),
+            cache_type_v: "f16".into(),
+            flash_attention: false,
+            batch_size: 512,
+            ubatch_size: 512,
+            startup_timeout_secs: 60,
+        }
+    }
+
+    /// Every path field of a provider configuration, read back from a loaded configuration in
+    /// the order `paths_of` lists them.
+    fn paths_of(config: &ProviderConfig) -> Vec<(String, Option<PathBuf>)> {
+        let mut paths = vec![
+            ("data_dir".to_string(), Some(config.data_dir.clone())),
+            ("signing_key_file".into(), Some(config.signing_key_file.clone())),
+            ("admin_token_file".into(), Some(config.admin_token_file.clone())),
+            ("dht.identity_file".into(), Some(config.dht.identity_file.clone())),
+            ("network.rpc_bearer_file".into(), config.network.rpc_bearer_file.clone()),
+        ];
+        for (index, model) in config.models.iter().enumerate() {
+            let runtime = model.runtime.as_ref();
+            paths.extend([
+                (format!("models[{index}].engine_api_key_file"), model.engine_api_key_file.clone()),
+                (format!("models[{index}].qualification_evidence_file"), model.qualification_evidence_file.clone()),
+                (format!("models[{index}].runtime.runtime_dir"), runtime.map(|r| r.runtime_dir.clone())),
+                (format!("models[{index}].runtime.artifact_dir"), runtime.map(|r| r.artifact_dir.clone())),
+            ]);
+        }
+        paths
+    }
+
+    /// A development provider whose every path field is `path(name)`: two managed CPU embedding
+    /// models, so that each model's four path fields are present twice under distinct names.
+    fn every_path(directory: &Path, path: impl Fn(&str) -> PathBuf) -> ProviderConfig {
+        let mut config = provider(directory, true);
+        config.data_dir = path("state/data");
+        config.signing_key_file = path("keys/signing.key");
+        config.admin_token_file = path("keys/admin.token");
+        config.dht.identity_file = path("keys/dht.key");
+        config.network.rpc_bearer_file = Some(path("secrets/rpc.token"));
+        let template = config.models.remove(0);
+        for (index, name) in ["first", "second"].into_iter().enumerate() {
+            let mut model = template.clone();
+            model.model.id = format!("{}-{name}", template.model.id);
+            model.engine_url = format!("http://127.0.0.1:{}", 18080 + index);
+            model.engine_api_key_file = Some(path(&format!("secrets/{name}-engine.key")));
+            model.qualification_evidence_file = Some(path(&format!("evidence/{name}.json")));
+            model.runtime = Some(cpu_runtime(
+                path(&format!("runtime/{name}")),
+                path(&format!("../shared/artifacts/{name}")),
+            ));
+            config.models.push(model);
+        }
+        config
+    }
+
+    /// profile-path-resolution requirement 1, provider configuration (task 3.1): `load`
+    /// resolves each of the provider's nine path-valued fields (`data_dir`, `signing_key_file`,
+    /// `admin_token_file`, `dht.identity_file`, `network.rpc_bearer_file`, and for every model
+    /// `engine_api_key_file`, `qualification_evidence_file`, `runtime.runtime_dir` and
+    /// `runtime.artifact_dir`) against the configuration file's directory, lexically (a `..`
+    /// component is kept, none of the files exists, and nothing is created), keeps absolute
+    /// paths unchanged, and leaves absent optional paths absent.
+    #[test]
+    fn every_relative_provider_path_resolves_against_the_configuration_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let base = root.join("operator").join("provider");
+        std::fs::create_dir_all(&base).unwrap();
+        let file = base.join("provider.json");
+
+        let relative = every_path(root, |name| PathBuf::from(name));
+        let expected: Vec<_> = paths_of(&relative)
+            .into_iter()
+            .map(|(field, path)| (field, path.map(|path| base.join(path))))
+            .collect();
+        assert_eq!(expected.len(), 13);
+        assert!(expected.iter().all(|(_, path)| path.is_some()));
+        std::fs::write(&file, serde_json::to_vec(&relative).unwrap()).unwrap();
+        let loaded = ProviderConfig::load(&file).unwrap();
+        assert_eq!(paths_of(&loaded), expected);
+        // Lexical: the `..` component is not collapsed and nothing is created or required.
+        assert_eq!(
+            loaded.models[1].runtime.as_ref().unwrap().artifact_dir,
+            base.join("..").join("shared").join("artifacts").join("second")
+        );
+        let names = |path: &Path| -> Vec<_> {
+            std::fs::read_dir(path).unwrap().map(|entry| entry.unwrap().file_name()).collect()
+        };
+        assert_eq!(names(&base), ["provider.json"]);
+        assert_eq!(names(root), ["operator"]);
+
+        // Absolute paths are used unchanged, wherever the configuration file is.
+        let elsewhere = root.join("elsewhere");
+        let absolute = every_path(root, |name| elsewhere.join(name));
+        std::fs::write(&file, serde_json::to_vec(&absolute).unwrap()).unwrap();
+        assert_eq!(paths_of(&ProviderConfig::load(&file).unwrap()), paths_of(&absolute));
+        assert!(!elsewhere.exists());
+
+        // Absent optional paths stay absent; the present ones still resolve.
+        let mut optional = provider(root, true);
+        optional.data_dir = "data".into();
+        std::fs::write(&file, serde_json::to_vec(&optional).unwrap()).unwrap();
+        let loaded = ProviderConfig::load(&file).unwrap();
+        assert_eq!(loaded.data_dir, base.join("data"));
+        assert_eq!(loaded.network.rpc_bearer_file, None);
+        assert_eq!(loaded.models[0].engine_api_key_file, None);
+        assert_eq!(loaded.models[0].qualification_evidence_file, None);
+        assert!(loaded.models[0].runtime.is_none());
+        assert_eq!(names(&base), ["provider.json"]);
+    }
 }

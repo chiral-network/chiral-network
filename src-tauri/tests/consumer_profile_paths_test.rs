@@ -7,7 +7,7 @@
 //! Only offline wallet commands are used; the loopback RPC is never contacted.
 use chiral_network::consumer::{Consumer, ConsumerConfig};
 use chiral_network::network::{NetworkConfig, ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS};
-use chiral_network::protocol::NetworkIdentity;
+use chiral_network::protocol::{InferenceOffer, NetworkIdentity, Signed};
 use chiral_network::provider_config::ProviderConfig;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -84,8 +84,9 @@ fn refused(output: &Output) -> String {
     stderr
 }
 
-/// Every directory and file under `path`, with file contents, to prove nothing was touched.
-fn snapshot(path: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+/// Every directory and file under `path`, with the SHA-256 of each file's contents, to prove
+/// nothing was touched; a failure shows digests, never a key or bearer.
+fn snapshot(path: &Path) -> BTreeMap<PathBuf, Option<String>> {
     let mut entries = BTreeMap::new();
     let mut pending = vec![path.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -96,7 +97,8 @@ fn snapshot(path: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
                 entries.insert(path.clone(), None);
                 pending.push(path);
             } else {
-                entries.insert(path.clone(), Some(std::fs::read(&path).unwrap()));
+                let digest = <sha2::Sha256 as sha2::Digest>::digest(std::fs::read(&path).unwrap());
+                entries.insert(path.clone(), Some(hex::encode(digest)));
             }
         }
     }
@@ -454,4 +456,222 @@ fn a_consumer_profile_and_a_provider_config_in_one_folder_share_one_journal() {
     );
     assert!(state.join("consumer").join("wallet.key").is_file());
     assert!(is_empty(&elsewhere));
+}
+
+/// The subcommand names a `chiral` help screen lists, without `help`.
+fn subcommands(path: &[&str]) -> Vec<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_chiral"))
+        .env_remove("CHIRAL_CONSUMER_CONFIG")
+        .args(path)
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{path:?}");
+    let help = String::from_utf8(output.stdout).unwrap();
+    let listed = help
+        .split("Commands:\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{path:?}: {help}"));
+    listed
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != "help")
+        .map(str::to_owned)
+        .collect()
+}
+
+/// profile-path-resolution requirement 5 scenario "The CLI reports a refusal on stderr" (task
+/// 3.5) for every command: each subcommand the CLI lists, with arguments that would otherwise
+/// reach the chain, a provider or a file, is given a refused profile (this network's wallet only
+/// at the old working-directory location). Each exits with status 1, writes nothing to standard
+/// output, writes the refusal as one `chiral: ` diagnostic line to standard error, creates
+/// nothing (neither the profile's `data_dir` nor the export file) and leaves the old state
+/// unchanged. The list is checked against the help screens, so a new command must be added here.
+#[test]
+fn every_cli_command_reports_a_refused_profile_on_stderr_only() {
+    let (_guard, root) = root();
+    let network = network("profile-path-every-command");
+    let profiles = folder(root.join("profiles"));
+    let old_cwd = folder(root.join("old-cwd"));
+    let profile = profiles.join("consumer.json");
+    write_profile(&profile, consumer_profile(&network, "data"));
+    Consumer::new(ConsumerConfig {
+        network: network.clone(),
+        data_dir: old_cwd.join("data"),
+        catalog_url: None,
+        development: false,
+        dht: None,
+    })
+    .unwrap()
+    .wallet_create()
+    .unwrap();
+    let before = snapshot(&old_cwd);
+    let profiles_before = snapshot(&profiles);
+
+    let contract = "c".repeat(64);
+    let c = contract.as_str();
+    let commands: Vec<Vec<&str>> = vec![
+        vec!["network", "show"],
+        vec!["network", "status"],
+        vec!["network", "policy"],
+        vec!["wallet", "create"],
+        vec!["wallet", "import", "--file", "import.key"],
+        vec!["wallet", "export", "--file", "export.key"],
+        vec!["wallet", "address"],
+        vec!["wallet", "balance"],
+        vec!["wallet", "history"],
+        vec!["discover"],
+        vec!["discover", "--model", "test/model"],
+        vec!["quote", "--offer", "offer.json", "--amount-wei", "1000"],
+        vec!["fund", "--offer", "offer.json", "--quote", "quote.json"],
+        vec!["resume", c],
+        vec!["cancel-funding", c, "--accept-gas-and-race-risk"],
+        vec!["topup", c, "--amount-wei", "1000"],
+        vec!["accounts"],
+        vec!["pending"],
+        vec!["account", c],
+        vec!["usage", c],
+        vec!["funding", c],
+        vec!["funding-recovery", c],
+        vec!["receipt", c],
+        vec!["credentials", c, "list"],
+        vec!["credentials", c, "issue"],
+        vec!["credentials", c, "revoke", "credential"],
+        vec!["credentials", c, "rotate", "credential"],
+        vec!["credentials", c, "export"],
+        vec!["infer", c, "--request", "request.json"],
+        vec!["infer", c, "--request", "request.json", "--stream"],
+        vec!["request", c, "request-1"],
+        vec!["request", c, "request-1", "--cancel"],
+        vec!["requests", c],
+        vec!["provider-admin", "--endpoint", "https://provider.example", "--token-file", "admin.token", "status"],
+        vec!["feedback", c, "--score", "5", "--revision", "1"],
+    ];
+
+    // Every listed command and nested command is exercised.
+    let named = |command: &Vec<&str>| match command[0] {
+        "network" | "wallet" => format!("{} {}", command[0], command[1]),
+        "credentials" => format!("credentials {}", command[2]),
+        name => name.to_owned(),
+    };
+    let exercised: std::collections::BTreeSet<_> = commands.iter().map(named).collect();
+    let mut listed = std::collections::BTreeSet::new();
+    for name in subcommands(&[]) {
+        if matches!(name.as_str(), "network" | "wallet" | "credentials") {
+            for nested in subcommands(&[&name]) {
+                listed.insert(format!("{name} {nested}"));
+            }
+        } else {
+            listed.insert(name);
+        }
+    }
+    assert_eq!(listed.len(), 32, "{listed:?}");
+    assert_eq!(exercised, listed);
+
+    for args in &commands {
+        let output = chiral(&old_cwd, &profile, args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}");
+        let stderr = refused(&output);
+        let start = format!("chiral: consumer profile {}: relative data_dir \"data\"", profile.display());
+        assert!(stderr.starts_with(&start), "{args:?}: {stderr}");
+        assert_eq!(stderr.lines().count(), 1, "{args:?}: one diagnostic line: {stderr}");
+        for required in ["Refusing to start with empty state", "nothing was created, moved or deleted"] {
+            assert!(stderr.contains(required), "{args:?}: missing {required:?} in {stderr}");
+        }
+        assert_eq!(snapshot(&old_cwd), before, "{args:?}: old state changed");
+        assert_eq!(snapshot(&profiles), profiles_before, "{args:?}: state created");
+    }
+}
+
+/// profile-path-resolution requirement 1 (task 3.1): path arguments given on the `chiral` command
+/// line are not configuration paths and follow the process working directory, while the
+/// profile's own `data_dir` still resolves next to the profile. A wallet export file and the
+/// import of it, an offer document (`quote --offer`, `fund --offer`), a quote document (`fund
+/// --quote`), an inference request document, credential options documents (`credentials issue`
+/// and `rotate --options`) and the provider administration `--token-file` are each found in (or
+/// written to) the working directory, never beside the profile.
+#[test]
+fn command_line_path_arguments_follow_the_working_directory() {
+    let (_guard, root) = root();
+    let network = network("profile-path-command-line");
+    let profiles = folder(root.join("profiles"));
+    let others = folder(root.join("others"));
+    let work = folder(root.join("work"));
+    let profile = profiles.join("consumer.json");
+    write_profile(&profile, consumer_profile(&network, "data"));
+    let other = others.join("consumer.json");
+    write_profile(&other, consumer_profile(&network, "data"));
+
+    let created = address(&chiral(&work, &profile, &["wallet", "create"]));
+    let exported = chiral(&work, &profile, &["wallet", "export", "--file", "backup.key"]);
+    assert!(exported.status.success(), "{}", String::from_utf8_lossy(&exported.stderr));
+    assert!(work.join("backup.key").is_file(), "the export is written to the working directory");
+    assert!(!profiles.join("backup.key").exists());
+    // The import reads the working directory's file into the other profile's own data_dir.
+    assert_eq!(
+        address(&chiral(&work, &other, &["wallet", "import", "--file", "backup.key"])),
+        created
+    );
+    assert!(!others.join("backup.key").exists());
+    assert!(network.scoped_dir(&others.join("data")).join("consumer").join("wallet.key").is_file());
+
+    // Documents are read from the working directory: an unparsable one there is reported as
+    // such; were they read beside the profile, where none exists, the file would be unreadable.
+    std::fs::write(work.join("offer.json"), b"not a signed offer").unwrap();
+    std::fs::write(work.join("request.json"), b"not a request").unwrap();
+    std::fs::write(work.join("options.json"), b"not credential options").unwrap();
+    for args in [
+        vec!["quote", "--offer", "offer.json", "--amount-wei", "1000"],
+        vec!["infer", "contract", "--request", "request.json"],
+        vec!["credentials", "contract", "issue", "--options", "options.json"],
+        vec!["credentials", "contract", "rotate", "credential", "--options", "options.json"],
+    ] {
+        let output = chiral(&work, &profile, &args);
+        let stderr = refused(&output);
+        assert_eq!(stderr.trim(), "chiral: invalid JSON input document", "{args:?}");
+    }
+    // `fund` reads its offer and then its quote document: with a parsable signed offer in the
+    // working directory, the unparsable quote there is the reported failure.
+    let signed_offer = json!({
+        "payload": {
+            "network": network.identity,
+            "provider_wallet": "0x1111111111111111111111111111111111111111",
+            "peer_id": "peer", "deployment_id": "deployment", "endpoint": "https://provider.example",
+            "model": {
+                "id": "test/model", "revision": "ab".repeat(20), "tokenizer_revision": "cd".repeat(20),
+                "chat_template_sha256": "ef".repeat(32), "quantization": null, "context_length": 4096,
+                "max_output_tokens": 256, "capabilities": ["chat"], "serving": null
+            },
+            "price": {"input_wei_per_1k": "1000", "output_wei_per_1k": "1000"},
+            "min_funding_wei": "1000", "platform_wallet": "0x2222222222222222222222222222222222222222",
+            "fee_bps": 50, "max_concurrency": 1, "revision": 1, "issued_at": 1, "expires_at": 2
+        },
+        "signature": "00"
+    });
+    serde_json::from_value::<Signed<InferenceOffer>>(signed_offer.clone()).expect("the offer document parses");
+    std::fs::write(work.join("signed-offer.json"), serde_json::to_vec(&signed_offer).unwrap()).unwrap();
+    std::fs::write(work.join("quote.json"), b"not a signed quote").unwrap();
+    let output = chiral(&work, &profile, &["fund", "--offer", "signed-offer.json", "--quote", "quote.json"]);
+    let stderr = refused(&output);
+    assert_eq!(stderr.lines().last(), Some("chiral: invalid JSON input document"), "fund: {stderr}");
+    // The administration token file is read from the working directory before any request: an
+    // empty protected file there is refused as empty, where a missing one would be unreadable.
+    drop(chiral_network::wallet::create_secret_file(&work.join("admin.token")).unwrap());
+    let output = chiral(
+        &work,
+        &profile,
+        &["provider-admin", "--endpoint", "http://127.0.0.1:9", "--token-file", "admin.token", "status"],
+    );
+    assert_eq!(refused(&output).trim(), "chiral: empty admin token");
+    let mut names: Vec<_> = std::fs::read_dir(&work)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["admin.token", "backup.key", "offer.json", "options.json", "quote.json", "request.json", "signed-offer.json"]
+    );
+    assert!(!profiles.join("admin.token").exists() && !profiles.join("quote.json").exists());
 }

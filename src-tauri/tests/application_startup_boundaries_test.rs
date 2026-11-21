@@ -777,6 +777,19 @@ fn function_body(source: &str, name: &str) -> std::ops::Range<usize> {
     rust::functions(&code).into_iter().find(|(found, _, _)| found == name).unwrap_or_else(|| panic!("fn {name}")).2
 }
 
+/// The body of the desktop's operation dispatch. The `consumer_command` Tauri command is
+/// exactly one call of `consumer_operation`, which holds the dispatch so that a desktop test can
+/// drive it without a Tauri application; pinning that delegation keeps every operation the
+/// command reaches inside the returned body.
+fn desktop_dispatch(desktop: &str) -> std::ops::Range<usize> {
+    let command: String = rust::without_comments(&desktop[function_body(desktop, "consumer_command")])
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert_eq!(command, "{consumer_operation(&state,operation,args).await}", "consumer_command only delegates");
+    function_body(desktop, "consumer_operation")
+}
+
 /// The commands of the build script's app manifest: the literals of its `.commands(&[...])`.
 fn app_manifest(build: &str) -> Vec<String> {
     let code = rust::code(build);
@@ -822,8 +835,8 @@ fn help(binary: &str, path: &[String]) -> (Vec<String>, Vec<String>) {
 
 /// Task 3.1 (requirement 1, scenario "No surface controls mining or a node"): the desktop's
 /// native commands and operations (the build script's app manifest, `generate_handler!` and
-/// every operation and argument name of `consumer_command`, whose default refuses anything
-/// else), the GUI's native calls, every `chiral` subcommand and option (`--help`, recursively),
+/// every operation and argument name of `consumer_command`, which only delegates to
+/// `consumer_operation`, whose default refuses anything else), the GUI's native calls, every `chiral` subcommand and option (`--help`, recursively),
 /// the options of the other binaries and the provider operator actions (`provider-admin.py`,
 /// the CLI's administration actions and the daemon's administration routes) are enumerated;
 /// none starts, stops or configures a node or mining, or sets a mining or coinbase address.
@@ -838,7 +851,7 @@ fn no_native_operation_command_or_operator_action_controls_a_node_or_mining() {
     let handled: Vec<String> = code[handler + "generate_handler![".len()..rust::matching(&code, handler + "generate_handler!".len()) - 1]
         .split(',').map(|name| name.trim().to_owned()).filter(|name| !name.is_empty()).collect();
     assert_eq!(handled, manifest);
-    let dispatch = literals(&desktop, function_body(&desktop, "consumer_command"));
+    let dispatch = literals(&desktop, desktop_dispatch(&desktop));
     // Every literal that could be an operation or argument name: any spelling without spaces
     // (snake, camel or kebab case), so that no case convention hides one.
     let name_like = |literal: &&str| !literal.is_empty() && literal.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'.' || b == b':');
@@ -1077,9 +1090,9 @@ fn the_desktop_start_only_installs_the_tray() {
 fn the_desktop_wallet_operations_are_the_cli_consumer_operations_and_logout_touches_no_file() {
     let compact = |text: &str| -> String { rust::without_comments(text).chars().filter(|c| !c.is_whitespace()).collect() };
     let desktop = read("src-tauri/src/desktop.rs");
-    let dispatch = compact(&desktop[function_body(&desktop, "consumer_command")]);
+    let dispatch = compact(&desktop[desktop_dispatch(&desktop)]);
     for expected in [
-        r#"ifoperation=="logout"{end_session(&state).await;returnOk(Value::Null);}"#,
+        r#"ifoperation=="logout"{end_session(state).await;returnOk(Value::Null);}"#,
         r#"letnext=Arc::new(Consumer::load(Path::new(text(&args,"path")?))?);"#,
         r#""wallet_create"=>value(consumer.wallet_create()?),"#,
         r#""wallet_import"=>value(consumer.wallet_import_file(Path::new(text(&args,"path")?))?),"#,

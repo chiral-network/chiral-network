@@ -57,8 +57,18 @@ async fn consumer_command(
     operation: String,
     args: Value,
 ) -> Result<Value, String> {
+    consumer_operation(&state, operation, args).await
+}
+
+/// The body of `consumer_command`, on the desktop state itself, so that tests drive the same
+/// dispatch without a Tauri application.
+async fn consumer_operation(
+    state: &DesktopState,
+    operation: String,
+    args: Value,
+) -> Result<Value, String> {
     if operation == "logout" {
-        end_session(&state).await;
+        end_session(state).await;
         return Ok(Value::Null);
     }
     if operation == "configure" {
@@ -417,6 +427,11 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serializes the tests that set or read the process-wide effective version policy: loading
+    /// a profile restores that profile's policy watermark into it.
+    static EFFECTIVE_POLICY: Mutex<()> = Mutex::const_new(());
+
     #[test]
     fn tray_menu_ids_map_to_show_and_confirmed_quit_only() {
         assert_eq!(tray_action(TRAY_SHOW_ID), Some(TrayAction::Show));
@@ -437,6 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_drops_the_previous_networks_version_status() {
+        let _policy = EFFECTIVE_POLICY.lock().await;
         let mut policy = crate::version::bundled_policy();
         policy.recommended = "999.0.0".into();
         crate::version::set_effective_policy_for_test(policy);
@@ -457,5 +473,169 @@ mod tests {
         assert!(*receiver.borrow());
         assert!(state.streams.lock().await.is_empty());
         state.cancel_all().await;
+    }
+
+    /// profile-path-resolution requirement 5 scenario "Desktop Settings shows a refusal" (task
+    /// 3.5), native half. With profile P1 loaded (its wallet created and a stream pending),
+    /// `configure` with a profile P2 that is refused because this network's state exists only at
+    /// the working-directory interpretation of a relative `data_dir`, `network.rpc_bearer_file`
+    /// or `dht.identity_file` returns the refusal (the string Settings shows), creates nothing,
+    /// leaves the old state unchanged, keeps the very same P1 consumer loaded with its wallet,
+    /// and cancels no stream. The deliberate absolute-path remedy then loads, replacing P1 and
+    /// cancelling the stream, as every successful `configure` does.
+    #[tokio::test]
+    async fn configure_returns_a_refusal_and_the_loaded_profile_stays_loaded() {
+        use crate::consumer::ConsumerConfig;
+        use crate::network::NetworkConfig;
+        use crate::protocol::NetworkIdentity;
+        use crate::provider_config::DhtConfig;
+        use std::path::{Component, PathBuf};
+        let _policy = EFFECTIVE_POLICY.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let network = |deployment: &str| NetworkConfig {
+            identity: NetworkIdentity {
+                chain_id: crate::network::ESPACE_TESTNET_CHAIN_ID,
+                genesis_hash: crate::network::ESPACE_TESTNET_GENESIS.into(),
+                deployment_id: deployment.into(),
+            },
+            rpc_url: "http://127.0.0.1:9".into(),
+            rpc_bearer_file: None,
+            faucet_url: None,
+            explorer_url: None,
+            policy_url: None,
+        };
+        let profile = |network: NetworkConfig, data_dir: PathBuf| ConsumerConfig {
+            network,
+            data_dir,
+            catalog_url: None,
+            development: false,
+            dht: None,
+        };
+        let write = |path: &Path, config: &ConsumerConfig| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, serde_json::to_vec(config).unwrap()).unwrap();
+        };
+        let snapshot = |path: &Path| {
+            let mut entries = std::collections::BTreeMap::new();
+            let mut pending = vec![path.to_path_buf()];
+            while let Some(directory) = pending.pop() {
+                for entry in std::fs::read_dir(&directory).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        entries.insert(path.clone(), None);
+                        pending.push(path);
+                    } else {
+                        // A digest, so that a failure never shows the wallet key.
+                        let digest = <sha2::Sha256 as sha2::Digest>::digest(std::fs::read(&path).unwrap());
+                        entries.insert(path.clone(), Some(hex::encode(digest)));
+                    }
+                }
+            }
+            entries
+        };
+        // The working directory of a test binary is fixed (nothing changes it), so a relative
+        // path that climbs from it to the file-system root and descends to an absolute `target`
+        // names `target` from the working directory, and a place inside `root` that does not
+        // exist from a profile directory deeper than the working directory: exactly the old
+        // working-directory location of an earlier client. The working directory is only read.
+        let working = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let climb = working.components().filter(|c| matches!(c, Component::Normal(_))).count();
+        let from_working_directory = |target: &Path| -> PathBuf {
+            let mut path: PathBuf = std::iter::repeat("..").take(climb).collect();
+            path.extend(target.components().filter(|c| matches!(c, Component::Normal(_))));
+            assert!(std::fs::symlink_metadata(&path).is_ok(), "{path:?} names {target:?}");
+            path
+        };
+        let deep = (0..=climb).fold(root.join("p2"), |path, level| path.join(format!("d{level}")));
+
+        // P1 is loaded, its wallet created, and a stream is pending.
+        let state = DesktopState::default();
+        let p1 = root.join("p1").join("consumer.json");
+        write(&p1, &profile(network("desktop-p1"), root.join("p1-data")));
+        let configure = |path: &Path| json!({"path": path.display().to_string()});
+        assert_eq!(
+            consumer_operation(&state, "configure".into(), configure(&p1)).await,
+            Ok(json!({"address": null}))
+        );
+        let address = consumer_operation(&state, "wallet_create".into(), json!({})).await.unwrap();
+        let loaded = state.consumer.read().await.clone().unwrap();
+        let (sender, mut receiver) = watch::channel(false);
+        state.streams.lock().await.insert("pending".into(), sender);
+
+        // State that an earlier client run from the working directory left for P2's network.
+        let old = root.join("old");
+        let old_data = old.join("data");
+        let p2_network = network("desktop-p2");
+        let old_address = Consumer::new(profile(p2_network.clone(), old_data.clone()))
+            .unwrap()
+            .wallet_create()
+            .unwrap();
+        assert_ne!(json!(old_address), address);
+        std::fs::write(old.join("rpc.token"), b"read from the old working directory").unwrap();
+        std::fs::write(old.join("peer.key"), b"read from the old working directory").unwrap();
+        let old_before = snapshot(&old);
+
+        let unused = root.join("p2-data");
+        for field in ["data_dir", "network.rpc_bearer_file", "dht.identity_file"] {
+            let mut config = profile(p2_network.clone(), unused.clone());
+            match field {
+                "data_dir" => config.data_dir = from_working_directory(&old_data),
+                "network.rpc_bearer_file" => {
+                    config.network.rpc_bearer_file = Some(from_working_directory(&old.join("rpc.token")))
+                }
+                _ => {
+                    config.dht = Some(DhtConfig {
+                        listen: "/ip4/127.0.0.1/tcp/0".into(),
+                        bootstrap: vec![],
+                        identity_file: from_working_directory(&old.join("peer.key")),
+                    })
+                }
+            }
+            let p2 = deep.join(format!("{}.json", field.replace('.', "-")));
+            write(&p2, &config);
+            let p2_before = snapshot(&root.join("p2"));
+
+            let error = consumer_operation(&state, "configure".into(), configure(&p2))
+                .await
+                .expect_err(field);
+
+            let start = format!("consumer profile {}: relative {field} ", p2.display());
+            assert!(error.starts_with(&start), "{field}: {error}");
+            for required in [
+                "now resolves against the profile's directory",
+                "nothing was created, moved or deleted",
+                &format!("set {field} to the absolute path"),
+                "deliberately move",
+            ] {
+                assert!(error.contains(required), "{field}: missing {required:?} in {error}");
+            }
+            // Nothing was created, and the old state is unchanged.
+            assert_eq!(snapshot(&root.join("p2")), p2_before, "{field}");
+            assert!(!unused.exists(), "{field}");
+            assert_eq!(snapshot(&old), old_before, "{field}");
+            // P1 stays the loaded profile: the same consumer, its network and wallet, and no
+            // stream was cancelled.
+            let current = state.consumer.read().await.clone();
+            let current = current.unwrap_or_else(|| panic!("{field}: P1 was unloaded"));
+            assert!(Arc::ptr_eq(&current, &loaded), "{field}: P1 was replaced");
+            assert_eq!(json!(current.address().unwrap()), address, "{field}");
+            let shown = consumer_operation(&state, "network_profile".into(), json!({})).await.unwrap();
+            assert_eq!(shown["identity"]["deployment_id"], "desktop-p1", "{field}");
+            assert!(!receiver.has_changed().unwrap(), "{field}: a stream was cancelled");
+            assert!(state.streams.lock().await.contains_key("pending"), "{field}");
+        }
+
+        // The deliberate remedy, an absolute data_dir naming the old state, loads it: a
+        // successful configure replaces P1 and cancels its stream.
+        let remedy = root.join("p2-absolute.json");
+        write(&remedy, &profile(p2_network, old_data));
+        assert_eq!(
+            consumer_operation(&state, "configure".into(), configure(&remedy)).await,
+            Ok(json!({"address": old_address}))
+        );
+        receiver.changed().await.expect("cancellation notification");
+        assert!(*receiver.borrow());
+        assert!(!Arc::ptr_eq(&state.consumer.read().await.clone().unwrap(), &loaded));
     }
 }
