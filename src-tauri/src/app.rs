@@ -3683,6 +3683,13 @@ mod tests {
     /// Stores a quote of the first model for the wallet of signing key `consumer` repeated, free
     /// when `funding` is zero and otherwise at the configured price.
     fn stored_quote(state: &ProviderState, consumer: &str, funding: u128) -> Signed<Quote> {
+        stored_quote_for(state, consumer, funding, &state.config.models[0].model)
+    }
+
+    /// `stored_quote` with `model` as the agreement's terms, such as an earlier report of the
+    /// configured model under which the account was opened.
+    fn stored_quote_for(state: &ProviderState, consumer: &str, funding: u128, model: &protocol::ModelSpec)
+        -> Signed<Quote> {
         let now = protocol::now().unwrap();
         let configured = &state.config.models[0];
         let price = if funding == 0 {
@@ -3694,7 +3701,7 @@ mod tests {
             id: protocol::random_id(), network: state.config.network.identity.clone(),
             offer_id: protocol::random_id(), provider_wallet: state.wallet.clone(),
             consumer_wallet: wallet::address_from_private_key(&consumer.repeat(32)).unwrap(),
-            model: configured.model.clone(), price, funding_wei: funding.to_string(),
+            model: model.clone(), price, funding_wei: funding.to_string(),
             platform_wallet: state.config.platform_wallet.clone(), fee_bps: 50, max_concurrency: 1,
             nonce: protocol::random_id(), issued_at: now, expires_at: now + 300,
         }, &state.private_key).unwrap();
@@ -3720,7 +3727,13 @@ mod tests {
     /// credential and the opening's transaction hash.
     fn funded_account(state: &ProviderState, receipts: &Receipts, consumer: &str, funding: u128)
         -> (String, protocol::Credential, String) {
-        let quote = stored_quote(state, consumer, funding);
+        funded_account_for(state, receipts, consumer, funding, &state.config.models[0].model)
+    }
+
+    /// `funded_account` with `model` as the agreement's terms.
+    fn funded_account_for(state: &ProviderState, receipts: &Receipts, consumer: &str, funding: u128,
+        model: &protocol::ModelSpec) -> (String, protocol::Credential, String) {
+        let quote = stored_quote_for(state, consumer, funding, model);
         let (payment, _) = acknowledged_opening(state, receipts, consumer, &quote);
         let evidence = crate::chain_client::VerifiedPayment {
             network: state.config.network.identity.clone(), tx_hash: payment.tx_hash.clone(),
@@ -4931,6 +4944,265 @@ mod tests {
             "0".to_owned(), "4".to_owned()));
         runtime.dht.stop().await;
         for server in servers {
+            server.abort();
+        }
+    }
+
+    /// inference-request-accounting task 3.2, *Performance remedies preserve usage and admitted
+    /// evidence* and *Restart recovers orphaned reservations before new admission*. A daemon's
+    /// served report comes from its configuration, which does not change while it runs, and one
+    /// daemon owns a deployment's ledger; a renewal therefore reaches the gateway through a
+    /// restart, and startup recovery is where a request admitted under one report meets the next.
+    ///
+    /// Three synthetic reports of identical terms (parser inputs, not qualification) are bound by
+    /// their files' digests: R0 (measured at 100), R1 (150) and R2 (200). Two accounts were opened
+    /// under R0. The daemon serves R1. A chat request admitted through the gateway binds R1, not
+    /// the agreement's R0, and its settlement write fails, so it stays reserved; three ledger
+    /// misses of the other account then latch R1. The daemon restarts with R2. When the start
+    /// returns, before any request, the held request is released as `restart_unknown_usage`
+    /// still bound to R1 (no usage, no waived amount, its whole 10-wei hold as exposure), and its
+    /// provider-incomplete observation joins R1's window, not R2's. R1 stays withdrawn; R2
+    /// admits. A new request is charged 4 wei at the agreement's rates and binds R2. A request
+    /// whose first token arrives after 2.1 s settles as a known-usage inference waiver bound to
+    /// R2: no charge, its two input and one output token recorded, 4 wei waived once, only its
+    /// hold returned; funding and the platform fee are unchanged. (The charged request is outside
+    /// the qualified workload envelope, so its accounting does not depend on the stub's speed.)
+    /// The gateway's status read and a signed receipt show each request's admitted digest beside
+    /// the unchanged agreement (R0). Finally, two more ledger misses latch R2 while a streamed
+    /// request admitted under R2 is held in the engine: a new request is refused before
+    /// reservation, and the held request settles at its known usage (4 wei) with the gateway's
+    /// own outcome bound to R2, admission and settlement health unchanged.
+    #[tokio::test]
+    async fn a_restart_under_a_renewed_report_recovers_held_requests_with_their_admitted_report() {
+        use sha2::{Digest, Sha256};
+        const TEMPLATE: &str = "{{ messages }}";
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (rpc, rpc_server) = serve(settled_chain(receipts.clone())).await;
+        let report = |name: &str, measured_at: u64| {
+            let (mut model, mut report) = crate::performance::evidence_tests::fixture();
+            model.chat_template_sha256 = hex::encode(Sha256::digest(TEMPLATE));
+            let version = crate::engine_runtime::ENGINE_VERSION;
+            let profile = model.serving.as_mut().unwrap();
+            profile.engine_version = version.into();
+            profile.qualification.measured_at = measured_at;
+            report["runtime_observation"]["engine_version"] = json!(version);
+            report["measured_at"] = json!(measured_at);
+            let evidence = directory.path().join(name);
+            crate::performance::evidence_tests::persist(&mut model, &mut report, &evidence);
+            (model, evidence)
+        };
+        let (r0, _) = report("r0.json", 100);
+        let (r1, r1_evidence) = report("r1.json", 150);
+        let (r2, r2_evidence) = report("r2.json", 200);
+        let digest = |model: &protocol::ModelSpec| model.serving.as_ref().unwrap().qualification.evidence_sha256.clone();
+        let (d0, d1, d2) = (digest(&r0), digest(&r1), digest(&r2));
+        assert!(d0 != d1 && d1 != d2 && d0 != d2);
+        assert!(r0.accepts_execution(&r1) && r0.accepts_execution(&r2));
+        // The stub engine delays its whole answer to the chat message `slow-first-token` by 2.1 s,
+        // past the 2 s TTFT, holds a streamed chat message `held` open after its first token
+        // until released, and answers everything else at once.
+        let stream = HeldStream::new();
+        let engine = chat_engine_holding(r1.clone(), TEMPLATE, Some(stream.clone()))
+            .layer(middleware::from_fn(|request: Request, next: Next| async move {
+            let (parts, body) = request.into_parts();
+            let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap();
+            if serde_json::from_slice::<Value>(&bytes).is_ok_and(|body| body["messages"][0]["content"] == "slow-first-token") {
+                tokio::time::sleep(Duration::from_millis(2_100)).await;
+            }
+            next.run(Request::from_parts(parts, axum::body::Body::from(bytes))).await
+        }));
+        let (engine_url, engine_server) = serve(engine).await;
+        let (mut config, unavailable) = profiled_chat_config(directory.path(), rpc, &r1, r1_evidence, &engine_url).await;
+        config.models[0].price = PriceSchedule { input_wei_per_1k: "1000".into(), output_wei_per_1k: "2000".into() };
+        let mut renewed = config.clone();
+        renewed.models[0].model = r2.clone();
+        renewed.models[0].qualification_evidence_file = Some(r2_evidence);
+
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let (contract, credential, _) = funded_account_for(&runtime.state, &receipts, "44", 1_000_000, &r0);
+        let (other, other_credential, _) = funded_account_for(&runtime.state, &receipts, "55", 1_000_000, &r0);
+        assert_eq!(runtime.state.qualified_model(&r0), Some(&r1));
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("CREATE TRIGGER refuse_held_settlement AFTER UPDATE ON requests
+            WHEN OLD.request_key='held-under-r1' AND NEW.status<>'reserved'
+            BEGIN SELECT RAISE(FAIL,'injected settlement write failure'); END;").unwrap();
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "held-under-r1").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::INTERNAL_SERVER_ERROR, &json!("internal_error")), "{answer}");
+        assert_eq!(runtime.state.settlement_fault(), Some(inference_gateway::DURABLE_SETTLEMENT_FAILED));
+        let held = runtime.state.ledger.request_view(&contract, "held-under-r1").unwrap();
+        assert_eq!((held.status.as_str(), held.max_cost_wei.as_str(), held.prompt_tokens_reserved, held.max_output_tokens),
+            ("reserved", "10", 2, 4));
+        assert_eq!(serde_json::to_value(&held.performance).unwrap(), json!({"evidence_sha256": d1,
+            "policy": crate::performance::POLICY, "eligibility": "pending", "ttft_us": null, "decode_us": null,
+            "elapsed_us": null, "output_tokens": null, "attained": null, "remedy": "none"}),
+            "the gateway's reservation binds the served report, not the agreement's");
+        // Three ledger misses of the other account (supplied usage, a prerequisite) latch R1.
+        let usage = protocol::TokenUsage { prompt_tokens: 2, completion_tokens: 1 };
+        for index in 0..3 {
+            let now = protocol::now().unwrap();
+            let reservation = runtime.state.ledger.reserve(&other, &other_credential.id, &format!("r1-miss-{index}"),
+                2, 4, now, &r1).unwrap();
+            let miss = crate::performance::outcome(r1.serving.as_ref().unwrap(), true, Some(2_000_001), None, Some(&usage),
+                "completed", false, Some(2_000_001), &d1);
+            runtime.state.ledger.settle_measured(&reservation.id, &usage, "completed", Some(&miss), now).unwrap();
+        }
+        assert!(runtime.state.ledger.performance_withdrawn(&r1).unwrap());
+        assert!(runtime.state.qualified_model(&r0).is_none());
+        ledger.execute_batch("DROP TRIGGER refuse_held_settlement").unwrap();
+        drop(ledger);
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        // Restarted with the renewal R2: recovered before any request, still bound to R1.
+        let runtime = ProviderRuntime::start(renewed).await.unwrap();
+        let recovered = runtime.state.ledger.request_view(&contract, "held-under-r1").unwrap();
+        assert_eq!((recovered.id.as_str(), recovered.status.as_str(), recovered.usage.prompt_tokens, recovered.usage.completion_tokens,
+            recovered.cost_wei.as_str(), recovered.provider_loss_wei.as_str(), recovered.waived_wei.as_str()),
+            (held.id.as_str(), "restart_unknown_usage", 0, 0, "0", "10", "0"));
+        let recovered_performance = json!({"evidence_sha256": d1, "policy": crate::performance::POLICY,
+            "eligibility": "provider_incomplete", "ttft_us": null, "decode_us": null, "elapsed_us": null,
+            "output_tokens": null, "attained": false, "remedy": "inference_waiver"});
+        assert_eq!(serde_json::to_value(&recovered.performance).unwrap(), recovered_performance);
+        let observations = || ledger_connection(&runtime).query_row(
+            "SELECT json_group_array(json_array(request,evidence,miss)) FROM
+                (SELECT request,evidence,miss FROM performance_observations ORDER BY sequence)", [],
+            |row| row.get::<_, String>(0)).map(|text| serde_json::from_str::<Value>(&text).unwrap()).unwrap();
+        let latches = || ledger_connection(&runtime).query_row(
+            "SELECT json_group_array(json_array(model,evidence)) FROM performance_withdrawals", [],
+            |row| row.get::<_, String>(0)).map(|text| serde_json::from_str::<Value>(&text).unwrap()).unwrap();
+        let misses: Vec<Value> = (0..3).map(|index| {
+            let id = runtime.state.ledger.request_view(&other, &format!("r1-miss-{index}")).unwrap().id;
+            json!([id, d1, 1])
+        }).collect();
+        let mut expected_observations = misses.clone();
+        expected_observations.push(json!([held.id, d1, 1]));
+        assert_eq!(observations(), json!(expected_observations), "the recovered request joins its admitted report's window");
+        assert_eq!(latches(), json!([["model", d1]]));
+        assert_eq!((runtime.state.accepting.load(Ordering::Acquire), runtime.state.settlement_fault()), (true, None));
+        assert_eq!(runtime.state.qualified_model(&r0), Some(&r2));
+        let balances = |runtime: &ProviderRuntime| {
+            let account = runtime.state.ledger.account(&contract).unwrap();
+            let held = runtime.state.ledger.credentials(&contract).unwrap().into_iter()
+                .find(|entry| entry.id == credential.id).unwrap();
+            json!([account.funded_wei, account.fee_wei, account.available_wei, account.reserved_wei, account.spent_wei,
+                account.waived_wei, account.provider_loss_wei, [account.usage.prompt_tokens, account.usage.completion_tokens],
+                held.reserved_wei, held.spent_wei])
+        };
+        assert_eq!(balances(&runtime), json!(["1000000", "5000", "995000", "0", "0", "0", "0", [0, 0], "0", "0"]));
+
+        // New requests bind R2: one charged at the agreement's rates, one a known-usage waiver.
+        // The charged request allows 300 output tokens, beyond the qualified workload envelope
+        // (256), so that its accounting does not depend on how fast the stub answers.
+        let (status, answer) = call(&runtime.public_router(), "POST", "/v1/chat/completions",
+            &keyed(&credential.bearer, "after-the-renewal"), Some(&json!({"model": "model",
+            "messages": [{"role": "user", "content": "hello"}], "max_tokens": 300}))).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        let charged = runtime.state.ledger.request_view(&contract, "after-the-renewal").unwrap();
+        assert_eq!((charged.status.as_str(), charged.usage.prompt_tokens, charged.usage.completion_tokens,
+            charged.max_cost_wei.as_str(), charged.cost_wei.as_str(), charged.waived_wei.as_str()),
+            ("completed", 2, 1, "602", "4", "0"));
+        let performance = charged.performance.as_ref().unwrap();
+        assert_eq!((performance.evidence_sha256.as_str(), performance.eligibility.as_str(), performance.attained,
+            performance.remedy.as_str()), (d2.as_str(), "outside_workload", None, "none"));
+        let (status, answer) = call(&runtime.public_router(), "POST", "/v1/chat/completions",
+            &keyed(&credential.bearer, "waived-after-the-renewal"), Some(&json!({"model": "model",
+            "messages": [{"role": "user", "content": "slow-first-token"}], "max_tokens": 4}))).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        let waived = runtime.state.ledger.request_view(&contract, "waived-after-the-renewal").unwrap();
+        assert_eq!((waived.status.as_str(), waived.usage.prompt_tokens, waived.usage.completion_tokens,
+            waived.max_cost_wei.as_str(), waived.cost_wei.as_str(), waived.waived_wei.as_str(), waived.provider_loss_wei.as_str()),
+            ("completed", 2, 1, "10", "0", "4", "0"));
+        let performance = waived.performance.as_ref().unwrap();
+        assert_eq!((performance.evidence_sha256.as_str(), performance.attained, performance.remedy.as_str(), performance.output_tokens),
+            (d2.as_str(), Some(false), "inference_waiver", Some(1)));
+        assert!(performance.ttft_us.unwrap() > crate::performance::TTFT_US, "{performance:?}");
+        expected_observations.push(json!([waived.id, d2, 1]));
+        assert_eq!(observations(), json!(expected_observations));
+        assert_eq!(latches(), json!([["model", d1]]), "R2 keeps its own window");
+        assert_eq!(balances(&runtime), json!(["1000000", "5000", "994996", "0", "4", "4", "0", [4, 2], "0", "4"]));
+
+        // Reads: the held request by key through the gateway, and a signed receipt binding every
+        // request's admitted digest beside the agreement's terms.
+        let read = bearer_header(&credential.bearer);
+        let (status, view) = call(&runtime.public_router(), "GET", "/v1/requests/held-under-r1", &read, None).await;
+        assert_eq!((status, &view["performance"]), (StatusCode::OK, &recovered_performance));
+        let (status, receipt) = call(&runtime.public_router(), "GET", &format!("/v1/contracts/{contract}/receipt"), &read, None).await;
+        assert_eq!(status, StatusCode::OK, "{receipt}");
+        let receipt: Signed<protocol::UsageReceipt> = serde_json::from_value(receipt).unwrap();
+        protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &runtime.state.wallet).unwrap();
+        assert_eq!(receipt.payload.account.model, r0, "the agreement keeps R0's digest and measurement time");
+        let bound: std::collections::BTreeMap<String, String> = receipt.payload.requests.iter()
+            .map(|request| (request.request_id.clone(), request.performance.as_ref().unwrap().evidence_sha256.clone()))
+            .collect();
+        assert_eq!(bound, [("after-the-renewal", &d2), ("held-under-r1", &d1), ("waived-after-the-renewal", &d2)]
+            .into_iter().map(|(key, evidence)| (key.to_owned(), evidence.clone())).collect());
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "held-under-r1").await;
+        assert_eq!((status, &answer["error"]["code"], &answer["error"]["request_status"]),
+            (StatusCode::CONFLICT, &json!("duplicate_request"), &json!("restart_unknown_usage")), "{answer}");
+
+        // R2 is latched while a request admitted under it is in the engine (review addition).
+        // New requests are refused before reservation, and the held request still settles at its
+        // known usage with the gateway's own outcome bound to R2: settlement classifies with the
+        // report admitted at reservation and never re-reads the current qualification state. It
+        // allows 300 output tokens, outside the qualified workload envelope, so that its
+        // accounting does not depend on timing.
+        let admitted = tokio::spawn({
+            let (public, headers) = (runtime.public_router(), keyed(&credential.bearer, "held-while-r2-latches"));
+            let body = json!({"model": "model", "messages": [{"role": "user", "content": "held"}],
+                "max_tokens": 300, "stream": true});
+            async move { send(&public, "POST", "/v1/chat/completions", &headers, Some(&body)).await }
+        });
+        stream.entered().await;
+        let pending = runtime.state.ledger.request_view(&contract, "held-while-r2-latches").unwrap();
+        assert_eq!((pending.status.as_str(), pending.max_cost_wei.as_str()), ("reserved", "602"));
+        assert_eq!(pending.performance.as_ref().unwrap().evidence_sha256, d2);
+        // Two ledger misses of the other account join the waived request's miss and latch R2.
+        for index in 0..2 {
+            let now = protocol::now().unwrap();
+            let reservation = runtime.state.ledger.reserve(&other, &other_credential.id, &format!("r2-miss-{index}"),
+                2, 4, now, &r2).unwrap();
+            let miss = crate::performance::outcome(r2.serving.as_ref().unwrap(), true, Some(2_000_001), None, Some(&usage),
+                "completed", false, Some(2_000_001), &d2);
+            runtime.state.ledger.settle_measured(&reservation.id, &usage, "completed", Some(&miss), now).unwrap();
+            let id = runtime.state.ledger.request_view(&other, &format!("r2-miss-{index}")).unwrap().id;
+            expected_observations.push(json!([id, d2, 1]));
+        }
+        assert_eq!(latches(), json!([["model", d1], ["model", d2]]));
+        assert!(runtime.state.qualified_model(&r0).is_none());
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "after-r2-latched").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("model_unqualified")),
+            "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "after-r2-latched").is_err());
+        stream.release();
+        let (status, text) = within(admitted).await.unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert!(text.contains("\"OK\"") && text.ends_with("data: [DONE]\n\n") && !text.contains("\"error\""), "{text}");
+        let settled = within(async {
+            loop {
+                let view = runtime.state.ledger.request_view(&contract, "held-while-r2-latches").unwrap();
+                if view.status != "reserved" {
+                    break view;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await;
+        assert_eq!((settled.id.as_str(), settled.status.as_str(), settled.usage.prompt_tokens, settled.usage.completion_tokens,
+            settled.cost_wei.as_str(), settled.waived_wei.as_str(), settled.provider_loss_wei.as_str()),
+            (pending.id.as_str(), "completed", 2, 1, "4", "0", "0"));
+        let performance = settled.performance.as_ref().unwrap();
+        assert_eq!((performance.evidence_sha256.as_str(), performance.policy.as_str(), performance.eligibility.as_str(),
+            performance.attained, performance.remedy.as_str(), performance.output_tokens),
+            (d2.as_str(), crate::performance::POLICY, "outside_workload", None, "none", Some(1)));
+        assert!(performance.ttft_us.is_some() && performance.elapsed_us.is_some(),
+            "the gateway's own measured outcome: {performance:?}");
+        assert_eq!((runtime.state.accepting.load(Ordering::Acquire), runtime.state.settlement_fault()), (true, None));
+        assert_eq!(observations(), json!(expected_observations), "an outside-workload request adds no observation");
+        assert_eq!(latches(), json!([["model", d1], ["model", d2]]));
+        assert_eq!(balances(&runtime), json!(["1000000", "5000", "994992", "0", "8", "4", "0", [6, 3], "0", "8"]));
+        runtime.dht.stop().await;
+        for server in [engine_server, rpc_server, unavailable] {
             server.abort();
         }
     }

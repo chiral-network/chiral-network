@@ -1,5 +1,15 @@
 # APAS progress
 
+## 2026-11-21 (ninetieth round) — Acceptance: request-accounting 3.2 (admitted evidence stays bound through settlement, waiver, restart and renewal)
+
+- In step at `ae20db31`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-request-accounting` 3.2), through a workflow: write tests, then an adversarial review. design.md gains "Admitted evidence through settlement (task 3.2)". It has an inventory of the ten statements against the existing performance, records, receipt and owner-control tests, and a code-sites table of every place admitted evidence is bound, copied, compared or re-read. No product code changed and no code difference was found.
+- `billing_store::tests::admitted_reports_stay_bound_through_settlement_waiver_and_restart_across_a_renewal`: requests admitted under renewal R1 stay held while R1 is withdrawn and R2 is admitted. Eight changed-term or not-newer renewals are refused at reserve with every row unchanged: hardware, artifact, engine, concurrency, arrival rate, speed class, an equal measurement time and an older one. Known settlement, a known-usage waiver and an unknown release each refuse outcomes computed against R2 or the agreement's report, then commit against R1. Restart recovery binds each request to its own report. A signed receipt carries each admitted digest. A waiver keeps known usage and waives only inference cost, with the fee unchanged.
+- `app::tests::a_restart_under_a_renewed_report_recovers_held_requests_with_their_admitted_report`: a gateway request admitted under R1 is held by a settlement write failure. The daemon restarts with R2, and startup recovery releases the request, still bound to R1, before admission. Under R2 the test then sees a charged request outside the workload envelope and a known-usage time-to-first-token waiver through the production gateway; earlier gateway waivers all had unknown usage. Review addition: a stream admitted under R2 and held while R2 is withdrawn still completes, bound to R2 with the gateway's own timings, and admission stays open. Before this, two `Settlement::finish` regressions that re-read current withdrawal state passed every lib test.
+- Mutations: the author ran 13 and the review 15; each fails a named test.
+- Recorded limits: a request record and receipt bind the measurement time only through the report digest, and the product keeps no superseded report file. An older request's measurement time therefore needs a copy the operator keeps; this matches the design's earlier trust limit. "Strictly newer" is compared with the agreement's report, not with the latest renewal; neither the spec nor the book names the reference report. The reports are synthetic, a decode-rate miss through the gateway is not exercised, and process-kill and fsync durability are not established.
+- 3.2 ticked. Checks: `--lib` 460 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; desktop `--lib desktop::` 10/10; the cited unchanged targets `inference_account_records_test` 2/2 and `inference_quote_acceptance_test` 17/17 (review run); strict validation passes. Test-only change; round 89's full suite covers the product code.
+
 ## 2026-11-21 (eighty-ninth round) — Acceptance and code: request-accounting 3.1 portable part; a committed invalid-usage release no longer closes admission
 
 - In step at `df0c05d7`; whitepaper unchanged; no new answers.
@@ -1013,7 +1023,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89), 3.2–3.4 and 4.x (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89), 3.3, 3.4 and 4.x (3.2 done in round 90) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

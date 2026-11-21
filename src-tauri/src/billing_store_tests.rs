@@ -10206,3 +10206,330 @@ async fn gateway_cumulative_usage_overflow_is_an_invalid_usage_release_not_a_set
     let account = fixture.routes.ledger().account(&contract).unwrap();
     assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), (4, u64::MAX));
 }
+
+// inference-request-accounting task 3.2: admitted evidence through settlement. Ledger steps
+// take explicit logical operation times. The reports are synthetic parser inputs persisted as
+// files, not hardware qualification, timing eligibility or withdrawal classification.
+
+/// The synthetic profiled chat model of `performance::evidence_tests` with its report measured
+/// at `measured_at`, persisted as `name` in `directory`: the model, whose qualification is that
+/// file's SHA-256 digest and measurement time, and the file.
+fn measured_report(directory: &Path, name: &str, measured_at: u64) -> (ModelSpec, std::path::PathBuf) {
+    let (mut model, mut report) = crate::performance::evidence_tests::fixture();
+    model.serving.as_mut().unwrap().qualification.measured_at = measured_at;
+    report["measured_at"] = json!(measured_at);
+    let path = directory.join(name);
+    crate::performance::evidence_tests::persist(&mut model, &mut report, &path);
+    (model, path)
+}
+
+/// The measurement time recorded by the one retained report among `reports` whose SHA-256
+/// digest is `digest`: what a bound digest identifies.
+fn report_measured_at(reports: &[&std::path::Path], digest: &str) -> u64 {
+    use sha2::{Digest, Sha256};
+    let matching: Vec<u64> = reports.iter().filter_map(|path| {
+        let bytes = std::fs::read(path).unwrap();
+        (hex::encode(Sha256::digest(&bytes)) == digest)
+            .then(|| serde_json::from_slice::<Value>(&bytes).unwrap()["measured_at"].as_u64().unwrap())
+    }).collect();
+    assert_eq!(matching.len(), 1, "exactly one retained report has digest {digest}");
+    matching[0]
+}
+
+fn evidence_of(model: &ModelSpec) -> String {
+    model.serving.as_ref().unwrap().qualification.evidence_sha256.clone()
+}
+
+/// The performance record a reservation binds before dispatch: the admitted report's digest
+/// and policy, nothing measured yet.
+fn pending_performance(evidence: &str) -> Value {
+    json!({"evidence_sha256": evidence, "policy": crate::performance::POLICY, "eligibility": "pending",
+        "ttft_us": null, "decode_us": null, "elapsed_us": null, "output_tokens": null,
+        "attained": null, "remedy": "none"})
+}
+
+/// `expected` with the ledger's reservation of `key` on `account` by `credential` added at
+/// logical time `created`: `prompt` input and `output` maximum output tokens holding `maximum`
+/// wei, bound to the report whose digest is `evidence`. Only the opaque identifier is read from
+/// `after`; every other member is the caller's literal. Returns that identifier.
+#[allow(clippy::too_many_arguments)]
+fn bound_reservation(expected: &mut ExpiryRows, after: &ExpiryRows, account: &str, credential: &str, key: &str,
+    prompt: u64, output: u64, maximum: i128, created: u64, evidence: &str) -> String {
+    let id = after["requests"].iter().find(|row| row[1] == account && row[2] == key)
+        .unwrap_or_else(|| panic!("{key} was not reserved"))[0].as_str().unwrap().to_owned();
+    let requests = expected.get_mut("requests").unwrap();
+    requests.push(json!([id, account, key, credential, "reserved", created, {
+        "id": id, "request_id": key, "contract_id": account, "credential_id": credential, "status": "reserved",
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0}, "cost_wei": "0", "max_cost_wei": maximum.to_string(),
+        "provider_loss_wei": "0", "prompt_tokens_reserved": prompt, "max_output_tokens": output,
+        "created_at": created, "settled_at": null, "performance": pending_performance(evidence), "waived_wei": "0"}]));
+    requests.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    let held = &mut expiry_row(expected, "accounts", account)[3];
+    expiry_shift(&mut held["available_wei"], -maximum);
+    expiry_shift(&mut held["reserved_wei"], maximum);
+    expiry_shift(&mut expiry_row(expected, "credentials", credential)[3]["reserved_wei"], maximum);
+    id
+}
+
+/// `expect_terminal` for request `id` with its stored performance record `performance` and
+/// `waived` wei of nominal inference cost foregone: recorded on the request and accumulated once
+/// on its account's waived total, never returned to available credit or spent.
+fn expect_bound_terminal(expected: &mut ExpiryRows, id: &str, status: &str, known: Option<(u64, u64, i128)>,
+    settled_at: u64, performance: Value, waived: i128) {
+    expect_terminal(expected, id, status, known, settled_at);
+    let row = expiry_row(expected, "requests", id);
+    row[6]["performance"] = performance;
+    row[6]["waived_wei"] = json!(waived.to_string());
+    let account = row[6]["contract_id"].as_str().unwrap().to_owned();
+    expiry_shift(&mut expiry_row(expected, "accounts", &account)[3]["waived_wei"], waived);
+}
+
+/// `expected` with the next performance observation: request `id` of model `model` against the
+/// report whose digest is `evidence`, a miss or not.
+fn expect_observation(expected: &mut ExpiryRows, id: &str, evidence: &str, miss: bool) {
+    let observations = expected.get_mut("performance_observations").unwrap();
+    let sequence = observations.last().map_or(1, |row| row[0].as_u64().unwrap() + 1);
+    observations.push(json!([sequence, id, "model", evidence, u8::from(miss)]));
+}
+
+/// inference-request-accounting task 3.2, *Performance remedies preserve usage and admitted
+/// evidence*: "Terminal performance accounting SHALL bind the reservation's admitted report and
+/// policy, not silently substitute a later report, and the binding SHALL survive settlement and
+/// unknown-usage restart recovery"; an eligible waiver "SHALL set actual inference charge to zero,
+/// release the hold, retain known authoritative usage and record the nominal waived inference
+/// amount once" and "SHALL NOT refund funding/platform fees or chain gas".
+///
+/// An account is opened under report R0 (measured at 100). Three synthetic report files of
+/// otherwise identical terms are persisted and parse as reports: R0, R1 (150) and R2 (200), each
+/// bound by its file's SHA-256 digest. Four requests are admitted under the renewal R1 and held.
+/// While they are held, three other R1 misses latch R1's withdrawal, eight changed or
+/// not-strictly-newer reports are refused as renewals with every row unchanged, and the renewal
+/// R2 is admitted for four more requests. Each request keeps the report it was admitted under,
+/// distinct from both the agreement's report and the later one:
+/// - known settlement, a known-usage inference waiver and an explicit unknown release each refuse
+///   a performance outcome computed against the later report (or the agreement's) with every row
+///   unchanged, then commit against the admitted report, with its observation in that report's
+///   own window;
+/// - the waiver charges nothing, keeps the known usage, records the 17-wei nominal cost once and
+///   returns only the hold; funding, the 500-wei platform fee and its obligation are unchanged;
+/// - after reopening, restart recovery binds each still-reserved request to its admitted report,
+///   not to the later renewal, and counts its provider-incomplete observation in that window;
+/// - late replays offering the other report or other usage return the first result unchanged;
+/// - a signed receipt carries each request's admitted digest beside the unchanged agreement
+///   (R0's digest and measurement time); the bound digest identifies exactly one retained report,
+///   whose measurement time is the admitted one.
+///
+/// R1 stays withdrawn and R2 keeps its own window. Every step compares complete rows of every
+/// ledger table against fixed literals.
+#[test]
+fn admitted_reports_stay_bound_through_settlement_waiver_and_restart_across_a_renewal() {
+    use crate::performance::{outcome, validate_evidence, POLICY};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("renewal.sqlite");
+    let (r0, r0_file) = measured_report(directory.path(), "r0.json", 100);
+    let (r1, r1_file) = measured_report(directory.path(), "r1.json", 150);
+    let (r2, r2_file) = measured_report(directory.path(), "r2.json", 200);
+    let reports = [r0_file.as_path(), r1_file.as_path(), r2_file.as_path()];
+    for (model, file) in [(&r0, &r0_file), (&r1, &r1_file), (&r2, &r2_file)] {
+        validate_evidence(model, file, 300).unwrap();
+    }
+    let (d0, d1, d2) = (evidence_of(&r0), evidence_of(&r1), evidence_of(&r2));
+    assert!(d0 != d1 && d1 != d2 && d0 != d2);
+    assert!(r0.accepts_execution(&r1) && r0.accepts_execution(&r2));
+
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (q, opened) = performance_account(&store, r0.clone(), 121);
+    let account = q.payload.id.clone();
+    let root = opened.credential.as_ref().unwrap().id.clone();
+    let mut expected = expiry_ledger_rows(&path);
+    let rows = || expiry_ledger_rows(&path);
+
+    // Four requests admitted under the renewal R1: 10 input and 20 maximum output tokens at one
+    // wei per token hold 30 wei each. The reservation carries R1's digest and measurement time;
+    // the stored request binds R1's digest and policy; the agreement stays R0.
+    let mut ids = std::collections::BTreeMap::new();
+    for key in ["r1-known", "r1-waived", "r1-unknown", "r1-restart"] {
+        let reservation = store.reserve(&account, &root, key, 10, 20, 200, &r1).unwrap();
+        assert_eq!(reservation.model, r1, "{key}: the reservation carries the admitted report");
+        assert_eq!((reservation.price, reservation.max_cost_wei.as_str()), (q.payload.price.clone(), "30"));
+        let after = rows();
+        ids.insert(key, bound_reservation(&mut expected, &after, &account, &root, key, 10, 20, 30, 200, &d1));
+        assert_eq!(after, expected, "{key}");
+    }
+    assert_eq!(store.account(&account).unwrap().model, r0);
+
+    // While they are held, three other R1 misses latch R1's withdrawal. Each is a known-usage
+    // waiver of its own 3-wei nominal cost.
+    let known = TokenUsage { prompt_tokens: 10, completion_tokens: 7 };
+    let measured = |model: &ModelSpec, usage: &TokenUsage, miss: bool| {
+        let profile = model.serving.as_ref().unwrap();
+        outcome(profile, true, Some(if miss { 2_000_001 } else { 1_000_000 }), Some(50_000), Some(usage),
+            "completed", false, Some(2_100_000), &profile.qualification.evidence_sha256)
+    };
+    let latch_usage = TokenUsage { prompt_tokens: 1, completion_tokens: 2 };
+    for index in 0..3 {
+        let key = format!("r1-miss-{index}");
+        let reservation = store.reserve(&account, &root, &key, 1, 2, 201, &r1).unwrap();
+        let after = rows();
+        let id = bound_reservation(&mut expected, &after, &account, &root, &key, 1, 2, 3, 201, &d1);
+        assert_eq!(reservation.id, id);
+        let miss = measured(&r1, &latch_usage, true);
+        store.settle_measured(&id, &latch_usage, "completed", Some(&miss), 201).unwrap();
+        expect_bound_terminal(&mut expected, &id, "completed", Some((1, 2, 0)), 201, serde_json::to_value(&miss).unwrap(), 3);
+        expect_observation(&mut expected, &id, &d1, true);
+        if index == 2 {
+            expected.get_mut("performance_withdrawals").unwrap().push(json!(["model", d1]));
+        }
+        assert_eq!(rows(), expected, "{key}");
+    }
+    assert!(store.performance_withdrawn(&r1).unwrap());
+    assert!(store.reserve(&account, &root, "r1-after-its-latch", 10, 20, 201, &r1).unwrap_err().starts_with("model_unqualified:"));
+    assert_eq!(rows(), expected, "a refused reservation under the latched report");
+
+    // Not an otherwise-identical, strictly newer renewal: each is refused with every row unchanged.
+    let changed = |change: &dyn Fn(&mut protocol::ServingProfile)| {
+        let mut candidate = r2.clone();
+        change(candidate.serving.as_mut().unwrap());
+        candidate
+    };
+    for (case, candidate) in [
+        ("the agreement's measurement time", changed(&|p| p.qualification.measured_at = 100)),
+        ("an older measurement time", changed(&|p| p.qualification.measured_at = 99)),
+        ("hardware", changed(&|p| p.devices[0].memory_mib += 1)),
+        ("artifact", changed(&|p| p.artifact_manifest_sha256 = "e".repeat(64))),
+        ("engine", changed(&|p| p.engine_version = "another-engine".into())),
+        ("admitted concurrency", changed(&|p| p.max_concurrency += 1)),
+        ("admitted arrival rate", changed(&|p| p.arrival_milli_rps += 1)),
+        ("speed class", changed(&|p| p.output_tokens_per_second = 50)),
+    ] {
+        let refused = store.reserve(&account, &root, "not-a-renewal", 10, 20, 202, &candidate);
+        assert!(refused.as_ref().is_err_and(|error| error.starts_with("model_revision_unavailable:")), "{case}: {refused:?}");
+        assert_eq!(rows(), expected, "{case}");
+        assert!(!r0.accepts_execution(&candidate), "{case}");
+    }
+
+    // The renewal R2 is admitted while the R1 requests are still held.
+    for key in ["r2-known", "r2-waived", "r2-unknown", "r2-restart"] {
+        let reservation = store.reserve(&account, &root, key, 10, 20, 203, &r2).unwrap();
+        assert_eq!(reservation.model, r2, "{key}");
+        let after = rows();
+        ids.insert(key, bound_reservation(&mut expected, &after, &account, &root, key, 10, 20, 30, 203, &d2));
+        assert_eq!(after, expected, "{key}");
+    }
+    assert_eq!(store.account(&account).unwrap().model, r0);
+
+    // Settlement of each request: an outcome computed against any report other than the admitted
+    // one is refused with every row unchanged; the admitted report's outcome then commits.
+    let unknown = |model: &ModelSpec| {
+        let profile = model.serving.as_ref().unwrap();
+        outcome(profile, true, Some(1_000_000), None, None, "cancelled", false, Some(1_500_000),
+            &profile.qualification.evidence_sha256)
+    };
+    for (admitted, evidence, others, prefix) in [(&r1, &d1, [&r2, &r0], "r1"), (&r2, &d2, [&r1, &r0], "r2")] {
+        let id = ids[format!("{prefix}-known").as_str()].clone();
+        for other in others {
+            assert!(store.settle_measured(&id, &known, "completed", Some(&measured(other, &known, false)), 204)
+                .unwrap_err().contains("differs from admitted execution evidence"), "{prefix}-known");
+            assert_eq!(rows(), expected, "{prefix}-known: a refused outcome");
+        }
+        let attained = measured(admitted, &known, false);
+        let settled = store.settle_measured(&id, &known, "completed", Some(&attained), 204).unwrap();
+        assert_eq!((settled.cost_wei.as_str(), settled.waived_wei.as_str()), ("17", "0"));
+        expect_bound_terminal(&mut expected, &id, "completed", Some((10, 7, 17)), 204, serde_json::to_value(&attained).unwrap(), 0);
+        expect_observation(&mut expected, &id, evidence, false);
+        assert_eq!(rows(), expected, "{prefix}-known");
+
+        let id = ids[format!("{prefix}-waived").as_str()].clone();
+        for other in others {
+            assert!(store.settle_measured(&id, &known, "completed", Some(&measured(other, &known, true)), 204)
+                .unwrap_err().contains("differs from admitted execution evidence"), "{prefix}-waived");
+            assert_eq!(rows(), expected, "{prefix}-waived: a refused outcome");
+        }
+        let missed = measured(admitted, &known, true);
+        assert_eq!((missed.attained, missed.remedy.as_str()), (Some(false), "inference_waiver"));
+        let settled = store.settle_measured(&id, &known, "completed", Some(&missed), 204).unwrap();
+        assert_eq!((settled.cost_wei.as_str(), settled.waived_wei.as_str()), ("0", "17"));
+        assert_eq!((settled.usage.prompt_tokens, settled.usage.completion_tokens), (10, 7));
+        expect_bound_terminal(&mut expected, &id, "completed", Some((10, 7, 0)), 204, serde_json::to_value(&missed).unwrap(), 17);
+        expect_observation(&mut expected, &id, evidence, true);
+        assert_eq!(rows(), expected, "{prefix}-waived");
+
+        let id = ids[format!("{prefix}-unknown").as_str()].clone();
+        for other in others {
+            assert!(store.settle_measured(&id, &TokenUsage::default(), "cancelled_unknown_usage", Some(&unknown(other)), 204)
+                .unwrap_err().contains("differs from admitted execution evidence"), "{prefix}-unknown");
+            assert_eq!(rows(), expected, "{prefix}-unknown: a refused outcome");
+        }
+        let released = unknown(admitted);
+        let settled = store.settle_measured(&id, &TokenUsage::default(), "cancelled_unknown_usage", Some(&released), 204).unwrap();
+        assert_eq!((settled.cost_wei.as_str(), settled.provider_loss_wei.as_str(), settled.waived_wei.as_str()), ("0", "30", "0"));
+        expect_bound_terminal(&mut expected, &id, "cancelled_unknown_usage", None, 204, serde_json::to_value(&released).unwrap(), 0);
+        assert_eq!(rows(), expected, "{prefix}-unknown");
+    }
+
+    // Restart recovery after reopening binds each still-reserved request to its admitted report,
+    // not the later renewal, with no invented usage or waived amount.
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(rows(), expected, "reopened");
+    assert_eq!(store.recover_requests(205).unwrap(), 2);
+    for (key, evidence) in [("r1-restart", &d1), ("r2-restart", &d2)] {
+        let id = &ids[key];
+        expect_bound_terminal(&mut expected, id, "restart_unknown_usage", None, 205, json!({
+            "evidence_sha256": evidence, "policy": POLICY, "eligibility": "provider_incomplete",
+            "ttft_us": null, "decode_us": null, "elapsed_us": null, "output_tokens": null,
+            "attained": false, "remedy": "inference_waiver"}), 0);
+        expect_observation(&mut expected, id, evidence, true);
+    }
+    assert_eq!(rows(), expected, "restart recovery");
+    assert_eq!(store.recover_requests(206).unwrap(), 0);
+    assert_eq!(rows(), expected, "repeated recovery");
+    // R1 stays withdrawn; R2's own window holds one attained and two missed observations.
+    assert_eq!(expected["performance_withdrawals"], vec![json!(["model", d1])]);
+    assert!(store.performance_withdrawn(&r1).unwrap() && !store.performance_withdrawn(&r2).unwrap());
+    assert!(!store.performance_withdrawn(&r0).unwrap());
+
+    // Late replays offering the other report, other usage or another status return the first
+    // result and change no row.
+    for (key, id) in &ids {
+        let (admitted, other) = if key.starts_with("r1") { (&r1, &r2) } else { (&r2, &r1) };
+        let first = store.request_view(&account, key).unwrap();
+        let late = TokenUsage { prompt_tokens: 10, completion_tokens: 3 };
+        for (usage, status, performance) in [
+            (&late, "completed", Some(measured(other, &late, true))),
+            (&known, "completed", Some(measured(admitted, &known, false))),
+            (&TokenUsage::default(), "restart_unknown_usage", None),
+        ] {
+            let replay = store.settle_measured(id, usage, status, performance.as_ref(), 207).unwrap();
+            assert_eq!(serde_json::to_value(&replay).unwrap(), serde_json::to_value(&first).unwrap(), "{key}");
+        }
+        assert!(store.reserve(&account, &root, key, 10, 20, 207, &r2).unwrap_err().starts_with("duplicate_request:"), "{key}");
+        assert_eq!(rows(), expected, "{key}: late replays");
+    }
+
+    // Only the hold returned: the waiver is foregone inference cost, never a balance credit,
+    // and funding, the platform fee and its obligation are unchanged.
+    let held = store.account(&account).unwrap();
+    assert_eq!((held.funded_wei.as_str(), held.fee_wei.as_str(), held.available_wei.as_str(), held.reserved_wei.as_str(),
+        held.spent_wei.as_str(), held.waived_wei.as_str()), ("100000", "500", "99466", "0", "34", "43"));
+    assert_eq!((held.usage.prompt_tokens, held.usage.completion_tokens), (43, 34));
+    assert_eq!(expected["fee_obligations"].len(), 1);
+
+    // A signed receipt binds each request's admitted digest beside the unchanged agreement; each
+    // bound digest identifies exactly one retained report and its measurement time.
+    let receipt = store.receipt(&account, PROVIDER_KEY, 208).unwrap();
+    protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
+    expiry_row(&mut expected, "accounts", &account)[4] = json!(1);
+    assert_eq!(rows(), expected, "a receipt advances only its sequence");
+    assert_eq!(receipt.payload.account.model, r0);
+    assert_eq!(report_measured_at(&reports, &d0), 100);
+    assert_eq!(receipt.payload.requests.len(), 11);
+    for request in &receipt.payload.requests {
+        let performance = request.performance.as_ref().unwrap();
+        let (evidence, measured_at) = if request.request_id.starts_with("r1") { (&d1, 150) } else { (&d2, 200) };
+        assert_eq!((&performance.evidence_sha256, performance.policy.as_str()), (evidence, POLICY), "{}", request.request_id);
+        assert_eq!(report_measured_at(&reports, &performance.evidence_sha256), measured_at, "{}", request.request_id);
+        let stored = expiry_row(&mut expected, "requests", &request.id)[6].clone();
+        assert_eq!(serde_json::to_value(request).unwrap(), stored, "{}", request.request_id);
+    }
+}
