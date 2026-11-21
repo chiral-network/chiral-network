@@ -8,7 +8,7 @@ No verified proofs, replaced tests, trusted functions, unchecked assumptions or 
 
 ## Judged snapshot, lifecycle and top-up tests
 
-Requirement source: `openspec/changes/specify-inference-account-snapshot/specs/inference-account-snapshot/spec.md` (named account schema, exact usage counters, original-term/conservation binding and post-commit recovery). These judgments concern replacing the entire existing test, including its actual calls and asserted results, under the vstd-only/no-interface-change rules. Mathematical subproperties may still merit proofs; they would not replace tests of unmodeled I/O or third-party behavior.
+Requirement source: `openspec/specs/inference-account-snapshot/spec.md` (archived from `specify-inference-account-snapshot`, 2026-11-21) (named account schema, exact usage counters, original-term/conservation binding and post-commit recovery). These judgments concern replacing the entire existing test, including its actual calls and asserted results, under the vstd-only/no-interface-change rules. Mathematical subproperties may still merit proofs; they would not replace tests of unmodeled I/O or third-party behavior.
 
 Top-up recovery also follows `openspec/specs/inference-account-topup-request/spec.md`: exact original ownership, independent safe credit, retained spend/holds/credentials, admission-independent recovery and at-most-once funding/fees. The additional judgments below cover actual HTTP/SQLite/native execution, not a pure model of those operations.
 

@@ -65,6 +65,6 @@
 - [x] 4.1 Update requirement/source/test correspondence and operator/client documentation with observed results and remaining release limits; leave the whitepaper unchanged.
   - design.md now has the 3.3/3.4 results, the task 3.4 code difference, the updated source map, a requirement-and-scenario correspondence table, operator and client notes, and the remaining limits.
   - The whitepaper and book are unchanged. The full suite run afterwards with the task 3.4 read checks in place passed every headless target, including owner-control 61/61 and request-accounting 3.2.1's retained regression.
-- [ ] 4.2 Pass strict validation and required available project checks after implementation. Archive with `openspec archive specify-inference-account-snapshot --yes` only when every in-scope task is complete; never use `--skip-specs`.
+- [x] 4.2 Pass strict validation and required available project checks after implementation. Archive with `openspec archive specify-inference-account-snapshot --yes` only when every in-scope task is complete; never use `--skip-specs`.
 
 No deployment, live payment, account/server administration, installation, hardware qualification, whitepaper edit or unrelated source adoption is authorized. Full `UsageReceipt`, `RequestView`, `PerformanceOutcome`, `OpenResult` and credential-envelope field schemas remain separate specification work; this change covers their shared account/usage payloads, not replacement wrappers.

@@ -26,7 +26,7 @@ This change defines what happens to a platform fee after its funding payment is 
 | `inference-account-topup-request` (normative) | Once-only fee on a top-up and durable tracking of a nonzero obligation with the original platform payee | Requirements 1 and 2 |
 | `inference-commercial-terms` (pending `specify-inference-commercial-terms`) | `platform_wallet` and `fee_bps = 50` in offers and quotes; quotes copy fee terms exactly | Context for requirement 2 (not named in the spec text) |
 | `inference-request-accounting` (pending `specify-inference-request-accounting`) | A waiver does not refund funding or platform fees; settlement does not alter fee evidence | Requirement 1 |
-| `inference-account-snapshot` (pending `specify-inference-account-snapshot`) | `fee_wei` is "not proof of platform receipt" in the consumer view | Requirement 12 |
+| `inference-account-snapshot` (archived from `specify-inference-account-snapshot`, 2026-11-21) | `fee_wei` is "not proof of platform receipt" in the consumer view | Requirement 12 |
 | `desktop-share-online` (pending `specify-desktop-share-online`) | The future Share dashboard: fee obligations by status, *Remit now* with confirmation, the automatic-remittance disclosure, remittance gas in the wizard (its open question 12 covers gas for free shares) | Requirement 11 |
 | `inference-opening-funding-intent` (pending) | An acknowledgement creates no account, credit or fee obligation | Consistent with requirement 1 (not named in the spec text) |
 

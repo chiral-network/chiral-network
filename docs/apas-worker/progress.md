@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-21 (eighty-second round) — Archive: `specify-inference-account-snapshot`
+
+- In step at `e7f2cac6`; whitepaper unchanged; no new answers.
+- Task 4.2 ticked, then `openspec archive specify-inference-account-snapshot --yes`: the change is now `openspec/changes/archive/2026-11-21-specify-inference-account-snapshot`, and `openspec/specs/inference-account-snapshot/spec.md` is a new normative capability (4 requirements added). The placeholder Purpose was replaced with one sentence. The archived design has no relative links. Two stale path references now point at the archive or the main spec: the `verus.md` requirement source and the `specify-fee-remittance` design's dependency table, which called the change pending.
+- Every task had passed: 3.3 and 3.4 in round 81's full suite, 2.5 in round 78's, and the rest earlier. Other pending changes name this change in text only, as an archive-order condition.
+- Checks: round 81's full suite at `e7f2cac6` covers the code (no code changed); `openspec validate --all --strict --no-interactive` 34 passed, 0 failed; `openspec validate inference-account-snapshot --type spec --strict` valid.
+
 ## 2026-11-21 (eighty-first round) — Acceptance and code: account receipt distinctions; corrupt stored and cached accounts fail closed
 
 - In step at `16c7f73a`; whitepaper unchanged; no new answers.
@@ -910,7 +917,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), the snapshot archive (4.2; 3.3–3.4 done in round 81; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), the 390 px reorganization-warning overflow of a long wei amount (snapshot archived, round 82), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
