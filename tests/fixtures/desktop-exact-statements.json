@@ -1,0 +1,167 @@
+{
+  "_comment": "Desktop webview presentation of a native account snapshot, signed receipt and stream events at the 2^53 - 1, 2^53, 2^53 + 1, 2^64 - 1 and u128::MAX wei boundaries: integers beyond 2^53 - 1 arrive as exact decimal strings. Asserted by desktop::tests in src-tauri/src/desktop.rs and rendered by tests/exactStatements.test.ts. Response-only presentation data, not provider, funding or engine evidence; the signature is a placeholder because the webview never verifies.",
+  "account": {
+    "contract_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+    "network": {
+      "chain_id": 71,
+      "genesis_hash": "0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804",
+      "deployment_id": "exact-presentation"
+    },
+    "provider_wallet": "0x1111111111111111111111111111111111111111",
+    "consumer_wallet": "0x2222222222222222222222222222222222222222",
+    "model": {
+      "id": "test/exact-counters",
+      "revision": "abababababababababababababababababababab",
+      "tokenizer_revision": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "chat_template_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+      "quantization": null,
+      "context_length": "18446744073709551615",
+      "max_output_tokens": "18446744073709551615",
+      "capabilities": [
+        "chat"
+      ],
+      "serving": null
+    },
+    "price": {
+      "input_wei_per_1k": "340282366920938463463374607431768211455",
+      "output_wei_per_1k": "1"
+    },
+    "status": "provider_review",
+    "funded_wei": "340282366920938463463374607431768211455",
+    "fee_wei": "5",
+    "spent_wei": "340282366920938463463374607431768211440",
+    "reserved_wei": "3",
+    "available_wei": "340282366920938463463374607431768211455",
+    "reversed_wei": "7",
+    "provider_loss_wei": "340282366920938463463374607431768211455",
+    "usage": {
+      "prompt_tokens": "18446744073709551615",
+      "completion_tokens": "9007199254740993"
+    },
+    "waived_wei": "340282366920938463463374607431768211455",
+    "max_concurrency": 4294967295
+  },
+  "receipt": {
+    "payload": {
+      "network": {
+        "chain_id": 71,
+        "genesis_hash": "0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804",
+        "deployment_id": "exact-presentation"
+      },
+      "provider_wallet": "0x1111111111111111111111111111111111111111",
+      "account": {
+        "contract_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+        "network": {
+          "chain_id": 71,
+          "genesis_hash": "0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804",
+          "deployment_id": "exact-presentation"
+        },
+        "provider_wallet": "0x1111111111111111111111111111111111111111",
+        "consumer_wallet": "0x2222222222222222222222222222222222222222",
+        "model": {
+          "id": "test/exact-counters",
+          "revision": "abababababababababababababababababababab",
+          "tokenizer_revision": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "chat_template_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "quantization": null,
+          "context_length": "18446744073709551615",
+          "max_output_tokens": "18446744073709551615",
+          "capabilities": [
+            "chat"
+          ],
+          "serving": null
+        },
+        "price": {
+          "input_wei_per_1k": "340282366920938463463374607431768211455",
+          "output_wei_per_1k": "1"
+        },
+        "status": "provider_review",
+        "funded_wei": "340282366920938463463374607431768211455",
+        "fee_wei": "5",
+        "spent_wei": "340282366920938463463374607431768211440",
+        "reserved_wei": "3",
+        "available_wei": "340282366920938463463374607431768211455",
+        "reversed_wei": "7",
+        "provider_loss_wei": "340282366920938463463374607431768211455",
+        "usage": {
+          "prompt_tokens": "18446744073709551615",
+          "completion_tokens": "9007199254740993"
+        },
+        "waived_wei": "340282366920938463463374607431768211455",
+        "max_concurrency": 4294967295
+      },
+      "requests": [
+        {
+          "id": "request-exact",
+          "request_id": "chatcmpl-exact",
+          "contract_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+          "credential_id": "credential-exact",
+          "status": "settled",
+          "usage": {
+            "prompt_tokens": 9007199254740991,
+            "completion_tokens": "18446744073709551615"
+          },
+          "cost_wei": "0",
+          "max_cost_wei": "340282366920938463463374607431768211455",
+          "provider_loss_wei": "340282366920938463463374607431768211455",
+          "prompt_tokens_reserved": "9007199254740993",
+          "max_output_tokens": "18446744073709551615",
+          "created_at": 1763683100,
+          "settled_at": "9007199254740992",
+          "performance": {
+            "evidence_sha256": "abababababababababababababababababababababababababababababababab",
+            "policy": "unqualified",
+            "eligibility": "not_applicable",
+            "ttft_us": "18446744073709551615",
+            "decode_us": "9007199254740993",
+            "elapsed_us": 9007199254740991,
+            "output_tokens": "18446744073709551615",
+            "attained": null,
+            "remedy": "none"
+          },
+          "waived_wei": "340282366920938463463374607431768211455"
+        }
+      ],
+      "sequence": "18446744073709551615",
+      "issued_at": 1763683200
+    },
+    "signature": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+  },
+  "stream": [
+    {
+      "kind": "started",
+      "data": {
+        "request_id": "chatcmpl-exact"
+      }
+    },
+    {
+      "kind": "chunk",
+      "data": {
+        "choices": [
+          {
+            "index": 0,
+            "delta": {
+              "content": "hi"
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": "18446744073709551615",
+          "completion_tokens": "9007199254740993",
+          "total_tokens": 9007199254740991
+        }
+      }
+    },
+    {
+      "kind": "done",
+      "data": {
+        "request_id": "chatcmpl-exact",
+        "usage": {
+          "prompt_tokens": "18446744073709551615",
+          "completion_tokens": "9007199254740993",
+          "total_tokens": 9007199254740991
+        }
+      }
+    }
+  ]
+}

@@ -778,16 +778,24 @@ fn function_body(source: &str, name: &str) -> std::ops::Range<usize> {
 }
 
 /// The body of the desktop's operation dispatch. The `consumer_command` Tauri command is
-/// exactly one call of `consumer_operation`, which holds the dispatch so that a desktop test can
-/// drive it without a Tauri application; pinning that delegation keeps every operation the
-/// command reaches inside the returned body.
+/// exactly one call of `consumer_operation`, so that a desktop test can drive it without a Tauri
+/// application. `consumer_operation` is exactly one call of `dispatch`, which holds the
+/// operations, followed by the webview presentation of its result. Pinning both delegations
+/// keeps every operation the command reaches inside the returned body.
 fn desktop_dispatch(desktop: &str) -> std::ops::Range<usize> {
-    let command: String = rust::without_comments(&desktop[function_body(desktop, "consumer_command")])
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    assert_eq!(command, "{consumer_operation(&state,operation,args).await}", "consumer_command only delegates");
-    function_body(desktop, "consumer_operation")
+    let compact_body = |name: &str| -> String {
+        rust::without_comments(&desktop[function_body(desktop, name)])
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    };
+    assert_eq!(compact_body("consumer_command"), "{consumer_operation(&state,operation,args).await}", "consumer_command only delegates");
+    assert_eq!(
+        compact_body("consumer_operation"),
+        "{letresult=dispatch(state,operation.clone(),args).await?;Ok(presented(&operation,result))}",
+        "consumer_operation only delegates to dispatch and presents its result"
+    );
+    function_body(desktop, "dispatch")
 }
 
 /// The commands of the build script's app manifest: the literals of its `.commands(&[...])`.
@@ -835,8 +843,8 @@ fn help(binary: &str, path: &[String]) -> (Vec<String>, Vec<String>) {
 
 /// Task 3.1 (requirement 1, scenario "No surface controls mining or a node"): the desktop's
 /// native commands and operations (the build script's app manifest, `generate_handler!` and
-/// every operation and argument name of `consumer_command`, which only delegates to
-/// `consumer_operation`, whose default refuses anything else), the GUI's native calls, every `chiral` subcommand and option (`--help`, recursively),
+/// every operation and argument name of `consumer_command`, which only delegates through
+/// `consumer_operation` to `dispatch`, whose default refuses anything else), the GUI's native calls, every `chiral` subcommand and option (`--help`, recursively),
 /// the options of the other binaries and the provider operator actions (`provider-admin.py`,
 /// the CLI's administration actions and the daemon's administration routes) are enumerated;
 /// none starts, stops or configures a node or mining, or sets a mining or coinbase address.

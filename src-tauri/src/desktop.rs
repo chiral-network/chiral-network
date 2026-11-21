@@ -43,6 +43,111 @@ fn optional_text<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
 fn value<T: serde::Serialize>(result: T) -> Result<Value, String> {
     serde_json::to_value(result).map_err(|_| "cannot serialize native response".into())
 }
+
+/// JavaScript's `Number.MAX_SAFE_INTEGER`, 2^53 - 1: every integer of at most this magnitude
+/// survives the webview's IPC JSON parsing into an IEEE-754 double unchanged.
+const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+/// Operations whose results present an account snapshot, a signed receipt, request records or
+/// usage. The webview only displays them; unlike discovered offers and quotes, which it hands
+/// back verbatim to `quote` and `fund`, it never returns them for native verification.
+const EXACT_PRESENTATION: [&str; 11] = [
+    "accounts",
+    "account",
+    "fund",
+    "topup",
+    "resume",
+    "receipt",
+    "usage",
+    "request_status",
+    "cancel_request",
+    "local_requests",
+    "infer",
+];
+
+/// The webview's copy of a native statement. Its IPC JSON is parsed into doubles, so an integer
+/// beyond ±(2^53 - 1), such as an unsigned 64-bit token counter, receipt sequence or timestamp,
+/// is delivered as its exact decimal string instead of a silently rounded number. Safe
+/// integers, floats and strings (canonical wei included) are unchanged. Only this presentation
+/// copy changes: the wire, signatures, persisted state and the CLI's JSON integers do not.
+fn exact_integers(value: Value) -> Value {
+    match value {
+        Value::Number(number) => {
+            let beyond = match (number.as_u64(), number.as_i64()) {
+                (Some(unsigned), _) => unsigned > MAX_SAFE_INTEGER,
+                (None, Some(signed)) => signed.unsigned_abs() > MAX_SAFE_INTEGER,
+                // A float is already the double JavaScript parses.
+                (None, None) => false,
+            };
+            if beyond {
+                Value::String(number.to_string())
+            } else {
+                Value::Number(number)
+            }
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(exact_integers).collect()),
+        Value::Object(members) => Value::Object(
+            members
+                .into_iter()
+                .map(|(name, member)| (name, exact_integers(member)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// A native result as `consumer_command` delivers it to the webview.
+fn presented(operation: &str, result: Value) -> Value {
+    if EXACT_PRESENTATION.contains(&operation) {
+        exact_integers(result)
+    } else {
+        result
+    }
+}
+
+/// A provider stream event as the webview receives it: its usage counters and timestamps are
+/// presented like an `infer` result.
+fn webview_event(event: StreamEvent) -> StreamEvent {
+    StreamEvent {
+        kind: event.kind,
+        data: exact_integers(event.data),
+    }
+}
+
+/// The forwarding loop of `inference_stream`: delivers each event of an opened provider stream to
+/// the webview channel as its `webview_event` copy until the stream ends, the channel closes or
+/// the desktop cancels it. `cancel_provider` stops the provider stream before the cancellation
+/// event is sent.
+async fn forward_stream(
+    events: &mut tokio::sync::mpsc::Receiver<StreamEvent>,
+    cancel_provider: impl Fn(),
+    cancelled: &mut watch::Receiver<bool>,
+    on_event: &Channel<StreamEvent>,
+) {
+    let mut terminal = false;
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancelled.changed() => {
+                cancel_provider();
+                let _ = on_event.send(StreamEvent { kind: "cancelled".into(), data: Value::Null });
+                break;
+            },
+            event = events.recv() => match event {
+                Some(event) => {
+                    terminal |= matches!(event.kind.as_str(), "done" | "error" | "cancelled");
+                    if on_event.send(webview_event(event)).is_err() { break; }
+                },
+                None => {
+                    if !terminal {
+                        let _ = on_event.send(StreamEvent { kind: "error".into(), data: json!({"message":"stream ended without completion; inspect request accounting before retrying"}) });
+                    }
+                    break;
+                },
+            }
+        }
+    }
+}
 fn ensure_supported() -> Result<(), String> {
     let policy = crate::version::effective_policy();
     if crate::version::compare_to_policy(crate::version::CURRENT_VERSION, &policy)? == "required" {
@@ -67,6 +172,12 @@ async fn consumer_operation(
     operation: String,
     args: Value,
 ) -> Result<Value, String> {
+    let result = dispatch(state, operation.clone(), args).await?;
+    Ok(presented(&operation, result))
+}
+
+/// The native result of one consumer operation, before its webview presentation.
+async fn dispatch(state: &DesktopState, operation: String, args: Value) -> Result<Value, String> {
     if operation == "logout" {
         end_session(state).await;
         return Ok(Value::Null);
@@ -262,29 +373,7 @@ async fn inference_stream(
                 });
             }
             Some(Ok(mut stream)) => {
-                let mut terminal = false;
-                loop {
-                    tokio::select! {
-                        biased;
-                        _ = cancelled.changed() => {
-                            stream.cancel.cancel();
-                            let _ = on_event.send(StreamEvent { kind: "cancelled".into(), data: Value::Null });
-                            break;
-                        },
-                        event = stream.events.recv() => match event {
-                            Some(event) => {
-                                terminal |= matches!(event.kind.as_str(), "done" | "error" | "cancelled");
-                                if on_event.send(event).is_err() { break; }
-                            },
-                            None => {
-                                if !terminal {
-                                    let _ = on_event.send(StreamEvent { kind: "error".into(), data: json!({"message":"stream ended without completion; inspect request accounting before retrying"}) });
-                                }
-                                break;
-                            },
-                        }
-                    }
-                }
+                forward_stream(&mut stream.events, || stream.cancel.cancel(), &mut cancelled, &on_event).await;
                 stream.cancel.cancel();
             }
         }
@@ -442,6 +531,398 @@ mod tests {
         assert_ne!(TRAY_SHOW_ID, TRAY_QUIT_ID);
         assert_eq!(QUIT_REQUEST_EVENT, "chiral://quit-requested");
     }
+
+    /// Whether JavaScript's JSON parsing keeps every number in `value` exact: no integer beyond
+    /// `Number.MAX_SAFE_INTEGER` (written out, independently of the product constant).
+    fn javascript_exact(value: &Value) -> bool {
+        const SAFE: u64 = 9_007_199_254_740_991;
+        match value {
+            Value::Number(number) => match (number.as_u64(), number.as_i64()) {
+                (Some(unsigned), _) => unsigned <= SAFE,
+                (None, Some(signed)) => signed.unsigned_abs() <= SAFE,
+                (None, None) => true,
+            },
+            Value::Array(items) => items.iter().all(javascript_exact),
+            Value::Object(members) => members.values().all(javascript_exact),
+            _ => true,
+        }
+    }
+
+    /// inference-account-snapshot task 2.5. The webview parses IPC JSON into doubles, so
+    /// 2^53 + 1 would arrive as 2^53 and 2^64 - 1 as 18446744073709552000. Integers beyond
+    /// 2^53 - 1 become their exact decimal strings; 2^53 itself is beyond (2^53 + 1 parses to
+    /// it). Safe integers, floats and strings, canonical wei among them, are unchanged.
+    #[test]
+    fn webview_integers_beyond_double_precision_become_exact_decimal_strings() {
+        let safe = (1u64 << 53) - 1;
+        let native = json!({
+            "zero": 0, "safe": safe, "negative_safe": -(safe as i64), "u32_max": u32::MAX,
+            "two_53": 1u64 << 53, "two_53_plus_1": (1u64 << 53) + 1, "u64_max": u64::MAX,
+            "negative_two_53": -(1i64 << 53), "i64_min": i64::MIN,
+            "half": 0.5, "large_float": 1e300,
+            "wei": u128::MAX.to_string(), "digits": "9007199254740993", "status": "provider_review",
+            "nested": [{"prompt_tokens": u64::MAX, "completion_tokens": safe}, [ (1u64 << 53) + 1 ]],
+            "none": null, "flag": true,
+        });
+        let delivered = exact_integers(native);
+        assert_eq!(delivered, json!({
+            "zero": 0, "safe": safe, "negative_safe": -(safe as i64), "u32_max": u32::MAX,
+            "two_53": "9007199254740992", "two_53_plus_1": "9007199254740993",
+            "u64_max": "18446744073709551615",
+            "negative_two_53": "-9007199254740992", "i64_min": "-9223372036854775808",
+            "half": 0.5, "large_float": 1e300,
+            "wei": "340282366920938463463374607431768211455", "digits": "9007199254740993",
+            "status": "provider_review",
+            "nested": [{"prompt_tokens": "18446744073709551615", "completion_tokens": safe},
+                ["9007199254740993"]],
+            "none": null, "flag": true,
+        }));
+        assert!(javascript_exact(&delivered));
+        // The IPC text carries the exact digits as JSON strings.
+        let text = serde_json::to_string(&delivered).unwrap();
+        assert!(text.contains(r#""u64_max":"18446744073709551615""#), "{text}");
+        assert!(text.contains(r#""safe":9007199254740991"#), "{text}");
+    }
+
+    fn boundary_account() -> crate::protocol::AccountView {
+        use crate::protocol::{AccountView, ModelSpec, NetworkIdentity, PriceSchedule, TokenUsage};
+        let max = u128::MAX.to_string();
+        AccountView {
+            contract_id: format!("0x{}", "01".repeat(32)),
+            network: NetworkIdentity {
+                chain_id: crate::network::ESPACE_TESTNET_CHAIN_ID,
+                genesis_hash: crate::network::ESPACE_TESTNET_GENESIS.into(),
+                deployment_id: "exact-presentation".into(),
+            },
+            provider_wallet: format!("0x{}", "11".repeat(20)),
+            consumer_wallet: format!("0x{}", "22".repeat(20)),
+            model: ModelSpec {
+                id: "test/exact-counters".into(),
+                revision: "ab".repeat(20),
+                tokenizer_revision: "cd".repeat(20),
+                chat_template_sha256: "ef".repeat(32),
+                quantization: None,
+                context_length: u64::MAX,
+                max_output_tokens: u64::MAX,
+                capabilities: vec!["chat".into()],
+                serving: None,
+            },
+            price: PriceSchedule { input_wei_per_1k: max.clone(), output_wei_per_1k: "1".into() },
+            status: "provider_review".into(),
+            // funded + loss = fee + reversed + spent + reserved + available = 2 * u128::MAX.
+            funded_wei: max.clone(),
+            fee_wei: "5".into(),
+            spent_wei: (u128::MAX - 15).to_string(),
+            reserved_wei: "3".into(),
+            available_wei: max.clone(),
+            reversed_wei: "7".into(),
+            provider_loss_wei: max.clone(),
+            usage: TokenUsage { prompt_tokens: u64::MAX, completion_tokens: (1 << 53) + 1 },
+            waived_wei: max,
+            max_concurrency: u32::MAX,
+        }
+    }
+
+    fn boundary_receipt() -> Signed<crate::protocol::UsageReceipt> {
+        use crate::{billing_store::RequestView, protocol::{PerformanceOutcome, TokenUsage, UsageReceipt}};
+        let account = boundary_account();
+        let max = u128::MAX.to_string();
+        let request = RequestView {
+            id: "request-exact".into(),
+            request_id: "chatcmpl-exact".into(),
+            contract_id: account.contract_id.clone(),
+            credential_id: "credential-exact".into(),
+            status: "settled".into(),
+            usage: TokenUsage { prompt_tokens: (1 << 53) - 1, completion_tokens: u64::MAX },
+            cost_wei: "0".into(),
+            max_cost_wei: max.clone(),
+            provider_loss_wei: max.clone(),
+            prompt_tokens_reserved: (1 << 53) + 1,
+            max_output_tokens: u64::MAX,
+            created_at: 1_763_683_100,
+            settled_at: Some(1 << 53),
+            performance: Some(PerformanceOutcome {
+                evidence_sha256: "ab".repeat(32),
+                policy: "unqualified".into(),
+                eligibility: "not_applicable".into(),
+                ttft_us: Some(u64::MAX),
+                decode_us: Some((1 << 53) + 1),
+                elapsed_us: Some((1 << 53) - 1),
+                output_tokens: Some(u64::MAX),
+                attained: None,
+                remedy: "none".into(),
+            }),
+            waived_wei: max,
+        };
+        Signed {
+            payload: UsageReceipt {
+                network: account.network.clone(),
+                provider_wallet: account.provider_wallet.clone(),
+                account,
+                requests: vec![request],
+                sequence: u64::MAX,
+                issued_at: 1_763_683_200,
+            },
+            // The webview never verifies; the native receipt read did, before presentation.
+            signature: format!("0x{}", "5a".repeat(65)),
+        }
+    }
+
+    /// inference-account-snapshot task 2.5, desktop boundary. Every account-, receipt-, request-
+    /// and usage-bearing operation delivers the shared fixture that tests/exactStatements.test.ts
+    /// renders: u64 counters, sequences and timestamps beyond 2^53 - 1 as exact decimal strings,
+    /// u128::MAX wei unchanged. The native typed statements keep their JSON integers; discovered
+    /// offers and quotes, handed back verbatim for native verification, are not converted.
+    #[test]
+    fn account_and_receipt_statements_reach_the_webview_as_the_shared_exact_fixture() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/desktop-exact-statements.json"))
+                .unwrap();
+        let account = value(boundary_account()).unwrap();
+        let receipt = value(boundary_receipt()).unwrap();
+        // The native statements are exact JSON integers; only the webview copy changes.
+        assert_eq!(account["usage"]["prompt_tokens"], json!(u64::MAX));
+        assert_eq!(receipt["payload"]["sequence"], json!(u64::MAX));
+        assert!(!javascript_exact(&account) && !javascript_exact(&receipt));
+
+        for operation in ["account", "fund", "topup", "resume"] {
+            assert_eq!(presented(operation, account.clone()), fixture["account"], "{operation}");
+        }
+        assert_eq!(presented("accounts", json!([account.clone()])), json!([fixture["account"]]));
+        assert_eq!(presented("receipt", receipt.clone()), fixture["receipt"]);
+        let requests = receipt["payload"]["requests"].clone();
+        let presented_requests = fixture["receipt"]["payload"]["requests"].clone();
+        assert_eq!(presented("usage", requests.clone()), presented_requests);
+        for operation in ["request_status", "cancel_request"] {
+            assert_eq!(presented(operation, requests[0].clone()), presented_requests[0], "{operation}");
+        }
+        let keys = json!({"requests": [{"contract_id": "c", "request_key": "k", "created_at": u64::MAX}],
+            "scope": "local_dispatch_keys_not_settlement"});
+        assert_eq!(presented("local_requests", keys)["requests"][0]["created_at"], "18446744073709551615");
+        let completion = json!({"created": 1_763_683_200u64, "data": [{"index": 0, "embedding": [0.25, -1.5]}],
+            "usage": {"prompt_tokens": u64::MAX, "completion_tokens": (1u64 << 53) + 1, "total_tokens": u64::MAX}});
+        assert_eq!(presented("infer", completion), json!({"created": 1_763_683_200u64,
+            "data": [{"index": 0, "embedding": [0.25, -1.5]}],
+            "usage": {"prompt_tokens": "18446744073709551615", "completion_tokens": "9007199254740993",
+                "total_tokens": "18446744073709551615"}}));
+        for delivered in [presented("receipt", receipt.clone()), fixture["account"].clone()] {
+            assert!(javascript_exact(&delivered));
+        }
+        // Signed offers and quotes return to `quote`/`fund` as received; never converted here.
+        for operation in ["discover", "quote", "provider_info", "agreement", "network_status"] {
+            assert_eq!(presented(operation, receipt.clone()), receipt, "{operation}");
+        }
+    }
+
+    /// A provider stream event reaches the webview channel as JSON text whose usage counters
+    /// beyond 2^53 - 1 are exact strings. The channel would otherwise evaluate
+    /// `18446744073709551615` as a JavaScript number literal and round it.
+    #[test]
+    fn stream_usage_reaches_the_webview_channel_as_exact_text() {
+        use tauri::ipc::InvokeResponseBody;
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let channel: Channel<StreamEvent> = Channel::new({
+            let sent = sent.clone();
+            move |body| {
+                if let InvokeResponseBody::Json(text) = body {
+                    sent.lock().unwrap().push(text);
+                }
+                Ok(())
+            }
+        });
+        let event = StreamEvent {
+            kind: "chunk".into(),
+            data: json!({"created": 1_763_683_200u64, "choices": [{"index": 0, "delta": {"content": "hi"}}],
+                "usage": {"prompt_tokens": u64::MAX, "completion_tokens": (1u64 << 53) + 1,
+                    "total_tokens": (1u64 << 53) - 1}}),
+        };
+        channel.send(webview_event(event)).unwrap();
+        let text = sent.lock().unwrap().pop().expect("one JSON message");
+        assert!(text.contains(r#""prompt_tokens":"18446744073709551615""#), "{text}");
+        let delivered: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(delivered, json!({"kind": "chunk", "data": {"created": 1_763_683_200u64,
+            "choices": [{"index": 0, "delta": {"content": "hi"}}],
+            "usage": {"prompt_tokens": "18446744073709551615", "completion_tokens": "9007199254740993",
+                "total_tokens": 9_007_199_254_740_991u64}}}));
+        assert!(javascript_exact(&delivered));
+    }
+
+    /// The forwarding loop `inference_stream` runs for an opened provider stream: each provider
+    /// event reaches the actual webview channel, in order, with usage counters beyond 2^53 - 1 as
+    /// exact strings. Catches the loop sending the provider event itself instead of its webview
+    /// copy, which the helper-level test above cannot see.
+    #[tokio::test]
+    async fn inference_stream_forwards_provider_usage_to_the_channel_exactly() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tauri::ipc::InvokeResponseBody;
+        let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let channel: Channel<StreamEvent> = Channel::new({
+            let sent = sent.clone();
+            move |body| {
+                if let InvokeResponseBody::Json(text) = body {
+                    sent.lock().unwrap().push(text);
+                }
+                Ok(())
+            }
+        });
+        let usage = json!({"prompt_tokens": u64::MAX, "completion_tokens": (1u64 << 53) + 1,
+            "total_tokens": (1u64 << 53) - 1});
+        let (provider, mut events) = tokio::sync::mpsc::channel(4);
+        for (kind, data) in [
+            ("started", json!({"request_id": "chatcmpl-exact"})),
+            ("chunk", json!({"choices": [{"index": 0, "delta": {"content": "hi"}}], "usage": usage})),
+            ("done", json!({"request_id": "chatcmpl-exact", "usage": usage})),
+        ] {
+            provider.send(StreamEvent { kind: kind.into(), data }).await.unwrap();
+        }
+        drop(provider);
+        // The desktop's cancellation sender stays open: this stream is not cancelled.
+        let (_desktop, mut cancelled) = watch::channel(false);
+        let provider_cancelled = AtomicBool::new(false);
+        forward_stream(&mut events, || provider_cancelled.store(true, Ordering::SeqCst), &mut cancelled, &channel)
+            .await;
+
+        let texts = sent.lock().unwrap().clone();
+        assert_eq!(texts.len(), 3, "{texts:?}");
+        for text in &texts[1..] {
+            for exact in [r#""prompt_tokens":"18446744073709551615""#, r#""completion_tokens":"9007199254740993""#,
+                r#""total_tokens":9007199254740991"#] {
+                assert!(text.contains(exact), "{text} lacks {exact}");
+            }
+        }
+        let delivered: Vec<Value> = texts.iter().map(|text| serde_json::from_str(text).unwrap()).collect();
+        // Exactly the events tests/exactStatements.test.ts evaluates on the Playground.
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/desktop-exact-statements.json"))
+                .unwrap();
+        assert_eq!(Value::Array(delivered.clone()), fixture["stream"]);
+        assert!(delivered.iter().all(javascript_exact));
+        // A completed stream is neither cancelled nor followed by a synthetic error.
+        assert!(!provider_cancelled.load(Ordering::SeqCst));
+    }
+
+    /// The actual `consumer_command` dispatch: `accounts` and `local_requests` read native
+    /// protected files that keep exact u64 counters, receipt watermark and u128::MAX wei, and
+    /// deliver them exactly to the webview without changing those files. The signed terms are a
+    /// restored prerequisite written through public APIs, not an observed opening.
+    #[tokio::test]
+    async fn native_accounts_and_request_keys_reach_the_webview_exactly_through_dispatch() {
+        use crate::consumer::ConsumerConfig;
+        use crate::network::NetworkConfig;
+        use crate::protocol::{InferenceOffer, Quote, OFFER_DOMAIN, QUOTE_DOMAIN};
+        use std::io::Write;
+        let _policy = EFFECTIVE_POLICY.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut account = boundary_account();
+        let config = ConsumerConfig {
+            network: NetworkConfig {
+                identity: account.network.clone(),
+                rpc_url: "http://127.0.0.1:9".into(),
+                rpc_bearer_file: None,
+                faucet_url: None,
+                explorer_url: None,
+                policy_url: None,
+            },
+            data_dir: root.join("data"),
+            catalog_url: None,
+            development: false,
+            dht: None,
+        };
+        let profile = root.join("consumer.json");
+        std::fs::write(&profile, serde_json::to_vec(&config).unwrap()).unwrap();
+        let state = DesktopState::default();
+        consumer_operation(&state, "configure".into(), json!({"path": profile.display().to_string()}))
+            .await
+            .unwrap();
+        let payer: String = serde_json::from_value(
+            consumer_operation(&state, "wallet_create".into(), json!({})).await.unwrap(),
+        )
+        .unwrap();
+        let key = crate::wallet::generate_private_key();
+        let provider = crate::wallet::address_from_private_key(&key).unwrap();
+        let now = crate::protocol::now().unwrap();
+        let offer = InferenceOffer {
+            network: account.network.clone(),
+            provider_wallet: provider.clone(),
+            peer_id: "QmPVGjYFugq4XUyBfoTHG6c3qxfBS26jEdaFM1gdAVuMZ2".into(),
+            deployment_id: "exact-presentation".into(),
+            endpoint: "https://provider.example".into(),
+            model: account.model.clone(),
+            price: account.price.clone(),
+            min_funding_wei: "1".into(),
+            platform_wallet: format!("0x{}", "33".repeat(20)),
+            fee_bps: 50,
+            max_concurrency: u32::MAX,
+            revision: 1,
+            issued_at: now - 120,
+            expires_at: now + 600,
+        };
+        let quote = Quote {
+            id: account.contract_id.clone(),
+            network: offer.network.clone(),
+            offer_id: crate::protocol::offer_id(&offer).unwrap(),
+            provider_wallet: provider.clone(),
+            consumer_wallet: payer.clone(),
+            model: offer.model.clone(),
+            price: offer.price.clone(),
+            funding_wei: u128::MAX.to_string(),
+            platform_wallet: offer.platform_wallet.clone(),
+            fee_bps: 50,
+            max_concurrency: u32::MAX,
+            nonce: "exact-presentation".into(),
+            issued_at: now - 120,
+            expires_at: now + 300,
+        };
+        account.provider_wallet = provider;
+        account.consumer_wallet = payer.clone();
+        let saved = json!({
+            "offer": crate::protocol::sign(OFFER_DOMAIN, offer, &key).unwrap(),
+            "quote": crate::protocol::sign(QUOTE_DOMAIN, quote, &key).unwrap(),
+            "account": account, "raw_transaction": null, "tx_hash": null, "credentials": [],
+            "active_credential": null, "topup": null, "receipt_sequence": u64::MAX,
+        });
+        let folder = config.network.scoped_dir(&config.data_dir).join("consumer").join(&payer);
+        let write = |path: &Path, value: &Value| {
+            crate::wallet::secure_directory(path.parent().unwrap()).unwrap();
+            let mut file = crate::wallet::create_secret_file(path).unwrap();
+            file.write_all(&serde_json::to_vec(value).unwrap()).unwrap();
+        };
+        let id = account.contract_id.clone();
+        let account_path = folder.join(format!("{}.json", hex::encode(crate::protocol::digest(id.as_bytes()))));
+        write(&account_path, &saved);
+        let request_path = folder.join("requests").join("exact.json");
+        write(&request_path, &json!({"contract_id": id, "request_key": "exact", "created_at": u64::MAX}));
+        let stored = (std::fs::read(&account_path).unwrap(), std::fs::read(&request_path).unwrap());
+
+        // The native consumer itself holds the exact integers.
+        let native = state.consumer.read().await.clone().unwrap().accounts().unwrap();
+        assert_eq!(native.len(), 1);
+        assert_eq!(native[0].usage.prompt_tokens, u64::MAX);
+        assert_eq!(native[0].usage.completion_tokens, (1 << 53) + 1);
+
+        let delivered = consumer_operation(&state, "accounts".into(), json!({})).await.unwrap();
+        let mut expected = value(&account).unwrap();
+        expected["usage"] = json!({"prompt_tokens": "18446744073709551615", "completion_tokens": "9007199254740993"});
+        expected["model"]["context_length"] = json!("18446744073709551615");
+        expected["model"]["max_output_tokens"] = json!("18446744073709551615");
+        assert_eq!(delivered, json!([expected]));
+        assert_eq!(delivered[0]["available_wei"], "340282366920938463463374607431768211455");
+        assert_eq!(delivered[0]["max_concurrency"], json!(u32::MAX));
+        assert!(javascript_exact(&delivered));
+
+        let keys = consumer_operation(&state, "local_requests".into(), json!({"contract_id": id}))
+            .await
+            .unwrap();
+        assert_eq!(keys, json!({"requests": [{"contract_id": id, "request_key": "exact",
+            "created_at": "18446744073709551615"}], "scope": "local_dispatch_keys_not_settlement"}));
+        // Presentation reads change no protected native file.
+        assert_eq!((std::fs::read(&account_path).unwrap(), std::fs::read(&request_path).unwrap()), stored);
+        let saved: Value = serde_json::from_slice(&stored.0).unwrap();
+        assert_eq!(saved["receipt_sequence"], json!(u64::MAX));
+        assert_eq!(saved["account"]["usage"]["prompt_tokens"], json!(u64::MAX));
+    }
+
     #[test]
     fn missing_and_invalid_command_fields_are_rejected() {
         assert!(text(&json!({"path":""}), "path").is_err());

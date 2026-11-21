@@ -42,11 +42,11 @@
         <dt class="stat-label flex items-center gap-1"><Cpu class="w-3 h-3" />Measured hardware</dt>
         <dd class="text-sm text-gray-900 dark:text-white">
           {#each profile.devices as device}
-            <div class="font-medium">{device.name} · {(device.memory_mib / 1024).toFixed(1)} GiB ({device.engine_device})</div>
+            <div class="font-medium">{device.name} · {(Number(device.memory_mib) / 1024).toFixed(1)} GiB ({device.engine_device})</div>
           {/each}
           <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {profile.memory_kind === 'unified' ? 'Shared unified memory, counted once' : 'Dedicated device memory'};
-            {(profile.memory_reserve_mib / 1024).toFixed(2)} GiB reserved per device
+            {(Number(profile.memory_reserve_mib) / 1024).toFixed(2)} GiB reserved per device
           </div>
         </dd>
       </div>
@@ -71,7 +71,7 @@
         <dt>HF model / tokenizer</dt><dd>{profile.hf_repo} / {profile.tokenizer_repo}</dd>
         <dt>Model revision</dt><dd class="mono">{model.revision}</dd>
         <dt>Tokenizer revision</dt><dd class="mono">{model.tokenizer_revision}</dd>
-        <dt>Evidence date</dt><dd>{new Date(profile.qualification.measured_at * 1000).toLocaleString()}</dd>
+        <dt>Evidence date</dt><dd>{new Date(Number(profile.qualification.measured_at) * 1000).toLocaleString()}</dd>
         <dt>Evidence SHA-256</dt><dd class="mono">{profile.qualification.evidence_sha256}</dd>
         <dt>Artifact SHA-256</dt><dd class="mono">{profile.artifact_manifest_sha256}</dd>
         <dt>Native runtime SHA-256</dt><dd class="mono">{profile.runtime_sha256}</dd>

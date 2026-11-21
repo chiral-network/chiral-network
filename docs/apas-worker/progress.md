@@ -1,5 +1,18 @@
 # APAS progress
 
+## 2026-11-21 (seventy-eighth round) — Code: the desktop shows token counters and other integers above 2^53 exactly
+
+- In step at `0a2db426`; whitepaper unchanged; no new answers.
+- Code-difference step (`specify-inference-account-snapshot` 2.5; design code difference, fixed). Every surface that presents or exports an account, signed receipt, request record or usage was checked for exact u64 counters and u128 wei:
+  - Already exact: the CLI's JSON output, the native protected files (including the `receipt_sequence` watermark), and wei on every page, which uses BigInt.
+  - Lossy before the fix: the desktop's command replies and stream channel. The webview parses them as JavaScript numbers, so a counter above 2^53 - 1 was rounded (18,446,744,073,709,551,615 showed as 18,446,744,073,709,552,000). This affected token usage, model limits, receipt sequence, request records and infer usage.
+- Fix, presentation only: for the account, receipt, request, usage and infer operations and for stream events, the desktop boundary sends any integer beyond ±(2^53 - 1) as its exact decimal string (`exact_integers`). The frontend types these fields as number-or-string and groups them with a BigInt-based `formatCount`; an already-rounded number shows as "unavailable". Discovered offers and quotes are left unconverted, because the webview hands them back to be signed. The wire, signed bytes, persisted state, CLI output and accepted range are unchanged, and no secret reaches the webview.
+- New tests: four `desktop::tests` plus one added in review, the new integration target `inference_account_presentation_test` (CLI stdout, saved account and watermark at 2^53+1 and 2^64-1 through re-signed receipts), and `tests/exactStatements.test.ts` (8 cases, including the real `stream()` path). The review found that reverting the real stream call site passed every test, and that a watermark cast through `f64` passed because the cast saturates at u64::MAX. It moved the stream loop into `forward_stream` with a test of its own and added a 2^53+1 receipt, so both mutants now fail.
+- Screenshots of Usage at 1440 and 390 px with mocked exact replies (scratchpad stub, never shipped) show 18,446,744,073,709,551,615 / 9,007,199,254,740,993 and the status `provider_review` verbatim. Observation, older than this change: at 390 px a u128::MAX "Provider loss" amount runs past the edge of the reorganization warning, because the long number does not wrap.
+- Recorded limits, outside this task: an offer or quote integer above 2^53 cannot round-trip through the webview (signature verification refuses the rounded copy); the Usage feedback `revision` is a number input; integers above 2^64 - 1 in untyped OpenAI pages are already doubles natively.
+- The first full suite caught what the workflow had not run: two `application_startup_boundaries_test` scans read the operation table from `consumer_operation`, which now delegates to `dispatch`. The scans now pin both delegations (`consumer_command` to `consumer_operation`, and `consumer_operation` to `dispatch` plus presentation) and read `dispatch`. A mutant that drops the presentation fails them.
+- 2.5 ticked. Checks: full suite under caffeinate (rerun with `--no-fail-fast` after the scan fix): bins build passes; 31 headless test targets, 740 passed, 12 ignored (helpers), 0 failed (`--lib` 428; `inference_account_presentation_test` 1/1; `application_startup_boundaries_test` 14/14; `inference_owner_control_test` 61/61); desktop `--lib desktop::` 10/10; `npm test` 88/88 in 18 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 76 OK; strict validation passes. No `pmset` sleep during the run.
+
 ## 2026-11-21 (seventy-seventh round) — Archive: `specify-non-reserving-quotes` and `specify-proposal-rate-budgets`
 
 - In step at `b3ee6bbf`; whitepaper unchanged; no new answers.
@@ -872,7 +885,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

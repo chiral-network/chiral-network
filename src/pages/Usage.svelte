@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { RefreshCw, Wallet, Coins, Flame, Hourglass, Gift, Hash, LayoutDashboard, KeyRound, ListChecks, LifeBuoy, ThumbsUp, Bot, PlusCircle, RotateCcw, Search, Ban, ReceiptText, Eye, EyeOff, RotateCw, Trash2, Code, Star, Loader2, ShieldAlert, Inbox, ChevronRight, Copy } from 'lucide-svelte';
-  import { command, errorText, formatCfx, parseCfx, type Account } from '$lib/native';
+  import { command, errorText, formatCfx, formatCount, parseCfx, type Account } from '$lib/native';
   import Result from '$lib/components/Result.svelte';
   import ServingProfile from '$lib/components/ServingProfile.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -202,7 +202,7 @@ try {
       <StatTile icon={Flame} tone="orange" label="Spent" value="{formatCfx(account.spent_wei)} CFX" />
       <StatTile icon={Hourglass} tone="amber" label="Reserved in flight" value="{formatCfx(account.reserved_wei)} CFX" />
       <StatTile icon={Gift} tone="purple" label="Charges waived" value="{formatCfx(account.waived_wei)} CFX" />
-      <StatTile icon={Hash} tone="sky" label="Input / output tokens" value="{account.usage.prompt_tokens.toLocaleString()} / {account.usage.completion_tokens.toLocaleString()}" />
+      <StatTile icon={Hash} tone="sky" label="Input / output tokens" value="{formatCount(account.usage.prompt_tokens)} / {formatCount(account.usage.completion_tokens)}" />
     </div>
   {/if}
 
@@ -229,7 +229,7 @@ try {
                 <dt>Inference charges waived</dt><dd>{formatCfx(account.waived_wei)} CFX</dd>
                 <dt>Reserved in flight</dt><dd>{formatCfx(account.reserved_wei)} CFX</dd>
                 <dt>Available</dt><dd class="font-semibold text-primary-600 dark:text-primary-400">{formatCfx(account.available_wei)} CFX</dd>
-                <dt>Input / output tokens</dt><dd>{account.usage.prompt_tokens} / {account.usage.completion_tokens}</dd>
+                <dt>Input / output tokens</dt><dd>{formatCount(account.usage.prompt_tokens)} / {formatCount(account.usage.completion_tokens)}</dd>
                 <dt>Contract</dt><dd class="mono">{account.contract_id}</dd>
               </dl>
               <p class="prose-muted text-xs">Waived inference charges remain in this provider balance; they are not an on-chain refund or transferable credit. Funding fees and network gas are unchanged. Request records and signed receipts identify performance eligibility, timing and remedy.</p>

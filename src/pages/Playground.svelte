@@ -2,7 +2,7 @@
   import { session } from '$lib/stores';
   import { onDestroy, onMount } from 'svelte';
   import { RefreshCw, MessageSquare, TextCursorInput, Binary, Send, Square, Loader2, CheckCircle2, XCircle, CircleDot, Ban, Sparkles, Store, ReceiptText, Wallet } from 'lucide-svelte';
-  import { command, stream, cancelStream, errorText, formatCfx, textDelta, type Account, type StreamEvent } from '$lib/native';
+  import { command, stream, cancelStream, errorText, formatCfx, formatCount, textDelta, type Account, type StreamEvent } from '$lib/native';
   import { toasts } from '$lib/toastStore';
   import Result from '$lib/components/Result.svelte';
   import ServingProfile from '$lib/components/ServingProfile.svelte';
@@ -27,7 +27,9 @@
     try {
       account = await command<Account>('account', { contract_id: contractId });
       if (!account.model.capabilities.includes(kind)) kind = kinds.find(value => account!.model.capabilities.includes(value)) ?? 'chat';
-      if (account.model.max_output_tokens > 0) maxTokens = Math.max(1, Math.min(maxTokens, account.model.max_output_tokens));
+      // Only an upper bound for a small requested count: a limit beyond 2^53 - 1 exceeds every safe count either way.
+      const limit = Number(account.model.max_output_tokens);
+      if (limit > 0) maxTokens = Math.max(1, Math.min(maxTokens, limit));
     }
     catch (e) { error = errorText(e); }
   }
@@ -163,7 +165,7 @@
             <label class="block">
               <span class="field-label">Maximum output tokens</span>
               <input form="playground-form" class="input" type="number" min="1" max={account?.model.max_output_tokens ?? 1} bind:value={maxTokens} required disabled={busy || !account} />
-              {#if account}<span class="field-hint block">Up to {account.model.max_output_tokens.toLocaleString()} for this model.</span>{/if}
+              {#if account}<span class="field-hint block">Up to {formatCount(account.model.max_output_tokens)} for this model.</span>{/if}
             </label>
           {/if}
         </div>
