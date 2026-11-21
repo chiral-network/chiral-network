@@ -1631,7 +1631,16 @@ mod tests {
         let key = "11".repeat(32);
         let (config, server) = unavailable_provider(directory.path()).await;
         let first = ProviderRuntime::start(config.clone()).await.unwrap();
-        assert!(ProviderRuntime::start(config.clone()).await.is_err());
+        // provider-daemon-lifecycle task 3.8: refused by the deployment lock, not by another fault,
+        // and before it opens the deployment's ledger. Another connection holds the ledger's write
+        // lock meanwhile, so a start that opened the ledger first would wait for it and fail with
+        // "database is locked" instead.
+        let writer = ledger_connection(&first);
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        assert_eq!(ProviderRuntime::start(config.clone()).await.err().as_deref(),
+            Some("another provider owns this deployment data directory"));
+        writer.execute_batch("ROLLBACK").unwrap();
+        drop(writer);
         let mut second_config = config.clone();
         second_config.dht.identity_file = directory.path().join("peer-b.key");
         let second = ProviderRuntime::start(second_config).await.unwrap();
@@ -1672,6 +1681,7 @@ mod tests {
             "free"
         );
         assert!(second.state.ledger.account(&quote.payload.id).is_err());
+        let opened = serde_json::to_value(first.state.ledger.account(&quote.payload.id).unwrap()).unwrap();
         first.dht.stop().await;
         drop(first);
         let restarted = ProviderRuntime::start(config).await.unwrap();
@@ -1684,6 +1694,9 @@ mod tests {
                 .status,
             "free"
         );
+        // Task 3.8, scenario "A restarted daemon serves the same deployment": the whole account,
+        // its balance and status included, is unchanged.
+        assert_eq!(serde_json::to_value(restarted.state.ledger.account(&quote.payload.id).unwrap()).unwrap(), opened);
         assert!(second.state.ledger.account(&quote.payload.id).is_err());
         restarted.dht.stop().await;
         second.dht.stop().await;
@@ -3776,22 +3789,29 @@ mod tests {
     /// `consumer` repeated, with a one-use challenge of `public` signed by that key.
     async fn owner_post(public: &Router, state: &ProviderState, consumer: &str, path: &str, body: Value)
         -> (StatusCode, Value) {
+        owner_call(public, state, consumer, "POST", path, Some(body)).await
+    }
+
+    /// `method path` on `public`, with the JSON `body` or none, proved by the owner as `owner_post`
+    /// proves it.
+    async fn owner_call(public: &Router, state: &ProviderState, consumer: &str, method: &str, path: &str,
+        body: Option<Value>) -> (StatusCode, Value) {
         let key = consumer.repeat(32);
         let owner = wallet::address_from_private_key(&key).unwrap();
-        let body_hash = protocol::hash_hex(body.to_string().as_bytes());
+        let body_hash = protocol::hash_hex(body.as_ref().map(Value::to_string).unwrap_or_default().as_bytes());
         let (status, challenge) = call(public, "POST", "/v1/auth/challenge", &[], Some(&json!({
-            "wallet": owner, "method": "POST", "path": path, "body_hash": body_hash}))).await;
+            "wallet": owner, "method": method, "path": path, "body_hash": body_hash}))).await;
         assert_eq!(status, StatusCode::OK, "{challenge}");
         let challenge: protocol::Challenge = serde_json::from_value(challenge).unwrap();
         let payload = crate::auth::challenge_payload(&crate::auth::AuthPayload {
             network: state.config.network.identity.clone(), provider_wallet: state.wallet.clone(),
-            wallet: owner.clone(), method: "POST".into(), path: path.into(), body_hash,
+            wallet: owner.clone(), method: method.into(), path: path.into(), body_hash,
             nonce: challenge.nonce.clone(), expires_at: challenge.expires_at,
         }).unwrap();
         let signature = wallet::sign_message(&key, &payload).unwrap();
         let proof = [("x-chiral-owner".to_owned(), owner), ("x-chiral-nonce".to_owned(), challenge.nonce),
             ("x-chiral-signature".to_owned(), signature)];
-        call(public, "POST", path, &proof, Some(&body)).await
+        call(public, method, path, &proof, body.as_ref()).await
     }
 
     /// Every row of every table of `connection`, by table name.
@@ -4917,6 +4937,465 @@ mod tests {
         assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"]),
             (&json!(true), &json!(true), &Value::Null), "{view}");
         assert_eq!(embed(&runtime, &bearer, "readable-ledger").await.0, StatusCode::OK);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    // provider-daemon-lifecycle acceptance evidence, tasks 3.7 to 3.10.
+
+    /// The served chat template of `development_chat_provider`'s model.
+    const DEVELOPMENT_TEMPLATE: &str = "{{ messages }}";
+
+    /// `unavailable_provider` whose chain RPC is `chain` and whose only model, the development chat
+    /// model of the offer fixture, runs on `chat_engine`, priced at 1,000 wei per 1,000 input tokens
+    /// and 2,000 per 1,000 output tokens: `chat_request` (two prompt tokens, at most four output
+    /// tokens, one generated) then reserves 10 wei and costs 4. A development provider that
+    /// publishes its offer in its own registry. Returns the configuration and the servers to abort.
+    async fn development_chat_provider(directory: &std::path::Path, chain: Router)
+        -> (ProviderConfig, Vec<tokio::task::JoinHandle<()>>) {
+        use sha2::{Digest, Sha256};
+        let (mut config, unavailable) = unavailable_provider(directory).await;
+        let (rpc, rpc_server) = serve(chain).await;
+        config.network.rpc_url = rpc;
+        let deployment = &mut config.models[0];
+        deployment.model.chat_template_sha256 = hex::encode(Sha256::digest(DEVELOPMENT_TEMPLATE));
+        deployment.price = PriceSchedule { input_wei_per_1k: "1000".into(), output_wei_per_1k: "2000".into() };
+        deployment.request_timeout_secs = 30;
+        let (engine, engine_server) = serve(chat_engine(deployment.model.clone(), DEVELOPMENT_TEMPLATE)).await;
+        deployment.engine_url = engine;
+        (config, vec![engine_server, rpc_server, unavailable])
+    }
+
+    /// Sends `chat_request` under `key` with `bearer` of the funded `contract` of a
+    /// `development_chat_provider`, and asserts that it completes at that agreement's rates of 1,000
+    /// and 2,000 wei per 1,000 tokens: 10 wei reserved and 4 charged.
+    async fn completes_at_agreement_rates(runtime: &Arc<ProviderRuntime>, contract: &str, bearer: &str, key: &str) {
+        let (status, answer) = chat_request(runtime, bearer, key).await;
+        assert_eq!(status, StatusCode::OK, "{key}: {answer}");
+        let view = runtime.state.ledger.request_view(contract, key).unwrap();
+        assert_eq!((view.status.as_str(), view.max_cost_wei.as_str(), view.cost_wei.as_str()), ("completed", "10", "4"), "{key}");
+    }
+
+    /// The chain RPC of `ready_chain`, except that it reports chain ID `chain_id` and block 0 with
+    /// hash `genesis`.
+    fn chain_reporting(chain_id: &'static str, genesis: String) -> Router {
+        Router::new().fallback(move |request: Json<Value>| {
+            let genesis = genesis.clone();
+            async move {
+                let method = request["method"].as_str().unwrap_or("").to_owned();
+                let result = match method.as_str() {
+                    "eth_chainId" => json!(chain_id),
+                    "eth_getBlockByNumber" if request["params"][0] == "0x0" => json!({"number": "0x0", "hash": genesis,
+                        "timestamp": format!("0x{:x}", protocol::now().unwrap() - 12)}),
+                    _ => return ready_chain(request).await,
+                };
+                Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result})).into_response()
+            }
+        })
+    }
+
+    /// provider-daemon-lifecycle requirement 7 (task 3.7). A development chat provider whose chain
+    /// RPC answers as `settled_chain` publishes its offer and holds a funded account. Restarted:
+    /// - with a chain RPC that reports chain ID 72, and with one that reports another genesis, the
+    ///   start is refused with "configured RPC identity was rejected" (scenario "A rejected chain
+    ///   identity stops the start");
+    /// - while the RPC answers 503, it starts: `/readyz` answers 200 with `ready` true and
+    ///   `funding_ready` false, `/admin/offers` and the DHT hold no offer, the status names the
+    ///   outage and no failed pass, the funded account's request is admitted and charged at its
+    ///   agreement's rates, and a quote proposal is refused for new funding (scenario "An
+    ///   unavailable chain RPC does not stop the start"); once the RPC answers again, a pass
+    ///   publishes;
+    /// - over an exhausted offer revision, it starts, reports the failed pass, is not new-funding
+    ///   ready, publishes nothing and admits the funded account's request (scenario "A
+    ///   publication failure at start leaves the daemon running", with a funded account);
+    /// - with a reserved request whose recovery the ledger refuses, the start is refused and the
+    ///   request stays reserved (a startup-recovery failure is fatal); once the ledger accepts the
+    ///   write, the start recovers it.
+    #[tokio::test]
+    async fn startup_refuses_a_rejected_chain_identity_or_failed_recovery_and_runs_through_an_outage_or_publication_failure() {
+        use tower::ServiceExt;
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let outage = Arc::new(AtomicBool::new(false));
+        let chain = settled_chain(receipts.clone()).layer(middleware::from_fn({
+            let outage = outage.clone();
+            move |request: Request, next: Next| {
+                let outage = outage.clone();
+                async move {
+                    if outage.load(Ordering::Acquire) {
+                        StatusCode::SERVICE_UNAVAILABLE.into_response()
+                    } else {
+                        next.run(request).await
+                    }
+                }
+            }
+        }));
+        let (config, servers) = development_chat_provider(directory.path(), chain).await;
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        assert_eq!(published(&runtime).await.0.len(), 1);
+        let (contract, credential, _) = funded_account(&runtime.state, &receipts, "44", 1_000_000);
+        let ledger_path = runtime.state.config.runtime_data_dir().unwrap().join(&runtime.state.wallet)
+            .join(runtime.dht.peer_id()).join("ledger.sqlite3");
+        let revision_file = runtime.revision_file.clone();
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        // A rejected chain identity stops the start.
+        for (case, chain) in [
+            ("another chain ID", chain_reporting("0x48", crate::network::ESPACE_TESTNET_GENESIS.into())),
+            ("another genesis", chain_reporting("0x47", format!("0x{}", "99".repeat(32)))),
+        ] {
+            let (rpc, server) = serve(chain).await;
+            let mut rejected = config.clone();
+            rejected.network.rpc_url = rpc;
+            assert_eq!(ProviderRuntime::start(rejected).await.err().as_deref(), Some("configured RPC identity was rejected"), "{case}");
+            server.abort();
+        }
+
+        // An unavailable chain RPC does not stop the start.
+        outage.store(true, Ordering::Release);
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        let response = runtime.public_router().oneshot(Request::builder().uri("/readyz")
+            .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"ready": true, "funding_ready": false}));
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["draining"], &view["refresh_error"], &view["models"][0]["ready"]),
+            (&json!(true), &json!(false), &json!(false), &Value::Null, &json!(true)), "{view}");
+        assert_eq!(view["chain_error"], "Configured RPC unavailable; retaining last observed funding states", "{view}");
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "during-the-outage").await;
+        let (status, answer) = call(&runtime.public_router(), "POST", "/v1/contracts/propose", &[], Some(&json!({
+            "offer_id": protocol::random_id(), "consumer_wallet": wallet::address_from_private_key(&"88".repeat(32)).unwrap(),
+            "funding_wei": "1000"}))).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("settlement_unavailable")), "{answer}");
+        // Once the RPC answers again, a pass publishes.
+        outage.store(false, Ordering::Release);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        assert_eq!(admission(&runtime).await, (json!(true), json!(false), json!(true)));
+        assert_eq!(published(&runtime).await.0.len(), 1);
+        let revision = std::fs::read_to_string(&revision_file).unwrap();
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        // A publication failure at start leaves the provider running and serving the funded account.
+        std::fs::write(&revision_file, format!("{}\n", u64::MAX)).unwrap();
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["funding_ready"], &view["refresh_error"], &view["chain_error"]),
+            (&json!(true), &json!(false), &json!("Persisting offer revision failed"), &Value::Null), "{view}");
+        assert_eq!(published(&runtime).await, (vec![], json!(0)));
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "after-a-failed-starting-pass").await;
+        runtime.dht.stop().await;
+        drop(runtime);
+        std::fs::write(&revision_file, revision).unwrap();
+
+        // A failed startup recovery stops the start.
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        runtime.state.ledger.reserve(&contract, &credential.id, "left-reserved", 2, 4, protocol::now().unwrap(),
+            &config.models[0].model).unwrap();
+        runtime.dht.stop().await;
+        drop(runtime);
+        let ledger = rusqlite::Connection::open(&ledger_path).unwrap();
+        ledger.busy_timeout(Duration::from_secs(5)).unwrap();
+        ledger.execute_batch("CREATE TRIGGER refuse_recovery BEFORE UPDATE ON requests
+            WHEN OLD.status='reserved' AND NEW.status<>'reserved'
+            BEGIN SELECT RAISE(ABORT,'injected recovery write failure'); END;").unwrap();
+        let refused = ProviderRuntime::start(config.clone()).await.err().unwrap_or_default();
+        assert!(refused.contains("injected recovery write failure"), "{refused}");
+        let status: String = ledger.query_row("SELECT status FROM requests WHERE request_key='left-reserved'", [],
+            |row| row.get(0)).unwrap();
+        assert_eq!(status, "reserved");
+        ledger.execute_batch("DROP TRIGGER refuse_recovery").unwrap();
+        drop(ledger);
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert_eq!(runtime.state.ledger.request_view(&contract, "left-reserved").unwrap().status, "restart_unknown_usage");
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// Every row of every table, and every schema object, of the SQLite database at `path`.
+    fn database_snapshot(path: &std::path::Path) -> Value {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        let objects: Vec<String> = connection
+            .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").unwrap()
+            .query_map([], |row| Ok(format!("{:?}", (row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)))).unwrap()
+            .collect::<Result<_, _>>().unwrap();
+        json!({"rows": table_rows(&connection), "objects": objects})
+    }
+
+    /// Asserts that two `database_snapshot`s are equal, naming only the tables, or the schema, that
+    /// differ, so that no stored credential digest reaches the failure message.
+    fn assert_same_database(before: &Value, after: &Value, context: &str) {
+        let tables: std::collections::BTreeSet<&String> = before["rows"].as_object().unwrap().keys()
+            .chain(after["rows"].as_object().unwrap().keys()).collect();
+        let mut differing: Vec<String> = tables.into_iter()
+            .filter(|table| before["rows"][table.as_str()] != after["rows"][table.as_str()]).cloned().collect();
+        if before["objects"] != after["objects"] {
+            differing.push("schema objects".into());
+        }
+        assert!(differing.is_empty(), "{context}: changed {differing:?}");
+    }
+
+    /// provider-daemon-lifecycle requirement 9 (task 3.9), with requirement 10's rule that no
+    /// startup refusal rewrites state. A development chat provider publishes its offer and opens a
+    /// free account, then stops. Each refused start leaves the ledger it refused, every row and
+    /// every schema object, unchanged:
+    /// - its own ledger, recording schema 2, and then schema 4: each refused ("performance
+    ///   protocol requires a fresh network-scoped ledger …"; scenario "An older schema is refused
+    ///   without conversion", at the start, and the requirement's "different schema");
+    /// - a copy in the deployment directory of the same network and peer identity under another
+    ///   signing wallet: refused with `wrong_provider` (scenario "A ledger of another network or
+    ///   provider is refused");
+    /// - a copy in the deployment directory of another network identity (another deployment ID of
+    ///   the same chain): `BillingStore::open` and the start each refuse it with `wrong_network`.
+    /// The ledger holds a funded account, with its funding acknowledgement, credited funding and
+    /// pending platform fee, and records schema 3, the configured network identity and the signing
+    /// wallet. The signing key, the peer identity, the offer revision and the wallet journal are
+    /// unchanged after all three refusals, and the deployment's own ledger then opens with its
+    /// account and its recorded identity unchanged.
+    #[tokio::test]
+    async fn a_ledger_of_another_schema_network_or_provider_refuses_the_start_and_stays_unchanged() {
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (config, servers) = development_chat_provider(directory.path(), settled_chain(receipts.clone())).await;
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        assert_eq!(published(&runtime).await.0.len(), 1);
+        let (contract, _, _) = funded_account(&runtime.state, &receipts, "44", 1_000_000);
+        let account = serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap();
+        let (provider_wallet, peer) = (runtime.state.wallet.clone(), runtime.dht.peer_id());
+        runtime.dht.stop().await;
+        drop(runtime);
+        let deployment = config.runtime_data_dir().unwrap().join(&provider_wallet).join(&peer);
+        let ledger = deployment.join("ledger.sqlite3");
+        let journals = files_named(&config.data_dir, "transactions.sqlite3");
+        assert_eq!(journals.len(), 1, "{journals:?}");
+        let digest = |path: &std::path::Path| hex::encode(Sha256::digest(std::fs::read(path).unwrap()));
+        let files = || json!({"signing key": digest(&config.signing_key_file), "peer identity": digest(&config.dht.identity_file),
+            "offer revision": std::fs::read_to_string(deployment.join("offer-revision")).unwrap()});
+        let (files_before, journal_before, original) = (files(), database_snapshot(&journals[0]), database_snapshot(&ledger));
+        for table in ["funding", "funding_intents", "fee_obligations"] {
+            assert_eq!(original["rows"][table].as_array().map(Vec::len), Some(1), "{table}");
+        }
+        // The recorded schema, network identity and provider.
+        let recorded = |path: &std::path::Path| -> Vec<(String, String)> {
+            rusqlite::Connection::open(path).unwrap()
+                .prepare("SELECT key, value FROM metadata WHERE key IN ('schema','network','provider') ORDER BY key").unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap()
+        };
+        let identity = recorded(&ledger);
+        assert_eq!(identity.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(), ["network", "provider", "schema"]);
+        assert_eq!(serde_json::from_str::<Value>(&identity[0].1).unwrap(), serde_json::to_value(&config.network.identity).unwrap());
+        assert_eq!((identity[1].1.as_str(), identity[2].1.as_str()), (provider_wallet.as_str(), "3"));
+        // Copies the ledger into the deployment directory `into`, as a restore by the operator would.
+        let copy = |into: &std::path::Path| {
+            wallet::secure_directory(into).unwrap();
+            std::fs::copy(&ledger, into.join("ledger.sqlite3")).unwrap();
+            into.join("ledger.sqlite3")
+        };
+
+        // An older schema, and a different (newer) one.
+        for schema in ["2", "4"] {
+            rusqlite::Connection::open(&ledger).unwrap().execute("UPDATE metadata SET value=?1 WHERE key='schema'", [schema]).unwrap();
+            let refused_ledger = database_snapshot(&ledger);
+            let refused = ProviderRuntime::start(config.clone()).await.err().unwrap_or_default();
+            assert!(refused.starts_with("performance protocol requires a fresh network-scoped ledger"), "schema {schema}: {refused}");
+            assert_same_database(&refused_ledger, &database_snapshot(&ledger), &format!("the refused ledger of schema {schema}"));
+        }
+        rusqlite::Connection::open(&ledger).unwrap().execute("UPDATE metadata SET value='3' WHERE key='schema'", []).unwrap();
+        assert_same_database(&original, &database_snapshot(&ledger), "the ledger with its schema restored");
+
+        // The ledger of another provider wallet.
+        let mut other_provider = config.clone();
+        other_provider.signing_key_file = directory.path().join("other-wallet.key");
+        wallet::save_private_key(&other_provider.signing_key_file, &"33".repeat(32)).unwrap();
+        let other_wallet = wallet::address_from_private_key(&"33".repeat(32)).unwrap();
+        let copied = copy(&config.runtime_data_dir().unwrap().join(&other_wallet).join(&peer));
+        assert_eq!(ProviderRuntime::start(other_provider).await.err().as_deref(),
+            Some("wrong_provider: ledger belongs to another provider"));
+        assert_same_database(&original, &database_snapshot(&copied), "the refused ledger of another provider");
+
+        // The ledger of another network identity.
+        let mut other_network = config.clone();
+        other_network.network.identity.deployment_id = "another-deployment".into();
+        let copied = copy(&other_network.runtime_data_dir().unwrap().join(&provider_wallet).join(&peer));
+        let opened = BillingStore::open(&copied, &other_network.network.identity).err().unwrap_or_default();
+        assert!(opened.starts_with("wrong_network: "), "{opened}");
+        assert_same_database(&original, &database_snapshot(&copied), "the ledger that BillingStore::open refused");
+        assert_eq!(ProviderRuntime::start(other_network).await.err().as_deref(),
+            Some("wrong_network: ledger belongs to another chain/deployment"));
+        assert_same_database(&original, &database_snapshot(&copied), "the refused ledger of another network");
+
+        // Nothing else was rewritten, and the deployment's own ledger opens with its account.
+        assert_eq!(files(), files_before);
+        assert_same_database(&journal_before, &database_snapshot(&journals[0]), "the wallet journal");
+        assert_same_database(&original, &database_snapshot(&ledger), "the deployment's own ledger");
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        assert_eq!(serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap(), account);
+        assert_eq!(recorded(&ledger), identity, "the start changed the recorded identity");
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 10 (task 3.10), scenarios "Editing the configuration of
+    /// a running daemon changes nothing" and "A price change does not re-price an existing
+    /// account". A development chat provider, started from its configuration file, publishes its
+    /// offer at rates R (1,000 and 2,000 wei per 1,000 input and output tokens) and holds a funded
+    /// account under R.
+    /// - The file is edited to price the input at 2R and to another model revision, and a pass
+    ///   runs: the provider's configuration is still the one it loaded, its offer keeps the model
+    ///   and the price under a higher revision, and the account is served at R.
+    /// - The operator drains, prices the input at 2R and restarts from the file: the account is
+    ///   unchanged; the new offer advertises 2R under a revision higher than any earlier one; the
+    ///   account's next request reserves 10 wei and is charged 4 at R, not 12 and 6 at 2R; and a
+    ///   quote proposal for the new offer takes 2R.
+    #[tokio::test]
+    async fn configuration_changes_reach_new_offers_only_through_a_restart_and_never_reprice_an_agreement() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (config, servers) = development_chat_provider(directory.path(), settled_chain(receipts.clone())).await;
+        let file = directory.path().join("provider.json");
+        let write = |config: &ProviderConfig| std::fs::write(&file, serde_json::to_vec_pretty(config).unwrap()).unwrap();
+        write(&config);
+        let loaded = ProviderConfig::load(&file).unwrap();
+        let runtime = ProviderRuntime::start(loaded.clone()).await.unwrap();
+        let only = |offers: Vec<Value>| {
+            assert_eq!(offers.len(), 1);
+            offers[0]["payload"].clone()
+        };
+        let first = only(published(&runtime).await.0);
+        assert_eq!(first["price"], json!({"input_wei_per_1k": "1000", "output_wei_per_1k": "2000"}));
+        let (contract, credential, _) = funded_account(&runtime.state, &receipts, "44", 1_000_000);
+
+        // Edited under the running provider: nothing changes.
+        let mut edited = loaded.clone();
+        edited.models[0].price.input_wei_per_1k = "2000".into();
+        edited.models[0].model.revision = "cd".repeat(20);
+        write(&edited);
+        assert_eq!(runtime.refresh().await, Ok(1));
+        assert_eq!(serde_json::to_value(&*runtime.state.config).unwrap(), serde_json::to_value(&loaded).unwrap());
+        let second = only(published(&runtime).await.0);
+        assert_eq!((&second["model"], &second["price"]), (&first["model"], &first["price"]));
+        assert!(second["revision"].as_u64().unwrap() > first["revision"].as_u64().unwrap());
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "after-the-edit").await;
+
+        // Drained, repriced and restarted: the new price reaches new offers only.
+        assert_eq!(admin(&runtime, "POST", "/admin/drain").await.0, StatusCode::OK);
+        let account = serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap();
+        runtime.dht.stop().await;
+        drop(runtime);
+        let mut repriced = loaded.clone();
+        repriced.models[0].price.input_wei_per_1k = "2000".into();
+        write(&repriced);
+        let runtime = ProviderRuntime::start(ProviderConfig::load(&file).unwrap()).await.unwrap();
+        assert_eq!(serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap(), account);
+        let third = only(published(&runtime).await.0);
+        assert_eq!(third["price"], json!({"input_wei_per_1k": "2000", "output_wei_per_1k": "2000"}));
+        assert_eq!(third["model"], first["model"]);
+        assert!(third["revision"].as_u64().unwrap() > second["revision"].as_u64().unwrap());
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "after-the-restart").await;
+        let after = runtime.state.ledger.account(&contract).unwrap();
+        assert_eq!((after.price.input_wei_per_1k.as_str(), after.spent_wei.as_str()), ("1000", "8"));
+        // A new agreement takes the new price. The ledger signs no quote in its first minute, so
+        // it is given an earlier minute of quote signing.
+        let minute = protocol::now().unwrap() / 60 - 1;
+        ledger_connection(&runtime).execute_batch(&format!(
+            "INSERT INTO metadata(key,value) VALUES('quote_work_minute','{minute}');
+             INSERT INTO rate_limits(bucket,window,count) VALUES('quote-work:global',{minute},1);")).unwrap();
+        let offer_id = runtime.published.lock().await.iter().next().unwrap().clone();
+        let (status, quote) = call(&runtime.public_router(), "POST", "/v1/contracts/propose", &[], Some(&json!({
+            "offer_id": offer_id, "consumer_wallet": wallet::address_from_private_key(&"88".repeat(32)).unwrap(),
+            "funding_wei": "1000"}))).await;
+        assert_eq!(status, StatusCode::OK, "{quote}");
+        assert_eq!(quote["payload"]["price"], third["price"]);
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
+    /// provider-daemon-lifecycle requirement 10 (task 3.10), scenario "A replaced model does not
+    /// spend an old balance". A development chat provider opens a funded account through its
+    /// acknowledged opening, serves it one request, and restarts configured only with another
+    /// revision of the model, which it serves and publishes. The account's request is refused
+    /// (409 `model_revision_unavailable`) before reservation: no record, and the account, its
+    /// balance and holds included, is unchanged. Its owner still reads the account, the earlier
+    /// request, the receipt, the funding history and the credentials, recovers the funding
+    /// acknowledgement as it was given and the opening (the same account and no new bearer), and
+    /// revokes the credential, whose bearer is then refused.
+    #[tokio::test]
+    async fn a_restart_with_another_model_revision_refuses_old_agreements_before_reservation_and_keeps_their_control() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (config, servers) = development_chat_provider(directory.path(), settled_chain(receipts.clone())).await;
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        let quote = stored_quote(&runtime.state, "44", 1_000_000);
+        let (payment, acknowledgement) = acknowledged_opening(&runtime.state, &receipts, "44", &quote);
+        let evidence = crate::chain_client::VerifiedPayment {
+            network: config.network.identity.clone(), tx_hash: payment.tx_hash.clone(),
+            from: quote.payload.consumer_wallet.clone(), to: runtime.state.wallet.clone(), value_wei: "1000000".into(),
+            data: protocol::opening_data(&quote.payload).unwrap(), block_hash: safe_block_hash(), block_number: 10,
+            raw_transaction: payment.raw_transaction.clone(),
+        };
+        let credential = runtime.state.ledger.open_account(&quote, Some(&evidence), protocol::now().unwrap()).unwrap()
+            .credential.unwrap();
+        let contract = quote.payload.id.clone();
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "before-the-replacement").await;
+        let earlier = runtime.state.ledger.request_view(&contract, "before-the-replacement").unwrap();
+        let account = serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap();
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        let mut replaced = config.clone();
+        replaced.models[0].model.revision = "cd".repeat(20);
+        let runtime = ProviderRuntime::start(replaced).await.unwrap();
+        let (offers, _) = published(&runtime).await;
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0]["payload"]["model"]["revision"], json!("cd".repeat(20)));
+        let public = runtime.public_router();
+        let (status, answer) = call(&public, "POST", "/v1/chat/completions", &keyed(&credential.bearer, "after-the-replacement"),
+            Some(&json!({"model": "model", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 4}))).await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::CONFLICT, &json!("model_revision_unavailable")), "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "after-the-replacement").is_err());
+        assert_eq!(serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap(), account);
+        // The account's status, its request, receipt, funding and credentials stay readable.
+        let read = bearer_header(&credential.bearer);
+        assert_eq!(call(&public, "GET", &format!("/v1/contracts/{contract}"), &read, None).await, (StatusCode::OK, account.clone()));
+        let (status, view) = call(&public, "GET", "/v1/requests/before-the-replacement", &read, None).await;
+        assert_eq!((status, &view["status"], &view["id"]), (StatusCode::OK, &json!("completed"), &json!(earlier.id)), "{view}");
+        let (status, receipt) = call(&public, "GET", &format!("/v1/contracts/{contract}/receipt"), &read, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(receipt["payload"]["requests"].as_array().unwrap().iter().any(|request| request["id"] == json!(earlier.id)));
+        let (status, funding) = call(&public, "GET", &format!("/v1/contracts/{contract}/funding"), &read, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(funding.to_string().to_ascii_lowercase().contains(&payment.tx_hash.to_ascii_lowercase()),
+            "the funding history does not list the opening");
+        let (status, credentials) = call(&public, "GET", &format!("/v1/contracts/{contract}/credentials"), &read, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(credentials.to_string().contains(&credential.id), "the credential list does not name the credential");
+        // Its owner recovers the funding acknowledgement as it was given, and the opening, and
+        // revokes the credential.
+        let path = format!("/v1/contracts/{contract}/funding-intent");
+        assert_eq!(owner_post(&public, &runtime.state, "44", &path, json!({"raw_transaction": payment.raw_transaction})).await,
+            (StatusCode::OK, acknowledgement));
+        let (status, recovered) = owner_post(&public, &runtime.state, "44", "/v1/contracts/open",
+            json!({"quote_id": contract, "raw_transaction": payment.raw_transaction})).await;
+        assert_eq!(status, StatusCode::OK, "{}", recovered["error"]);
+        assert_eq!((&recovered["account"], &recovered["credential"]), (&account, &Value::Null));
+        let path = format!("/v1/contracts/{contract}/credentials/{}", credential.id);
+        assert_eq!(owner_call(&public, &runtime.state, "44", "DELETE", &path, None).await,
+            (StatusCode::OK, json!({"revoked": true})));
+        assert_eq!(call(&public, "GET", &format!("/v1/contracts/{contract}"), &read, None).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(serde_json::to_value(runtime.state.ledger.account(&contract).unwrap()).unwrap(), account);
         runtime.dht.stop().await;
         for server in servers {
             server.abort();
