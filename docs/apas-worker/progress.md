@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-21 (ninety-fifth round) — Acceptance: opening-intent 2.2 (fresh HTTP admission matrix)
+
+- In step at `de9bccc2`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-opening-funding-intent` parent 2.2), through a workflow: write tests, then an adversarial review. design.md gains "Parent 2.2: fresh HTTP admission matrix". It maps five dimensions (owner authentication, envelope, current nonce and chain evidence, full signed gas cost, qualification and readiness) to requirement text and to passing tests whose assertions were read in source, and names the gap each new test fills. No product code changed and no code difference was found.
+- Five new tests in `inference_funding_admission_test`, which now has 45:
+  - `fresh_intent_owner_refusals_precede_chain_observation_with_every_gate_open`: proofs that are expired, missing, signed by another key, or bound to another original or quote get 401. Another wallet presenting its own payment gets 403, and the review added a never-issued quote (404 `not_found`). Each refusal makes no RPC call and writes no intent or paid accounting. The owner's fresh proof is then acknowledged, and replaying it gets 401.
+  - `nonce_refusals_keep_the_earlier_acknowledgement_and_admit_the_unchanged_next_original`: a second agreement refused at the nonce observation four times leaves the first acknowledgement's row unchanged; once nonce 0 is spent, the same next-nonce bytes are acknowledged.
+  - `fresh_intent_requires_identity_checked_healthy_chain_evidence_before_and_after_balance`: another chain ID, a syncing node, a frontier above the head and stale blocks, both before the balance call (no `eth_getBalance`) and at its reply. The review added another genesis, a stale safe frontier behind a fresh head, a future head, a safe timestamp later than the head's, and a same-height safe hash.
+  - `fresh_intent_admits_type_two_priority_fee_equal_to_its_signed_maximum`: one wei below full cost is refused, exact cost is acknowledged.
+  - `fresh_intent_gates_refuse_before_chain_observation_and_qualification_is_rechecked_after_balance`: draining, readiness and lost qualification are each refused before any RPC; qualification lost at the balance reply is refused after it.
+- Mutations: the author ran 9 and the review 9 more; each fails a named new test. Six passed every earlier test of the target: a head-only post-balance recheck, refusing priority equal to its maximum, dropping the safe-frontier age, allowing a future head, and dropping either frontier-order clause. Skipping genesis at admission passed all lib `chain_client` tests. The fixture's chain view gained parameters whose defaults equal the old healthy view; no assertion was weakened.
+- Covered by composition, not isolated at the route: contract creation (exact recipient binding), a pre-EIP-155 legacy `v` (core decoder test), the 16 KiB decoded bound (payment-envelope-bounds 2.5 keeps the direct guard evidence), and withdrawal or engine exit (through `qualified_model`, which the gates test pins).
+- Observation, not a difference here: a configured-RPC chain-ID or genesis mismatch is refused as 400 `invalid_payment`. This spec requires only refusal; the classification is `specify-funding-settlement` code difference 4, and the health test will need updating when that is fixed. Owner-proof expiry is guarded twice, so only removing both guards fails a test.
+- 2.2 ticked. Checks: `--lib` 469 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; `inference_funding_admission_test` 45/45; desktop `--lib desktop::` 10/10; strict validation passes. Test-only change; round 89's full suite covers the product code. `inference_owner_control_test` cells are cited from round 89 (61/61), unchanged since.
+
 ## 2026-11-21 (ninety-fourth round) — Acceptance: opening-intent 2.8 (acknowledgement alone never opens or credits; free opening needs no payment)
 
 - In step at `43294b40`; whitepaper unchanged; no new answers.
@@ -1079,7 +1094,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.2, 2.5, 2.6 and 2.7 (2.3 done in round 84; 2.8 in rounds 93–94), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6 and 2.7 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

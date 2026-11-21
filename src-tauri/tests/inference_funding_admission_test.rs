@@ -54,11 +54,21 @@ struct ChainView {
     pending_nonce: u64,
     head_height: u64,
     head_hash: u64,
+    // Health of the synthetic node; the defaults are a healthy, identity-matching view.
+    chain_id_offset: u64,
+    other_genesis: bool,
+    syncing: bool,
+    frontier_age: u64,
+    // Seconds by which only the safe frontier is older, and a signed shift of only the head's
+    // timestamp, so each freshness and frontier-order rule can fail alone.
+    safe_age: u64,
+    head_offset: i64,
 }
 
 impl Default for ChainView {
     fn default() -> Self {
-        Self { latest_nonce: 0, pending_nonce: 0, head_height: 10, head_hash: 10 }
+        Self { latest_nonce: 0, pending_nonce: 0, head_height: 10, head_hash: 10,
+            chain_id_offset: 0, other_genesis: false, syncing: false, frontier_age: 0, safe_age: 0, head_offset: 0 }
     }
 }
 
@@ -66,6 +76,8 @@ impl Default for ChainView {
 enum FundingGate {
     Accepting,
     Ready,
+    // The fixture's single development model in the provider's in-memory qualified set.
+    Qualified,
 }
 
 impl FundingGate {
@@ -73,6 +85,12 @@ impl FundingGate {
         let gate = match self {
             Self::Accepting => &provider.accepting,
             Self::Ready => &provider.funding_ready,
+            Self::Qualified => {
+                let model = &provider.config.models[0].model.id;
+                let mut qualified = provider.qualified_models.write().unwrap();
+                if enabled { qualified.insert(model.clone()); } else { qualified.remove(model); }
+                return;
+            }
         };
         gate.store(enabled, Ordering::Release);
     }
@@ -103,15 +121,19 @@ async fn rpc_reply(State(state): State<Arc<SpendabilityRpc>>, Json(request): Jso
     } else { None };
     if let Some(barrier) = barrier { barrier.wait().await; }
     let mut control = state.control.lock().unwrap();
+    // A stale view ages the head and safe frontier together, so the frontier stays consistent.
+    let observed_at = state.observed_at.load(Ordering::Acquire).saturating_sub(control.view.frontier_age);
     let result = match request["method"].as_str().unwrap() {
-        "eth_chainId" => json!(format!("0x{:x}", state.network.chain_id)),
-        "eth_syncing" => json!(false),
+        "eth_chainId" => json!(format!("0x{:x}", state.network.chain_id + control.view.chain_id_offset)),
+        "eth_syncing" => json!(control.view.syncing),
         "eth_getBlockByNumber" => {
             assert_eq!(args[1], false);
             let (number, hash, timestamp) = match args[0].as_str().unwrap() {
+                "0x0" if control.view.other_genesis => (0_u64, format!("0x{}", "aa".repeat(32)), 0),
                 "0x0" => (0_u64, state.network.genesis_hash.clone(), 0),
-                "safe" => (9, format!("0x{:064x}", 9), state.observed_at.load(Ordering::Acquire)),
-                "latest" => (control.view.head_height, format!("0x{:064x}", control.view.head_hash), state.observed_at.load(Ordering::Acquire)),
+                "safe" => (9, format!("0x{:064x}", 9), observed_at.saturating_sub(control.view.safe_age)),
+                "latest" => (control.view.head_height, format!("0x{:064x}", control.view.head_hash),
+                    observed_at.saturating_add_signed(control.view.head_offset)),
                 tag => panic!("unexpected fixture block selector: {tag}"),
             };
             json!({"number":format!("0x{number:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
@@ -329,7 +351,12 @@ async fn owner_headers(app: &mut Router, quote: &Quote, key: &str, path: &str, b
         nonce: challenge.nonce.clone(), expires_at: challenge.expires_at };
     let payload = auth::challenge_payload(&proof).unwrap();
     assert_eq!(hex::decode(challenge.payload_hex.strip_prefix("0x").unwrap()).unwrap(), payload);
-    let signature = wallet::sign_message(key, &payload).unwrap();
+    proof_headers(&proof, key)
+}
+
+/// The three owner-proof headers for an issued challenge, signed by `key`.
+fn proof_headers(proof: &AuthPayload, key: &str) -> HeaderMap {
+    let signature = wallet::sign_message(key, &auth::challenge_payload(proof).unwrap()).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("x-chiral-owner", proof.wallet.parse().unwrap());
     headers.insert("x-chiral-nonce", proof.nonce.parse().unwrap());
@@ -439,8 +466,36 @@ impl Fixture {
         assert!(self.persisted_without_credit().funding_intent(&self.quote.payload, raw).unwrap().is_none(), "{name}");
     }
 
+    /// A refusal before any chain observation: nothing at the synthetic RPC, not even a
+    /// read, on top of every `refuses` assertion.
+    async fn refuses_before_rpc(&mut self, raw: &str, name: &str, expected: (StatusCode, &str)) {
+        self.rpc.requests.lock().unwrap().clear();
+        self.refuses(raw, name, expected, None).await;
+        assert!(self.rpc.requests.lock().unwrap().is_empty(), "{name}: refused before any chain RPC");
+    }
+
+    /// A request refused for its authority, sent with the caller's headers and body to this
+    /// quote's funding-intent route: no chain RPC at all, no acknowledgement or partial intent
+    /// for any agreement, the signed quote retained and no paid accounting.
+    async fn refuses_authority(&mut self, headers: &HeaderMap, body: &[u8], name: &str, expected: (StatusCode, &str)) {
+        self.rpc.requests.lock().unwrap().clear();
+        let path = format!("/v1/contracts/{}/funding-intent", self.quote.payload.id);
+        let (status, document) = request(&mut self.app, &path, headers, body.to_vec()).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (expected.0, Some(expected.1)), "{name}: {document}");
+        assert!(self.rpc.requests.lock().unwrap().is_empty(), "{name}: authority is refused before any chain RPC");
+        self.persisted_without_credit();
+        let intents: u64 = Connection::open(&self.provider.ledger_path).unwrap()
+            .query_row("SELECT COUNT(*) FROM funding_intents", [], |row| row.get(0)).unwrap();
+        assert_eq!(intents, 0, "{name}: no acknowledgement or partial intent");
+    }
+
     async fn acknowledges(&mut self, raw: &str, envelope: &ValidatedPaymentEnvelope, name: &str) {
         let (status, document) = self.submit_intent(raw).await;
+        self.accepted(status, document, raw, envelope, name);
+    }
+
+    /// Every check `acknowledges` makes, for a response the caller obtained itself.
+    fn accepted(&self, status: StatusCode, document: Value, raw: &str, envelope: &ValidatedPaymentEnvelope, name: &str) {
         assert_eq!(status, StatusCode::OK, "{name}: {document}");
         let ack: Signed<FundingIntent> = serde_json::from_value(document).unwrap();
         protocol::verify(protocol::INTENT_DOMAIN, &ack, &self.quote.payload.provider_wallet).unwrap();
@@ -1467,6 +1522,315 @@ async fn fresh_intent_rechecks_provider_funding_gates_after_balance() {
     }
 }
 
+/// Parent 2.2, owner-authentication row, at fresh admission with every gate open, healthy
+/// synthetic RPC, ample balance and a current nonce, so that only authority can refuse. The
+/// route refuses an expired proof, a missing proof, a proof for the quoted owner signed by
+/// another key, a proof bound to another original's body and a proof bound to another quote's
+/// route (401 `invalid_api_key`), and another wallet's valid proof presenting a payment that
+/// wallet signed itself (owner versus payer: 403 `forbidden`). The owner's valid proof for a
+/// never-issued quote identifier gets 404 `not_found`. None reaches the chain RPC, and
+/// none leaves an acknowledgement, intent, account, funding or fee row. The quoted owner's fresh
+/// proof then obtains the acknowledgement of the unchanged original, and replaying that consumed
+/// proof is refused without RPC or change. The expired challenge is issued at an explicit
+/// earlier ledger sample because the route samples wall time; no sleep is used. Would catch an
+/// owner proof accepted without its lifetime, signature, body, target or quoted-owner binding,
+/// and authority checked only after chain observation. Synthetic RPC, not live-chain evidence.
+#[tokio::test]
+async fn fresh_intent_owner_refusals_precede_chain_observation_with_every_gate_open() {
+    let directory = tempfile::tempdir().unwrap();
+    let other_key = format!("{:064x}", 7);
+    let other_wallet = wallet::address_from_private_key(&other_key).unwrap();
+    let unauthorized = (StatusCode::UNAUTHORIZED, "invalid_api_key");
+    for (kind, envelope_name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 21_000 + u64::from(kind), 100).await;
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        let quote = fixture.quote.clone();
+        let path = format!("/v1/contracts/{}/funding-intent", quote.payload.id);
+        let fields = PaymentFields::opening(&quote.payload, 0, 11);
+        let (raw, envelope) = fixture.original(kind, &fields);
+        let body = serde_json::to_vec(&json!({"raw_transaction": raw})).unwrap();
+        let name = |case: &str| format!("{envelope_name}: {case}");
+
+        // Sent before any route challenge, whose cleanup would remove it: the refusal is the
+        // proof's lifetime, not a missing challenge.
+        let issued = protocol::now().unwrap() - 2 * auth::CHALLENGE_TTL_SECS;
+        let expired = AuthPayload { network: quote.payload.network.clone(),
+            provider_wallet: quote.payload.provider_wallet.clone(), wallet: quote.payload.consumer_wallet.clone(),
+            method: "POST".into(), path: path.clone(), body_hash: protocol::hash_hex(&body),
+            nonce: protocol::random_id(), expires_at: issued + auth::CHALLENGE_TTL_SECS };
+        fixture.provider.state.ledger.create_challenge(&expired, issued).unwrap();
+        let headers = proof_headers(&expired, &fixture.owner_key);
+        fixture.refuses_authority(&headers, &body, &name("expired owner proof"), unauthorized).await;
+        assert!(fixture.provider.state.ledger.challenge(&expired.nonce).is_ok(),
+            "{}: the issued challenge was present and refused for its lifetime, not consumed", name("expired owner proof"));
+
+        fixture.refuses_authority(&HeaderMap::new(), &body, &name("missing owner proof"), unauthorized).await;
+
+        let headers = owner_headers(&mut fixture.app, &quote.payload, &other_key, &path, &body).await;
+        fixture.refuses_authority(&headers, &body, &name("owner proof signed by another key"), unauthorized).await;
+
+        // Another genuine original of the same quote and nonce, at another signed price.
+        let (other_raw, _) = fixture.original(kind, &PaymentFields::opening(&quote.payload, 0, 12));
+        let other_body = serde_json::to_vec(&json!({"raw_transaction": other_raw})).unwrap();
+        let headers = owner_headers(&mut fixture.app, &quote.payload, &fixture.owner_key, &path, &other_body).await;
+        fixture.refuses_authority(&headers, &body, &name("proof bound to another original"), unauthorized).await;
+
+        let (status, document) = propose(&mut fixture.app, &fixture.provider.offer_id,
+            &quote.payload.consumer_wallet, "100").await;
+        assert_eq!(status, StatusCode::OK, "{document}");
+        let other_quote: Signed<Quote> = serde_json::from_value(document).unwrap();
+        let other_path = format!("/v1/contracts/{}/funding-intent", other_quote.payload.id);
+        let headers = owner_headers(&mut fixture.app, &other_quote.payload, &fixture.owner_key, &other_path, &body).await;
+        fixture.refuses_authority(&headers, &body, &name("proof bound to another quote"), unauthorized).await;
+
+        // Valid owner authority for a well-formed quote identifier this provider never issued:
+        // there is no exact signed quote to retrieve, so nothing reaches the chain or the ledger.
+        let absent_path = format!("/v1/contracts/0x{:064x}/funding-intent", 1);
+        let headers = owner_headers(&mut fixture.app, &quote.payload, &fixture.owner_key, &absent_path, &body).await;
+        fixture.rpc.requests.lock().unwrap().clear();
+        let (status, document) = request(&mut fixture.app, &absent_path, &headers, body.clone()).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")),
+            "{}: {document}", name("never-issued quote"));
+        assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{}", name("never-issued quote"));
+        fixture.persisted_without_credit();
+        let intents: u64 = Connection::open(&fixture.provider.ledger_path).unwrap()
+            .query_row("SELECT COUNT(*) FROM funding_intents", [], |row| row.get(0)).unwrap();
+        assert_eq!(intents, 0, "{}", name("never-issued quote"));
+
+        // Owner versus payer: the other wallet pays with its own signature and proves itself,
+        // but it is not the quoted consumer.
+        let own_raw = signed_payment(&fields, &other_key, kind, &[0xc0]);
+        let own_body = serde_json::to_vec(&json!({"raw_transaction": own_raw})).unwrap();
+        let mut as_other = quote.payload.clone();
+        as_other.consumer_wallet = other_wallet.clone();
+        let headers = owner_headers(&mut fixture.app, &as_other, &other_key, &path, &own_body).await;
+        fixture.refuses_authority(&headers, &own_body, &name("another wallet with its own payment"),
+            (StatusCode::FORBIDDEN, "forbidden")).await;
+
+        let headers = owner_headers(&mut fixture.app, &quote.payload, &fixture.owner_key, &path, &body).await;
+        fixture.rpc.requests.lock().unwrap().clear();
+        let (status, document) = request(&mut fixture.app, &path, &headers, body.clone()).await;
+        let acknowledgement = document.clone();
+        fixture.accepted(status, document, &raw, &envelope, &name("fresh owner proof"));
+        fixture.rpc.requests.lock().unwrap().clear();
+        let (status, document) = request(&mut fixture.app, &path, &headers, body.clone()).await;
+        assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_api_key")),
+            "{}: {document}", name("replayed owner proof"));
+        assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{}", name("replayed owner proof"));
+        assert_eq!(serde_json::to_value(fixture.persisted_without_credit()
+            .funding_intent(&quote.payload, &raw).unwrap()).unwrap(), acknowledgement, "{}", name("replayed owner proof"));
+    }
+}
+
+/// Parent 2.2, current-nonce row: refusal "does not delete an earlier acknowledged original or
+/// require a replacement payment". The owner's first agreement is acknowledged at nonce 0 and
+/// not broadcast. A second agreement of the same owner is refused while synthetic nonce
+/// observations show that first original unbroadcast, pending or executed: its next-nonce
+/// original as a future nonce (400 `invalid_payment`), and an original reusing nonce 0 as a
+/// competing pending nonce (409 `funding_pending`) or as a spent one (400). Each refusal reaches
+/// the nonce observation, keeps the second quote without acknowledgement, intent, account,
+/// funding or fee row, and leaves every column of the first agreement's intent unchanged. Once
+/// nonce 0 is observed spent, the same next-nonce bytes refused first are acknowledged, with no
+/// replacement payment, and the first acknowledgement is recovered unchanged without any RPC
+/// request. Synthetic nonce advancement is not execution or credit of the first original.
+#[tokio::test]
+async fn nonce_refusals_keep_the_earlier_acknowledgement_and_admit_the_unchanged_next_original() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 22_000 + u64::from(kind), 100).await;
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        let earlier = fixture.quote.clone();
+        let (earlier_raw, earlier_envelope) = fixture.original(kind, &PaymentFields::opening(&earlier.payload, 0, 11));
+        fixture.acknowledges(&earlier_raw, &earlier_envelope, &format!("{envelope_name}: earlier agreement")).await;
+        let earlier_ack = serde_json::to_value(fixture.provider.state.ledger
+            .funding_intent(&earlier.payload, &earlier_raw).unwrap().unwrap()).unwrap();
+        let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+        let earlier_row = || db.query_row(
+            "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until)
+             FROM funding_intents WHERE contract=?1",
+            [&earlier.payload.id], |row| row.get::<_, String>(0)).unwrap();
+        let retained = earlier_row();
+
+        let (status, document) = propose(&mut fixture.app, &fixture.provider.offer_id,
+            &earlier.payload.consumer_wallet, "100").await;
+        assert_eq!(status, StatusCode::OK, "{document}");
+        fixture.quote = serde_json::from_value(document).unwrap();
+        let (next, next_envelope) = fixture.original(kind, &PaymentFields::opening(&fixture.quote.payload, 1, 11));
+        let (reused, _) = fixture.original(kind, &PaymentFields::opening(&fixture.quote.payload, 0, 11));
+        for (case, latest, pending, candidate, expected) in [
+            ("next nonce while the earlier original is unbroadcast", 0, 0, &next, (StatusCode::BAD_REQUEST, "invalid_payment")),
+            ("next nonce while the earlier original is pending", 0, 1, &next, (StatusCode::BAD_REQUEST, "invalid_payment")),
+            ("earlier nonce while it is pending", 0, 1, &reused, (StatusCode::CONFLICT, "funding_pending")),
+            ("earlier nonce once it is spent", 1, 1, &reused, (StatusCode::BAD_REQUEST, "invalid_payment")),
+        ] {
+            let name = format!("{envelope_name}: {case}");
+            {
+                let mut control = fixture.rpc.control.lock().unwrap();
+                control.view.latest_nonce = latest;
+                control.view.pending_nonce = pending;
+            }
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.refuses(candidate, &name, expected, Some("eth_getTransactionCount")).await;
+            assert_eq!(earlier_row(), retained, "{name}: the earlier acknowledged original is unchanged");
+        }
+        let name = format!("{envelope_name}: the refused next original after nonce 0 is spent");
+        fixture.rpc.requests.lock().unwrap().clear();
+        fixture.acknowledges(&next, &next_envelope, &name).await;
+        assert_eq!(earlier_row(), retained, "{name}");
+        let intents: u64 = db.query_row("SELECT COUNT(*) FROM funding_intents", [], |row| row.get(0)).unwrap();
+        assert_eq!(intents, 2, "{name}");
+        fixture.rpc.requests.lock().unwrap().clear();
+        let (status, document) = authorized_intent(&mut fixture.app, &earlier, &fixture.owner_key, &earlier_raw).await;
+        assert_eq!((status, &document), (StatusCode::OK, &earlier_ack), "{name}: cached recovery");
+        assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{name}: cached recovery reads no chain state");
+        assert!(fixture.provider.state.ledger.account(&earlier.payload.id).unwrap_err().starts_with("not_found:"), "{name}");
+    }
+}
+
+/// Parent 2.2, current-nonce row: fresh admission "SHALL use the provider's configured
+/// identity-checked, healthy RPC evidence" and "SHALL recheck latest/pending nonce and chain
+/// health after the balance observation". Each unhealthy synthetic view is applied once before
+/// the balance observation and once at the balance reply: another chain ID, a syncing node, a
+/// safe frontier above the head, a head and safe frontier aged 600 seconds, a safe frontier
+/// aged 400 seconds behind a fresh head, a head timestamp 600 seconds ahead of the local clock,
+/// a safe frontier timestamp later than the head's, and a safe frontier at the head's height
+/// with another hash. Another genesis is applied only before the balance observation, as the
+/// first identity check in each fixture, because genesis is verified once per configured
+/// endpoint. Every case is refused without acknowledgement, intent, account, funding or fee row
+/// and without submission, before the balance observation in the first pass and after it in the
+/// second; the unchanged original is then acknowledged once the view is healthy. The
+/// post-balance frontier cases are internally contradictory views (503), not the consistent
+/// regression that task 2.2.2 refuses with 409. Would catch a post-balance recheck that observes
+/// only the head, and a health check that drops genesis, safe-frontier age, future-head or any
+/// frontier-order rule. Synthetic RPC, not live-chain qualification.
+#[tokio::test]
+async fn fresh_intent_requires_identity_checked_healthy_chain_evidence_before_and_after_balance() {
+    let directory = tempfile::tempdir().unwrap();
+    let unavailable = (StatusCode::SERVICE_UNAVAILABLE, "settlement_unavailable");
+    // The chain client currently reports a configured-identity mismatch as a rejected payment.
+    // That classification belongs to specify-funding-settlement code difference 4, which would
+    // make it 503 `settlement_unavailable`; this requirement fixes only that it is refused.
+    let identity = (StatusCode::BAD_REQUEST, "invalid_payment");
+    let views = [
+        ("RPC reports another chain ID", ChainView { chain_id_offset: 1, ..ChainView::default() }, identity, "eth_chainId"),
+        ("node is syncing", ChainView { syncing: true, ..ChainView::default() }, unavailable, "eth_syncing"),
+        ("safe frontier above the head", ChainView { head_height: 8, head_hash: 8, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+        ("stale head and safe frontier", ChainView { frontier_age: 600, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+        ("stale safe frontier behind a fresh head", ChainView { safe_age: 400, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+        ("head timestamp ahead of the local clock", ChainView { head_offset: 600, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+        ("safe frontier timestamp after the head's", ChainView { head_offset: -30, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+        ("safe frontier at the head height with another hash", ChainView { head_height: 9, head_hash: 11, ..ChainView::default() },
+            unavailable, "eth_getBlockByNumber"),
+    ];
+    for (kind, envelope_name) in ENVELOPES {
+        // One fixture, and so one owner, per pass: each stays within the ledger's twelve owner
+        // challenges per wallet and minute.
+        for (pass, at_balance) in [(0, false), (1, true)] {
+            let mut fixture = Fixture::new(directory.path(), 24_000 + 10 * pass + u64::from(kind), 100).await;
+            let (raw, envelope) = fixture.original(kind, &PaymentFields::opening(&fixture.quote.payload, 0, 11));
+            fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+            if !at_balance {
+                // First identity check of this endpoint: the genesis read is reached and refuses it.
+                let name = format!("{envelope_name}: RPC reports another genesis before the balance observation");
+                fixture.rpc.control.lock().unwrap().view = ChainView { other_genesis: true, ..ChainView::default() };
+                fixture.rpc.requests.lock().unwrap().clear();
+                fixture.refuses(&raw, &name, identity, Some("eth_chainId")).await;
+                {
+                    let requests = fixture.rpc.requests.lock().unwrap();
+                    assert!(requests.iter().any(|request| request["params"][0] == "0x0"), "{name}: genesis was read");
+                    assert!(requests.iter().all(|request| request["method"] == "eth_chainId" || request["params"][0] == "0x0"),
+                        "{name}: refused at the genesis read");
+                }
+                fixture.rpc.control.lock().unwrap().view = ChainView::default();
+            }
+            for (case, view, expected, method) in views {
+                fixture.rpc.requests.lock().unwrap().clear();
+                if at_balance {
+                    let name = format!("{envelope_name}: {case} at the balance reply");
+                    fixture.rpc.control.lock().unwrap().after_balance = Some(view);
+                    fixture.refuses(&raw, &name, expected, Some("eth_getBalance")).await;
+                } else {
+                    let name = format!("{envelope_name}: {case} before the balance observation");
+                    fixture.rpc.control.lock().unwrap().view = view;
+                    fixture.refuses(&raw, &name, expected, Some(method)).await;
+                    assert!(fixture.rpc.requests.lock().unwrap().iter().all(|request| request["method"] != "eth_getBalance"),
+                        "{name}: refused at the first view");
+                }
+                fixture.rpc.control.lock().unwrap().view = ChainView::default();
+            }
+            fixture.rpc.requests.lock().unwrap().clear();
+            fixture.acknowledges(&raw, &envelope, &format!("{envelope_name}: healthy evidence")).await;
+        }
+    }
+}
+
+/// Parent 2.2, full-gas row: the maximum price of a type-2 original is `maxFeePerGas`, "with
+/// priority fee no greater than that maximum". An original whose priority fee equals its nonzero
+/// maximum is admissible: one wei below value plus the full signed gas limit times that maximum
+/// it is refused at the balance observation, and at exactly that cost it is acknowledged without
+/// submission or credit. Every other type-2 control in this target keeps priority below the
+/// maximum, and the zero-price case sets both to zero, so none of them sees a decoder that
+/// refuses equality.
+#[tokio::test]
+async fn fresh_intent_admits_type_two_priority_fee_equal_to_its_signed_maximum() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::new(directory.path(), 23_000, 100).await;
+    let mut fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+    fields.priority_fee = fields.max_fee;
+    let (raw, envelope) = fixture.original(2, &fields);
+    let name = "EIP-1559 priority fee equal to its maximum";
+    let needed = 100 + u128::from(GAS) * 11;
+    fixture.rpc.control.lock().unwrap().balance = needed - 1;
+    fixture.refuses(&raw, name, (StatusCode::BAD_REQUEST, "invalid_payment"), Some("eth_getBalance")).await;
+    fixture.rpc.control.lock().unwrap().balance = needed;
+    fixture.rpc.requests.lock().unwrap().clear();
+    fixture.acknowledges(&raw, &envelope, name).await;
+}
+
+/// Parent 2.2, qualification/readiness row. Each new-funding gate is checked before any chain
+/// observation, and qualification again after it. With synthetic healthy RPC, ample balance and
+/// a current nonce, a closed gate refuses the fresh intent with its own code (503
+/// `provider_draining`, `settlement_unavailable` or `model_unqualified`) before the provider
+/// sends a single RPC request. Qualification that passes before the RPC and is lost before the
+/// balance reply returns is refused with 503 `model_unqualified` after it. No refusal leaves an
+/// acknowledgement, intent, account, funding or fee row or submits anything, and the unchanged
+/// original is then acknowledged with fresh authority. Task 2.2.5 covers draining and readiness
+/// lost after the balance RPC. Would catch a gate checked only after spendability RPC, and a
+/// post-RPC qualification answer reused from before the RPC. The qualified set is a test
+/// prerequisite, not measured qualification.
+#[tokio::test]
+async fn fresh_intent_gates_refuse_before_chain_observation_and_qualification_is_rechecked_after_balance() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        let mut fixture = Fixture::new(directory.path(), 20_000 + u64::from(kind), 100).await;
+        let (raw, envelope) = fixture.original(kind, &PaymentFields::opening(&fixture.quote.payload, 0, 11));
+        fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+        for (gate, code) in [
+            (FundingGate::Accepting, "provider_draining"),
+            (FundingGate::Ready, "settlement_unavailable"),
+            (FundingGate::Qualified, "model_unqualified"),
+        ] {
+            gate.set(&fixture.provider.state, false);
+            fixture.refuses_before_rpc(&raw, &format!("{envelope_name}: {code} before chain observation"),
+                (StatusCode::SERVICE_UNAVAILABLE, code)).await;
+            gate.set(&fixture.provider.state, true);
+        }
+        let name = format!("{envelope_name}: qualification lost before the balance reply");
+        fixture.rpc.control.lock().unwrap().after_balance_gate =
+            Some((fixture.provider.state.clone(), FundingGate::Qualified));
+        fixture.rpc.requests.lock().unwrap().clear();
+        fixture.refuses(&raw, &name, (StatusCode::SERVICE_UNAVAILABLE, "model_unqualified"), Some("eth_getBalance")).await;
+        FundingGate::Qualified.set(&fixture.provider.state, true);
+        fixture.rpc.requests.lock().unwrap().clear();
+        fixture.acknowledges(&raw, &envelope, &name).await;
+    }
+}
+
 #[tokio::test]
 async fn failed_intent_persistence_rolls_back_the_entire_retention_handoff() {
     let directory = tempfile::tempdir().unwrap();
@@ -2135,7 +2499,7 @@ async fn native_lost_fresh_acknowledgement_recovers_after_provider_and_client_re
         // Synthetic next-nonce observations are not proof the original executed.
         fixture.rpc.observed_at.store(protocol::now().unwrap(), Ordering::Release);
         fixture.rpc.control.lock().unwrap().view = ChainView {
-            latest_nonce: 1, pending_nonce: 1, head_height: 11, head_hash: 11,
+            latest_nonce: 1, pending_nonce: 1, head_height: 11, head_hash: 11, ..ChainView::default()
         };
         let (status, refused) = authorized_intent(&mut fixture.app, &unrelated,
             &fixture.owner_key, &candidate_raw).await;
