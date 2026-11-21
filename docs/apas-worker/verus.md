@@ -375,3 +375,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `billing_store::tests::admitted_reports_stay_bound_through_settlement_waiver_and_restart_across_a_renewal` — **replaceable in part**: renewal admission (identical serving terms and a strictly later measurement time than the agreement's report), and settlement accepting only an outcome whose digest equals the request's admitted digest, are pure predicates over modeled terms that a Verus `ensures` clause could state; the waiver arithmetic (inference cost waived, usage and fee unchanged) is conserved integer arithmetic over a ledger model. The SQLite rows, reopening, report files and signed receipt are outside it.
 - `app::tests::a_restart_under_a_renewed_report_recovers_held_requests_with_their_admitted_report` — **not replaceable**: a restarted daemon, the HTTP gateway, a held loopback engine stream, timed waivers and SQLite triggers.
+
+## Judged 2026-11-21 — quote budget independence (request-accounting 3.3)
+
+- `exhausted_quote_signing_work_leaves_existing_requests_and_inference_gates_intact` and `exhausted_committed_quote_issuance_leaves_existing_requests_and_inference_gates_intact` — **replaceable in part**: that the inference admission predicate and settlement transitions read and write no quote-budget state, and that each quote budget's counter and minute change only under its own claim, is a frame condition over a modeled state that Verus could prove; the SQLite rows, pending-state cleanup, reopening and signed receipts are outside it.
+- `exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference_and_reads_continue` — **not replaceable**: HTTP routers, the real clock, bearer authentication and a loopback engine.

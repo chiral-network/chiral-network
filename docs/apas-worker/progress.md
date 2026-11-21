@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-21 (ninety-first round) — Acceptance: request-accounting 3.3 (quote-budget exhaustion leaves inference intact)
+
+- In step at `54abd7bd`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-request-accounting` 3.3), through a workflow: assess the blocker, write tests, then an adversarial review. No product code changed and no code difference was found.
+- Blocker resolved. 3.3 was blocked where the pre-signing work budget or a controlled issuance clock needed owner-untracked source or the non-reserving cutover. Both now exist in tracked source on the propose route's path (contracts.rs:294–295), each with an operation-time argument and its own non-regressing minute: `sign_quote` claims work through `claim_quote_work`, and `store_quote` charges committed issuance through `proposal_rate_limit`. tasks.md replaces the BLOCKED clause with this reason and keeps the ban on sleeps, fabricated accepted timestamps and full stored-quote occupancy.
+- design.md gains "Quote budget independence (task 3.3)". Three `billing_store::tests`:
+  - `exhausted_quote_signing_work_leaves_existing_requests_and_inference_gates_intact` and `exhausted_committed_quote_issuance_leaves_existing_requests_and_inference_gates_intact` run at explicit ledger times. With either budget exhausted, the following match exact complete rows: known settlement, unknown and invalid-usage releases, restart recovery after reopening, request reads and a signed receipt. A fresh request is still admitted and charged. The account's own checks still refuse new requests with every row unchanged: credit, spend cap, scope, saturation, model revision, a withdrawn report, a duplicate, and both inference budgets. Inference leaves the quote rows unchanged. The budgets are independent of each other: a quote still commits under exhausted work, and an issuance refusal refunds no spent work unit.
+  - `exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference_and_reads_continue` runs once per budget through the production control and public routers with a controlled engine. Each budget is exhausted at a minute ten minutes ahead, which its non-regressing clock keeps in effect for real-clock proposals. A refused proposal does not pause admission. Gateway settlement, cancellation, status, control reads and receipts continue. The gateway's checks still refuse: a withdrawn report (503), credit (402), scope (403), a held key (409) and a revoked bearer (401, a review addition).
+- Review finding, closed: a quote refusal that commits pending-state cleanup passed every test, because the fixture held nothing that had expired but not yet been removed. The ledger tests now keep a lapsed funding-intent lease and quote pending through every refusal and reopening, so cleanup on refusal fails them; this covers "SHALL NOT preserve partial pending-state mutations". Mutations: the author ran 16 and the review 6; each fails a named test.
+- Recorded limits: the router test does not restart the daemon, so restart recovery is covered at the ledger level. The challenge budget and opening capacity are not exhausted here. In-crate tests call the pub(crate) `sign_quote` directly. The controlled engine is not llama.cpp. Reconciliation with opening-intent 2.8.2 is 3.4.
+- 3.3 ticked. Checks: `--lib` 463 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; desktop `--lib desktop::` 10/10; strict validation passes. Test-only change; round 89's full suite covers the product code.
+
 ## 2026-11-21 (ninetieth round) — Acceptance: request-accounting 3.2 (admitted evidence stays bound through settlement, waiver, restart and renewal)
 
 - In step at `ae20db31`; whitepaper unchanged; no new answers.
@@ -1023,7 +1035,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89), 3.3, 3.4 and 4.x (3.2 done in round 90) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89), 3.4 and 4.x (3.2 and 3.3 done in rounds 90–91) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

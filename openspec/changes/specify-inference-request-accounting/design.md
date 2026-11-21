@@ -55,7 +55,7 @@ No fresh quote/storage/work/issuance/opening gate may refuse an existing request
 | Unknown usage and restart | `restart_releases_unknown_holds_and_preserves_deduplication` releases once after reopening and refuses late re-charge/key reuse. Both terminal matrices distinguish definite statement/commit rollback from intentionally committed invalid-usage release/error and preserve unrelated holds. The performance matrix keeps unknown nominal waivers at zero and retains admitted report identity. | Ledger invalid-input boundaries are complete with task 2.5. Gateway failure boundaries remain 3.1. Explicit recovery-method calls do not prove daemon startup ordering or process-kill durability. |
 | Performance binding/remedy | Existing waiver/renewal tests retain known usage, fees, original terms and report identity. `performance_write_failures_preserve_bound_waivers_and_withdrawal_latches` adds exact rollback at observation, latch and commit boundaries, original-report/policy refusal, retained old withdrawal, one committed known/unknown waiver, reopened idempotence and later settlement of another already-admitted hold. | These are synthetic ledger/report inputs, not hardware qualification or the full timing/withdrawal classifier. Reconcile them with the gateway boundary in 3.2. |
 | Attributable recovery reads | `receipts_are_signed_monotonic_and_network_bound_across_restart` verifies the provider signature, persisted sequence increase, wrong-network reopen and wrong signer refusal. The owner-control read, cursor and foreign-request tests inspect owner/read authority, empty bodies, literal cursor binding and account isolation. `expired_credential_requests_stay_readable_and_unduplicable_through_the_routers` refuses an expired bearer's status, cancel, request and receipt reads with 401, while the owner proof and a live rotated `read` credential read the original request attributed to the expired credential and obtain signed receipts binding it, before and after settlement. Task 2.3 adds four ledger tests and one router test. `request_pages_and_receipts_hold_the_100_newest_account_requests_newest_first` pins the 100-, 101- and 103-record pages, newest creation time then newest insertion, account scoping and the exact six-member receipt binding that page and the stored account. `timestamp_before_pages_can_omit_requests_sharing_the_boundary_timestamp` demonstrates the documented tie omission. `receipt_sequences_are_durable_per_account_and_failed_issuance_commits_nothing` covers durable per-account sequences, signer, statement-fault and commit-refusal failures, and exhaustion at `i64::MAX`. `a_receipt_waits_for_a_competing_settlement_and_binds_only_committed_state` covers a competing writer by a deterministic schedule. `request_and_receipt_reads_are_account_scoped_and_change_no_financial_row` covers read authority and complete-row stability through the routers. | Process-kill and fsync durability and daemon startup recovery are not exercised. Receipt wording in clients and operator documentation is 4.1. |
-| Quote-resource independence | `request_accounting_and_receipts_recover_at_full_quote_storage` targets genuine reservation/known settlement/unknown restart and authorized reads with standalone quote storage full, beyond the earlier opening/top-up cases. | Independent issuance/signing-work exhaustion, actual inference dispatch and the blocked non-reserving quote cutover remain distinct tasks. |
+| Quote-resource independence | `request_accounting_and_receipts_recover_at_full_quote_storage` targets genuine reservation/known settlement/unknown restart and authorized reads with standalone quote storage full, beyond the earlier opening/top-up cases. Task 3.3 adds independent signing-work and committed-issuance exhaustion beside existing and fresh requests, at the ledger and through the gateway (*Quote budget independence (task 3.3)* below). | Reconciliation with opening-intent 2.8.2 is 3.4. Opening capacity and the challenge budget are not exhausted by 3.3. |
 
 Several existing ledger tests inject `VerifiedPayment` after verification for setup. They establish ledger behavior, not native CFX execution or healthy public safe-frontier evidence. Existing public/native funding tests have their own explicitly bounded scripted-RPC evidence. Do not count either as engine usage validation.
 
@@ -574,15 +574,140 @@ No code difference was found, and no production code changed.
 
 The reports are synthetic and only parsed; nothing here qualifies hardware or a speed class. Ledger usage is supplied; the daemon's comes from a stub engine. A renewal mid-request inside one daemon cannot happen, by construction, so the gateway is tested across a restart. The daemon waiver is a short-output TTFT miss from a stub delayed by 2.1 s, which is timed; a decode-rate miss through the gateway is not exercised, because the stub emits one token. Restarts are clean stops, not process kills or fsync failures. The product validates only the configured report file (`qualification_evidence_file`) and keeps no copy of a superseded one, so after a renewal the measurement time of an older bound digest is recoverable only from a copy the operator keeps. The mid-request latch in (D) is supplied ledger misses of another account, not observed slow generation. The owner-control tests cited are not run by this task.
 
+### Quote budget independence (task 3.3)
+
+Task 3.3 exhausts each quote budget on its own, then exercises existing requests and fresh inference beside it. It adds two `billing_store::tests` ledger tests (L), which share one case body, and one router test (R), which runs once per budget. No production code changed.
+
+#### Blocker assessment
+
+When 3.3 was written, the non-reserving quote cutover was not implemented. The task was blocked wherever the work budget or a controlled issuance clock needed owner-untracked source. That blocker no longer applies. Both budgets are now in tracked source, on the production proposal path, with operation-time arguments:
+
+- **Pre-signing work.** `BillingStore::sign_quote(quote, key, now)` claims one unit through `claim_quote_work` before the signer runs, in its own committed transaction (metadata `quote_work_minute`, counter `quote-work:global`). When exhausted it refuses with `rate_limit: quote signing work limit exceeded`. The first claim on a ledger without work evidence refuses and commits that minute as exhausted. It is `pub(crate)`. In-crate tests call it with an explicit time; integration targets reach it only through the propose route.
+- **Committed issuance.** `BillingStore::store_quote(quote, now)` charges `proposal_rate_limit` inside the quote-insertion transaction (`quote_committed_minute`, `quote:global`). When exhausted it refuses with `rate_limit: committed quote issuance limit exceeded`. It is `pub`.
+- **Clocks.** Each budget takes its effective minute as the later of the sample's minute and its own watermark, so neither clock regresses.
+- **Route.** `POST /v1/contracts/propose` (`contracts.rs`) calls both, in that order, with one wall-clock sample.
+
+The ledger tests pass explicit logical times. The routers sample the wall clock, so R exhausts each budget at an explicit minute F, ten minutes after it starts. Each clock's watermark then keeps F in effect for every proposal the route samples during the test.
+
+None of the substitutes that 3.3 forbids is used:
+
+- No wall-clock sleep stands in for a clock. R waits only for engine events and settlement, as 3.1 does.
+- No counter is restored and no timestamp is rewritten. Every unit is spent by a real `sign_quote` or `store_quote` call. Quote terms carry the time they were signed at, as the route builds them.
+- No stored-quote occupancy. At most 601 standalone quotes are stored, against 10,000-record storage, and each refusal carries its own budget's message.
+
+#### Inventory
+
+"Existing" lists tests that passed before this task, each read for the assertion named. The integration tests cited are not run by this task.
+
+| 3.3 statement | Specification statement | Existing passing tests | Gap → filled by |
+|---|---|---|---|
+| (a) With work exhausted, existing requests still settle (known usage), release (unknown and invalid usage), recover at restart and read (status, list, signed receipt), with exact rows | *Quote pressure and new-admission gates cannot strand settlement*: settlement, unknown-usage release and authorized status/receipt recovery "SHALL NOT require new quote retention, signing-work, committed-issuance allowance or paid/free opening capacity"; inference-proposal-admission *Public quote work is bounded before signing*: "None of these limits SHALL gate ... settlement recovery as fresh quote work" | `quote_work_invalid_evidence_fails_closed_without_blocking_paid_settlement` (one known settlement after invalid work evidence, not exhaustion; account fields only); `request_accounting_and_receipts_recover_at_full_quote_storage` (full storage, not work) | Release, restart recovery, reads and receipts beside exhausted work, with complete rows → (L) `Work`, (R) `Work` |
+| (b) The same with committed issuance exhausted | The same requirement; *Committed proposals consume a provider-wide minute budget*: available issuance "SHALL NOT reserve paid/free opening or inference capacity"; *Proposal rate charging is atomic and nonrefundable*: "settlement recovery SHALL NOT be charged or refused as fresh quote issuance" | `public_global_committed_rate_refusal_preserves_quotes_and_an_opened_agreement` (integration: account and credential resume, no request) | Any inference request beside exhausted issuance → (L) `Issuance`, (R) `Issuance` |
+| Each budget exhausted independently of the other | Committed issuance "SHALL be ledger-local and separate from pre-signing work, challenge and inference budgets"; work "SHALL remain separate from the global committed-proposal counter" | `quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges` (integration: separate counters and clocks, from restored work evidence) | None for the counters. 3.3 shows independence in its own fixtures: with work exhausted, a quote signed in the same minute still commits. With issuance exhausted, route-shaped proposals still sign, and each work unit stays spent → (L), (R) |
+| (c) Fresh inference keeps its own gates: admitted by them and refused by them | "This exclusion SHALL NOT waive fresh inference's authentication, compatible execution, qualification, concurrency, inference-rate or worst-case-credit checks"; scenario *Full quote resources preserve terminal accounting*: "a fresh inference request still has to satisfy its independent admission and reservation limits" | 2.4 (scope, concurrency, cap and duplicate refusals at full storage); the 2.5 budget tests (no quote pressure) | Every gate, admitted and refused, with either budget exhausted → (L), (R) |
+| (d) Inference consumes no quote budget, and quote refusals consume no inference budget | *Inference abuse budgets remain independent*: "SHALL remain separate from proposal/challenge budgets"; scenario *Exhausted inference budget does not strand a hold*: quote allowance "is neither charged nor replenished" | `exhausted_inference_budgets_do_not_strand_admitted_holds` (inference exhaustion leaves quote rows unchanged) | The converse, and inference beside each quote clock while it has allowance → (L), (R) |
+| (e) Each budget's refusal changes no financial row | Work: an exhausted budget "SHALL return HTTP 429 with `rate_limit` without signing"; initialization "durably marks M exhausted without altering committed-proposal or financial evidence". Issuance: a rejected insertion "SHALL NOT consume committed-issuance units, advance its watermark, insert its quote or preserve partial pending-state/adoption mutations", and "SHALL NOT refund or alter a separately committed pre-signing work permit" | `quote_work_bounds_600_real_signatures_when_every_insertion_rolls_back`, `quote_work_initialization_restart_and_clock_regression_require_new_minute` (protected snapshots of ledgers holding no request); `quote_rate_adoption_preserves_totals_and_retires_wallet_rows_only_on_commit` | Complete rows of every table on each refusal, beside held, settled and fresh requests, and beside a lapsed admission lease and quote that a committed cleanup would change → (L), (R) |
+
+#### Tests
+
+`exhausted_quote_signing_work_leaves_existing_requests_and_inference_gates_intact` and `exhausted_committed_quote_issuance_leaves_existing_requests_and_inference_gates_intact` (L) run `exhausted_quote_budget_case` for one budget each. Minute M is 1,000 (logical samples 60,000 to 60,059). Complete rows of every ledger table are compared with fixed literals using the 2.2.4 snapshot helpers. Post-verification funding, supplied usage and a synthetic profile are ledger prerequisites, not chain, engine or hardware evidence.
+
+The setup has three paid accounts:
+
+- **A** (995 wei available) has credential C (`infer`/`read`, four slots), F (`infer`, one slot), a credential with a 10-wei cap and a `read`-only credential.
+- **B** has a credential D.
+- **P** is profiled. Three real misses latch its report as withdrawn.
+
+The work budget then initializes in minute 997. That first claim is refused and changes only the two work rows; no money row changes. In minutes 998 and 999, A settles a 2-wei request and holds four 30-wei requests: three by C and one by F. D gets 119 records in the minute before M, and B gets 29 unknown-usage releases, each one short of its inference budget. These reservations and settlements leave every quote row unchanged.
+
+Also in minute 999, an unopened funding intent and a standalone quote are committed as prerequisites, signed directly like the accounts' quotes. The intent's admission lease and the quote both lapse at 60,005, inside M and before the first refusal of the exhausted budget. Only a successful issuance or challenge after the lapse cleans them up, so a refusal that commits pending-state cleanup changes a funding-intent row and a quote row. Both are still present after every refusal, after reopening and after inference in M + 1.
+
+Each case then exhausts its budget at the start of M:
+
+- **`Work`** makes 600 real signatures, each verified, and commits one of the quotes. Another quote signed in M still commits afterwards, at 60,001, before the lapse, so issuance keeps its own allowance.
+- **`Issuance`** signs 300 quotes in each of minutes 998 and 999, so work never reaches 600 outside its initialization minute. It commits 600 of them in M, which with the lapsing quote stores 601 standalone quotes. Two route-shaped proposals in M still sign. Each spends one work unit, changes only the work clock, and that unit stays spent when issuance refuses the quote.
+
+Every later refusal of the exhausted budget returns exactly its message and changes no row. That holds at each step's own time, at the regressed sample 59,950, at the last second of M and after reopening. While the budget stays exhausted:
+
+- C's holds settle: known (10, 7) usage is charged 17 wei; an explicit unknown release and invalid (10, 21) usage each return the whole 30 wei with 30 wei of exposure.
+- Reads by key and by opaque identifier, the request list and a signed receipt bind exactly the stored records. Only the receipt sequence changes.
+- C's fresh request is admitted and charged 15 wei.
+- These are refused by their own rule, with every row unchanged: a request beyond A's credit, one beyond the 10-wei cap, the `read`-only credential, F's full slot, changed serving terms, P's withdrawn report and a held key.
+- After every quote refusal so far, D's 120th record is admitted and its 121st refused. B's 30th unknown release is admitted, then both of B's credentials are refused. So quote refusals consumed no inference allowance.
+- After reopening, restart recovery releases F's hold, and F is then admitted again.
+- Late outcomes return the first results. Final reads and the receipt agree with every row.
+
+A ends at 944 wei available, 51 spent, (31, 20) tokens, with its 5-wei fee and 1,000 wei funded. The quote rows still equal their state at exhaustion. In minute M + 1, a reservation, its settlement and a recovery leave every quote row unchanged. Only the budget's own operation then opens its new minute.
+
+`exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference_and_reads_continue` (R) runs the production control and public routers, once per budget. It uses the paid 3.1 gateway fixture (995 wei available, one wei per token) and its controlled engine, plus a signed development offer, so that `POST /v1/contracts/propose` reaches the quote budgets. Before exhaustion the root has a completed request (7 wei) and two chat requests held in the engine at 8 wei each. Exhaustion uses the ledger's own interfaces at minute F:
+
+- **`Work`**: the work clock initializes (refused) in the minute before the test and signs one spare quote in the test's minute. It then makes 600 signatures in F. The spare then commits, so issuance keeps its own allowance.
+- **`Issuance`**: the work clock initializes in F - 3 and signs 300 quotes in each of F - 2 and F - 1. All 600 commit in F.
+
+Each proposal while exhausted gets 429 `rate_limit` with exactly the budget's message. A work refusal changes no row and reaches no engine. An issuance refusal changes only the work clock, by the one unit the route spent, which is not refunded. Meanwhile:
+
+- The held requests settle through the gateway: one is charged its known 7 wei, and a cancellation releases the other's whole 8 wei with 8 wei of exposure.
+- A fresh request after a refused proposal is admitted and charged 7 wei.
+- These record nothing: a request with qualification withdrawn (503 `model_unqualified`, no engine call), one beyond the balance (402 `insufficient_balance`, no generation), a `read`-only bearer (403 `credential_scope`) and a revoked bearer (401 `invalid_api_key`, no engine call). A held key gets its 409.
+- The public status by key and by identifier (root and `read` bearers), the control-plane request and account reads, and a signed receipt binding every request return exactly the stored records. Only the receipt sequence changes.
+- No inference or read step changes a quote row. No settlement fault is recorded, and admission stays open.
+
+The account ends at 974 available and 21 spent. The controlled engine is test evidence, not llama.cpp.
+
+#### Mutations
+
+Each mutation was applied alone, run against the three tests and restored by copy with a fresh timestamp, then checked by byte comparison. Each fails at least one test:
+
+1. `reserve` gated by a work claim: all three, at the first reservation (L) and at the first gateway request, which answers 429 `rate_limit_exceeded` (R).
+2. `reserve` silently claiming a work unit: all three. (L) fails at the work initialization, which a reservation had already done, so the claim signs. (R) fails at its existing requests, where the work rows appear.
+3. Settlement charging committed issuance (`proposal_rate_limit` in `settle_measured`): all three, at the quote-row assertions.
+4. Settlement refused, without a write, while either budget is exhausted: all three, at the known settlement (L) and at the held request's settlement, which answers 500 (R).
+5. Restart recovery refused while either budget is exhausted: both (L), at recovery. (R) does not restart.
+6. Receipt issuance refused while either budget is exhausted: all three, at the receipt.
+7. Fresh reservations refused while either budget is exhausted: all three, at the fresh admission.
+8. A refused proposal pausing inference admission (`contracts.rs`): (R), at the fresh request (503 `provider_paused`). In the first version of (R) it failed at the next proposal instead (503 `provider_draining`). The fresh request now directly follows a refused proposal.
+9. The gateway's two qualification checks removed: (R), at the withdrawn-qualification request (200).
+10. The credential budget at `> 120`: both (L), at D's 121st record.
+11. The account unknown-usage budget at `> 30`: both (L), at B's next request.
+12. No spend cap: both (L), at the over-cap request.
+13. The work clock taking the sample's minute alone: (L) `Work`, at the regressed sample; (R) `Work`, where the proposal is admitted (200).
+14. The issuance clock taking the sample's minute alone: (L) `Issuance` and (R) `Issuance`, likewise.
+15. A work refusal recording a row: (L) `Work` at the first refusal; (R) `Work` at the first proposal.
+16. An issuance refusal refunding a spent work unit (above one): (R) `Issuance` at the first proposal. It survived the first version of (L) `Issuance`, whose work count in M was one. (L) then gained the second route-shaped proposal and now fails there too.
+
+Adversarial review applied six more, each restored and checked the same way:
+
+17. `store_quote` committing `cleanup_pending` in its own transaction before the issuance check, so an issuance refusal keeps its cleanup. It passed all three tests and all 463 lib tests, because the fixture held no pending state that had lapsed by the refusal times. The review added the lapsing lease and quote above, and the `Work` step that commits before the lapse. It now fails (L) `Issuance` at the first route-shaped proposal. (R) cannot show it: the routers sample the wall clock, and exhaustion's own cleanup at F, in the future, already removes anything that lapses before a real-clock refusal.
+18. `sign_quote` running `cleanup_pending` inside its work-claim transaction, which commits on refusal. It passed all three tests before the review's witness and now fails both (L): `Work` at the first refusal, `Issuance` at the first route-shaped proposal.
+19. The work clock taking the later of its own minute and the committed-issuance watermark (a shared clock): (R) `Issuance`, at the first refused proposal, whose work unit lands in F instead of F - 1.
+20. The issuance clock taking the later of its own minute and the work watermark: (R) `Work`, where the spare commits in F instead of its own minute.
+21. Both inference budgets waived while either quote counter is at 600: both (L), at D's 121st record.
+22. Authentication ignoring revocation: (R), at the revoked bearer, which the review added. The reservation's own check still refuses it, but as 403 `account_forbidden` instead of 401 `invalid_api_key`.
+
+#### Observations
+
+No code difference was found, and no production code changed.
+
+1. Work initialization refuses its first claim and commits that minute as exhausted. This is the specification's conservative initialization. Here it changes only the two work rows.
+2. Opening an account already zeroes its intent's `admission_until`, so the accounts' own intents give a refusal nothing to clean up. The review's unopened intent supplies a lease that has lapsed but is still recorded, which is what makes a committed cleanup visible.
+3. Both quote refusals and the ledger's inference budget start with `rate_limit:`. The gateway answers the inference refusal as `rate_limit_exceeded` with its own message. The propose route answers `rate_limit` with the ledger's message. The two stay distinguishable by code and message.
+
+#### Limits
+
+- The routers read the wall clock. Exhaustion at F holds for them only because neither quote clock regresses; the route still samples wall time, so a proposal after F would find fresh allowance. The test takes seconds.
+- (R) does not restart the daemon. Restart recovery is (L)'s explicit `recover_requests` over a reopened ledger. Daemon startup ordering is the 3.1 restart test, without quote pressure.
+- The challenge budget and paid/free opening capacity are not exhausted here. Full storage is 2.4. Reconciliation with opening-intent 2.8.2 is 3.4. This acceptance does not mitigate the public named-wallet quota risk.
+- Post-verification funding, supplied usage, the synthetic profile and the controlled engine are prerequisites or test evidence, not chain, engine or hardware evidence. Process-kill and fsync durability are not established.
+
 ## Acceptance sequence and ownership
 
 1. The focused ledger/read acceptance inventory above maps actual test bodies and leaves unexercised boundaries explicit. Complete the separate gateway/backend inventory in 3.1 rather than treating names or ledger inputs as workflow evidence.
 2. The full-storage regression above is the first independently useful missing slice. Retain its post-verification opening/history and supplied-usage disclosures; its ledger/router reopening is not public dispatch or a process-kill experiment.
 3. Cover deterministic transactional faults and competing writers where not already covered. Inject faults only into isolated owned fixtures. Keep successful retry controls and exact monetary identities; do not weaken existing tests or normalize production failures.
 4. Complete the actual gateway boundary: preparation before reservation/dispatch, duplicate/ambiguous response, known/unknown cancellation, failed durable settlement and status/receipt recovery. Reuse bounded private test backends only as explicit controlled evidence, never as runtime fallback or model qualification.
-5. Extend independently to committed quote issuance and pre-signing work exhaustion when those implemented boundaries and controlled clocks are independently committable. Stored-quote occupancy is not evidence of those budgets. Retain new-inference gates throughout.
+5. Extend independently to committed quote issuance and pre-signing work exhaustion when those implemented boundaries and controlled clocks are independently committable. Stored-quote occupancy is not evidence of those budgets. Retain new-inference gates throughout. Done by task 3.3 (*Quote budget independence (task 3.3)* above): both budgets are implemented in tracked source with operation-time arguments, and each is exhausted by real calls.
 
-Production ledger/gateway/backend/app source and their private unit tests are owner-untracked migration work. The subsequent author answer in `docs/apas-worker/report.md` permits incorporating pre-existing source actually needed for the non-reserving implementation while preserving unrelated work; ownership alone no longer blocks that cutover. This terminal-race acceptance slice adopts none of that source. Do not absorb unrelated migration, expose production-only test APIs, copy modules or commit a knowingly failing regression alone. Worker-owned integration acceptance can proceed when its public interfaces suffice. The missing pre-signing work and quote-clock implementation still require their own code and acceptance; source permission is not implementation evidence.
+Production ledger/gateway/backend/app source and their private unit tests were owner-untracked migration work when this change was written. The subsequent author answer in `docs/apas-worker/report.md` permits incorporating pre-existing source actually needed for the non-reserving implementation while preserving unrelated work; ownership alone no longer blocks that cutover, and that source is now tracked. This terminal-race acceptance slice adopts none of that source. Do not absorb unrelated migration, expose production-only test APIs, copy modules or commit a knowingly failing regression alone. Worker-owned integration acceptance can proceed when its public interfaces suffice. The pre-signing work budget and the non-regressing quote clocks have since been implemented with their own acceptance (opening-intent 2.3.2 and `inference_proposal_test::quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges`); task 3.3 exercises them beside request accounting.
 
 ## Verification and completion
 

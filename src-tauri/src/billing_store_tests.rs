@@ -10533,3 +10533,737 @@ fn admitted_reports_stay_bound_through_settlement_waiver_and_restart_across_a_re
         assert_eq!(serde_json::to_value(request).unwrap(), stored, "{}", request.request_id);
     }
 }
+
+// inference-request-accounting task 3.3: exhausted quote budgets beside existing requests
+// and fresh inference. The pre-signing work budget (`sign_quote`) and the committed-issuance
+// budget (`store_quote`) are each exhausted by real calls of those production interfaces at
+// explicit operation times, never by restored counters, rewritten timestamps, sleeps or
+// stored-quote occupancy. Ledger steps pass explicit logical times; the router test's
+// routers read the real clock, and its budgets are exhausted at an explicit later minute
+// that their non-regressing clocks keep in effect for every real-clock sample.
+
+const QUOTE_WORK_REFUSAL: &str = "rate_limit: quote signing work limit exceeded";
+const QUOTE_ISSUANCE_REFUSAL: &str = "rate_limit: committed quote issuance limit exceeded";
+
+/// The quote budget a task 3.3 case exhausts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum QuoteBudget {
+    /// The 600-unit pre-signing work budget, claimed by `sign_quote`.
+    Work,
+    /// The 600-proposal committed-issuance budget, charged by `store_quote`.
+    Issuance,
+}
+
+/// The terms a public proposal on `base`'s offer signs at `at`, as the propose route builds
+/// them: fresh quote and nonce identifiers, issued at `at` for 300 seconds, naming wallet `n`.
+/// Named wallets neither partition nor refill either quote budget.
+fn proposal_terms(base: &Quote, n: u64, at: u64) -> Quote {
+    let mut terms = base.clone();
+    terms.id = protocol::random_id();
+    terms.nonce = protocol::random_id();
+    terms.consumer_wallet = format!("0x{n:040x}");
+    terms.issued_at = at;
+    terms.expires_at = at + 300;
+    terms
+}
+
+/// `rows` with one quote clock, its `bucket` counter and `watermark` minute, at (`window`,
+/// `count`), as one committed claim or issuance leaves it.
+fn with_quote_clock(rows: &ExpiryRows, bucket: &str, watermark: &str, window: u64, count: u64) -> ExpiryRows {
+    let mut expected = rows.clone();
+    let metadata = expected.get_mut("metadata").unwrap();
+    metadata.retain(|row| row[0] != watermark);
+    metadata.push(json!([watermark, window.to_string()]));
+    metadata.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    let limits = expected.get_mut("rate_limits").unwrap();
+    limits.retain(|row| row[0] != bucket);
+    limits.push(json!([bucket, window, count]));
+    limits.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    expected
+}
+
+/// The quote-budget state of a snapshot: metadata (both quote watermarks), rate limits (both
+/// quote counters) and standalone quotes.
+fn quote_rows(rows: &ExpiryRows) -> [Vec<Value>; 3] {
+    ["metadata", "rate_limits", "quotes"].map(|table| rows[table].clone())
+}
+
+/// Every other table of a snapshot: accounts, credentials, requests, funding, funding intents
+/// and attempts, fees, performance and challenges.
+fn money_rows(rows: &ExpiryRows) -> Vec<Vec<Value>> {
+    rows.iter()
+        .filter(|(table, _)| !["metadata", "rate_limits", "quotes"].contains(table))
+        .map(|(_, table)| table.clone())
+        .collect()
+}
+
+/// A fresh reservation of `key` by `credential` at `now` under `model` is refused with an error
+/// starting `prefix`, leaves every ledger row unchanged and does not occupy `key`.
+#[allow(clippy::too_many_arguments)]
+fn assert_reserve_refused(store: &BillingStore, path: &Path, account: &str, credential: &str, key: &str,
+    (prompt, output): (u64, u64), now: u64, model: &ModelSpec, prefix: &str, case: &str) {
+    let before = expiry_ledger_rows(path);
+    let error = store.reserve(account, credential, key, prompt, output, now, model).unwrap_err();
+    assert!(error.starts_with(prefix), "{case}: {key}: {error}");
+    assert!(store.request_view(account, key).unwrap_err().starts_with("not_found:"), "{case}: {key}");
+    assert_eq!(expiry_ledger_rows(path), before, "{case}: the refusal of {key} changed the ledger");
+}
+
+/// The request records of `account` in `rows`, ordered by opaque identifier.
+fn account_records(rows: &ExpiryRows, account: &str) -> Vec<Value> {
+    let mut records: Vec<Value> = rows["requests"].iter().filter(|row| row[1] == account).map(|row| row[6].clone()).collect();
+    records.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    records
+}
+
+/// Every request of `account` in `expected` reads back exactly by key and by opaque
+/// identifier, the account's list holds exactly those records newest first, and no read
+/// changes a row.
+fn assert_ledger_reads(store: &BillingStore, path: &Path, expected: &ExpiryRows, account: &str, case: &str) {
+    let records = account_records(expected, account);
+    assert!(!records.is_empty() && records.len() <= 100, "{case}");
+    for record in &records {
+        for target in [record["request_id"].as_str().unwrap(), record["id"].as_str().unwrap()] {
+            assert_eq!(serde_json::to_value(store.request_view(account, target).unwrap()).unwrap(), *record, "{case}: {target}");
+        }
+    }
+    let listed: Vec<Value> = store.requests(account, None).unwrap().iter().map(|view| serde_json::to_value(view).unwrap()).collect();
+    assert!(listed.windows(2).all(|pair| pair[0]["created_at"].as_u64() >= pair[1]["created_at"].as_u64()), "{case}");
+    let mut sorted = listed;
+    sorted.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    assert_eq!(sorted, records, "{case}: the request list");
+    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a read changed the ledger");
+}
+
+/// Issues a receipt for `account` at `at` and checks it: signed by the provider for the
+/// network, binding the account and every request record of `expected` with the next
+/// sequence. Applies that sequence to `expected`, which must then be every row.
+fn assert_ledger_receipt(store: &BillingStore, path: &Path, expected: &mut ExpiryRows, account: &str, at: u64, case: &str) {
+    let provider = crate::wallet::address_from_private_key(PROVIDER_KEY).unwrap();
+    let receipt = store.receipt(account, PROVIDER_KEY, at).unwrap();
+    protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &provider).unwrap();
+    let row = expiry_row(expected, "accounts", account).clone();
+    let sequence = row[4].as_u64().unwrap() + 1;
+    assert_eq!((&receipt.payload.network, &receipt.payload.provider_wallet, receipt.payload.sequence, receipt.payload.issued_at),
+        (&network(), &provider, sequence, at), "{case}");
+    assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), row[3], "{case}: the receipt's account");
+    let mut bound: Vec<Value> = receipt.payload.requests.iter().map(|view| serde_json::to_value(view).unwrap()).collect();
+    bound.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    assert_eq!(bound, account_records(expected, account), "{case}: the receipt's requests");
+    expiry_row(expected, "accounts", account)[4] = json!(sequence);
+    assert_eq!(expiry_ledger_rows(path), *expected, "{case}: a receipt changed more than its sequence");
+}
+
+/// inference-request-accounting task 3.3, one quote budget exhausted at the ledger. Times are
+/// logical; minute M = 1,000 is samples 60,000-60,059.
+///
+/// Setup: paid account A (995 wei available) has credential C (`infer`/`read`, four slots), F
+/// (`infer`, one slot), a 10-wei capped credential and a `read`-only one; paid account B has a
+/// credential D; profiled account P's report is latched withdrawn by three misses. The work
+/// budget initializes in minute 997: that first claim is refused and changes only the work
+/// clock, never a money row. At minutes 998-999 A holds four 30-wei requests (three by C, one by
+/// F) beside a settled 2-wei request; D has 119 records in the minute before M and B 29
+/// unknown-usage releases, one short of each inference budget. These reservations and
+/// settlements leave every quote row unchanged.
+///
+/// In minute 999 an unopened funding intent (admission lease) and a standalone quote, both
+/// lapsing at 60,005, are committed as prerequisites. They stay present until a successful
+/// issuance after the lapse, so a refusal that commits pending-state cleanup changes a row.
+///
+/// Exhaustion, at the start of M: `Work` makes 600 real signatures, verified, and commits one of
+/// them; a quote signed in M (before the lapse) still commits afterwards, so issuance keeps its
+/// own allowance. `Issuance` signs 300 quotes in each of minutes 998 and 999 (work never
+/// reaches 600 outside its initialization minute) and commits 600 of them in M, with 601
+/// standalone quotes stored, far below the 10,000-record storage; two route-shaped proposals
+/// in M still sign, each spending one work unit that changes only the work clock and stays
+/// spent when issuance refuses the quote. Every later refusal of the exhausted budget, at the
+/// step's own time, at the regressed sample 59,950, at the last second of M and after
+/// reopening, returns exactly its message and changes no row; the lapsed lease and quote are
+/// still present after every refusal, also after reopening and inference in M + 1.
+///
+/// While exhausted: C's holds settle as known (10, 7) usage for 17 wei, an explicit unknown
+/// release and invalid (10, 21) usage, each releasing exactly its own hold; ledger reads by key
+/// and opaque identifier, the list and a signed receipt bind exactly the stored records and
+/// change only the receipt sequence. Fresh inference keeps its own gates: C is admitted and
+/// charged 15 wei; over-credit, over-cap, `read`-only, F's full slot, changed serving terms,
+/// P's withdrawn report and a held key are each refused by their own rule with every row
+/// unchanged. D's 120th record is admitted after every quote refusal so far and its 121st
+/// refused; B's 30th unknown release is admitted, then B's credentials are refused. After
+/// reopening, restart recovery releases F's hold, after which F is admitted again; late
+/// replays return first results; final reads and receipt agree; A ends at 944 available, 51
+/// spent, (31, 20) tokens, the 5-wei fee and 1,000 funded. Quote rows equal their state at
+/// exhaustion. In minute M + 1, inference first leaves every quote row unchanged, and only the
+/// budget's own operation then opens its new minute.
+///
+/// Catches: settlement, release, recovery, reads, receipts or reservation gated by or charging
+/// either quote budget; a quote refusal that writes a row (including committed pending-state
+/// cleanup of a lapsed lease or quote) or consumes an inference allowance; exhaustion that
+/// waives or bypasses an inference gate; a regressing quote clock.
+fn exhausted_quote_budget_case(budget: QuoteBudget) {
+    const M: u64 = 1_000;
+    const START: u64 = M * 60;
+    const REGRESSED: u64 = 59_950;
+    let t = START + 10;
+    let case = format!("{budget:?}");
+    let refusal = match budget {
+        QuoteBudget::Work => QUOTE_WORK_REFUSAL,
+        QuoteBudget::Issuance => QUOTE_ISSUANCE_REFUSAL,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let rows = || expiry_ledger_rows(&path);
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let provider = crate::wallet::address_from_private_key(PROVIDER_KEY).unwrap();
+    let usage = |prompt_tokens, completion_tokens| TokenUsage { prompt_tokens, completion_tokens };
+    let issue = |store: &BillingStore, account: &str, cap: Option<&str>, slots: u32, scopes: &[&str]| {
+        store.issue_credential(account, &CredentialIssueRequest {
+            expires_at: 1_000_000, spend_cap_wei: cap.map(str::to_string), max_concurrency: slots,
+            scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
+        }, 102).unwrap()
+    };
+
+    // A holds the existing requests and the fresh-admission gates.
+    let (qa, _, opened_a) = paid(&store);
+    let terms = qa.payload.clone();
+    let a = terms.id.clone();
+    let model = terms.model.clone();
+    let root = opened_a.credential.unwrap();
+    let c = issue(&store, &a, None, 4, &["infer", "read"]);
+    let f = issue(&store, &a, None, 1, &["infer"]);
+    let capped = issue(&store, &a, Some("10"), 2, &["infer"]);
+    let reader = issue(&store, &a, None, 2, &["read"]);
+    // B carries both inference budgets.
+    let qb = quote(1000, false);
+    store.store_quote(&qb, 100).unwrap();
+    let pb = payment(&qb.payload, true, 1000, 2);
+    register(&store, &qb, &pb, 100);
+    let b = qb.payload.id.clone();
+    let b_model = qb.payload.model.clone();
+    let b_root = store.open_account(&qb, Some(&pb), 101).unwrap().credential.unwrap();
+    let d = issue(&store, &b, None, 2, &["infer"]);
+    // P's current report is withdrawn by three real misses.
+    let mut profiled = quote(0, true).payload.model;
+    profiled.serving = Some(crate::performance::test_profile());
+    profiled.serving.as_mut().unwrap().max_concurrency = 32;
+    let (qp, opened_p) = performance_account(&store, profiled.clone(), 3);
+    let p = qp.payload.id.clone();
+    let p_root = opened_p.credential.unwrap();
+    for n in 0..3 {
+        let held = store.reserve(&p, &p_root.id, &format!("p-miss-{n}"), 1, 256, 150, &profiled).unwrap();
+        settle_performance(&store, &held, true, false);
+    }
+    assert!(store.performance_withdrawn(&profiled).unwrap(), "{case}: P's report is latched");
+
+    // The work budget initializes exhausted in minute 997; that refusal changes only the work clock.
+    let before = rows();
+    assert_eq!(store.sign_quote(proposal_terms(&terms, 1, 59_820), PROVIDER_KEY, 59_820).unwrap_err(), QUOTE_WORK_REFUSAL);
+    assert_eq!(rows(), with_quote_clock(&before, "quote-work:global", "quote_work_minute", 997, 600),
+        "{case}: the initialization refusal changed more than the work clock");
+    let sign = |store: &BillingStore, n: u64, at: u64| {
+        let proposal = proposal_terms(&terms, n, at);
+        let signed = store.sign_quote(proposal.clone(), PROVIDER_KEY, at).unwrap();
+        assert_eq!(signed.payload, proposal);
+        protocol::verify(protocol::QUOTE_DOMAIN, &signed, &provider).unwrap();
+        signed
+    };
+    let mut signed: Vec<Signed<Quote>> = Vec::new();
+    if budget == QuoteBudget::Issuance {
+        signed.extend((0..300).map(|n| sign(&store, 10_000 + n, 59_880)));
+        assert_eq!(quote_work_rate(&store), ("998".into(), 998, 300));
+    }
+
+    // Existing requests, created before exhaustion, touch no quote row.
+    let quote_state = quote_rows(&rows());
+    let prior = store.reserve(&a, &root.id, "prior", 1, 1, 59_890, &model).unwrap();
+    store.settle(&prior.id, &usage(1, 1), "completed", 59_891).unwrap();
+    let held = ["held-known", "held-unknown", "held-invalid"].map(|key| store.reserve(&a, &c.id, key, 10, 20, 59_900, &model).unwrap());
+    let restart = store.reserve(&a, &f.id, "held-restart", 10, 20, 59_900, &model).unwrap();
+    assert!(held.iter().chain([&restart]).all(|hold| hold.max_cost_wei == "30"), "{case}");
+    assert_eq!(quote_rows(&rows()), quote_state, "{case}: reservations or a settlement touched a quote budget");
+    if budget == QuoteBudget::Issuance {
+        signed.extend((300..601).map(|n| sign(&store, 10_000 + n, 59_940)));
+        assert_eq!(quote_work_rate(&store), ("999".into(), 999, 301));
+    }
+    let quote_state = quote_rows(&rows());
+    budget_records(&store, &b, &d.id, "d-window", 119, 59_990, BudgetEnd::Known("completed"));
+    budget_records(&store, &b, &b_root.id, "b-unknown", 29, 59_990, BudgetEnd::Unknown("cancelled_unknown_usage"));
+    assert_eq!(quote_rows(&rows()), quote_state, "{case}: budget records touched a quote budget");
+
+    // Pending state that lapses at LAPSE, inside M and before the first refusal, so that a
+    // refusal committing pending-state cleanup is visible: an acknowledged, unopened funding
+    // intent whose admission lease ends then, and a standalone quote expiring then. Both are
+    // prerequisites signed directly, like the accounts' quotes, and commit in minute 999.
+    const LAPSE: u64 = START + 5;
+    let lapsing = || {
+        let mut lapsing = quote(1000, false).payload;
+        (lapsing.issued_at, lapsing.expires_at) = (59_995, LAPSE);
+        protocol::sign(protocol::QUOTE_DOMAIN, lapsing, PROVIDER_KEY).unwrap()
+    };
+    let (lease, standalone) = (lapsing(), lapsing());
+    for pending in [&lease, &standalone] {
+        store.store_quote(pending, 59_995).unwrap();
+    }
+    register(&store, &lease, &payment(&lease.payload, true, 1000, 4), 59_995);
+    let still_pending = |rows: &ExpiryRows, step: &str| {
+        let intent = rows["funding_intents"].iter().find(|row| row[0] == lease.payload.id.as_str());
+        assert_eq!(intent.map(|row| row[7].clone()), Some(json!(LAPSE)), "{case}, {step}: the lapsed lease was cleaned up");
+        assert!(rows["quotes"].iter().any(|row| row[0] == standalone.payload.id.as_str()),
+            "{case}, {step}: the expired standalone quote was cleaned up");
+    };
+
+    // Exhaustion of exactly one budget at the start of M, by real calls.
+    let money = money_rows(&rows());
+    let candidate = match budget {
+        QuoteBudget::Work => {
+            signed.extend((0..600).map(|n| sign(&store, 10_000 + n, START)));
+            assert_eq!(quote_work_rate(&store), ("1000".into(), 1000, 600));
+            store.store_quote(&signed[0], START).unwrap();
+            assert_eq!(committed_quote_rate(&store), (Some("1000".into()), 1000, 1, 0));
+            None
+        }
+        QuoteBudget::Issuance => {
+            let candidate = signed.pop().unwrap();
+            for quote in &signed {
+                store.store_quote(quote, START).unwrap();
+            }
+            assert_eq!(committed_quote_rate(&store), (Some("1000".into()), 1000, 600, 0));
+            assert_eq!(quote_work_rate(&store), ("999".into(), 999, 301));
+            Some(candidate)
+        }
+    };
+    assert_eq!(money_rows(&rows()), money, "{case}: exhaustion changed a money row");
+    let stored = rows()["quotes"].len();
+    assert_eq!(stored, if budget == QuoteBudget::Work { 2 } else { 601 }, "{case}: the committed quotes and the lapsing one");
+    assert!((stored as i64) < MAX_PENDING, "{case}: quote storage is not what refuses");
+    still_pending(&rows(), "exhaustion");
+
+    // The other budget keeps its own allowance in M (before LAPSE, so that its own cleanup
+    // leaves the lapsing state for the refusals below).
+    let before = rows();
+    match budget {
+        QuoteBudget::Work => {
+            store.store_quote(&signed[1], START + 1).unwrap();
+            assert_eq!(committed_quote_rate(&store), (Some("1000".into()), 1000, 2, 0));
+            assert_eq!(quote_work_rate(&store), ("1000".into(), 1000, 600));
+        }
+        QuoteBudget::Issuance => {
+            // Each route-shaped proposal signs and is refused issuance; its work unit stays spent.
+            for (n, spent) in [(20_000, 1), (20_001, 2)] {
+                let previous = rows();
+                let route = sign(&store, n, t);
+                assert_eq!(store.store_quote(&route, t).unwrap_err(), QUOTE_ISSUANCE_REFUSAL);
+                assert_eq!(rows(), with_quote_clock(&previous, "quote-work:global", "quote_work_minute", 1000, spent),
+                    "{case}: a route-shaped proposal changed more than its spent work unit");
+            }
+        }
+    }
+    assert_eq!(money_rows(&rows()), money_rows(&before), "{case}: the other budget's operation changed a money row");
+
+    // A refusal of the exhausted budget returns exactly its message and changes no row.
+    let refused = |store: &BillingStore, at: u64, step: &str| {
+        let before = expiry_ledger_rows(&path);
+        let error = match &candidate {
+            None => store.sign_quote(proposal_terms(&terms, 30_000 + at, at), PROVIDER_KEY, at).unwrap_err(),
+            Some(candidate) => store.store_quote(candidate, at).unwrap_err(),
+        };
+        assert_eq!(error, refusal, "{case}, {step}: at {at}");
+        assert_eq!(expiry_ledger_rows(&path), before, "{case}, {step}: the refusal at {at} changed a row");
+    };
+    for (at, step) in [(t, "exhausted"), (REGRESSED, "regressed sample"), (START + 59, "last second of M")] {
+        refused(&store, at, step);
+    }
+    still_pending(&rows(), "refusals after the lapse");
+    let exhausted = quote_rows(&rows());
+
+    // Existing requests settle, release and read exactly while the budget is exhausted.
+    let mut expected = rows();
+    expect_terminal(&mut expected, &held[0].id, "completed", Some((10, 7, 17)), t + 1);
+    assert_eq!(store.settle(&held[0].id, &usage(10, 7), "completed", t + 1).unwrap().cost_wei, "17", "{case}");
+    assert_eq!(rows(), expected, "{case}: known settlement");
+    refused(&store, t + 1, "after known settlement");
+    expect_terminal(&mut expected, &held[1].id, "cancelled_unknown_usage", None, t + 2);
+    store.settle(&held[1].id, &TokenUsage::default(), "cancelled_unknown_usage", t + 2).unwrap();
+    assert_eq!(rows(), expected, "{case}: unknown release");
+    refused(&store, t + 2, "after unknown release");
+    expect_terminal(&mut expected, &held[2].id, "invalid_usage_unknown_usage", None, t + 3);
+    let error = store.settle(&held[2].id, &usage(10, 21), "completed", t + 3).unwrap_err();
+    assert!(error.starts_with("usage_over_reservation:"), "{case}: {error}");
+    assert_eq!(rows(), expected, "{case}: invalid-usage release");
+    refused(&store, t + 3, "after invalid-usage release");
+    assert_ledger_reads(&store, &path, &expected, &a, &format!("{case}: reads while exhausted"));
+    assert_ledger_receipt(&store, &path, &mut expected, &a, t + 4, &format!("{case}: receipt while exhausted"));
+    refused(&store, t + 4, "after reads");
+
+    // Fresh inference is admitted by its own rules...
+    let fresh = store.reserve(&a, &c.id, "fresh", 10, 20, t + 10, &model).unwrap();
+    expected = gateway_reserved(&expected, &rows(), "fresh", &c.id, 10, 20, 30, (t + 10, t + 10));
+    assert_eq!(rows(), expected, "{case}: fresh reservation");
+    expect_terminal(&mut expected, &fresh.id, "completed", Some((10, 5, 15)), t + 11);
+    store.settle(&fresh.id, &usage(10, 5), "completed", t + 11).unwrap();
+    assert_eq!(rows(), expected, "{case}: fresh settlement");
+    refused(&store, t + 11, "after fresh admission");
+    // ...and refused by them, with every row unchanged.
+    let mut changed_terms = model.clone();
+    changed_terms.revision = "sha256:another-revision".into();
+    let p_model = store.account(&p).unwrap().model;
+    for (account, credential, key, tokens, execution, prefix) in [
+        (&a, &c.id, "over-credit", (1, 4096), &model, "insufficient_funds:"),
+        (&a, &capped.id, "over-cap", (10, 20), &model, "spend_cap:"),
+        (&a, &reader.id, "read-only", (10, 20), &model, "forbidden:"),
+        (&a, &f.id, "slot-held", (10, 20), &model, "saturation:"),
+        (&a, &c.id, "changed-terms", (10, 20), &changed_terms, "model_revision_unavailable:"),
+        (&p, &p_root.id, "withdrawn-report", (1, 256), &p_model, "model_unqualified:"),
+    ] {
+        assert_reserve_refused(&store, &path, account, credential, key, tokens, t + 12, execution, prefix, &case);
+        refused(&store, t + 12, key);
+    }
+    for credential in [&c.id, &root.id] {
+        let error = store.reserve(&a, credential, "held-known", 10, 20, t + 12, &model).unwrap_err();
+        assert!(error.starts_with("duplicate_request:"), "{case}: {error}");
+    }
+    assert_eq!(rows(), expected, "{case}: duplicates");
+
+    // Quote refusals consumed no inference allowance: D's 120th and B's 30th are admitted.
+    assert_eq!(budget_counts(&path, &b, &d.id, t + 20 - 60, t + 20 - 3600), (119, 29), "{case}");
+    let d120 = store.reserve(&b, &d.id, "d-120", 1, 0, t + 20, &b_model).unwrap();
+    expected = gateway_reserved(&expected, &rows(), "d-120", &d.id, 1, 0, 1, (t + 20, t + 20));
+    expect_terminal(&mut expected, &d120.id, "completed", Some((1, 0, 1)), t + 20);
+    store.settle(&d120.id, &usage(1, 0), "completed", t + 20).unwrap();
+    assert_eq!(rows(), expected, "{case}: D's 120th record");
+    assert_budget_refused(&store, &path, &b, &d.id, "d-121", t + 20, &case);
+    refused(&store, t + 20, "credential budget reached");
+    let last = store.reserve(&b, &b_root.id, "b-unknown-last", 1, 0, t + 21, &b_model).unwrap();
+    expected = gateway_reserved(&expected, &rows(), "b-unknown-last", &b_root.id, 1, 0, 1, (t + 21, t + 21));
+    expect_terminal(&mut expected, &last.id, "cancelled_unknown_usage", None, t + 21);
+    store.settle(&last.id, &TokenUsage::default(), "cancelled_unknown_usage", t + 21).unwrap();
+    assert_eq!(rows(), expected, "{case}: B's 30th unknown release");
+    assert_eq!(budget_counts(&path, &b, &b_root.id, t + 21 - 60, t + 21 - 3600), (30, 30), "{case}");
+    for credential in [&b_root.id, &d.id] {
+        assert_budget_refused(&store, &path, &b, credential, "b-after-budget", t + 21, &case);
+    }
+    refused(&store, t + 21, "account budget reached");
+
+    // Reopened, the budget stays exhausted, and restart recovery still releases F's hold.
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    for (at, step) in [(t + 30, "reopened"), (REGRESSED, "reopened, regressed sample"), (START + 59, "reopened, last second of M")] {
+        refused(&store, at, step);
+    }
+    assert_eq!(rows(), expected, "{case}: reopening");
+    still_pending(&expected, "reopened");
+    expect_terminal(&mut expected, &restart.id, "restart_unknown_usage", None, t + 31);
+    assert_eq!(store.recover_requests(t + 31).unwrap(), 1, "{case}");
+    assert_eq!(rows(), expected, "{case}: restart recovery");
+    refused(&store, t + 31, "after restart recovery");
+    // F's slot is free again, so its own concurrency rule admits it.
+    let again = store.reserve(&a, &f.id, "f-after-restart", 10, 20, t + 32, &model).unwrap();
+    expected = gateway_reserved(&expected, &rows(), "f-after-restart", &f.id, 10, 20, 30, (t + 32, t + 32));
+    expect_terminal(&mut expected, &again.id, "completed", Some((10, 7, 17)), t + 33);
+    store.settle(&again.id, &usage(10, 7), "completed", t + 33).unwrap();
+    assert_eq!(rows(), expected, "{case}: F admitted after recovery");
+    refused(&store, t + 33, "after F's admission");
+
+    // First results survive late outcomes; final reads and receipt agree with every row.
+    for hold in held.iter().chain([&restart, &fresh, &again]) {
+        let record = expiry_row(&mut expected, "requests", &hold.id)[6].clone();
+        for (late, status) in [(usage(10, 20), "completed"), (TokenUsage::default(), "failed_unknown_usage")] {
+            assert_eq!(serde_json::to_value(store.settle(&hold.id, &late, status, t + 34).unwrap()).unwrap(), record,
+                "{case}: late {status} for {}", hold.id);
+        }
+    }
+    assert_eq!(store.recover_requests(t + 34).unwrap(), 0, "{case}");
+    assert_eq!(rows(), expected, "{case}: late outcomes");
+    assert_ledger_reads(&store, &path, &expected, &a, &format!("{case}: final reads"));
+    assert_ledger_receipt(&store, &path, &mut expected, &a, t + 35, &format!("{case}: final receipt"));
+    refused(&store, t + 35, "final");
+    let account = store.account(&a).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str(),
+            account.usage.prompt_tokens, account.usage.completion_tokens, account.provider_loss_wei.as_str(),
+            account.fee_wei.as_str(), account.funded_wei.as_str()),
+        ("944", "0", "51", 31, 20, "0", "5", "1000"),
+        "{case}"
+    );
+    assert_eq!(quote_rows(&rows()), exhausted, "{case}: inference consumed or refreshed a quote budget");
+
+    // In minute M + 1 inference still moves no quote clock; only the budget's own operation
+    // opens its new minute.
+    let next = START + 70;
+    let later = store.reserve(&a, &c.id, "next-minute", 10, 20, next, &model).unwrap();
+    store.settle(&later.id, &usage(10, 7), "completed", next).unwrap();
+    assert_eq!(store.recover_requests(next).unwrap(), 0, "{case}");
+    assert_eq!(quote_rows(&rows()), exhausted, "{case}: inference in a later minute moved a quote clock");
+    still_pending(&rows(), "inference in M + 1");
+    match &candidate {
+        None => {
+            sign(&store, 40_000, next);
+            assert_eq!(quote_work_rate(&store), ("1001".into(), 1001, 1));
+            assert_eq!(committed_quote_rate(&store), (Some("1000".into()), 1000, 2, 0));
+        }
+        Some(candidate) => {
+            store.store_quote(candidate, next).unwrap();
+            assert_eq!(committed_quote_rate(&store), (Some("1001".into()), 1001, 1, 0));
+            assert_eq!(quote_work_rate(&store), ("1000".into(), 1000, 2));
+        }
+    }
+}
+
+/// Task 3.3 (a), (c)-(e) for the pre-signing work budget; see `exhausted_quote_budget_case`.
+#[test]
+fn exhausted_quote_signing_work_leaves_existing_requests_and_inference_gates_intact() {
+    exhausted_quote_budget_case(QuoteBudget::Work);
+}
+
+/// Task 3.3 (b)-(e) for the committed-issuance budget; see `exhausted_quote_budget_case`.
+#[test]
+fn exhausted_committed_quote_issuance_leaves_existing_requests_and_inference_gates_intact() {
+    exhausted_quote_budget_case(QuoteBudget::Issuance);
+}
+
+/// A signed development offer of `routes`' provider for the agreement's model and price, with
+/// the immutable hex revisions offers require, so that the public proposal route reaches the
+/// quote budgets.
+fn budget_offer(routes: &CredentialRoutes, now: u64) -> Signed<crate::protocol::InferenceOffer> {
+    let agreement = &routes.agreement.payload;
+    let mut model = agreement.model.clone();
+    model.revision = "ab".repeat(20);
+    model.tokenizer_revision = "cd".repeat(20);
+    protocol::sign(protocol::OFFER_DOMAIN, crate::protocol::InferenceOffer {
+        network: network(), provider_wallet: routes.state.wallet.clone(),
+        peer_id: "QmPVGjYFugq4XUyBfoTHG6c3qxfBS26jEdaFM1gdAVuMZ2".into(), deployment_id: "quote-budgets".into(),
+        endpoint: "http://127.0.0.1:9419".into(), model, price: agreement.price.clone(),
+        min_funding_wei: "1000".into(), platform_wallet: agreement.platform_wallet.clone(), fee_bps: 50,
+        max_concurrency: 4, revision: 1, issued_at: now, expires_at: now + 3600,
+    }, PROVIDER_KEY).unwrap()
+}
+
+/// Sends the public proposal `body` to `fixture`'s control router and asserts 429
+/// `rate_limit` with exactly `refusal`, and no engine call. A work refusal precedes signing and
+/// changes no row. An issuance refusal follows the route's claimed work unit, which is never
+/// refunded, so only the work clock `work` (minute, count) advances, by that one unit.
+async fn assert_proposal_refused(fixture: &GatewayFixture, body: &[u8], refusal: &str, work: &mut Option<(u64, u64)>, case: &str) {
+    let before = fixture.rows();
+    let (status, document) = fixture.routes.anonymous("POST", "/v1/contracts/propose", body.to_vec()).await;
+    assert_eq!((status, document["error"]["code"].as_str(), document["error"]["message"].as_str()),
+        (axum::http::StatusCode::TOO_MANY_REQUESTS, Some("rate_limit"), Some(refusal)), "{case}: {document}");
+    let expected = match work {
+        None => before,
+        Some((minute, count)) => {
+            *count += 1;
+            with_quote_clock(&before, "quote-work:global", "quote_work_minute", *minute, *count)
+        }
+    };
+    assert_eq!(fixture.rows(), expected, "{case}: the refused proposal changed more than its own work unit");
+    fixture.engine.untouched(case);
+}
+
+/// Task 3.3 through the production routers, once per budget. The control router's
+/// `/v1/contracts/propose` and the public inference router serve one provider, with a
+/// controlled engine (test evidence only, not llama.cpp). The routers read the real clock, so
+/// each budget is exhausted by real calls of the ledger's own interfaces at minute F, ten
+/// minutes after the test starts; both quote clocks are non-regressing, so every real-clock
+/// proposal sample uses F, without restored counters, sleeps or stored-quote occupancy.
+///
+/// Before exhaustion the root has a completed request (7 wei) and two chat requests held in
+/// the engine, each holding 8 wei. `Work`: the work clock initializes (refused) in the minute
+/// before the test, signs one spare quote in the test's minute and makes 600 signatures in F; the
+/// spare then commits, so issuance keeps its own allowance. `Issuance`: the work clock
+/// initializes in F - 3 and signs 300 quotes in each of F - 2 and F - 1; all 600 commit in F.
+///
+/// While exhausted, each public proposal gets 429 `rate_limit` with exactly the budget's
+/// message: a work refusal changes no row; an issuance refusal spends only its one work unit,
+/// unrefunded. Meanwhile the held requests settle through the gateway (known usage charged
+/// 7 wei; a cancellation releasing its whole 8 wei with 8 wei of exposure); a fresh request is
+/// admitted and charged 7 wei; a request with qualification withdrawn (503
+/// `model_unqualified`, no engine call), one beyond the balance (402 `insufficient_balance`,
+/// no generation), a `read`-only bearer (403 `credential_scope`) and a revoked bearer (401
+/// `invalid_api_key`) record nothing; a held key gets its 409. Public status reads by key and identifier (root and `read` bearers),
+/// control-plane request and account reads, and a signed receipt binding every request return
+/// exactly the stored records and change only the receipt sequence. Complete rows come from
+/// fixed literals; no inference step changes a quote row.
+///
+/// Catches: a proposal refusal that pauses or charges inference admission, gateway inference
+/// or reads gated by or charging either quote budget, a refusal changing a money row, and the
+/// gateway's own qualification, credit, scope or authentication gate skipped while a quote
+/// budget is exhausted.
+#[tokio::test]
+async fn exhausted_quote_budgets_refuse_public_proposals_while_gateway_inference_and_reads_continue() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    for budget in [QuoteBudget::Work, QuoteBudget::Issuance] {
+        let case = format!("{budget:?}");
+        let mut fixture = gateway_fixture(false, 120).await;
+        let root = fixture.root.clone();
+        let contract = fixture.id();
+        let state = fixture.routes.state.clone();
+        let terms = fixture.routes.agreement.payload.clone();
+        let reader = fixture.routes.issue(1, &["read"]);
+        let revoked = fixture.routes.issue(1, &["infer"]);
+        fixture.routes.ledger().revoke_credential(&contract, &revoked.id).unwrap();
+        let now = protocol::now().unwrap();
+        let future = now / 60 + 10;
+        let offer_id = state.offers.insert(budget_offer(&fixture.routes, now)).unwrap();
+        let proposal = serde_json::to_vec(&json!({"offer_id": offer_id,
+            "consumer_wallet": format!("0x{}", "22".repeat(20)), "funding_wei": "1000"})).unwrap();
+
+        // Existing requests: one completed, two held in the engine.
+        let rows = fixture.rows();
+        let start = protocol::now().unwrap();
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "settled-before", "settled before", 4, false)).await).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let held = fixture.spawn(gateway_chat(&root.bearer, "held-known", "held wait=held:after-output", 4, false));
+        let cancelled = fixture.spawn(gateway_chat(&root.bearer, "held-cancelled", "cancelled stall=cancelled:after-output", 4, false));
+        assert_eq!(fixture.engine.events(2).await, ["held cancelled", "held held"], "{case}");
+        let window = (start, protocol::now().unwrap());
+        let mut expected = gateway_reserved(&rows, &fixture.rows(), "settled-before", &root.id, 4, 4, 8, window);
+        expected = gateway_settled(&expected, &fixture.rows(), &fixture.view("settled-before").id, "completed", Some((4, 3, 7)), window);
+        expected = gateway_reserved(&expected, &fixture.rows(), "held-known", &root.id, 4, 4, 8, window);
+        expected = gateway_reserved(&expected, &fixture.rows(), "held-cancelled", &root.id, 4, 4, 8, window);
+        assert_eq!(fixture.rows(), expected, "{case}: existing requests");
+        fixture.engine.take();
+
+        // Exhaust exactly one budget at F by real calls of the ledger's interfaces.
+        let ledger = fixture.routes.ledger();
+        let sign = |n: u64, at: u64| {
+            let terms = proposal_terms(&terms, n, at);
+            let signed = ledger.sign_quote(terms.clone(), PROVIDER_KEY, at).unwrap();
+            assert_eq!(signed.payload, terms);
+            signed
+        };
+        let money = money_rows(&fixture.rows());
+        let (refusal, mut work) = match budget {
+            QuoteBudget::Work => {
+                assert_eq!(ledger.sign_quote(proposal_terms(&terms, 1, now - 60), PROVIDER_KEY, now - 60).unwrap_err(),
+                    QUOTE_WORK_REFUSAL);
+                let spare = sign(2, now);
+                for n in 0..600 {
+                    sign(10_000 + n, future * 60);
+                }
+                assert_eq!(quote_work_rate(ledger), (future.to_string(), future, 600));
+                // Committed issuance keeps its own allowance: the spare commits in its own clock.
+                let (_, minute, count, _) = committed_quote_rate(ledger);
+                ledger.store_quote(&spare, now).unwrap();
+                let (minute, count) = if now / 60 > minute { (now / 60, 1) } else { (minute, count + 1) };
+                assert_eq!(committed_quote_rate(ledger), (Some(minute.to_string()), minute, count, 0), "{case}");
+                (QUOTE_WORK_REFUSAL, None)
+            }
+            QuoteBudget::Issuance => {
+                assert_eq!(ledger.sign_quote(proposal_terms(&terms, 1, (future - 3) * 60), PROVIDER_KEY, (future - 3) * 60)
+                    .unwrap_err(), QUOTE_WORK_REFUSAL);
+                let signed: Vec<Signed<Quote>> = (0..600)
+                    .map(|n| sign(10_000 + n, if n < 300 { (future - 2) * 60 } else { (future - 1) * 60 }))
+                    .collect();
+                for quote in &signed {
+                    ledger.store_quote(quote, future * 60).unwrap();
+                }
+                assert_eq!(committed_quote_rate(ledger), (Some(future.to_string()), future, 600, 0));
+                assert_eq!(quote_work_rate(ledger), ((future - 1).to_string(), future - 1, 300));
+                assert!((fixture.rows()["quotes"].len() as i64) < MAX_PENDING, "{case}");
+                (QUOTE_ISSUANCE_REFUSAL, Some((future - 1, 300)))
+            }
+        };
+        assert_eq!(money_rows(&fixture.rows()), money, "{case}: exhaustion changed a money row");
+        let mut expected = fixture.rows();
+        assert_proposal_refused(&fixture, &proposal, refusal, &mut work, &format!("{case}: exhausted")).await;
+        if let Some((minute, count)) = work {
+            expected = with_quote_clock(&expected, "quote-work:global", "quote_work_minute", minute, count);
+        }
+        let quotes = quote_rows(&expected);
+
+        // The held requests settle: known usage is charged, a cancellation releases its hold.
+        fixture.engine.release("held");
+        let (status, _, text) = gateway_answer(held.await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let known = fixture.settled("held-known").await;
+        expected = gateway_settled(&expected, &fixture.rows(), &known.id, "completed", Some((4, 3, 7)), (start, protocol::now().unwrap()));
+        assert_eq!(fixture.rows(), expected, "{case}: known settlement");
+        let target = fixture.view("held-cancelled");
+        let (status, header, answer) = fixture.cancel(&root.bearer, "held-cancelled").await;
+        assert_eq!((status, header.as_deref(), answer), (StatusCode::ACCEPTED, Some(target.id.as_str()),
+            json!({"id": target.id, "status": "cancelling"})), "{case}");
+        assert_eq!(fixture.engine.event().await, "dropped cancelled", "{case}");
+        let (status, _, text) = gateway_answer(cancelled.await.unwrap()).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::CONFLICT, Some("request_cancelled")), "{case}: {text}");
+        let released = fixture.settled("held-cancelled").await;
+        expected = gateway_settled(&expected, &fixture.rows(), &released.id, "cancelled_unknown_usage", None, (start, protocol::now().unwrap()));
+        assert_eq!(fixture.rows(), expected, "{case}: unknown release");
+        assert_eq!(quote_rows(&fixture.rows()), quotes, "{case}: settlement touched a quote budget");
+        fixture.engine.take();
+
+        // A fresh request after the refused proposal is admitted and charged by its own rules...
+        let start = protocol::now().unwrap();
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "fresh", "fresh request", 4, false)).await).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {text}");
+        let window = (start, protocol::now().unwrap());
+        let fresh = fixture.view("fresh");
+        let reserved = gateway_reserved(&expected, &fixture.rows(), "fresh", &root.id, 4, 4, 8, window);
+        expected = gateway_settled(&reserved, &fixture.rows(), &fresh.id, "completed", Some((4, 3, 7)), window);
+        assert_eq!(fixture.rows(), expected, "{case}: fresh request");
+        assert_eq!(quote_rows(&fixture.rows()), quotes, "{case}: a fresh request touched a quote budget");
+        assert_eq!(fixture.engine.take().generated.len(), 1, "{case}");
+        assert_proposal_refused(&fixture, &proposal, refusal, &mut work, &format!("{case}: after inference")).await;
+        if let Some((minute, count)) = work {
+            expected = with_quote_clock(&expected, "quote-work:global", "quote_work_minute", minute, count);
+        }
+        let quotes = quote_rows(&expected);
+        // ...and refused by them, with nothing recorded.
+        state.qualified_models.write().unwrap().clear();
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "unqualified", "fresh request", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, Some("model_unqualified")), "{case}: {text}");
+        fixture.engine.untouched("unqualified");
+        state.qualified_models.write().unwrap().insert(terms.model.id.clone());
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "over-credit", "fresh request", 4096, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::PAYMENT_REQUIRED, Some("insufficient_balance")), "{case}: {text}");
+        assert!(fixture.engine.take().generated.is_empty(), "{case}: an over-credit request was dispatched");
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&reader.bearer, "read-only", "fresh request", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("credential_scope")), "{case}: {text}");
+        fixture.engine.untouched("read-only");
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&revoked.bearer, "revoked", "fresh request", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::UNAUTHORIZED, Some("invalid_api_key")), "{case}: {text}");
+        fixture.engine.untouched("revoked");
+        for key in ["unqualified", "over-credit", "read-only", "revoked"] {
+            assert!(!fixture.recorded(key), "{case}: {key}");
+        }
+        assert_eq!(fixture.rows(), expected, "{case}: refused requests");
+        fixture.duplicates("settled-before", "settled before", &[&root.bearer]).await;
+        assert!(state.settlement_fault().is_none() && state.accepting.load(Ordering::Acquire), "{case}");
+
+        // Reads return exactly the stored records and change only the receipt sequence.
+        for key in ["settled-before", "held-known", "held-cancelled", "fresh"] {
+            let view = fixture.view(key);
+            let record = serde_json::to_value(&view).unwrap();
+            assert_eq!(record, expiry_row(&mut expected, "requests", &view.id)[6], "{case}: {key}");
+            for target in [key, view.id.as_str()] {
+                for bearer in [&root.bearer, &reader.bearer] {
+                    assert_eq!(fixture.status(bearer, target).await, (StatusCode::OK, record.clone()), "{case}: {target}");
+                }
+            }
+            let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/requests/{key}"),
+                Some(&reader.bearer)).await;
+            assert_eq!((status, document), (StatusCode::OK, record), "{case}: {key}");
+        }
+        let account = expiry_row(&mut expected, "accounts", &contract)[3].clone();
+        assert_eq!((&account["available_wei"], &account["reserved_wei"], &account["spent_wei"]),
+            (&json!("974"), &json!("0"), &json!("21")), "{case}");
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}"), Some(&reader.bearer)).await;
+        assert_eq!((status, document), (StatusCode::OK, account.clone()), "{case}");
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/receipt"), Some(&reader.bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{case}: {document}");
+        let payload = routed_receipt(&fixture.routes, document);
+        assert_eq!(payload["account"], account, "{case}");
+        let mut bound = payload["requests"].as_array().unwrap().clone();
+        bound.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        assert_eq!(bound, account_records(&expected, &contract), "{case}: the receipt's requests");
+        let sequence = &mut expiry_row(&mut expected, "accounts", &contract)[4];
+        *sequence = json!(sequence.as_u64().unwrap() + 1);
+        assert_eq!(fixture.rows(), expected, "{case}: a read changed more than the receipt sequence");
+        assert_eq!(quote_rows(&fixture.rows()), quotes, "{case}: inference or reads touched a quote budget");
+        fixture.engine.untouched("reads");
+        assert_proposal_refused(&fixture, &proposal, refusal, &mut work, &format!("{case}: final")).await;
+    }
+}
