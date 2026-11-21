@@ -360,9 +360,14 @@ impl Drop for Fixture {
 
 impl Fixture {
     async fn new(directory: &Path, case: u64, funding: u128) -> Self {
+        Self::priced(directory, case, funding, "1", "2").await
+    }
+
+    /// The same provider, RPC and quote with the offer's token prices chosen by the caller.
+    async fn priced(directory: &Path, case: u64, funding: u128, input: &str, output: &str) -> Self {
         let public = TcpListener::bind("127.0.0.1:0").unwrap();
         let admin = TcpListener::bind("127.0.0.1:0").unwrap();
-        let mut provider = PreparedProvider::new(directory, case, "1", "2",
+        let mut provider = PreparedProvider::new(directory, case, input, output,
             public.local_addr().unwrap(), admin.local_addr().unwrap());
         let owner_key = format!("{:064x}", 70_000 + case);
         let payer = wallet::address_from_private_key(&owner_key).unwrap();
@@ -3455,4 +3460,94 @@ async fn native_accepted_original_recovers_after_expiry_restart_and_refill_until
     drop(consumer);
     stop.send(()).unwrap();
     server.await.unwrap();
+}
+
+/// Opening-intent 2.8, statement 5, through the production router: genuinely free terms never
+/// take the paid funding-intent path. The quoted payer correctly signs two originals that
+/// commit to the free terms: a fabricated zero-value opening payment, which passes local
+/// envelope validation, and a 100-wei transfer, which does not. With an unlimited balance,
+/// so spendability cannot be the reason, both owner-authenticated funding intents get
+/// 400/`invalid_payment`: the zero-value one from the ledger's free-terms guard, by its exact
+/// message, the transfer from envelope validation. Neither writes an acknowledgement, intent,
+/// account, credential, request, funding, attempt or fee row, and nothing is submitted. The
+/// retained free quote then opens through owner-authenticated `open` with a null transaction
+/// and no chain RPC, as a free account with zero money and a working root credential. The
+/// same two funding intents against the open free account are refused the same way and
+/// change no row. Synthetic RPC, not live-chain evidence. Would catch free terms that accept
+/// a funding intent, and a free opening that needs a payment or chain access.
+#[tokio::test]
+async fn free_terms_refuse_paid_funding_intents_and_open_without_payment_or_rpc() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::priced(directory.path(), 78_500, 0, "0", "0").await;
+    let quote = fixture.quote.clone();
+    assert_eq!((quote.payload.funding_wei.as_str(), quote.payload.price.input_wei_per_1k.as_str(),
+        quote.payload.price.output_wei_per_1k.as_str()), ("0", "0", "0"));
+    fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+    let mut fields = PaymentFields::opening(&quote.payload, 0, 11);
+    let zero = signed_payment(&fields, &fixture.owner_key, 2, &[0xc0]);
+    assert_eq!(fixture.envelope(&zero).unwrap().value_wei, "0", "a structurally valid zero-value payment");
+    fields.value = 100;
+    let transfer = signed_payment(&fields, &fixture.owner_key, 2, &[0xc0]);
+    assert!(matches!(fixture.envelope(&transfer), Err(ChainError::Rejected(_))));
+    let refusals = [
+        (&zero, "invalid_payment: free sessions do not accept funding intents"),
+        (&transfer, "Funding intent must match the agreement, use the current sender nonce, and have balance for value plus signed gas"),
+    ];
+    let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+    let records = || [
+        "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(id,contract,request_key,credential,status,created,record) FROM requests ORDER BY id",
+        "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash",
+        "SELECT json_array(tx_hash,contract,record,raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+        "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash",
+        "SELECT json_array(id,status,record) FROM fee_batches ORDER BY id",
+    ].map(|query| db.prepare(query).unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>().unwrap());
+    let mut expected = records();
+    assert_eq!(expected.iter().map(Vec::len).collect::<Vec<_>>(), [0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    let mut root = None;
+    for opened in [false, true] {
+        if opened {
+            let rpc_before = fixture.rpc.requests.lock().unwrap().len();
+            let body = serde_json::to_vec(&json!({"quote_id":quote.payload.id,"raw_transaction":null})).unwrap();
+            let headers = owner_headers(&mut fixture.app, &quote.payload, &fixture.owner_key, "/v1/contracts/open", &body).await;
+            let (status, document) = request(&mut fixture.app, "/v1/contracts/open", &headers, body).await;
+            assert_eq!(status, StatusCode::OK, "{document}");
+            assert_eq!(fixture.rpc.requests.lock().unwrap().len(), rpc_before, "a free opening reaches no chain RPC");
+            let result: protocol::OpenResult = serde_json::from_value(document).unwrap();
+            let account = &result.account;
+            assert_eq!((account.contract_id.as_str(), account.status.as_str()), (quote.payload.id.as_str(), "free"));
+            assert_eq!(account.price, quote.payload.price);
+            for amount in [&account.funded_wei, &account.fee_wei, &account.spent_wei, &account.reserved_wei,
+                &account.available_wei, &account.reversed_wei, &account.provider_loss_wei, &account.waived_wei] {
+                assert_eq!(amount, "0");
+            }
+            let after = records();
+            assert_eq!(after.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 0, 0, 0, 0, 0, 0, 0],
+                "only the free account and its root credential; the standalone quote is handed off");
+            root = Some((result.credential.unwrap(), serde_json::to_value(account).unwrap()));
+            expected = after;
+        }
+        for (raw, message) in &refusals {
+            let (status, document) = fixture.submit_intent(raw).await;
+            assert_eq!((status, document["error"]["code"].as_str()), (StatusCode::BAD_REQUEST, Some("invalid_payment")),
+                "opened={opened}: {document}");
+            assert_eq!(document["error"]["message"], *message, "opened={opened}");
+            assert_eq!(records(), expected, "opened={opened}: a refused free funding intent wrote a row");
+            assert!(fixture.provider.state.ledger.funding_intent(&quote.payload, raw).unwrap().is_none());
+            fixture.observed_without_submission(None);
+        }
+        if !opened {
+            assert_eq!(serde_json::to_value(fixture.provider.state.ledger.quote(&quote.payload.id).unwrap()).unwrap(),
+                serde_json::to_value(&quote).unwrap(), "the free quote stays retained for its free opening");
+        }
+    }
+    let (credential, account) = root.unwrap();
+    let ledger = BillingStore::open(&fixture.provider.ledger_path, &quote.payload.network).unwrap();
+    let context = ledger.authenticate(&credential.bearer, protocol::now().unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(context.account).unwrap(), account);
+    assert_eq!(context.credential_id, credential.id);
 }

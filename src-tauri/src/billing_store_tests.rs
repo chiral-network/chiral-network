@@ -853,6 +853,269 @@ fn paid_open_never_registers_implicitly_even_before_expiry() {
     assert!(store.prepare_fee_batches(1000, true).unwrap().is_empty());
 }
 
+/// Opening-intent 2.8, statements 1-3, at the ledger. Two paid originals are durably
+/// acknowledged after unrelated paid and free accounts exist. Without verified payment
+/// evidence neither becomes an account, credential, funding credit or fee obligation:
+/// not while its lease is active, not after a rejected attempt releases one lease, not
+/// after quote expiry releases the other, and not after reopening. Opening without that
+/// evidence returns its exact error; so do a different payment for the same terms, a
+/// top-up to the unopened agreement, credential issuance for it, rotation of another
+/// account's root onto it and a maintenance recheck of its hash with accepted evidence,
+/// which maintenance's own scan never selects. None of them writes a row. Cached acknowledgement
+/// recovery and the original-bytes precheck succeed, also without writing. The positive
+/// control then opens each agreement with its own acknowledged payment: 1,000 wei funded,
+/// a 5-wei obligation. Payments are ledger inputs after the chain-verification boundary,
+/// not chain evidence. Would catch an acknowledgement, or a released or expired lease,
+/// treated as payment, and a refusal that leaves a partial row.
+#[test]
+fn acknowledgement_alone_never_opens_or_credits_through_lease_release_expiry_and_reopening() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("acknowledgement-only.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    // Unrelated accepted history: one credited paid account and one free account.
+    let unrelated_root = paid(&store).2.credential.unwrap().id;
+    let free = quote(0, true);
+    store.store_quote(&free, 100).unwrap();
+    store.open_account(&free, None, 101).unwrap();
+    let expiring = quote(1000, false);
+    let released = quote(1000, false);
+    for terms in [&expiring, &released] {
+        store.store_quote(terms, 102).unwrap();
+    }
+    let originals = [
+        (&expiring, payment(&expiring.payload, true, 1000, 7), 7),
+        (&released, payment(&released.payload, true, 1000, 8), 8),
+    ];
+    let history = quote_work_protected_snapshot(&store);
+    let acks = [
+        register(&store, &expiring, &originals[0].1, 150),
+        register(&store, &released, &originals[1].1, 151),
+    ];
+    let acknowledged = quote_work_protected_snapshot(&store);
+    // Acknowledgement adds retained intents only: accounts, credentials, requests,
+    // funding, attempts, fee obligations and fee batches are exactly as before.
+    for table in [4, 5, 6, 7, 8, 10, 11] {
+        assert_eq!(acknowledged[table], history[table], "acknowledgement changed table {table}");
+    }
+    assert_eq!(acknowledged[9].len(), history[9].len() + 2);
+    assert_eq!(active_intents(&store, 151), 2);
+    // Every acknowledged term except the admission deadline (the last column).
+    let terms = |snapshot: &[Vec<String>]| {
+        snapshot[9].iter().map(|row| {
+            let mut row: serde_json::Value = serde_json::from_str(row).unwrap();
+            row.as_array_mut().unwrap().pop();
+            row
+        }).collect::<Vec<_>>()
+    };
+    let refuses = |store: &BillingStore, now: u64| {
+        let before = quote_work_protected_snapshot(store);
+        for ((agreement, original, nonce), ack) in originals.iter().zip(&acks) {
+            let id = &agreement.payload.id;
+            assert_eq!(store.open_account(agreement, None, now).unwrap_err(),
+                "invalid_payment: funding transaction required", "at {now}");
+            assert_eq!(store.check_open_funding(&agreement.payload, None, now).unwrap_err(),
+                "funding_intent_required: original registered funding transaction bytes are required");
+            let substitute = payment(&agreement.payload, true, 1000, 0x30);
+            assert_eq!(store.open_account(agreement, Some(&substitute), now).unwrap_err(),
+                "conflict: funding transaction differs from the registered intent");
+            let topup = payment(&agreement.payload, false, 1000, 0x31);
+            assert_eq!(store.credit_topup(id, &topup, now).unwrap_err(), "not_found: account not found");
+            assert_eq!(store.account(id).unwrap_err(), "not_found: account not found");
+            // The remaining credential and credit writers: no credential is issued for the
+            // agreement or rotated onto it from another account, and maintenance neither
+            // rechecks the acknowledged hash nor credits it from accepted chain evidence.
+            let options = CredentialIssueRequest { expires_at: now + 3600, spend_cap_wei: None,
+                max_concurrency: 1, scopes: vec!["infer".into(), "read".into()] };
+            assert_eq!(store.issue_credential(id, &options, now).unwrap_err(), "not_found: account not found");
+            assert_eq!(store.rotate_credential(id, &unrelated_root, &options, now).unwrap_err(),
+                "not_found: credential not found");
+            assert!(store.credentials(id).unwrap().is_empty());
+            assert!(store.funding_to_recheck().unwrap().iter().all(|funded| funded.tx_hash != original.tx_hash));
+            assert_eq!(store.apply_funding_recheck(&original.tx_hash,
+                &Ok(crate::chain_client::PaymentState::Accepted(original.clone())), now).unwrap_err(),
+                "not_found: funding not found");
+            // Reads of accepted evidence, never credit: the original-bytes precheck and
+            // cached recovery, which must not sample fresh registration time.
+            store.check_open_funding(&agreement.payload, Some(&original.raw_transaction), now).unwrap();
+            let recovered = store.funding_intent(&agreement.payload, &original.raw_transaction).unwrap();
+            assert_eq!(encode(&recovered.unwrap()).unwrap(), encode(ack).unwrap());
+            let cached = store.register_funding_intent(
+                agreement, &agreement.payload.consumer_wallet, &original.raw_transaction,
+                &original.tx_hash, *nonce, PROVIDER_KEY,
+                || Err("cached recovery sampled fresh registration time".into()),
+                false, &agreement.payload.model,
+            ).unwrap();
+            assert_eq!(encode(&cached).unwrap(), encode(ack).unwrap());
+        }
+        assert_eq!(quote_work_protected_snapshot(store), before, "a refusal or read wrote a row at {now}");
+    };
+    refuses(&store, 151);
+
+    // A rejected attempt releases one lease; its agreement stays unopened and uncredited.
+    store.record_funding_attempt(&released.payload.id, &originals[1].1.raw_transaction, "rejected", 152).unwrap();
+    let rejected = quote_work_protected_snapshot(&store);
+    for table in [4, 5, 6, 7, 10, 11] {
+        assert_eq!(rejected[table], acknowledged[table], "lease release changed table {table}");
+    }
+    assert_eq!(rejected[8].len(), acknowledged[8].len() + 1, "only the rejected attempt is recorded");
+    assert_eq!(terms(&rejected), terms(&acknowledged));
+    assert_eq!(active_intents(&store, 152), 1);
+    refuses(&store, 152);
+
+    // Quote expiry releases the other lease, through the maintenance that store_quote and
+    // challenge issuance run.
+    store.transaction(|tx| cleanup_pending(tx, 400)).unwrap();
+    let expired = quote_work_protected_snapshot(&store);
+    for table in [4, 5, 6, 7, 8, 10, 11] {
+        assert_eq!(expired[table], rejected[table], "lease expiry changed table {table}");
+    }
+    assert_eq!(terms(&expired), terms(&acknowledged), "expiry keeps every acknowledged term");
+    assert_eq!(active_intents(&store, 0), 0, "both leases are released");
+    for now in [400, 30 * 86_400] {
+        refuses(&store, now);
+    }
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(quote_work_protected_snapshot(&store), expired);
+    refuses(&store, 30 * 86_400 + 1);
+
+    // Positive control: each acknowledgement opens with its own verified original.
+    let late = 30 * 86_400 + 2;
+    for (agreement, original, _) in &originals {
+        let opened = store.open_account(agreement, Some(original), late).unwrap();
+        let account = &opened.account;
+        assert_eq!(account.status, "active");
+        assert_eq!(
+            [&account.funded_wei, &account.fee_wei, &account.available_wei, &account.spent_wei, &account.reserved_wei],
+            ["1000", "5", "995", "0", "0"]
+        );
+        assert!(opened.credential.is_some());
+    }
+    let credited = quote_work_protected_snapshot(&store);
+    for table in [4, 5, 7, 10] {
+        assert_eq!(credited[table].len(), expired[table].len() + 2, "table {table}");
+        assert!(expired[table].iter().all(|row| credited[table].contains(row)), "table {table}");
+    }
+    assert_eq!(credited[6], expired[6]);
+    assert_eq!(credited[11], expired[11]);
+    assert_eq!(terms(&credited), terms(&acknowledged));
+}
+
+/// Opening-intent 2.8, statement 5, at the ledger. Genuinely free terms take no transfer,
+/// no fabricated zero-value payment, no funding intent and no top-up credit. Paid terms
+/// cannot be opened as free. Signed terms that mix zero prices with funding, or prices
+/// with zero funding, are refused at storage and opening. Each refusal returns its exact
+/// error and writes no row, before and after reopening and after the free account opens.
+/// Controls: the free quote opens free without payment, adding only its account and root
+/// credential and handing off its standalone quote; replaying it with a transfer returns
+/// the unchanged free account without credit or credential; and the paid quote opens only
+/// with its acknowledged verified payment. Payments are ledger inputs after the
+/// chain-verification boundary. Would catch a free opening, intent or top-up that accepts
+/// money, and a paid agreement opened without verified payment.
+#[test]
+fn free_and_paid_terms_never_cross_at_opening_intent_or_topup() {
+    const MIXED: &str = "invalid_quote: free sessions require zero funding; paid sessions require funding";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("free-paid-crossing.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    paid(&store); // Unrelated credited history, a post-verification prerequisite.
+    let free = quote(0, true);
+    let paid_terms = quote(1000, false);
+    for terms in [&free, &paid_terms] {
+        store.store_quote(terms, 102).unwrap();
+    }
+    // A nonzero transfer and a fabricated zero-value payment, both committing to the free terms.
+    let transfer = payment(&free.payload, true, 1000, 9);
+    let zero = payment(&free.payload, true, 0, 10);
+    // Provider-signed terms that cross the kinds: zero prices with funding, prices without.
+    let crossed = [(free.payload.clone(), "1000"), (paid_terms.payload.clone(), "0")].map(|(mut terms, funding)| {
+        terms.id = protocol::random_id();
+        terms.nonce = protocol::random_id();
+        terms.funding_wei = funding.into();
+        protocol::sign(protocol::QUOTE_DOMAIN, terms, PROVIDER_KEY).unwrap()
+    });
+    let refuses = |store: &BillingStore, now: u64, free_opened: bool| {
+        let before = quote_work_protected_snapshot(store);
+        for (offered, nonce) in [(&transfer, 9), (&zero, 10)] {
+            if !free_opened {
+                assert_eq!(store.open_account(&free, Some(offered), now).unwrap_err(),
+                    "invalid_payment: free sessions do not accept a transfer");
+            }
+            assert_eq!(store.check_open_funding(&free.payload, Some(&offered.raw_transaction), now).unwrap_err(),
+                "invalid_payment: free sessions do not accept a transaction");
+            assert_eq!(store.register_funding_intent(
+                &free, &free.payload.consumer_wallet, &offered.raw_transaction, &offered.tx_hash,
+                nonce, PROVIDER_KEY, || Ok(now), true, &free.payload.model,
+            ).unwrap_err(), "invalid_payment: free sessions do not accept funding intents");
+        }
+        assert_eq!(store.open_account(&paid_terms, None, now).unwrap_err(),
+            "invalid_payment: funding transaction required");
+        assert_eq!(store.check_open_funding(&paid_terms.payload, None, now).unwrap_err(),
+            "funding_intent_required: original registered funding transaction bytes are required");
+        for mixed in &crossed {
+            let funded = payment(&mixed.payload, true, 1000, 11);
+            assert_eq!(store.store_quote(mixed, now).unwrap_err(), MIXED);
+            assert_eq!(store.open_account(mixed, None, now).unwrap_err(), MIXED);
+            assert_eq!(store.open_account(mixed, Some(&funded), now).unwrap_err(), MIXED);
+        }
+        // The priced zero-funding terms are refused as free; the free-priced funded terms were never issued.
+        assert_eq!(store.register_funding_intent(
+            &crossed[1], &crossed[1].payload.consumer_wallet, &transfer.raw_transaction,
+            &transfer.tx_hash, 9, PROVIDER_KEY, || Ok(now), true, &crossed[1].payload.model,
+        ).unwrap_err(), "invalid_payment: free sessions do not accept funding intents");
+        assert_eq!(store.register_funding_intent(
+            &crossed[0], &crossed[0].payload.consumer_wallet, &transfer.raw_transaction,
+            &transfer.tx_hash, 9, PROVIDER_KEY, || Ok(now), true, &crossed[0].payload.model,
+        ).unwrap_err(), "invalid_quote: quote was not issued by this provider");
+        assert_eq!(quote_work_protected_snapshot(store), before, "a refusal wrote a row at {now}");
+    };
+    refuses(&store, 103, false);
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    refuses(&store, 104, false);
+
+    // Control: the free quote opens free without any payment or intent.
+    let before = quote_work_protected_snapshot(&store);
+    let opened = store.open_account(&free, None, 105).unwrap();
+    let account = &opened.account;
+    assert_eq!((account.status.as_str(), &account.price), ("free", &free.payload.price));
+    for amount in [&account.funded_wei, &account.fee_wei, &account.spent_wei, &account.reserved_wei,
+        &account.available_wei, &account.reversed_wei, &account.provider_loss_wei, &account.waived_wei] {
+        assert_eq!(amount, "0");
+    }
+    let root = opened.credential.clone().unwrap();
+    let after = quote_work_protected_snapshot(&store);
+    for table in [0, 1, 3, 6, 7, 8, 9, 10, 11, 12, 13] {
+        assert_eq!(after[table], before[table], "free opening changed table {table}");
+    }
+    let mut quotes = before[2].clone();
+    quotes.retain(|record| !record.contains(&free.payload.id));
+    assert_eq!(after[2], quotes, "only the free quote is handed off");
+    for table in [4, 5] {
+        assert_eq!(after[table].len(), before[table].len() + 1, "table {table}");
+        assert!(before[table].iter().all(|row| after[table].contains(row)), "table {table}");
+    }
+    // The open free account still takes no transfer, intent or credit.
+    let replay = store.open_account(&free, Some(&transfer), 106).unwrap();
+    assert_eq!(encode(&replay.account).unwrap(), encode(&opened.account).unwrap());
+    assert!(replay.credential.is_none(), "a replay issues no credential");
+    assert_eq!(store.credit_topup(&free.payload.id, &payment(&free.payload, false, 1000, 12), 106).unwrap_err(),
+        "forbidden: only active paid accounts accept top-ups");
+    refuses(&store, 106, true);
+    assert_eq!(quote_work_protected_snapshot(&store), after);
+    assert_eq!(encode(&store.authenticate(&root.bearer, 106).unwrap().account).unwrap(), encode(&opened.account).unwrap());
+
+    // Control: the paid terms open only with their acknowledged verified payment.
+    let original = payment(&paid_terms.payload, true, 1000, 13);
+    register(&store, &paid_terms, &original, 107);
+    let opened = store.open_account(&paid_terms, Some(&original), 108).unwrap();
+    assert_eq!(opened.account.status, "active");
+    assert_eq!(
+        [&opened.account.funded_wei, &opened.account.fee_wei, &opened.account.available_wei],
+        ["1000", "5", "995"]
+    );
+}
+
 #[test]
 fn registration_rejects_expiry_wrong_owner_network_and_replacement() {
     let store = memory();

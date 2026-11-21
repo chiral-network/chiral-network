@@ -754,6 +754,122 @@ async fn native_free_opening_and_full_refusal_never_prepare_or_submit_payment() 
     }
 }
 
+/// Opening-intent 2.8, statement 5, through the native consumer. The provider signs crossed
+/// terms: a quote charging 1,000 wei under its free offer, and a zero-funding quote under a
+/// paid revision of that offer, each otherwise matching its offer. Native `fund` refuses
+/// both with the exact error before any saved agreement, wallet-journal original, owner
+/// proof, control request or chain RPC. The genuine free quote then opens free with one
+/// owner proof and a null transaction, and native `topup` of that free account is refused
+/// before any request, payment or change to its saved state. Last, a correctly funded quote
+/// under the same paid offer passes the check and reaches native chain access, so the
+/// funding mismatch alone refused the crossed paid quote. Would catch native payment
+/// preparation for free terms, a paid offer opened through the free path, and a free
+/// account taking a paid top-up.
+#[tokio::test]
+async fn native_refuses_crossed_free_and_paid_terms_before_any_request_or_payment() {
+    let directory = tempfile::tempdir().unwrap();
+    let case = 950;
+    let mut fixture = Fixture::new(directory.path(), case, Reply::Honest).await;
+    let client_calls = Arc::new(Mutex::new(Vec::new()));
+    let observed = client_calls.clone();
+    let rpc_app = Router::new().fallback(move |request: Request| {
+        let observed = observed.clone();
+        async move {
+            observed.lock().unwrap().push((request.method().clone(), request.uri().to_string()));
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    });
+    let rpc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut network = fixture.provider.state.config.network.clone();
+    network.rpc_url = format!("http://{}", rpc_listener.local_addr().unwrap());
+    let rpc_server = tokio::spawn(async move { axum::serve(rpc_listener, rpc_app).await.unwrap(); });
+    let config = ConsumerConfig { network, data_dir: directory.path().join(format!("consumer-{case}")),
+        catalog_url: None, development: true, dht: None };
+    // Same imported wallet and base journal; only native chain access is isolated.
+    fixture.consumer = Consumer::new(config.clone()).unwrap();
+    let owner = fixture.consumer.address().unwrap();
+    let scoped = config.network.scoped_dir(&config.data_dir);
+    let account_path = |id: &str| scoped.join("consumer").join(&owner)
+        .join(format!("{}.json", hex::encode(protocol::digest(id.as_bytes()))));
+    let journal = Connection::open(scoped.join("wallet-journal/transactions.sqlite3")).unwrap();
+    let clear = |fixture: &Fixture| {
+        let mut observed = fixture.observations.lock().unwrap();
+        observed.challenges.clear();
+        observed.controls.clear();
+    };
+    let nothing_sent = |fixture: &Fixture| {
+        let observed = fixture.observations.lock().unwrap();
+        assert!(observed.challenges.is_empty() && observed.controls.is_empty(), "no owner proof or control request");
+        drop(observed);
+        assert!(client_calls.lock().unwrap().is_empty(), "no native chain RPC");
+        let rows: (u64, u64) = journal.query_row(
+            "SELECT (SELECT COUNT(*) FROM transactions),(SELECT COUNT(*) FROM cancellations)", [],
+            |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(rows, (0, 0), "no prepared original or cancellation");
+    };
+    let key = fixture.provider.state.private_key.as_str().to_owned();
+    let free_offer = fixture.provider.offer.clone();
+    let mut paid_terms = free_offer.payload.clone();
+    paid_terms.revision += 1;
+    paid_terms.price.input_wei_per_1k = "1".into();
+    paid_terms.price.output_wei_per_1k = "2".into();
+    let paid_offer = protocol::sign(protocol::OFFER_DOMAIN, paid_terms, &key).unwrap();
+    let signed_quote = |offer: &Signed<protocol::InferenceOffer>, funding: &str| {
+        let mut terms = fixture.quote.payload.clone();
+        terms.id = protocol::random_id();
+        terms.nonce = protocol::random_id();
+        terms.offer_id = protocol::offer_id(&offer.payload).unwrap();
+        terms.price = offer.payload.price.clone();
+        terms.funding_wei = funding.into();
+        protocol::sign(QUOTE_DOMAIN, terms, &key).unwrap()
+    };
+    for (offer, crossed) in [(&free_offer, signed_quote(&free_offer, "1000")), (&paid_offer, signed_quote(&paid_offer, "0"))] {
+        clear(&fixture);
+        let error = fixture.consumer.fund(offer, &crossed).await.unwrap_err();
+        assert_eq!(error, "quote funding does not satisfy the selected offer");
+        assert!(!account_path(&crossed.payload.id).exists(), "no saved agreement");
+        assert_eq!(fixture.consumer.pending_accounts().unwrap(), json!({"pending":[]}));
+        assert!(fixture.consumer.accounts().unwrap().is_empty());
+        nothing_sent(&fixture);
+    }
+
+    // The genuine free quote opens free without payment.
+    clear(&fixture);
+    let quote = fixture.quote.clone();
+    let account = fixture.consumer.fund(&free_offer, &quote).await.unwrap();
+    assert_free_control_exchange(&fixture, &quote, "POST", StatusCode::OK);
+    assert_eq!(account.status, "free");
+    assert_eq!(account.funded_wei, "0");
+    let saved = std::fs::read(account_path(&quote.payload.id)).unwrap();
+    assert_no_free_payment(&serde_json::from_slice(&saved).unwrap());
+    let exported = fixture.consumer.credential_export(&quote.payload.id, None).unwrap();
+    clear(&fixture);
+    nothing_sent(&fixture);
+
+    // A free account takes no paid top-up: refused before any request or payment.
+    assert_eq!(fixture.consumer.topup(&quote.payload.id, "1000").await.unwrap_err(),
+        "free sessions do not accept paid topups");
+    nothing_sent(&fixture);
+    assert_eq!(std::fs::read(account_path(&quote.payload.id)).unwrap(), saved);
+    assert_eq!(fixture.consumer.credential_export(&quote.payload.id, None).unwrap(), exported);
+    let provider = &fixture.provider.state.ledger;
+    assert_eq!(serde_json::to_value(provider.account(&quote.payload.id).unwrap()).unwrap(),
+        serde_json::to_value(&account).unwrap());
+    assert!(provider.funding_history(&quote.payload.id).unwrap().is_empty());
+    let context = provider.authenticate(exported["api_key"].as_str().unwrap(), protocol::now().unwrap()).unwrap();
+    assert_eq!(context.credential_id, exported["credential_id"].as_str().unwrap());
+
+    // Control: a correctly funded quote under the same paid offer passes the funding check
+    // and reaches native chain access (refused here), so funding alone refused the crossed one.
+    let funded = signed_quote(&paid_offer, "100");
+    let error = fixture.consumer.fund(&paid_offer, &funded).await.unwrap_err();
+    assert_ne!(error, "quote funding does not satisfy the selected offer");
+    assert!(!client_calls.lock().unwrap().is_empty(), "the funded control reaches native chain access: {error}");
+    fixture.stop().await;
+    rpc_server.abort();
+    assert!(rpc_server.await.unwrap_err().is_cancelled());
+}
+
 #[tokio::test]
 async fn native_lost_free_opening_recovers_without_issuing_or_rotating_credentials() {
     let directory = tempfile::tempdir().unwrap();

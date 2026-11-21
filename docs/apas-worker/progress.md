@@ -1,5 +1,21 @@
 # APAS progress
 
+## 2026-11-21 (ninety-fourth round) — Acceptance: opening-intent 2.8 (acknowledgement alone never opens or credits; free opening needs no payment)
+
+- In step at `43294b40`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-opening-funding-intent` parent 2.8), through a workflow: write tests, then an adversarial review. design.md gains "Parent 2.8: acknowledgement alone and free opening without payment". It maps five statements at the ledger, HTTP and native layers to the tests that pass, with a table of every code path that writes accounts, credentials, credit, fee obligations, credit state and fee batches. No product code changed and no code difference was found.
+- Four new tests:
+  - `billing_store::tests::acknowledgement_alone_never_opens_or_credits_through_lease_release_expiry_and_reopening`: two acknowledged paid originals stay refused, with exact messages, for opening without payment, the bytes check, a different payment, a top-up, an account read, credential issue and rotation, and a funding recheck. This holds with the lease active, after release, after expiry, 30 days later and after reopening, and the full protected snapshot never changes. As a control, each opens with its own payment.
+  - `billing_store::tests::free_and_paid_terms_never_cross_at_opening_intent_or_topup`: a transfer or a fabricated zero-value payment on free terms, and paid terms without payment, are refused at opening, the bytes check and registration. Crossed signed terms are refused at storage. A free top-up is forbidden. Free opening adds only its account and root credential.
+  - `inference_funding_admission_test::free_terms_refuse_paid_funding_intents_and_open_without_payment_or_rpc`: over HTTP, free terms get 400 for a signed zero-value intent and for a transfer, with nine tables unchanged and nothing submitted. A null-transaction open creates a free account with no RPC.
+  - `inference_owner_consumer_test::native_refuses_crossed_free_and_paid_terms_before_any_request_or_payment`: native `fund` refuses crossed quotes with the exact error and no saved agreement, journal entry or request. `Consumer::topup` refuses a free account.
+- The review corrected two citations: native quote verification was already tested by `inference_quote_acceptance_test`, and the owner-control native test does not count funding attempts. It added the credential, rotation and recheck refusals to the acknowledgement test. It ran 7 more mutations; one, paid opening creating an uncredited account, passed the existing `paid_open_never_registers_implicitly_even_before_expiry` but fails both new tests. The author ran 6.
+- Recorded limits:
+  - Over HTTP, the funding-intent route has no free-terms check of its own. A signed zero-value payment for free terms reaches the balance and nonce RPC before the ledger refuses it. Nothing is written or submitted and the spec sets no order, so this is defence in depth, not a code difference.
+  - For an acknowledged but unopened agreement, the HTTP `topup` and `credentials` 404s are untested; the ledger refusals are tested.
+  - Native recovery of a lost first paid opening reply is still untested.
+- 2.8 ticked. Checks: `--lib` 469 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; `inference_funding_admission_test` 40/40; `inference_owner_consumer_test` 14/14; desktop `--lib desktop::` 10/10; strict validation passes. Test-only change; round 89's full suite covers the product code.
+
 ## 2026-11-21 (ninety-third round) — Acceptance: opening-intent 2.8.2 complete (inference settlement at full opening capacity)
 
 - In step at `478aa99c`; whitepaper unchanged; no new answers.
@@ -1063,7 +1079,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84; 2.8.2 in round 93), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.2, 2.5, 2.6 and 2.7 (2.3 done in round 84; 2.8 in rounds 93–94), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
