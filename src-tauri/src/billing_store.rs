@@ -1195,7 +1195,9 @@ impl BillingStore {
             let credential_active: u32 = tx.query_row("SELECT COUNT(*) FROM requests WHERE credential=?1 AND status='reserved'", [credential_id], |r| r.get(0)).map_err(sql)?;
             if account_active >= account.max_concurrency || credential_active >= credential.max_concurrency { return Err("saturation: concurrency limit reached".into()); }
             let recent: u32 = tx.query_row("SELECT COUNT(*) FROM requests WHERE credential=?1 AND created>=?2", params![credential_id,now.saturating_sub(60)], |r| r.get(0)).map_err(sql)?;
-            let losses: u32 = tx.query_row("SELECT COUNT(*) FROM requests WHERE contract=?1 AND created>=?2 AND status LIKE '%unknown_usage'", params![contract_id,now.saturating_sub(3600)], |r| r.get(0)).map_err(sql)?;
+            // GLOB, not LIKE: `_` must be literal so that only statuses settled as unknown
+            // usage (`ends_with("unknown_usage")` in settle_request) are counted.
+            let losses: u32 = tx.query_row("SELECT COUNT(*) FROM requests WHERE contract=?1 AND created>=?2 AND status GLOB '*unknown_usage'", params![contract_id,now.saturating_sub(3600)], |r| r.get(0)).map_err(sql)?;
             if recent >= 120 || losses >= 30 { return Err("rate_limit: inference admission limit reached".into()); }
             let maximum = usage_cost(&account.price,&TokenUsage{prompt_tokens,completion_tokens:max_output_tokens})?;
             if maximum > money(&account.available_wei)? { return Err("insufficient_funds: prepaid balance cannot cover the request".into()); }

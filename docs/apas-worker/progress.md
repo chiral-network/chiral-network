@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-21 (eighty-sixth round) — Acceptance and code: request-accounting 2.5 ledger edges; the unknown-usage budget counted a wildcard match
+
+- In step at `befc6f64`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-request-accounting` 2.5), through a workflow: write tests, then an adversarial review. Before this step, the only invalid-usage case tested was output above the bound, and no ledger test covered prompt-count mismatch, cumulative-counter overflow or either inference budget. Nine new `billing_store::tests` cases pass logical times only through `reserve`, `settle` and `recover_requests`, and compare complete ledger rows from fixed literals:
+  - **Invalid usage:** a prompt-count mismatch and a cumulative-counter overflow each commit one whole `invalid_usage_unknown_usage` release, with exposure, no charge and no counter change. There is no wraparound and no partial update. Exactly u64::MAX is charged, and the first result survives reopening.
+  - **Thresholds:** 119 prior requests admit the 120th per credential, and 29 prior unknown-usage releases admit the 30th per account. The `now - 60` and `now - 3600` cutoffs are inclusive and saturate at time zero.
+  - **What counts:** each budget is scoped to its credential or account. Windows use creation time, not settlement time, and terminal changes restore no allowance.
+  - **Clock regression:** future-dated rows still count after the clock regresses and the ledger reopens, and both windows are anchored at the sample, not the latest record.
+  - **Exhaustion:** known, unknown and invalid settlement and restart recovery still succeed with both budgets exhausted.
+  - **Refusals:** every refusal leaves every row unchanged.
+- Code difference found and fixed (design "Fixed 2026-11-21 by task 2.5"): the account budget counted `status LIKE '%unknown_usage'`, where `_` is a single-character wildcard. A known-charged status such as `completed_unknownxusage` therefore spent unknown-usage allowance. It now counts `GLOB '*unknown_usage'`, the suffix that `settle_request` classifies as unknown. No status the product produces changes classification. The regression fails without the fix.
+- Thirty-four mutations each fail a 2.5 test. The review found four that survived the first seven tests: the unknown cutoff falling back to `now` near zero; the credential window measured at settlement time; and either window anchored at the latest record. It added two tests and a late-settled record that catch them. Recorded limits: credentials have no token counters (account counters are the cumulative counters); the code's `*unknown_usage` also matches a bare `unknown_usage`, which no product path produces; live gateway edges stay with 3.1.
+- Disk: the data volume was full (1.4 GiB free). `src-tauri/target/debug/deps` held 684,925 unreferenced `.o` files (82.8 GiB) left by earlier rebuilds: macOS debug builds keep debug info in object files, and Cargo never prunes old ones. Only files that no current executable or dylib debug map references were deleted, leaving 80 GiB free; test results are unaffected. The workflow's author had earlier removed 19 incremental-cache directories more than 3 days old (1.77 GiB, regenerable).
+- 2.5 ticked. Checks: full suite under caffeinate with `--no-fail-fast`: bins build passes; 32 headless test targets, 757 passed, 12 ignored (helpers), 0 failed (`--lib` 441; `inference_owner_control_test` 61/61); desktop `--lib desktop::` 10/10; `npm test` 89/89 in 18 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 76 OK; strict validation passes. No `pmset` sleep during the run.
+
 ## 2026-11-21 (eighty-fifth round) — Acceptance: request-accounting 2.2.4 (credential expiry during an admitted hold) and parent 2.2
 
 - In step at `79c5dedf`; whitepaper unchanged; no new answers.
@@ -948,7 +963,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3/2.5/3.1–3.4 (2.2 done in round 85), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3/3.1–3.4 (2.2 and 2.5 done in rounds 85–86), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

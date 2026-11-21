@@ -6606,3 +6606,818 @@ async fn expired_credential_requests_stay_readable_and_unduplicable_through_the_
     refuse_expired("settled").await;
     assert_eq!(financial(), expected);
 }
+
+// inference-request-accounting task 2.5: the remaining ledger edges recorded by 2.1.
+// Every step passes an explicit logical operation time through the public ledger
+// arguments; no stored timestamp is rewritten, nothing waits for a clock, and no signed
+// time or quote/challenge clock stands in for the inference admission sample.
+
+/// The refusal of either inference admission budget (*Inference abuse budgets remain
+/// independent*), distinct from the quote, challenge and free-account rate limits.
+const INFERENCE_BUDGET_REFUSAL: &str = "rate_limit: inference admission limit reached";
+
+/// How `budget_records` ends each request it creates.
+#[derive(Clone, Copy, Debug)]
+enum BudgetEnd {
+    /// Known (1, 0) usage under this terminal status.
+    Known(&'static str),
+    /// An explicit release under this unknown-usage status.
+    Unknown(&'static str),
+    /// Known usage with one output token over its zero-token bound, which commits
+    /// `invalid_usage_unknown_usage`.
+    Invalid,
+}
+
+/// Creates `count` request records `{prefix}-{n}` for `credential` at logical time `at`.
+/// Each reserves one prepared input token and no output (a one-wei hold on the paid
+/// fixture, none on a free account) and ends at the same time as `end` says.
+fn budget_records(
+    store: &BillingStore,
+    account: &str,
+    credential: &str,
+    prefix: &str,
+    count: usize,
+    at: u64,
+    end: BudgetEnd,
+) {
+    let model = store.account(account).unwrap().model;
+    for n in 0..count {
+        let key = format!("{prefix}-{n}");
+        let held = store
+            .reserve(account, credential, &key, 1, 0, at, &model)
+            .unwrap_or_else(|error| panic!("{key} at {at}: {error}"));
+        let (status, view) = match end {
+            BudgetEnd::Known(status) => {
+                let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 0 };
+                (status, store.settle(&held.id, &usage, status, at).unwrap())
+            }
+            BudgetEnd::Unknown(status) => (status, store.settle(&held.id, &TokenUsage::default(), status, at).unwrap()),
+            BudgetEnd::Invalid => {
+                let usage = TokenUsage { prompt_tokens: 1, completion_tokens: 1 };
+                let error = store.settle(&held.id, &usage, "completed", at).unwrap_err();
+                assert!(error.starts_with("usage_over_reservation:"), "{key}: {error}");
+                ("invalid_usage_unknown_usage", store.request_view(account, &held.id).unwrap())
+            }
+        };
+        assert_eq!((view.status.as_str(), view.created_at, view.settled_at), (status, at, Some(at)), "{key}");
+    }
+}
+
+/// The fixture's own count of retained request records, from every row read through an
+/// independent connection: records of `credential` created at or after `credential_from`,
+/// and `*_unknown_usage` records of `account` created at or after `unknown_from`. It states
+/// a fixture precondition; admission outcomes are the evidence.
+fn budget_counts(path: &Path, account: &str, credential: &str, credential_from: u64, unknown_from: u64) -> (usize, usize) {
+    let rows = expiry_ledger_rows(path);
+    let requests = &rows["requests"];
+    let created = |row: &Value| row[5].as_u64().unwrap();
+    (
+        requests.iter().filter(|row| row[3] == credential && created(row) >= credential_from).count(),
+        requests
+            .iter()
+            .filter(|row| {
+                row[1] == account
+                    && row[4].as_str().unwrap().ends_with("_unknown_usage")
+                    && created(row) >= unknown_from
+            })
+            .count(),
+    )
+}
+
+/// A fresh one-token reservation by `credential` under `key` at `now` is refused by an
+/// inference admission budget, leaves every ledger row unchanged and does not occupy `key`.
+fn assert_budget_refused(store: &BillingStore, path: &Path, account: &str, credential: &str, key: &str, now: u64, case: &str) {
+    let before = expiry_ledger_rows(path);
+    let model = store.account(account).unwrap().model;
+    let error = store.reserve(account, credential, key, 1, 0, now, &model).unwrap_err();
+    assert_eq!(error, INFERENCE_BUDGET_REFUSAL, "{case}: {key} at {now}");
+    assert!(store.request_view(account, key).unwrap_err().starts_with("not_found:"), "{case}: {key}");
+    assert_eq!(expiry_ledger_rows(path), before, "{case}: the refusal of {key} at {now} changed the ledger");
+}
+
+/// inference-request-accounting scenario *Prompt or output mismatch* and requirement
+/// *Unknown usage releases the hold without inventing execution* (task 2.5): authoritative
+/// input usage must equal the exact prepared count. Credential C (100-wei cap) reserves 30
+/// wei for 10 prepared input and 20 maximum output tokens, beside a prior two-wei root
+/// charge and an unrelated 10-wei root hold. Known usage that changes only the input count
+/// (one fewer (9, 5), one more (11, 5) or none (0, 0)) would cost 14, 16 or zero wei, all
+/// within the hold. Each instead commits one `invalid_usage_unknown_usage` release: zero
+/// charge and recorded usage, the whole 30 wei back to available credit and off both
+/// holds, 30 wei of request exposure, and unchanged spend, cumulative usage and account
+/// funding-loss field. The invalid-usage error is returned after that commit. Later valid,
+/// over-bound, unknown and repeated mismatched calls, before and after reopening, return
+/// the first result without changing a row, and the key stays occupied for C and the root.
+/// A control with the same bounds and the exact prepared count is charged its 15 wei.
+#[test]
+fn prompt_count_mismatch_commits_one_invalid_usage_release_of_the_whole_hold() {
+    for (case, prompt, completion) in [("one fewer", 9, 5), ("one more", 11, 5), ("none", 0, 0)] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.sqlite");
+        let mut store = BillingStore::open(&path, &network()).unwrap();
+        let (q, _, opened) = paid(&store);
+        let id = q.payload.id.clone();
+        let model = q.payload.model.clone();
+        let root = opened.credential.unwrap();
+        let prior = store.reserve(&id, &root.id, "prior", 1, 1, 110, &model).unwrap();
+        store.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", 111).unwrap();
+        store.reserve(&id, &root.id, "unrelated", 5, 5, 112, &model).unwrap();
+        let c = app_credential(&store, &id, Some("100"), vec!["infer".into(), "read".into()]);
+        let target = store.reserve(&id, &c.id, "target", 10, 20, 120, &model).unwrap();
+        assert_eq!(target.max_cost_wei, "30", "{case}");
+
+        let mut expected = expiry_ledger_rows(&path);
+        expect_terminal(&mut expected, &target.id, "invalid_usage_unknown_usage", None, 130);
+        let error = store
+            .settle(&target.id, &TokenUsage { prompt_tokens: prompt, completion_tokens: completion }, "completed", 130)
+            .unwrap_err();
+        assert!(error.starts_with("usage_over_reservation:"), "{case}: {error}");
+        let settled = expiry_ledger_rows(&path);
+        assert_eq!(settled, expected, "{case}: the mismatch did not commit exactly one whole release");
+        let record = expected["requests"].iter().find(|row| row[0] == target.id).unwrap()[6].clone();
+        let view = store.request_view(&id, "target").unwrap();
+        assert_eq!(serde_json::to_value(&view).unwrap(), record, "{case}");
+        assert_eq!(
+            (
+                view.status.as_str(), view.usage.prompt_tokens, view.usage.completion_tokens, view.cost_wei.as_str(),
+                view.provider_loss_wei.as_str(), view.prompt_tokens_reserved, view.max_output_tokens, view.settled_at,
+            ),
+            ("invalid_usage_unknown_usage", 0, 0, "0", "30", 10, 20, Some(130)),
+            "{case}"
+        );
+        let account = store.account(&id).unwrap();
+        assert_eq!(
+            (
+                account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str(),
+                account.usage.prompt_tokens, account.usage.completion_tokens, account.provider_loss_wei.as_str(),
+                account.fee_wei.as_str(), account.funded_wei.as_str(),
+            ),
+            ("983", "10", "2", 1, 1, "0", "5", "1000"),
+            "{case}"
+        );
+        let entry = expiry_credential(&store, &id, &c.id);
+        assert_eq!((entry.reserved_wei.as_str(), entry.spent_wei.as_str()), ("0", "0"), "{case}");
+
+        for reopened in [false, true] {
+            if reopened {
+                drop(store);
+                store = BillingStore::open(&path, &network()).unwrap();
+            }
+            for (late_prompt, late_completion, status) in [
+                (10, 5, "completed"),
+                (10, 20, "completed"),
+                (10, 21, "completed"),
+                (prompt, completion, "completed"),
+                (0, 0, "cancelled_unknown_usage"),
+            ] {
+                let late = TokenUsage { prompt_tokens: late_prompt, completion_tokens: late_completion };
+                let replay = store.settle(&target.id, &late, status, 140).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&replay).unwrap(),
+                    record,
+                    "{case}: late {status} ({late_prompt}, {late_completion})"
+                );
+            }
+            for credential in [&c.id, &root.id] {
+                let error = store.reserve(&id, credential, "target", 10, 20, 141, &model).unwrap_err();
+                assert!(error.starts_with("duplicate_request:"), "{case}: {error}");
+            }
+            assert_eq!(expiry_ledger_rows(&path), settled, "{case}: reopened {reopened}");
+        }
+
+        // Control: the same bounds with the exact prepared count are known, chargeable usage.
+        let control = store.reserve(&id, &c.id, "control", 10, 20, 150, &model).unwrap();
+        let mut expected = expiry_ledger_rows(&path);
+        expect_terminal(&mut expected, &control.id, "completed", Some((10, 5, 15)), 151);
+        let charged = store
+            .settle(&control.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 5 }, "completed", 151)
+            .unwrap();
+        assert_eq!((charged.status.as_str(), charged.cost_wei.as_str()), ("completed", "15"), "{case}");
+        assert_eq!(expiry_ledger_rows(&path), expected, "{case}: control");
+    }
+}
+
+/// A paid agreement whose signed model admits any u64 token count (context and output
+/// limits u64::MAX) at the fixture's one wei per token, credited with `funding` wei through
+/// an injected post-verification payment `tag` (a ledger input, not chain evidence).
+fn wide_account(store: &BillingStore, funding: u128, tag: u8) -> (Signed<Quote>, Credential) {
+    let mut payload = quote(funding, false).payload;
+    payload.model.context_length = u64::MAX;
+    payload.model.max_output_tokens = u64::MAX;
+    let agreement = protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap();
+    store.store_quote(&agreement, 100).unwrap();
+    let funding_payment = payment(&agreement.payload, true, funding, tag);
+    register(store, &agreement, &funding_payment, 100);
+    let opened = store.open_account(&agreement, Some(&funding_payment), 101).unwrap();
+    (agreement, opened.credential.unwrap())
+}
+
+/// inference-request-accounting requirement *Unknown usage releases the hold without
+/// inventing execution* (task 2.5): the account's cumulative prompt and completion usage
+/// counters are u64 and must not overflow. Credentials carry spend and hold amounts but no
+/// token counters. Two known root requests bring both counters to u64::MAX - 100 under a
+/// model whose signed limits admit any u64 count, and an unrelated seven-wei root hold
+/// stays reserved. Credential C then reserves and settles, in order: input usage 101 with
+/// three output tokens (only the input counter would pass u64::MAX), seven input with 101
+/// output (only the output counter), 101 of each, exactly 100 of each (both counters reach
+/// u64::MAX), then one input token and one output token past it. Each over-maximum usage
+/// matches its prepared input and output bound, yet commits one `invalid_usage_unknown_usage`
+/// release: its whole hold returns with equal request exposure and zero charge, neither
+/// counter changes (no partial update and no wraparound), and the invalid-usage error is
+/// returned after the commit. Reaching exactly u64::MAX is charged as known usage. Complete
+/// expected rows come from fixed literals. Later calls, before and after reopening, return
+/// each first result and the keys stay occupied. A second account with zero counters settles
+/// each refused shape as known usage, so the cumulative counters alone caused the release.
+#[test]
+fn cumulative_usage_overflow_commits_an_invalid_usage_release_without_wrapping() {
+    const FUNDING: u128 = 100_000_000_000_000_000_000;
+    const FEE: u128 = FUNDING / 200;
+    const NEAR: u64 = u64::MAX - 100;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (agreement, root) = wide_account(&store, FUNDING, 1);
+    let (control, control_root) = wide_account(&store, FUNDING, 2);
+    let id = agreement.payload.id.clone();
+    let model = agreement.payload.model.clone();
+    for (key, prompt, output) in [("seed-input", NEAR, 0), ("seed-output", 0, NEAR)] {
+        let seed = store.reserve(&id, &root.id, key, prompt, output, 110, &model).unwrap();
+        assert_eq!(seed.max_cost_wei, NEAR.to_string(), "{key}");
+        let usage = TokenUsage { prompt_tokens: prompt, completion_tokens: output };
+        assert_eq!(store.settle(&seed.id, &usage, "completed", 111).unwrap().cost_wei, NEAR.to_string(), "{key}");
+    }
+    let unrelated = store.reserve(&id, &root.id, "unrelated", 3, 4, 112, &model).unwrap();
+    assert_eq!(unrelated.max_cost_wei, "7");
+    let c = app_credential(&store, &id, None, vec!["infer".into(), "read".into()]);
+    let seeded = 2 * u128::from(NEAR);
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (
+            account.usage.prompt_tokens, account.usage.completion_tokens, account.fee_wei.clone(),
+            account.spent_wei.clone(), account.reserved_wei.clone(), account.available_wei.clone(),
+        ),
+        (NEAR, NEAR, FEE.to_string(), seeded.to_string(), "7".to_string(), (FUNDING - FEE - seeded - 7).to_string())
+    );
+
+    // (key, prepared input, maximum output, supplied usage, hold, charge when valid, counters after)
+    let steps: [(&str, u64, u64, (u64, u64), u128, Option<u128>, (u64, u64)); 6] = [
+        ("input-over", 101, 10, (101, 3), 111, None, (NEAR, NEAR)),
+        ("output-over", 7, 101, (7, 101), 108, None, (NEAR, NEAR)),
+        ("both-over", 101, 101, (101, 101), 202, None, (NEAR, NEAR)),
+        ("exact-maximum", 100, 100, (100, 100), 200, Some(200), (u64::MAX, u64::MAX)),
+        ("input-past-maximum", 1, 0, (1, 0), 1, None, (u64::MAX, u64::MAX)),
+        ("output-past-maximum", 0, 1, (0, 1), 1, None, (u64::MAX, u64::MAX)),
+    ];
+    let mut results = Vec::new();
+    for (step, (key, prompt, output, usage, hold, charge, counters)) in steps.into_iter().enumerate() {
+        let at = 120 + 10 * step as u64;
+        let held = store.reserve(&id, &c.id, key, prompt, output, at, &model).unwrap();
+        assert_eq!(held.max_cost_wei, hold.to_string(), "{key}");
+        let supplied = TokenUsage { prompt_tokens: usage.0, completion_tokens: usage.1 };
+        let mut expected = expiry_ledger_rows(&path);
+        let result = match charge {
+            Some(cost) => {
+                expect_terminal(&mut expected, &held.id, "completed", Some((usage.0, usage.1, cost as i128)), at + 1);
+                store.settle(&held.id, &supplied, "completed", at + 1).unwrap()
+            }
+            None => {
+                expect_terminal(&mut expected, &held.id, "invalid_usage_unknown_usage", None, at + 1);
+                let error = store.settle(&held.id, &supplied, "completed", at + 1).unwrap_err();
+                assert!(error.starts_with("usage_over_reservation:"), "{key}: {error}");
+                store.request_view(&id, key).unwrap()
+            }
+        };
+        assert_eq!(expiry_ledger_rows(&path), expected, "{key}: settlement changed more than its own accounting");
+        let record = expected["requests"].iter().find(|row| row[0] == held.id).unwrap()[6].clone();
+        assert_eq!(serde_json::to_value(&result).unwrap(), record, "{key}");
+        let (cost, exposure) = match charge {
+            Some(cost) => (cost.to_string(), "0".to_string()),
+            None => ("0".to_string(), hold.to_string()),
+        };
+        assert_eq!((result.cost_wei.clone(), result.provider_loss_wei.clone()), (cost, exposure), "{key}");
+        let account = store.account(&id).unwrap();
+        assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), counters, "{key}");
+        assert_eq!(account.provider_loss_wei, "0", "{key}");
+        results.push((key, held.id, record, supplied));
+    }
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (
+            account.spent_wei.clone(), account.reserved_wei.clone(), account.available_wei.clone(),
+            account.fee_wei.clone(), account.funded_wei.clone(),
+        ),
+        (
+            (seeded + 200).to_string(), "7".to_string(), (FUNDING - FEE - seeded - 200 - 7).to_string(),
+            FEE.to_string(), FUNDING.to_string(),
+        )
+    );
+    let entry = expiry_credential(&store, &id, &c.id);
+    assert_eq!((entry.reserved_wei.as_str(), entry.spent_wei.as_str()), ("0", "200"));
+
+    let finished = expiry_ledger_rows(&path);
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        for (key, request, record, supplied) in &results {
+            for (late, status) in [
+                (supplied.clone(), "completed"),
+                (TokenUsage::default(), "completed"),
+                (TokenUsage::default(), "cancelled_unknown_usage"),
+            ] {
+                let replay = store.settle(request, &late, status, 300).unwrap();
+                assert_eq!(serde_json::to_value(&replay).unwrap(), *record, "{key}: late {status}");
+            }
+            let error = store.reserve(&id, &c.id, key, 1, 0, 301, &model).unwrap_err();
+            assert!(error.starts_with("duplicate_request:"), "{key}: {error}");
+        }
+        assert_eq!(expiry_ledger_rows(&path), finished, "reopened {reopened}");
+    }
+
+    // Control: with zero cumulative usage, every released shape is valid known usage.
+    let control_model = control.payload.model.clone();
+    for (key, prompt, output, usage, hold, charge, _) in steps {
+        if charge.is_some() {
+            continue;
+        }
+        let held = store.reserve(&control.payload.id, &control_root.id, key, prompt, output, 400, &control_model).unwrap();
+        assert_eq!(held.max_cost_wei, hold.to_string(), "control {key}");
+        let supplied = TokenUsage { prompt_tokens: usage.0, completion_tokens: usage.1 };
+        let settled = store.settle(&held.id, &supplied, "completed", 401).unwrap();
+        assert_eq!(
+            (settled.status.as_str(), settled.cost_wei.clone()),
+            ("completed", (usage.0 + usage.1).to_string()),
+            "control {key}"
+        );
+    }
+    assert_eq!(expiry_ledger_rows(&path)["accounts"].iter().find(|row| row[0] == id), finished["accounts"].iter().find(|row| row[0] == id));
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5), credential budget: a reservation is refused when its credential already has
+/// at least 120 request records created at or after max(0, now - 60). With T = 1,000,
+/// credential C has one known record at T - 61, one created at T - 61 but settled only at
+/// T, one at exactly T - 60, and in (T - 60, T] 90 known records, a request still held
+/// since T - 30, 10 explicit unknown releases, five invalid-usage releases and 12 known
+/// `failed` records: 119 counted records. At T the 120th reservation is admitted and the
+/// 121st refused with every ledger row unchanged, also after reopening; so the record at
+/// T - 60 counts, and neither record created at T - 61 does, although one of them was
+/// settled inside the window: the window uses creation time, not settlement time.
+/// Settling the held request and the 120th (terminal status changes) deletes no identity
+/// and restores no allowance. The root credential of the same account is admitted at T: the
+/// budget is per credential. At T + 1 the record created at T - 60 leaves the window and
+/// exactly one more reservation is admitted.
+#[test]
+fn credential_inference_budget_admits_the_120th_record_from_an_inclusive_60_second_cutoff() {
+    const T: u64 = 1_000;
+    let case = "credential budget";
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let options = CredentialIssueRequest {
+        expires_at: 100_000,
+        spend_cap_wei: None,
+        max_concurrency: 3,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let c = store.issue_credential(&id, &options, 102).unwrap();
+    budget_records(&store, &id, &c.id, "outside", 1, T - 61, BudgetEnd::Known("completed"));
+    let late = store.reserve(&id, &c.id, "outside-settled-late", 1, 0, T - 61, &model).unwrap();
+    budget_records(&store, &id, &c.id, "edge", 1, T - 60, BudgetEnd::Known("completed"));
+    budget_records(&store, &id, &c.id, "known", 90, T - 59, BudgetEnd::Known("completed"));
+    let held = store.reserve(&id, &c.id, "held", 10, 20, T - 30, &model).unwrap();
+    budget_records(&store, &id, &c.id, "cancelled", 10, T - 20, BudgetEnd::Unknown("cancelled_unknown_usage"));
+    budget_records(&store, &id, &c.id, "invalid", 5, T - 10, BudgetEnd::Invalid);
+    budget_records(&store, &id, &c.id, "failed", 12, T, BudgetEnd::Known("failed"));
+    let late = store.settle(&late.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", T).unwrap();
+    assert_eq!((late.created_at, late.settled_at), (T - 61, Some(T)));
+    assert_eq!(budget_counts(&path, &id, &c.id, T - 60, 0), (119, 15));
+    assert_eq!(budget_counts(&path, &id, &c.id, T - 61, 0).0, 121);
+
+    let admitted = store.reserve(&id, &c.id, "admitted-120th", 1, 0, T, &model).unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        assert_budget_refused(&store, &path, &id, &c.id, "refused-121st", T, case);
+    }
+    // Terminal status changes keep every counted identity, so no allowance returns.
+    store.settle(&held.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", T).unwrap();
+    store.settle(&admitted.id, &TokenUsage::default(), "cancelled_unknown_usage", T).unwrap();
+    assert_eq!(budget_counts(&path, &id, &c.id, T - 60, 0), (120, 16));
+    assert_budget_refused(&store, &path, &id, &c.id, "refused-121st", T, case);
+    // Per credential: the account's root still reserves at T.
+    let control = store.reserve(&id, &root.id, "root-control", 1, 0, T, &model).unwrap();
+    store.settle(&control.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", T).unwrap();
+    // At T + 1 the record created at T - 60 is older than the window: exactly one more.
+    store.reserve(&id, &c.id, "admitted-after-edge", 1, 0, T + 1, &model).unwrap();
+    assert_budget_refused(&store, &path, &id, &c.id, "refused-after-edge", T + 1, case);
+    let account = store.account(&id).unwrap();
+    // 106 one-wei known records (105 of C, the root's control) plus the held request's 17
+    // wei; the one-wei hold admitted at T + 1 remains.
+    assert_eq!(
+        (account.spent_wei.as_str(), account.reserved_wei.as_str(), account.available_wei.as_str()),
+        ("123", "1", "871")
+    );
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5): the credential cutoff max(0, now - 60) saturates near time zero instead of
+/// wrapping or dropping the window. A free account opened at logical time 0 (zero-price
+/// requests keep their admission accounting) has one record at 0 and 118 at 30. At 30
+/// (cutoff 0) the 120th is admitted and the 121st refused; at 60 (cutoff exactly 0) the
+/// record at 0 still counts; at 61 it does not, so exactly one more is admitted.
+#[test]
+fn credential_inference_budget_cutoff_saturates_at_time_zero() {
+    let case = "near time zero";
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let agreement = quote_at(0, true, 0);
+    store.store_quote(&agreement, 0).unwrap();
+    let opened = store.open_account(&agreement, None, 0).unwrap();
+    let id = agreement.payload.id.clone();
+    let model = agreement.payload.model.clone();
+    let root = opened.credential.unwrap();
+    budget_records(&store, &id, &root.id, "zero", 1, 0, BudgetEnd::Known("completed"));
+    budget_records(&store, &id, &root.id, "thirty", 118, 30, BudgetEnd::Known("completed"));
+    assert_eq!(budget_counts(&path, &id, &root.id, 0, 0), (119, 0));
+    let admitted = store.reserve(&id, &root.id, "admitted-120th", 1, 0, 30, &model).unwrap();
+    assert_eq!(admitted.max_cost_wei, "0");
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 30, case);
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 60, case);
+    store.reserve(&id, &root.id, "admitted-at-61", 1, 0, 61, &model).unwrap();
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 61, case);
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5): the account cutoff max(0, now - 3600) also saturates near time zero rather
+/// than falling back to `now` or dropping the window. A free account opened at logical time
+/// 0 has one explicit unknown-usage release created at 0 and 28 at 1,800. At 1,800 (cutoff
+/// 0) the 30th is admitted and, once released as unknown, the account is refused; at 3,600
+/// (cutoff exactly 0) the release created at 0 still counts; at 3,601 it does not, so
+/// exactly one more is admitted before its own release refuses the account again. Every
+/// refusal leaves all rows unchanged. The root's 60-second credential budget stays far
+/// below 120 throughout, so each refusal is the account's unknown-usage budget.
+#[test]
+fn account_unknown_usage_budget_cutoff_saturates_at_time_zero() {
+    let case = "unknown-usage budget near time zero";
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let agreement = quote_at(0, true, 0);
+    store.store_quote(&agreement, 0).unwrap();
+    let opened = store.open_account(&agreement, None, 0).unwrap();
+    let id = agreement.payload.id.clone();
+    let root = opened.credential.unwrap();
+    let unknown = BudgetEnd::Unknown("cancelled_unknown_usage");
+    budget_records(&store, &id, &root.id, "zero", 1, 0, unknown);
+    budget_records(&store, &id, &root.id, "half-hour", 28, 1_800, unknown);
+    assert_eq!(budget_counts(&path, &id, &root.id, 0, 0), (29, 29));
+    assert_eq!(budget_counts(&path, &id, &root.id, 1_740, 1), (28, 28));
+    budget_records(&store, &id, &root.id, "admitted-30th", 1, 1_800, BudgetEnd::Unknown("failed_unknown_usage"));
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 1_800, case);
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 3_600, case);
+    budget_records(&store, &id, &root.id, "admitted-at-3601", 1, 3_601, unknown);
+    assert_budget_refused(&store, &path, &id, &root.id, "refused", 3_601, case);
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5), account unknown-usage budget: a reservation is refused when its account
+/// already has at least 30 `*_unknown_usage` request records created at or after
+/// max(0, now - 3600). With T = 10,000, account A's credentials C1, C2 and root R create: at
+/// T - 3601 a request that stays reserved until restart recovery at T - 100 (an unknown
+/// record created outside the window though settled inside it); at exactly T - 3600 an
+/// explicit unknown release; 42 known records under `completed`, `cancelled`, `failed`,
+/// `disconnected`, `timed_out` and `completed_unknownxusage` (a known status the ledger
+/// charges, which merely resembles an unknown one); 27 releases across
+/// `cancelled_unknown_usage`, `failed_unknown_usage`, `disconnected_unknown_usage`,
+/// `timed_out_unknown_usage` and invalid usage; one more restart-recovered request; and a
+/// request still held: 29 counted records. At T the 30th is admitted, then released as
+/// unknown, and every credential of A is refused with all rows unchanged, also after
+/// reopening. A late known result cannot turn that record back into allowance, the held
+/// request still settles, and another account is admitted. At T + 1 the record created at
+/// T - 3600 leaves the window: one reservation is admitted and settled as known usage, which
+/// does not count, so another is admitted; its unknown release refuses the account again.
+#[test]
+fn account_unknown_usage_budget_counts_only_unknown_records_by_creation_time() {
+    const T: u64 = 10_000;
+    let case = "unknown-usage budget";
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let free = quote(0, true);
+    store.store_quote(&free, 105).unwrap();
+    let other = store.open_account(&free, None, 106).unwrap().credential.unwrap();
+    let options = CredentialIssueRequest {
+        expires_at: 100_000,
+        spend_cap_wei: None,
+        max_concurrency: 3,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let c1 = store.issue_credential(&id, &options, 107).unwrap();
+    let c2 = store.issue_credential(&id, &options, 107).unwrap();
+
+    let old = store.reserve(&id, &c1.id, "old", 1, 0, T - 3601, &model).unwrap();
+    budget_records(&store, &id, &c1.id, "edge", 1, T - 3600, BudgetEnd::Unknown("cancelled_unknown_usage"));
+    for status in ["completed", "cancelled", "failed", "disconnected", "timed_out", "completed_unknownxusage"] {
+        budget_records(&store, &id, &c2.id, status, 7, T - 3000, BudgetEnd::Known(status));
+    }
+    for (credential, prefix, count, end) in [
+        (&c1.id, "cancelled-unknown", 7, BudgetEnd::Unknown("cancelled_unknown_usage")),
+        (&c2.id, "failed-unknown", 6, BudgetEnd::Unknown("failed_unknown_usage")),
+        (&root.id, "disconnected-unknown", 6, BudgetEnd::Unknown("disconnected_unknown_usage")),
+        (&c1.id, "timed-out-unknown", 4, BudgetEnd::Unknown("timed_out_unknown_usage")),
+        (&c2.id, "invalid", 4, BudgetEnd::Invalid),
+    ] {
+        budget_records(&store, &id, credential, prefix, count, T - 2000, end);
+    }
+    store.reserve(&id, &root.id, "restart", 1, 0, T - 100, &model).unwrap();
+    assert_eq!(store.recover_requests(T - 100).unwrap(), 2);
+    let recovered = store.request_view(&id, &old.id).unwrap();
+    assert_eq!(
+        (recovered.status.as_str(), recovered.created_at, recovered.settled_at),
+        ("restart_unknown_usage", T - 3601, Some(T - 100))
+    );
+    // Until T - 1 the window still holds the recovered request created at T - 3601.
+    let held = store.reserve(&id, &c2.id, "held", 10, 20, T, &model).unwrap();
+    assert_eq!(budget_counts(&path, &id, &c1.id, 0, T - 3600).1, 29);
+    assert_eq!(budget_counts(&path, &id, &c1.id, 0, T - 3601).1, 30);
+    assert_eq!(budget_counts(&path, &id, &c1.id, 0, 0).1, 30);
+
+    let thirtieth = store.reserve(&id, &c1.id, "thirtieth", 1, 0, T, &model).unwrap();
+    store.settle(&thirtieth.id, &TokenUsage::default(), "failed_unknown_usage", T).unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        for credential in [&c1.id, &c2.id, &root.id] {
+            assert_budget_refused(&store, &path, &id, credential, "refused", T, case);
+        }
+    }
+    // A late known result keeps the first unknown result; the held request still settles.
+    let replay = store
+        .settle(&thirtieth.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", T)
+        .unwrap();
+    assert_eq!((replay.status.as_str(), replay.cost_wei.as_str()), ("failed_unknown_usage", "0"));
+    let settled = store
+        .settle(&held.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", T)
+        .unwrap();
+    assert_eq!((settled.status.as_str(), settled.cost_wei.as_str()), ("completed", "17"));
+    for credential in [&c1.id, &c2.id, &root.id] {
+        assert_budget_refused(&store, &path, &id, credential, "refused", T, case);
+    }
+    // Per account: another account reserves at T.
+    store.reserve(&free.payload.id, &other.id, "refused", 1, 0, T, &free.payload.model).unwrap();
+    // At T + 1 the record created at T - 3600 is older than the window.
+    let after = store.reserve(&id, &c2.id, "after-edge", 1, 0, T + 1, &model).unwrap();
+    store.settle(&after.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", T + 1).unwrap();
+    let last = store.reserve(&id, &root.id, "after-known", 1, 0, T + 1, &model).unwrap();
+    store.settle(&last.id, &TokenUsage::default(), "cancelled_unknown_usage", T + 1).unwrap();
+    for credential in [&c1.id, &c2.id, &root.id] {
+        assert_budget_refused(&store, &path, &id, credential, "refused-after-edge", T + 1, case);
+    }
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5): `now` is the provider-selected operation-time sample, and retained records
+/// created after a regressed sample are not omitted. Credential budget: credential C has
+/// 120 known records created at T = 20,000. Unknown-usage budget, in its own ledger: C has
+/// 30 explicit unknown releases created at T and the account's root has no record. For
+/// samples T, T - 1, T - 500, 0 and the last second of the window (T + 60, respectively
+/// T + 3600), before and after reopening, C (respectively the root) is refused with every
+/// row unchanged. One second later the records are older than the window and one
+/// reservation is admitted.
+#[test]
+fn inference_budgets_count_future_dated_records_after_clock_regression_and_reopening() {
+    const T: u64 = 20_000;
+    for unknown in [false, true] {
+        let case = if unknown { "unknown-usage budget" } else { "credential budget" };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.sqlite");
+        let mut store = BillingStore::open(&path, &network()).unwrap();
+        let (q, _, opened) = paid(&store);
+        let id = q.payload.id.clone();
+        let model = q.payload.model.clone();
+        let root = opened.credential.unwrap();
+        let options = CredentialIssueRequest {
+            expires_at: 100_000,
+            spend_cap_wei: None,
+            max_concurrency: 3,
+            scopes: vec!["infer".into(), "read".into()],
+        };
+        let c = store.issue_credential(&id, &options, 102).unwrap();
+        let (subject, last_second) = if unknown {
+            budget_records(&store, &id, &c.id, "unknown", 30, T, BudgetEnd::Unknown("cancelled_unknown_usage"));
+            assert_eq!(budget_counts(&path, &id, &root.id, 0, T), (0, 30));
+            (root.id.clone(), T + 3600)
+        } else {
+            budget_records(&store, &id, &c.id, "known", 120, T, BudgetEnd::Known("completed"));
+            assert_eq!(budget_counts(&path, &id, &c.id, T, 0), (120, 0));
+            (c.id.clone(), T + 60)
+        };
+        for reopened in [false, true] {
+            if reopened {
+                drop(store);
+                store = BillingStore::open(&path, &network()).unwrap();
+            }
+            for now in [T, T - 1, T - 500, 0, last_second] {
+                assert_budget_refused(&store, &path, &id, &subject, "refused", now, case);
+            }
+        }
+        store.reserve(&id, &subject, "admitted", 1, 0, last_second + 1, &model).unwrap();
+    }
+}
+
+/// inference-request-accounting requirement *Inference abuse budgets remain independent*
+/// (task 2.5): each window reaches back from the provider-selected sample itself, not from
+/// a non-regressing watermark such as the latest retained creation time. With T = 20,000,
+/// credential budget: credential C has 60 known records created at T and then, after the
+/// sample regressed, 60 created at T - 100. At T - 100 and at T - 40 (cutoff exactly
+/// T - 100) all 120 count and C is refused with every row unchanged, before and after
+/// reopening; at T - 39 the 60 records created at T - 100 leave the window and C is
+/// admitted. Unknown-usage budget, in its own ledger: C has 15 explicit unknown-usage
+/// releases created at T and then 15 at T - 4,000. The account's root, which has no
+/// record, is refused at T - 4,000 and at T - 400 (cutoff exactly T - 4,000), before and
+/// after reopening, and admitted at T - 399. A window anchored at the latest record (T)
+/// would admit at every refused sample.
+#[test]
+fn inference_budget_windows_reach_back_from_the_regressed_sample_not_the_latest_record() {
+    const T: u64 = 20_000;
+    for unknown in [false, true] {
+        let case = if unknown { "unknown-usage budget" } else { "credential budget" };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.sqlite");
+        let mut store = BillingStore::open(&path, &network()).unwrap();
+        let (q, _, opened) = paid(&store);
+        let id = q.payload.id.clone();
+        let model = q.payload.model.clone();
+        let root = opened.credential.unwrap();
+        let options = CredentialIssueRequest {
+            expires_at: 100_000,
+            spend_cap_wei: None,
+            max_concurrency: 3,
+            scopes: vec!["infer".into(), "read".into()],
+        };
+        let c = store.issue_credential(&id, &options, 102).unwrap();
+        let (subject, earlier, edge) = if unknown {
+            let end = BudgetEnd::Unknown("cancelled_unknown_usage");
+            budget_records(&store, &id, &c.id, "later", 15, T, end);
+            budget_records(&store, &id, &c.id, "earlier", 15, T - 4_000, end);
+            assert_eq!(budget_counts(&path, &id, &root.id, 0, T - 4_000), (0, 30));
+            assert_eq!(budget_counts(&path, &id, &root.id, 0, T - 3_999), (0, 15));
+            (root.id.clone(), T - 4_000, T - 400)
+        } else {
+            let end = BudgetEnd::Known("completed");
+            budget_records(&store, &id, &c.id, "later", 60, T, end);
+            budget_records(&store, &id, &c.id, "earlier", 60, T - 100, end);
+            assert_eq!(budget_counts(&path, &id, &c.id, T - 100, 0), (120, 0));
+            assert_eq!(budget_counts(&path, &id, &c.id, T - 99, 0), (60, 0));
+            (c.id.clone(), T - 100, T - 40)
+        };
+        for reopened in [false, true] {
+            if reopened {
+                drop(store);
+                store = BillingStore::open(&path, &network()).unwrap();
+            }
+            for now in [earlier, edge] {
+                assert_budget_refused(&store, &path, &id, &subject, "refused", now, case);
+            }
+        }
+        let admitted = store.reserve(&id, &subject, "admitted", 1, 0, edge + 1, &model).unwrap();
+        assert_eq!(store.request_view(&id, &admitted.id).unwrap().created_at, edge + 1, "{case}");
+    }
+}
+
+/// inference-request-accounting scenario *Exhausted inference budget does not strand a
+/// hold* (task 2.5). Credential C (five slots) holds four 30-wei requests admitted at
+/// T - 10 (T = 5,000). At T - 5 it then reaches both fresh allowances: 86 known one-wei
+/// records and 30 explicit unknown releases make 120 records of C in the last 60 seconds
+/// and 30 unknown-usage records of the account in the last hour. A pending signed quote and
+/// an issued challenge leave quote and challenge rate state. Fresh reservations by C and by
+/// the account's root are refused with every row unchanged. While both allowances stay
+/// exhausted, the held requests still settle at T: known (10, 7) usage is charged 17 wei; an
+/// explicit unknown release and invalid (10, 21) usage return their whole 30 wei with 30
+/// wei of exposure; and after reopening restart recovery releases the last hold. Each
+/// result changes exactly that request's original accounting (complete expected rows from
+/// fixed literals). Quote, challenge, rate and metadata rows are neither charged nor
+/// replenished, first results survive later calls and reopening, and fresh reservations
+/// stay refused.
+#[test]
+fn exhausted_inference_budgets_do_not_strand_admitted_holds() {
+    const T: u64 = 5_000;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let pending = quote_at(1000, false, T - 20);
+    store.store_quote(&pending, T - 20).unwrap();
+    let owner = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
+    store.create_challenge(&rate_challenge(&owner, 1, T - 20), T - 20).unwrap();
+    let options = CredentialIssueRequest {
+        expires_at: 100_000,
+        spend_cap_wei: None,
+        max_concurrency: 5,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let c = store.issue_credential(&id, &options, 102).unwrap();
+    let holds = ["held-known", "held-unknown", "held-invalid", "held-restart"]
+        .map(|key| store.reserve(&id, &c.id, key, 10, 20, T - 10, &model).unwrap());
+    budget_records(&store, &id, &c.id, "known", 86, T - 5, BudgetEnd::Known("completed"));
+    budget_records(&store, &id, &c.id, "unknown", 30, T - 5, BudgetEnd::Unknown("cancelled_unknown_usage"));
+    assert_eq!(budget_counts(&path, &id, &c.id, T - 60, T - 3600), (120, 30));
+    assert_eq!(budget_counts(&path, &id, &root.id, T - 60, T - 3600).0, 0);
+    let unrelated = |rows: &ExpiryRows| {
+        ["metadata", "rate_limits", "quotes", "challenges"].map(|table| rows[table].clone())
+    };
+    let allowance = unrelated(&expiry_ledger_rows(&path));
+    assert!(allowance[1..].iter().all(|rows| !rows.is_empty()), "the fixture must hold quote and challenge state");
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        ("789", "120", "86")
+    );
+    let exhausted = |store: &BillingStore, case: &str| {
+        for credential in [&c.id, &root.id] {
+            assert_budget_refused(store, &path, &id, credential, "fresh", T, case);
+        }
+    };
+    exhausted(&store, "before settlement");
+
+    let mut expected = expiry_ledger_rows(&path);
+    expect_terminal(&mut expected, &holds[0].id, "completed", Some((10, 7, 17)), T);
+    let known = store
+        .settle(&holds[0].id, &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", T)
+        .unwrap();
+    assert_eq!(known.cost_wei, "17");
+    assert_eq!(expiry_ledger_rows(&path), expected, "known settlement");
+    exhausted(&store, "after known settlement");
+
+    expect_terminal(&mut expected, &holds[1].id, "cancelled_unknown_usage", None, T);
+    store.settle(&holds[1].id, &TokenUsage::default(), "cancelled_unknown_usage", T).unwrap();
+    assert_eq!(expiry_ledger_rows(&path), expected, "unknown release");
+    exhausted(&store, "after unknown release");
+
+    expect_terminal(&mut expected, &holds[2].id, "invalid_usage_unknown_usage", None, T);
+    let error = store
+        .settle(&holds[2].id, &TokenUsage { prompt_tokens: 10, completion_tokens: 21 }, "completed", T)
+        .unwrap_err();
+    assert!(error.starts_with("usage_over_reservation:"), "{error}");
+    assert_eq!(expiry_ledger_rows(&path), expected, "invalid-usage release");
+    exhausted(&store, "after invalid-usage release");
+
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    exhausted(&store, "reopened");
+    expect_terminal(&mut expected, &holds[3].id, "restart_unknown_usage", None, T);
+    assert_eq!(store.recover_requests(T).unwrap(), 1);
+    assert_eq!(expiry_ledger_rows(&path), expected, "restart recovery");
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (
+            account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str(),
+            account.usage.prompt_tokens, account.usage.completion_tokens, account.provider_loss_wei.as_str(),
+            account.fee_wei.as_str(), account.funded_wei.as_str(),
+        ),
+        ("892", "0", "103", 96, 7, "0", "5", "1000")
+    );
+    let entry = expiry_credential(&store, &id, &c.id);
+    assert_eq!((entry.reserved_wei.as_str(), entry.spent_wei.as_str()), ("0", "103"));
+
+    let records: Vec<Value> = holds
+        .iter()
+        .map(|hold| expected["requests"].iter().find(|row| row[0] == hold.id).unwrap()[6].clone())
+        .collect();
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        for (hold, record) in holds.iter().zip(&records) {
+            for (late, status) in [
+                (TokenUsage { prompt_tokens: 10, completion_tokens: 20 }, "completed"),
+                (TokenUsage::default(), "failed_unknown_usage"),
+            ] {
+                let replay = store.settle(&hold.id, &late, status, T + 1).unwrap();
+                assert_eq!(serde_json::to_value(&replay).unwrap(), *record, "{}: late {status}", hold.id);
+            }
+        }
+        assert_eq!(store.recover_requests(T + 1).unwrap(), 0);
+        assert_eq!(expiry_ledger_rows(&path), expected, "reopened {reopened}");
+        exhausted(&store, "after every settlement");
+    }
+    assert_eq!(unrelated(&expiry_ledger_rows(&path)), allowance, "quote or challenge allowance changed");
+}
