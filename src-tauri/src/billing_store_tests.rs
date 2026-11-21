@@ -4630,15 +4630,15 @@ fn quote_work_invalid_evidence_fails_closed_without_blocking_paid_settlement() {
 // tests use logical time; the router tests use current time, because the production
 // control and inference routers read the real clock.
 
-/// A paid account opened now on `store`, funded with `funding` wei, whose signed
+/// A paid account opened at `now` on `store`, funded with `funding` wei, whose signed
 /// concurrency limit is `max_concurrency`. Verified funding is a ledger prerequisite
 /// after the chain boundary, as in `paid`.
-fn paid_now(
+fn paid_at(
     store: &BillingStore,
     funding: u128,
     max_concurrency: u32,
+    now: u64,
 ) -> (Signed<Quote>, crate::protocol::OpenResult) {
-    let now = protocol::now().unwrap();
     let mut payload = quote(funding, false).payload;
     payload.max_concurrency = max_concurrency;
     payload.issued_at = now;
@@ -4656,7 +4656,8 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// The production control router and public inference router over a file-backed
-/// ledger holding one paid account (`paid_now`). The provider is accepting, new
+/// ledger holding one paid account (`paid_at`, now unless `opened_at` says otherwise).
+/// The provider is accepting, new
 /// funding is ready and the agreed model is qualified until a test closes them; no
 /// chain RPC or engine answers.
 struct CredentialRoutes {
@@ -4669,6 +4670,12 @@ struct CredentialRoutes {
 
 impl CredentialRoutes {
     fn new(funding: u128, max_concurrency: u32) -> Self {
+        Self::opened_at(funding, max_concurrency, protocol::now().unwrap())
+    }
+
+    /// `new`, with the account opened at the explicit ledger time `opened_at`. The
+    /// routers still read the real clock.
+    fn opened_at(funding: u128, max_concurrency: u32, opened_at: u64) -> Self {
         use crate::{
             app::ProviderState,
             chain_client::ChainClient,
@@ -4680,7 +4687,7 @@ impl CredentialRoutes {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("ledger.sqlite");
         let ledger = Arc::new(BillingStore::open(&path, &network()).unwrap());
-        let (agreement, opened) = paid_now(&ledger, funding, max_concurrency);
+        let (agreement, opened) = paid_at(&ledger, funding, max_concurrency, opened_at);
         let network_config = NetworkConfig {
             identity: network(),
             rpc_url: "http://127.0.0.1:1".into(),
@@ -5875,4 +5882,727 @@ fn inconsistent_challenge_rate_evidence_fails_closed_without_erasing_state() {
         issue_consumed(&store, &fresh, 12, 900).unwrap();
         assert_eq!(challenge_clock(&store), (Some((15, 1)), Some((15, 1))), "{mutation}");
     }
+}
+
+// inference-request-accounting task 2.2.4: a credential that expires while one of its
+// requests holds prepaid credit. Ledger steps take explicit logical operation times; no
+// stored timestamp is rewritten and nothing waits for a clock.
+
+type ExpiryRows = std::collections::BTreeMap<&'static str, Vec<Value>>;
+
+/// Every row of every ledger table, read through an independent connection, with JSON
+/// record columns decoded so that expected financial changes can be applied field by
+/// field. Fails if the ledger has a table this list does not read.
+fn expiry_ledger_rows(path: &Path) -> ExpiryRows {
+    const TABLES: [(&str, &str); 14] = [
+        ("metadata", "SELECT json_array(key,value) FROM metadata ORDER BY key"),
+        ("rate_limits", "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket"),
+        ("quotes", "SELECT json_array(id,owner,expires,json(record)) FROM quotes ORDER BY id"),
+        ("challenges", "SELECT json_array(nonce,wallet,expires,json(record)) FROM challenges ORDER BY nonce"),
+        ("accounts", "SELECT json_array(id,owner,json(quote),json(account),sequence,created) FROM accounts ORDER BY id"),
+        ("credentials", "SELECT json_array(id,contract,token_hash,json(record),revoked) FROM credentials ORDER BY id"),
+        ("requests", "SELECT json_array(id,contract,request_key,credential,status,created,json(record)) FROM requests ORDER BY id"),
+        ("funding", "SELECT json_array(tx_hash,contract,record,evidence,status,checked) FROM funding ORDER BY tx_hash"),
+        ("funding_attempts", "SELECT json_array(tx_hash,contract,record,raw_transaction,updated) FROM funding_attempts ORDER BY tx_hash"),
+        ("funding_intents", "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract"),
+        ("fee_obligations", "SELECT json_array(tx_hash,platform,amount,created,status,batch) FROM fee_obligations ORDER BY tx_hash"),
+        ("fee_batches", "SELECT json_array(id,status,record) FROM fee_batches ORDER BY id"),
+        ("performance_observations", "SELECT json_array(sequence,request,model,evidence,miss) FROM performance_observations ORDER BY sequence"),
+        ("performance_withdrawals", "SELECT json_array(model,evidence) FROM performance_withdrawals ORDER BY model,evidence"),
+    ];
+    let db = Connection::open(path).unwrap();
+    let tables: Vec<String> = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let mut read: Vec<String> = TABLES.iter().map(|(table, _)| table.to_string()).collect();
+    read.sort();
+    assert_eq!(tables, read, "the snapshot must read every ledger table");
+    TABLES
+        .iter()
+        .map(|(table, query)| {
+            let rows = db
+                .prepare(query)
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(|row| serde_json::from_str(&row.unwrap()).unwrap())
+                .collect();
+            (*table, rows)
+        })
+        .collect()
+}
+
+/// The row of `table` whose first column is `id`.
+fn expiry_row<'a>(rows: &'a mut ExpiryRows, table: &str, id: &str) -> &'a mut Value {
+    rows.get_mut(table)
+        .unwrap()
+        .iter_mut()
+        .find(|row| row[0] == id)
+        .unwrap_or_else(|| panic!("no {table} row {id}"))
+}
+
+fn expiry_shift(amount: &mut Value, delta: i128) {
+    let current: i128 = amount.as_str().unwrap().parse().unwrap();
+    *amount = json!((current + delta).to_string());
+}
+
+/// Applies to `expected` the terminal accounting of the reserved request `request`: its
+/// whole original hold leaves the request's own account and credential, `cost` is spent
+/// and the rest returns to available credit. `known` usage is recorded with its cost; a
+/// release records zero usage and charge and the reservation-sized exposure. Amounts come
+/// from the caller's fixed literals, not from the production cost calculation.
+fn expect_terminal(
+    expected: &mut ExpiryRows,
+    request: &str,
+    status: &str,
+    known: Option<(u64, u64, i128)>,
+    settled_at: u64,
+) {
+    let row = expiry_row(expected, "requests", request);
+    assert_eq!(row[4], "reserved", "only a reserved request settles");
+    let (prompt, completion, cost) = known.unwrap_or((0, 0, 0));
+    let record = &mut row[6];
+    let account = record["contract_id"].as_str().unwrap().to_string();
+    let credential = record["credential_id"].as_str().unwrap().to_string();
+    let maximum: i128 = record["max_cost_wei"].as_str().unwrap().parse().unwrap();
+    record["status"] = json!(status);
+    record["usage"] = json!({"prompt_tokens": prompt, "completion_tokens": completion});
+    record["cost_wei"] = json!(cost.to_string());
+    record["provider_loss_wei"] = json!(if known.is_some() { 0 } else { maximum }.to_string());
+    record["settled_at"] = json!(settled_at);
+    row[4] = json!(status);
+    let account = &mut expiry_row(expected, "accounts", &account)[3];
+    expiry_shift(&mut account["reserved_wei"], -maximum);
+    expiry_shift(&mut account["available_wei"], maximum - cost);
+    expiry_shift(&mut account["spent_wei"], cost);
+    for (field, tokens) in [("prompt_tokens", prompt), ("completion_tokens", completion)] {
+        account["usage"][field] = json!(account["usage"][field].as_u64().unwrap() + tokens);
+    }
+    let credential = &mut expiry_row(expected, "credentials", &credential)[3];
+    expiry_shift(&mut credential["reserved_wei"], -maximum);
+    expiry_shift(&mut credential["spent_wei"], cost);
+}
+
+fn expiry_credential(store: &BillingStore, account: &str, credential: &str) -> CredentialView {
+    store.credentials(account).unwrap().into_iter().find(|entry| entry.id == credential).unwrap()
+}
+
+/// inference-request-accounting *Reservation atomically binds authority limits and
+/// credit* (task 2.2.4): the credential must be unexpired at the provider-selected
+/// operation time, and account-credentials defines `expires_at` as the time from which
+/// it no longer authenticates. With `expires_at` E = 1,000, a reservation at E - 1 is
+/// admitted; the identical reservation under a new key at exactly E, at E + 1 and 90
+/// days later is refused `forbidden` and the bearer no longer authenticates. Each refusal
+/// leaves every ledger row unchanged, also after reopening. The credential still has a
+/// free concurrency slot and no cap, and the account's live root admits the refused key
+/// and bounds at exactly E, so expiry alone refused it.
+#[test]
+fn credential_expiry_admits_through_the_last_second_and_refuses_new_holds_from_expires_at() {
+    const E: u64 = 1000;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let expiring = store
+        .issue_credential(
+            &id,
+            &CredentialIssueRequest {
+                expires_at: E,
+                spend_cap_wei: None,
+                max_concurrency: 2,
+                scopes: vec!["infer".into(), "read".into()],
+            },
+            102,
+        )
+        .unwrap();
+    assert_eq!(store.authenticate(&expiring.bearer, E - 1).unwrap().credential_id, expiring.id);
+    let admitted = store.reserve(&id, &expiring.id, "last-second", 10, 20, E - 1, &model).unwrap();
+    assert_eq!(admitted.max_cost_wei, "30");
+    let held = store.request_view(&id, "last-second").unwrap();
+    assert_eq!(
+        (held.status.as_str(), held.credential_id.as_str(), held.created_at),
+        ("reserved", expiring.id.as_str(), E - 1)
+    );
+    let entry = expiry_credential(&store, &id, &expiring.id);
+    assert_eq!((entry.reserved_wei.as_str(), entry.revoked, entry.expires_at), ("30", false, E));
+    let account = store.account(&id).unwrap();
+    assert_eq!((account.available_wei.as_str(), account.reserved_wei.as_str()), ("965", "30"));
+    let before = expiry_ledger_rows(&path);
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        for now in [E, E + 1, E + CREDENTIAL_TTL_MAX] {
+            let error = store.authenticate(&expiring.bearer, now).unwrap_err();
+            assert!(error.starts_with("unauthorized:"), "at {now}: {error}");
+            let error = store.reserve(&id, &expiring.id, "from-expiry", 10, 20, now, &model).unwrap_err();
+            assert!(error.starts_with("forbidden:"), "at {now}: {error}");
+            assert!(store.request_view(&id, "from-expiry").unwrap_err().starts_with("not_found:"));
+            assert_eq!(expiry_ledger_rows(&path), before, "reopened {reopened}, refused at {now}");
+        }
+    }
+    let root = opened.credential.unwrap();
+    let control = store.reserve(&id, &root.id, "from-expiry", 10, 20, E, &model).unwrap();
+    assert_eq!(control.max_cost_wei, "30");
+    assert_eq!(store.request_view(&id, "from-expiry").unwrap().credential_id, root.id);
+    let account = store.account(&id).unwrap();
+    assert_eq!((account.available_wei.as_str(), account.reserved_wei.as_str()), ("935", "60"));
+    assert_eq!(expiry_credential(&store, &id, &expiring.id).reserved_wei, "30");
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ExpiredHoldOutcome {
+    Known,
+    Unknown,
+    InvalidUsage,
+    Restart,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ExpiredHoldSuccessor {
+    Issued,
+    Revoked,
+    Rotated,
+}
+
+/// inference-request-accounting scenario *Revocation during an admitted request*, for
+/// expiry (task 2.2.4). Credential C (`expires_at` E = 1,000, cap 50 wei, three wei
+/// already spent) reserves 30 wei for client key `expiring-key` at E - 1. The account's
+/// root keeps a prior two-wei charge and an unrelated 10-wei hold, and a free account
+/// already used the same client key. For each terminal outcome (known usage, explicit
+/// unknown usage, usage over the reservation, restart recovery), each successor (a new
+/// credential issued for the account; C explicitly revoked, then a new credential issued;
+/// or C explicitly rotated) and settlement at exactly E or a day later:
+///
+/// - at E, C no longer authenticates and its new reservations, also with the held key,
+///   are refused with every ledger row unchanged;
+/// - the successor S starts with no hold or spend; revocation or rotation marks C revoked
+///   without moving its hold or spend; S's reservations with the held key are `duplicate_request`
+///   with every row unchanged, also after reopening between expiry and settlement;
+/// - settlement after expiry charges or releases exactly C's original hold against C and
+///   its account (complete expected rows derived from the fixed literals), leaves S, the
+///   root's hold and the other account untouched (restart recovery also releases the
+///   root's hold, as it releases every reserved request), and keeps the account's funding
+///   loss field unchanged;
+/// - later different terminal calls, before and after reopening, return the first result
+///   without changing a row; neither S nor C can reserve the key again;
+/// - the ledger request/list/receipt reads return the settled request attributed to C, a
+///   receipt advances only the receipt sequence, and S remains a live, separate authority
+///   whose own one-wei hold is its own.
+///
+/// Who may perform those reads is the routers' check; see
+/// `expired_credential_requests_stay_readable_and_unduplicable_through_the_routers`.
+#[test]
+fn expired_credential_hold_settles_once_against_its_original_accounting() {
+    for outcome in [
+        ExpiredHoldOutcome::Known,
+        ExpiredHoldOutcome::Unknown,
+        ExpiredHoldOutcome::InvalidUsage,
+        ExpiredHoldOutcome::Restart,
+    ] {
+        for successor in [ExpiredHoldSuccessor::Issued, ExpiredHoldSuccessor::Revoked, ExpiredHoldSuccessor::Rotated] {
+            for settle_at in [1000, 1000 + 86_400] {
+                expired_hold_case(outcome, successor, settle_at);
+            }
+        }
+    }
+}
+
+fn expired_hold_case(outcome: ExpiredHoldOutcome, successor_kind: ExpiredHoldSuccessor, settle_at: u64) {
+    const E: u64 = 1000;
+    let case = format!("{outcome:?}, {successor_kind:?} successor, settled at {settle_at}");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let id = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let prior = store.reserve(&id, &root.id, "root-prior", 1, 1, 103, &model).unwrap();
+    store.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", 104).unwrap();
+    let root_held = store.reserve(&id, &root.id, "root-held", 5, 5, 105, &model).unwrap();
+    let free = quote(0, true);
+    store.store_quote(&free, 105).unwrap();
+    let other = store.open_account(&free, None, 106).unwrap();
+    let other_request = store
+        .reserve(&free.payload.id, &other.credential.unwrap().id, "expiring-key", 10, 20, 106, &free.payload.model)
+        .unwrap();
+    store.settle(&other_request.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 5 }, "completed", 106).unwrap();
+    let options = |expires_at: u64| CredentialIssueRequest {
+        expires_at,
+        spend_cap_wei: Some("50".into()),
+        max_concurrency: 2,
+        scopes: vec!["infer".into(), "read".into()],
+    };
+    let expiring = store.issue_credential(&id, &options(E), 107).unwrap();
+    let spent = store.reserve(&id, &expiring.id, "expiring-prior", 2, 3, 108, &model).unwrap();
+    store.settle(&spent.id, &TokenUsage { prompt_tokens: 2, completion_tokens: 1 }, "completed", 109).unwrap();
+
+    assert_eq!(store.authenticate(&expiring.bearer, E - 1).unwrap().credential_id, expiring.id);
+    let target = store.reserve(&id, &expiring.id, "expiring-key", 10, 20, E - 1, &model).unwrap();
+    assert_eq!(target.max_cost_wei, "30", "{case}");
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (
+            account.funded_wei.as_str(), account.fee_wei.as_str(), account.available_wei.as_str(),
+            account.reserved_wei.as_str(), account.spent_wei.as_str(), account.usage.prompt_tokens,
+            account.usage.completion_tokens, account.provider_loss_wei.as_str(),
+        ),
+        ("1000", "5", "950", "40", "5", 3, 2, "0"),
+        "{case}"
+    );
+    let entry = expiry_credential(&store, &id, &expiring.id);
+    assert_eq!((entry.reserved_wei.as_str(), entry.spent_wei.as_str()), ("30", "3"), "{case}");
+    let admitted = expiry_ledger_rows(&path);
+
+    // (a) From E, C authorizes no new reservation, not even under the held key.
+    assert!(store.authenticate(&expiring.bearer, E).unwrap_err().starts_with("unauthorized:"), "{case}");
+    for (key, prompt, output) in [("after-expiry", 1, 1), ("expiring-key", 10, 20)] {
+        let error = store.reserve(&id, &expiring.id, key, prompt, output, E, &model).unwrap_err();
+        assert!(error.starts_with("forbidden:"), "{case}: {key}: {error}");
+    }
+    assert!(store.request_view(&id, "after-expiry").is_err(), "{case}");
+    assert_eq!(expiry_ledger_rows(&path), admitted, "{case}: a refusal changed the ledger");
+
+    // A successor S for the same account after expiry: issued, issued after C's explicit
+    // revocation, or rotated from C.
+    let replaced_at = if settle_at == E { E } else { E + 1 };
+    let successor = match successor_kind {
+        ExpiredHoldSuccessor::Issued => store.issue_credential(&id, &options(replaced_at + CREDENTIAL_TTL_MAX), replaced_at),
+        ExpiredHoldSuccessor::Revoked => {
+            store.revoke_credential(&id, &expiring.id).unwrap();
+            store.issue_credential(&id, &options(replaced_at + CREDENTIAL_TTL_MAX), replaced_at)
+        }
+        ExpiredHoldSuccessor::Rotated => {
+            store.rotate_credential(&id, &expiring.id, &options(replaced_at + CREDENTIAL_TTL_MAX), replaced_at)
+        }
+    }
+    .unwrap();
+    let replaced = expiry_ledger_rows(&path);
+    let mut expected = admitted.clone();
+    let revoked = successor_kind != ExpiredHoldSuccessor::Issued;
+    if revoked {
+        let row = expiry_row(&mut expected, "credentials", &expiring.id);
+        row[3]["revoked"] = json!(true);
+        row[4] = json!(1);
+    }
+    let successor_row = replaced["credentials"].iter().find(|row| row[0] == successor.id).unwrap().clone();
+    assert_eq!(
+        (&successor_row[1], &successor_row[3], &successor_row[4]),
+        (
+            &json!(id),
+            &json!({
+                "id": successor.id, "contract_id": id, "expires_at": replaced_at + CREDENTIAL_TTL_MAX,
+                "spend_cap_wei": "50", "spent_wei": "0", "reserved_wei": "0", "max_concurrency": 2,
+                "scopes": ["infer", "read"], "revoked": false, "created_at": replaced_at, "root": false,
+            }),
+            &json!(0),
+        ),
+        "{case}"
+    );
+    let credentials = expected.get_mut("credentials").unwrap();
+    credentials.push(successor_row);
+    credentials.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    assert_eq!(replaced, expected, "{case}: the successor moved a hold or spend");
+
+    // (c) S cannot take over or duplicate the held request.
+    assert_eq!(store.authenticate(&successor.bearer, replaced_at).unwrap().credential_id, successor.id);
+    for (prompt, output) in [(10, 20), (1, 1)] {
+        let error = store.reserve(&id, &successor.id, "expiring-key", prompt, output, replaced_at, &model).unwrap_err();
+        assert!(error.starts_with("duplicate_request:"), "{case}: {error}");
+    }
+    assert_eq!(expiry_ledger_rows(&path), replaced, "{case}");
+
+    // (d) Reopening between expiry and settlement.
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(expiry_ledger_rows(&path), replaced, "{case}: reopening changed the ledger");
+    assert!(store.authenticate(&expiring.bearer, settle_at).is_err(), "{case}");
+    let error = store.reserve(&id, &expiring.id, "after-expiry", 1, 1, settle_at, &model).unwrap_err();
+    assert!(error.starts_with("forbidden:"), "{case}: {error}");
+    let error = store.reserve(&id, &successor.id, "expiring-key", 10, 20, settle_at, &model).unwrap_err();
+    assert!(error.starts_with("duplicate_request:"), "{case}: {error}");
+    assert_eq!(expiry_ledger_rows(&path), replaced, "{case}");
+
+    // (b) Settlement after expiry, against C's original accounting.
+    let mut expected = replaced.clone();
+    let result = match outcome {
+        ExpiredHoldOutcome::Known => {
+            expect_terminal(&mut expected, &target.id, "completed", Some((10, 7, 17)), settle_at);
+            store.settle(&target.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", settle_at)
+                .unwrap()
+        }
+        ExpiredHoldOutcome::Unknown => {
+            expect_terminal(&mut expected, &target.id, "cancelled_unknown_usage", None, settle_at);
+            store.settle(&target.id, &TokenUsage::default(), "cancelled_unknown_usage", settle_at).unwrap()
+        }
+        ExpiredHoldOutcome::InvalidUsage => {
+            expect_terminal(&mut expected, &target.id, "invalid_usage_unknown_usage", None, settle_at);
+            let error = store
+                .settle(&target.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 21 }, "completed", settle_at)
+                .unwrap_err();
+            assert!(error.starts_with("usage_over_reservation:"), "{case}: {error}");
+            store.request_view(&id, &target.id).unwrap()
+        }
+        ExpiredHoldOutcome::Restart => {
+            expect_terminal(&mut expected, &target.id, "restart_unknown_usage", None, settle_at);
+            expect_terminal(&mut expected, &root_held.id, "restart_unknown_usage", None, settle_at);
+            assert_eq!(store.recover_requests(settle_at).unwrap(), 2, "{case}");
+            store.request_view(&id, &target.id).unwrap()
+        }
+    };
+    let record = expected["requests"].iter().find(|row| row[0] == target.id).unwrap()[6].clone();
+    assert_eq!(serde_json::to_value(&result).unwrap(), record, "{case}");
+    assert_eq!(result.credential_id, expiring.id, "{case}");
+    let settled = expiry_ledger_rows(&path);
+    assert_eq!(settled, expected, "{case}: settlement changed more than C's original accounting");
+    let known = outcome == ExpiredHoldOutcome::Known;
+    let account = store.account(&id).unwrap();
+    let (available, reserved, spent, usage) = match outcome {
+        ExpiredHoldOutcome::Known => ("963", "10", "22", (13, 9)),
+        ExpiredHoldOutcome::Unknown | ExpiredHoldOutcome::InvalidUsage => ("980", "10", "5", (3, 2)),
+        ExpiredHoldOutcome::Restart => ("990", "0", "5", (3, 2)),
+    };
+    assert_eq!(
+        (
+            account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str(),
+            account.usage.prompt_tokens, account.usage.completion_tokens, account.fee_wei.as_str(),
+            account.funded_wei.as_str(), account.provider_loss_wei.as_str(),
+        ),
+        (available, reserved, spent, usage.0, usage.1, "5", "1000", "0"),
+        "{case}"
+    );
+    assert_eq!(
+        (result.cost_wei.as_str(), result.provider_loss_wei.as_str()),
+        if known { ("17", "0") } else { ("0", "30") },
+        "{case}"
+    );
+    let entry = expiry_credential(&store, &id, &expiring.id);
+    assert_eq!(
+        (entry.reserved_wei.as_str(), entry.spent_wei.as_str(), entry.revoked),
+        ("0", if known { "20" } else { "3" }, revoked),
+        "{case}"
+    );
+    let entry = expiry_credential(&store, &id, &successor.id);
+    assert_eq!((entry.reserved_wei.as_str(), entry.spent_wei.as_str()), ("0", "0"), "{case}");
+
+    // The first terminal result wins, before and after reopening.
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        for (prompt, completion, status, at) in [
+            (10, 20, "completed", settle_at + 10),
+            (0, 0, "cancelled_unknown_usage", settle_at + 11),
+            (10, 21, "completed", settle_at + 12),
+        ] {
+            let replay = store
+                .settle(&target.id, &TokenUsage { prompt_tokens: prompt, completion_tokens: completion }, status, at)
+                .unwrap();
+            assert_eq!(serde_json::to_value(&replay).unwrap(), record, "{case}: replay {status}");
+        }
+        if outcome == ExpiredHoldOutcome::Restart {
+            assert_eq!(store.recover_requests(settle_at + 13).unwrap(), 0, "{case}");
+        }
+        let error = store.reserve(&id, &successor.id, "expiring-key", 10, 20, settle_at + 14, &model).unwrap_err();
+        assert!(error.starts_with("duplicate_request:"), "{case}: {error}");
+        let error = store.reserve(&id, &expiring.id, "after-expiry", 1, 1, settle_at + 14, &model).unwrap_err();
+        assert!(error.starts_with("forbidden:"), "{case}: {error}");
+        assert_eq!(expiry_ledger_rows(&path), settled, "{case}: reopened {reopened}");
+    }
+
+    // (e) Reads of the settled request attribute it to C.
+    for key in ["expiring-key", target.id.as_str()] {
+        assert_eq!(serde_json::to_value(store.request_view(&id, key).unwrap()).unwrap(), record, "{case}");
+    }
+    let listed = store.requests(&id, None).unwrap();
+    assert_eq!(listed.iter().filter(|request| request.id == target.id).count(), 1, "{case}");
+    assert!(listed.iter().any(|request| serde_json::to_value(request).unwrap() == record), "{case}");
+    assert_eq!(store.request_view(&free.payload.id, "expiring-key").unwrap().id, other_request.id, "{case}");
+    let receipt = store.receipt(&id, PROVIDER_KEY, settle_at + 20).unwrap();
+    protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
+    let bound = receipt.payload.requests.iter().find(|request| request.id == target.id).unwrap();
+    assert_eq!(serde_json::to_value(bound).unwrap(), record, "{case}");
+    let mut expected = settled.clone();
+    let account = expiry_row(&mut expected, "accounts", &id);
+    assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), account[3], "{case}");
+    let sequence = account[4].as_u64().unwrap() + 1;
+    assert_eq!(receipt.payload.sequence, sequence, "{case}");
+    account[4] = json!(sequence);
+    assert_eq!(expiry_ledger_rows(&path), expected, "{case}: a receipt changed more than its sequence");
+
+    // S is a live, separate authority: its own hold is its own, and C's record stays.
+    let control = store.reserve(&id, &successor.id, "successor-control", 1, 1, settle_at + 30, &model).unwrap();
+    assert_eq!(control.max_cost_wei, "2", "{case}");
+    assert_eq!(expiry_credential(&store, &id, &successor.id).reserved_wei, "2", "{case}");
+    store.settle(&control.id, &TokenUsage::default(), "cancelled_unknown_usage", settle_at + 31).unwrap();
+    let after = expiry_ledger_rows(&path);
+    let c_row = |rows: &ExpiryRows| rows["credentials"].iter().find(|row| row[0] == expiring.id).unwrap().clone();
+    assert_eq!(c_row(&after), c_row(&settled), "{case}");
+    let s_entry = expiry_credential(&store, &id, &successor.id);
+    assert_eq!((s_entry.reserved_wei.as_str(), s_entry.spent_wei.as_str()), ("0", "0"), "{case}");
+    let account = store.account(&id).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        (available, reserved, spent),
+        "{case}"
+    );
+}
+
+/// One request to the public inference router (`public`) or the control router, with
+/// `bearer` and an optional Idempotency-Key. Returns the status, the JSON document and
+/// the `x-request-id` header. No response may echo the bearer.
+async fn expiry_route(
+    routes: &CredentialRoutes,
+    public: bool,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    key: Option<&str>,
+    body: Vec<u8>,
+) -> (axum::http::StatusCode, Value, Option<String>) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {bearer}"));
+    if let Some(key) = key {
+        request = request.header("idempotency-key", key).header("content-type", "application/json");
+    }
+    let request = request.body(axum::body::Body::from(body)).unwrap();
+    let response = if public {
+        crate::inference_gateway::router(routes.state.clone()).oneshot(request).await.unwrap()
+    } else {
+        crate::contracts::router(routes.state.clone()).oneshot(request).await.unwrap()
+    };
+    let status = response.status();
+    let header = response
+        .headers()
+        .get("x-request-id")
+        .map(|value| value.to_str().unwrap().to_string());
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    assert!(!contains(&bytes, bearer.as_bytes()), "a response echoed the bearer");
+    (status, serde_json::from_slice(&bytes).unwrap(), header)
+}
+
+/// Task 2.2.4 through the production control and public inference routers, which read
+/// the real clock. The account is opened, and credential C (`expires_at` E) issued and
+/// used, at explicit logical ledger times long before that clock, so C has necessarily
+/// expired for every route call; no stored timestamp is rewritten and nothing waits.
+///
+/// - C's bearer is refused with 401 for request status, cancel, control request and
+///   receipt reads, and for inference with the held key or a new key, with no financial
+///   row changed. *Request and receipt history supports attributable recovery* keeps the
+///   existing owner/read-bearer authorization, and an expired credential is not that
+///   authority, so reads use the owner's proof or a live `read` credential.
+/// - The owner's proof reads the held request and rotates C into a live successor S
+///   (the account-credentials remedy for an expired credential). Rotation moves neither
+///   C's hold nor its spend.
+/// - S's inference with the held Idempotency-Key gets 409 `duplicate_request` naming the
+///   original request and status, before tokenization or any engine call (the configured
+///   engine is unreachable), and adds no request or hold; S's cancel of that key is a
+///   read. S's `read` scope and the owner's proof read the original request, attributed
+///   to C, and S obtains a signed receipt binding it.
+/// - Known settlement at an explicit time after E charges C and its account, not S; the
+///   same reads then return the settled request, the duplicate reports `completed`, and
+///   C's bearer is still refused.
+#[tokio::test]
+async fn expired_credential_requests_stay_readable_and_unduplicable_through_the_routers() {
+    use axum::http::StatusCode;
+    const OPENED_AT: u64 = 1_000_000;
+    const E: u64 = OPENED_AT + 1000;
+    let routes = CredentialRoutes::opened_at(1000, 2, OPENED_AT);
+    let id = routes.id();
+    let model = routes.agreement.payload.model.clone();
+    let expiring = routes
+        .ledger()
+        .issue_credential(
+            &id,
+            &CredentialIssueRequest {
+                expires_at: E,
+                spend_cap_wei: Some("50".into()),
+                max_concurrency: 1,
+                scopes: vec!["infer".into(), "read".into()],
+            },
+            OPENED_AT + 1,
+        )
+        .unwrap();
+    let held = routes.ledger().reserve(&id, &expiring.id, "route-held", 10, 20, E - 1, &model).unwrap();
+    assert_eq!(held.max_cost_wei, "30");
+    assert!(protocol::now().unwrap() >= E, "the routers' real clock must be after the logical expiry");
+    // Owner proofs legitimately spend challenge evidence and receipts advance only the
+    // receipt sequence (checked separately); every other row is compared.
+    let financial = || {
+        let mut rows = expiry_ledger_rows(&routes.path);
+        rows.retain(|table, _| !matches!(*table, "metadata" | "rate_limits" | "challenges"));
+        for account in rows.get_mut("accounts").unwrap() {
+            account[4] = Value::Null;
+        }
+        rows
+    };
+    let sequence = || -> u64 {
+        Connection::open(&routes.path)
+            .unwrap()
+            .query_row("SELECT sequence FROM accounts WHERE id=?1", [&id], |row| row.get(0))
+            .unwrap()
+    };
+    let reserved = serde_json::to_value(routes.ledger().request_view(&id, &held.id).unwrap()).unwrap();
+    assert_eq!((reserved["status"].as_str(), reserved["credential_id"].as_str()), (Some("reserved"), Some(expiring.id.as_str())));
+    let chat = serde_json::to_vec(&json!({
+        "model": model.id, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 20,
+    }))
+    .unwrap();
+    let status_path = "/v1/requests/route-held";
+    let cancel_path = "/v1/requests/route-held/cancel";
+    let control_path = format!("/v1/contracts/{id}/requests/{}", held.id);
+    let receipt_path = format!("/v1/contracts/{id}/receipt");
+
+    let refuse_expired = |stage: &'static str| {
+        let (routes, expiring, financial, chat) = (&routes, &expiring, &financial, &chat);
+        let (control_path, receipt_path) = (&control_path, &receipt_path);
+        async move {
+            let before = financial();
+            for (public, method, path, key) in [
+                (true, "GET", status_path, None),
+                (true, "POST", cancel_path, None),
+                (true, "POST", "/v1/chat/completions", Some("route-held")),
+                (true, "POST", "/v1/chat/completions", Some("route-new")),
+                (false, "GET", control_path.as_str(), None),
+                (false, "GET", receipt_path.as_str(), None),
+            ] {
+                let body = if key.is_some() { chat.clone() } else { Vec::new() };
+                let (status, document, _) = expiry_route(routes, public, method, path, &expiring.bearer, key, body).await;
+                let code = if public { "invalid_api_key" } else { "unauthorized" };
+                assert_eq!(
+                    (status, document["error"]["code"].as_str()),
+                    (StatusCode::UNAUTHORIZED, Some(code)),
+                    "{stage}: expired bearer {method} {path}: {document}"
+                );
+            }
+            assert!(routes.ledger().request_view(&routes.id(), "route-new").is_err(), "{stage}");
+            assert_eq!(financial(), before, "{stage}: an expired bearer changed the ledger");
+        }
+    };
+    refuse_expired("held").await;
+    let admitted = financial();
+
+    let (status, document, _) = routes.owner("GET", &control_path, Vec::new()).await;
+    assert_eq!((status, &document), (StatusCode::OK, &reserved));
+
+    // The owner rotates C into a live successor S at the routers' clock.
+    let now = protocol::now().unwrap();
+    let options = json!({"expires_at": now + 3600, "spend_cap_wei": "50", "max_concurrency": 1, "scopes": ["infer", "read"]});
+    let rotate = format!("/v1/contracts/{id}/credentials/{}/rotate", expiring.id);
+    let (status, document, _) = routes.owner("POST", &rotate, serde_json::to_vec(&options).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{}", document["error"]);
+    let successor: Credential = serde_json::from_value(document).unwrap();
+    routes.authenticates(&successor);
+    let rotated = financial();
+    let mut expected = admitted.clone();
+    let row = expiry_row(&mut expected, "credentials", &expiring.id);
+    row[3]["revoked"] = json!(true);
+    row[4] = json!(1);
+    let successor_row = rotated["credentials"].iter().find(|row| row[0] == successor.id).unwrap().clone();
+    assert_eq!(
+        (successor_row[3]["reserved_wei"].as_str(), successor_row[3]["spent_wei"].as_str()),
+        (Some("0"), Some("0"))
+    );
+    let credentials = expected.get_mut("credentials").unwrap();
+    credentials.push(successor_row);
+    credentials.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    assert_eq!(rotated, expected, "rotation moved a hold or spend");
+    let c_entry = routes.entry(&expiring.id);
+    assert_eq!((c_entry.reserved_wei.as_str(), c_entry.spent_wei.as_str(), c_entry.revoked), ("30", "0", true));
+
+    // S neither duplicates nor takes over the held request; its reads attribute it to C.
+    let successor_reads = |request: Value, request_status: &'static str| {
+        let (routes, successor, held, financial, sequence, chat) = (&routes, &successor, &held, &financial, &sequence, &chat);
+        let (control_path, receipt_path) = (&control_path, &receipt_path);
+        async move {
+            let before = financial();
+            let (status, document, header) = expiry_route(
+                routes, true, "POST", "/v1/chat/completions", &successor.bearer, Some("route-held"), chat.clone(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT, "{document}");
+            assert_eq!(
+                (
+                    document["error"]["code"].as_str(),
+                    document["error"]["request_id"].as_str(),
+                    document["error"]["request_status"].as_str(),
+                    header.as_deref(),
+                ),
+                (Some("duplicate_request"), Some(held.id.as_str()), Some(request_status), Some(held.id.as_str()))
+            );
+            for (public, method, path) in [
+                (true, "GET", status_path),
+                (true, "POST", cancel_path),
+                (false, "GET", control_path.as_str()),
+            ] {
+                let (status, document, _) = expiry_route(routes, public, method, path, &successor.bearer, None, Vec::new()).await;
+                assert_eq!((status, &document), (StatusCode::OK, &request), "successor {method} {path}");
+            }
+            let (status, document, _) = routes.owner("GET", control_path, Vec::new()).await;
+            assert_eq!((status, &document), (StatusCode::OK, &request), "owner read");
+            // Both the successor's `read` scope and the owner's proof obtain a signed
+            // receipt binding the original request.
+            for reader in ["successor", "owner"] {
+                let sequence_before = sequence();
+                let (status, document) = if reader == "owner" {
+                    let (status, document, _) = routes.owner("GET", receipt_path, Vec::new()).await;
+                    (status, document)
+                } else {
+                    let (status, document, _) =
+                        expiry_route(routes, false, "GET", receipt_path, &successor.bearer, None, Vec::new()).await;
+                    (status, document)
+                };
+                assert_eq!(status, StatusCode::OK, "{reader} receipt: {document}");
+                let receipt: Signed<UsageReceipt> = serde_json::from_value(document).unwrap();
+                protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &routes.state.wallet).unwrap();
+                assert_eq!(receipt.payload.sequence, sequence_before + 1, "{reader} receipt");
+                assert_eq!(sequence(), sequence_before + 1, "{reader} receipt");
+                let bound = receipt.payload.requests.iter().find(|bound| bound.id == held.id).unwrap();
+                assert_eq!(serde_json::to_value(bound).unwrap(), request, "{reader} receipt");
+                assert_eq!(
+                    serde_json::to_value(&receipt.payload.account).unwrap(),
+                    serde_json::to_value(routes.ledger().account(&routes.id()).unwrap()).unwrap(),
+                    "{reader} receipt"
+                );
+            }
+            assert_eq!(financial(), before, "successor reads or duplicates changed the ledger");
+        }
+    };
+    successor_reads(reserved.clone(), "reserved").await;
+    assert_eq!(financial(), rotated);
+
+    // Known settlement at an explicit time after E, against C's original accounting.
+    let settled = routes
+        .ledger()
+        .settle(&held.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", E + 5)
+        .unwrap();
+    let mut expected = rotated.clone();
+    expect_terminal(&mut expected, &held.id, "completed", Some((10, 7, 17)), E + 5);
+    let record = expected["requests"].iter().find(|row| row[0] == held.id).unwrap()[6].clone();
+    assert_eq!(serde_json::to_value(&settled).unwrap(), record);
+    assert_eq!(financial(), expected);
+    let account = routes.ledger().account(&id).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        ("978", "0", "17")
+    );
+    let c_entry = routes.entry(&expiring.id);
+    assert_eq!((c_entry.reserved_wei.as_str(), c_entry.spent_wei.as_str()), ("0", "17"));
+    let s_entry = routes.entry(&successor.id);
+    assert_eq!((s_entry.reserved_wei.as_str(), s_entry.spent_wei.as_str()), ("0", "0"));
+    successor_reads(record, "completed").await;
+    refuse_expired("settled").await;
+    assert_eq!(financial(), expected);
 }

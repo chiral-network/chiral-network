@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-21 (eighty-fifth round) — Acceptance: request-accounting 2.2.4 (credential expiry during an admitted hold) and parent 2.2
+
+- In step at `79c5dedf`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-request-accounting` 2.2.4), through a workflow: write tests, then adversarial review. The code already matches the spec. `reserve` and `authenticate` refuse from `expires_at` (`expires_at <= now`), so the last admitted second is E - 1. `settle_request`, `recover_requests` and the gateway's settlement never re-check credential liveness. Reads keep live authority: an expired bearer gets 401 on every route, as account-credentials requires, so the tests read through a live successor `read` credential or an owner proof.
+- New tests in `billing_store::tests` (test module only; no product code changed):
+  - `credential_expiry_admits_through_the_last_second_and_refuses_new_holds_from_expires_at`: admitted at E - 1. Refused (`forbidden`, and `unauthorized` for the bearer) at exactly E, E + 1 and E + 90 days, with all 14 ledger tables unchanged before and after reopening. The live root admits the same key at E.
+  - `expired_credential_hold_settles_once_against_its_original_accounting`: 24 cases covering four terminal kinds (known usage, explicit unknown usage, usage over the reservation, restart recovery), three successors (issued; revoked then issued; rotated) and settlement at exactly E or a day later. The hold survives reopening and settles once against the original credential and account, with rows built from literals. The successor gains no hold and gets `duplicate_request` for the held key, and the first terminal result stands.
+  - `expired_credential_requests_stay_readable_and_unduplicable_through_the_routers`: on the real control and public routers, with the account opened at a logical time already past expiry (no sleeps, no rewritten timestamps). The expired bearer is refused everywhere. The successor's chat with the held key gets 409 with the original request id before any engine call. The successor and the owner proof read the request and get signed receipts attributed to the original credential. After settlement only the original credential is charged.
+- Fifteen mutations fail them: the expiry comparison off by one in either direction; authentication ignoring expiry; settlement requiring a live credential; restart recovery skipping expired credentials; the duplicate check disabled or limited to the caller's credential; revocation or rotation zeroing or moving the hold; settlement skipping the expired credential's spend; and owner-proof receipt reads refused. The last was caught only after the review added the owner receipt read. Remaining gaps, recorded in design: a live gateway request whose credential expires mid-generation needs an operation-time input the gateway does not have (task 3.1). Explicit revocation during a hold is exercised on the expired credential (`revoke_credential` takes no time), and rotation of a live credential during a hold by the existing test.
+- 2.2.4 and parent 2.2 ticked; 2.2.1–2.2.3's tests in `inference_owner_control_test` passed in round 81's full suite, and that target's inputs are unchanged since.
+- Checks (test module only): `--lib` 432 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; desktop `--lib desktop::` 10/10; strict validation passes.
+
 ## 2026-11-21 (eighty-fourth round) — Acceptance: opening-intent 2.3.2 (non-reserving quote cutover) and parent 2.3
 
 - In step at `4c26d6e2`; whitepaper unchanged; no new answers.
@@ -936,7 +948,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3/2.5/3.1–3.4 (2.2 done in round 85), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

@@ -342,3 +342,9 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `inference_proposal_test::quote_work_and_committed_issuance_keep_separate_counters_clocks_and_failure_charges` — **replaceable in part**: the rule that each budget's effective minute is max(floor(t/60), its own watermark), and that a refusal of one budget never moves the other's counter or watermark, is pure state-transition arithmetic a Verus model of two independent counters could prove; the SQLite transactions, routers and reopening are outside it.
 - `inference_funding_admission_test::unrelated_quotes_beyond_both_former_wallet_ceilings_leave_the_owner_only_its_own_rules` — **not replaceable**: HTTP routes, owner proofs, ledger tables and signed quotes.
+
+## Judged 2026-11-21 — credential expiry during an admitted hold (request-accounting 2.2.4)
+
+- `billing_store::tests::credential_expiry_admits_through_the_last_second_and_refuses_new_holds_from_expires_at` — **replaceable in part**: the admission predicate (live iff `now < expires_at`, unrevoked and scoped) is a pure comparison a Verus `ensures` clause could state for every `now`; the unchanged-ledger assertions over SQLite are outside it.
+- `billing_store::tests::expired_credential_hold_settles_once_against_its_original_accounting` — **replaceable in part**: that settlement moves exactly the original hold between the original account's and credential's reserved, spent and available amounts, independent of credential liveness, is conserved integer arithmetic over a ledger model; the reopened SQLite state and first-terminal-result persistence are not.
+- `billing_store::tests::expired_credential_requests_stay_readable_and_unduplicable_through_the_routers` — **not replaceable**: HTTP routers, bearer and owner-proof authentication and signed receipts.
