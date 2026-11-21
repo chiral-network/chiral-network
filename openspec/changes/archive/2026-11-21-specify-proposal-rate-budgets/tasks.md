@@ -16,7 +16,7 @@
 ## 3. Verify and integrate
 
 - [x] 3.1 Run acceptance tests and available README/CI checks after implementation, recording unavailable platform/release gates without weakening them. Passed 418 Rust tests (20 suites; two pre-existing ignored), headless binary build, frontend checking/build and 15 tests, 46 Python tests, CI script compilation and both strict resource-change validations. Native desktop/release and external qualification gates remain unavailable/unclaimed; remaining parent acceptance still gates normal archival.
-- [ ] 3.2 Strictly validate and normally archive with `openspec archive specify-proposal-rate-budgets --yes`, never `--skip-specs`, only after all tasks and the non-reserving cutover are complete. Coordinate integration with the parent change so each requirement is applied once; never archive the old wallet policy as an intermediate state.
+- [x] 3.2 Strictly validate and normally archive with `openspec archive specify-proposal-rate-budgets --yes`, never `--skip-specs`, only after all tasks and the non-reserving cutover are complete. Coordinate integration with the parent change so each requirement is applied once; never archive the old wallet policy as an intermediate state. Done 2026-11-21 (round 77), right after the parent `specify-non-reserving-quotes` was archived; its three ledger-only requirements are added once to `inference-proposal-admission`, and no wallet-policy requirement is archived.
 
 ## Historical evidence before the author decision
 

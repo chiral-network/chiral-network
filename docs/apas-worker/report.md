@@ -104,6 +104,20 @@ Nonblocking factual update proposed for the author: in **Approved non-reserving 
 
 Worker action continued (2026-11-17): A systematic spec-versus-whitepaper comparison found that the archived main spec `inference-proposal-admission` still required the superseded named-wallet gates (eight pending proposals per named wallet, per-payer rate atomicity and named-payer quota attribution), contradicting **Approved non-reserving quotes** and the already-migrated code. The finished, implemented and tested deltas moved unchanged from `specify-non-reserving-quotes` into `adopt-provider-wide-quote-retention`, which was archived normally; the main spec now has provider-wide unaccepted-quote retention, atomic storage admission and the pre-signing work bound, and its Purpose no longer describes named-payer attribution. `specify-non-reserving-quotes` keeps *Public quotes do not reserve opening capacity* and *Authenticated paid admission preserves accepted commitments*, whose acceptance (tasks 3.3, 4.3) is still open, so this entry stays open. No code or whitepaper change; no new author decision is needed.
 
+Worker action continued (2026-11-21): The implementation and its acceptance now cover every item of the book's "Implementation gap and required evidence" list. `specify-non-reserving-quotes` and `specify-proposal-rate-budgets` are archived (round 77). Mitigation evidence:
+- Unrelated public proposals consume no named-wallet allowance: both wallet gates are removed (non-reserving 3.1, proposal-rate 2.4), and 24 same-owner proposals beyond both former ceilings are admitted (4.1).
+- Quote resources stay bounded provider-wide: 10,000 retained quotes, 600 committed insertions and 600 pre-signing work units per non-regressing minute (3.2, 4.2, proposal-rate 2.2–2.5).
+- Competing funding intents at the capacity boundary: exactly one acknowledgement for the final paid lease, and deterministic two-writer tests show the capacity check and insertion share one write transaction (3.3, 4.3, round 76).
+- Full capacity is refused with no acknowledgement, intent, account, credit or submission, and quotes issued while capacity is full reserve nothing (round 76).
+- Accepted intents are recovered across lost replies, restart and quote/lease expiry, without a new lease or replacement, up to safe-frontier credit (round 76; opening-intent 2.3.4).
+
+Remaining gaps, by design or outside this checkout:
+- Provider-wide exhaustion still affects every caller; these are availability bounds, not Sybil resistance.
+- Fresh owner proofs are limited to 12 per named wallet per minute, so a third party can still delay a wallet's owner operations. This is disclosed in the `inference-challenge-rate-budgets` spec.
+- No public load, security review or live-chain qualification has been done.
+
+Revised nonblocking factual update for the author, replacing the one above. In **Approved non-reserving quotes**, line 508 still describes the eight-slot and named-payer rate gates as current. A replacement: "The earlier isolated regression demonstrated the former named-wallet quota exposure. Native proposal issuance now uses provider-wide quote retention, committed-issuance and durable pre-signing-work bounds without named-wallet quote allowances, and isolated acceptance covers competing funding intents at the capacity boundary, full-capacity refusal without acknowledgement or submission, and recovery of accepted intents across lost replies, restart and expiry. Public-release security and load gates remain open; isolated checks are not deployment qualification." The entry stays open only for this factual update, which only the author can make.
+
 ## 2026-11-15 — Verus is unavailable
 
 Status: open

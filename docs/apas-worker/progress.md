@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-21 (seventy-seventh round) — Archive: `specify-non-reserving-quotes` and `specify-proposal-rate-budgets`
+
+- In step at `b3ee6bbf`; whitepaper unchanged; no new answers.
+- Non-reserving 4.4: the first report entry ("Public proposals can exhaust a named payer's quota") now lists mitigation evidence for each item of the book's "Implementation gap and required evidence" list. It also lists the remaining gaps: provider-wide exhaustion affects every caller, the 12-per-wallet owner-challenge limit, and no public load, security or live-chain qualification. The proposed factual update of book line 508 is revised to match, and the entry stays open only for that author edit.
+- Archived in order, each requirement applied once: `specify-non-reserving-quotes` (2 added) and then `specify-proposal-rate-budgets` (3 added, ledger-only; no wallet-policy requirement) into `openspec/specs/inference-proposal-admission`, which now has 11 requirements. Its Purpose now names the committed-issuance budget and paid admission. The two links from `specify-opening-funding-intent/design.md` now point at the archives.
+- Checks: round 76's full suite at `b3ee6bbf` covers the code (no code changed); `openspec validate --all --strict --no-interactive` 34 passed, 0 failed; `openspec validate inference-proposal-admission --type spec --strict` valid.
+
 ## 2026-11-21 (seventy-sixth round) — Acceptance: quotes overbook opening capacity; paid admission is atomic and accepted originals survive reply loss, restart and expiry
 
 - In step at `b02e974f`; whitepaper unchanged; no new answers.
@@ -865,7 +872,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Non-reserving 4.4 (report update and archive; 3.3/4.3 done in round 76), opening-intent 2.3.2 review, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
