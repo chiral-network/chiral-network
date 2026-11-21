@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-21 (ninety-second round) — Reconciliation: request-accounting 3.4 with opening-intent 2.8.2
+
+- In step at `3183a2de`; whitepaper unchanged; no new answers.
+- Docs-only step (`specify-inference-request-accounting` 3.4), through a workflow: write the reconciliation, then an adversarial review that opened every cited test. request-accounting design.md gains "Reconciliation with opening-intent 2.8.2 (task 3.4)". It is a matrix of 2.8.2's four recovery kinds (accepted paid original, existing account, top-up, inference settlement) against five exhausted resources (full quote storage, signing work, committed issuance, full paid opening capacity, full free opening capacity). Each cell names its test. A second table records which of 2.8.2's preserved properties each test asserts: authorization, safe-credit checks, prices, nonce ownership and exported credential authority.
+- Result: 18 of 20 cells are covered. Open: inference settlement at full paid capacity and at full free capacity. Five tests keep a request held under that pressure, but none settles, releases, recovers or reads it. Opening-intent 2.8.2 stays open, and its tasks.md gains a cross-reference note with no checkbox.
+- The review corrected three overclaims:
+  - The free-bound accepted-original pair recovers from an acknowledgement the client already saved, with no submission.
+  - The native top-up recovery attempts replay by POST, not a GET refresh.
+  - One authorization cell is "not checked".
+  It also notes that 2.5, 3.1 and 3.2 fill no cell.
+- Named-wallet position checked in code: the propose route calls only `sign_quote` (provider-wide work) and `store_quote` (provider-wide issuance and the 10,000-record bound). No wallet-keyed quote ceiling or pending counter remains. The removal came from the archived non-reserving and proposal-rate changes, which opening-intent 2.3.2 integrated. Request-accounting evidence neither relied on those gates nor mitigates them. design.md's stale "does not mitigate the public named-wallet quota risk" now says so. Still per wallet: the owner-challenge budget (12 per minute, 8 pending), which a third party can use to delay recovery that needs a fresh owner proof; no cited test exhausts it. Book line 508 still describes the old wallet gates; only the author can change it (report entry 2026-11-14 stays open).
+- Blockers: owner-control 2.4.3 (root rotation on an opening replay) was fixed on 2026-11-15, and its change was archived on 2026-11-21. Opening-intent design.md's last limits bullet said it "remains blocked"; I corrected that bullet and kept its evidence gap: no test has the native client recover a lost first paid opening reply. The production quote policy is no longer a blocker. Left for 4.1: request-accounting proposal.md's original Impact text ("owner-untracked", "blocked production cutover") describes the specification step as it was.
+- 3.4 ticked. Checks: strict validation of both changes passes. No code or test changed, so no cargo run.
+
 ## 2026-11-21 (ninety-first round) — Acceptance: request-accounting 3.3 (quote-budget exhaustion leaves inference intact)
 
 - In step at `54abd7bd`; whitepaper unchanged; no new answers.
@@ -1035,7 +1049,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89), 3.4 and 4.x (3.2 and 3.3 done in rounds 90–91) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92), opening-intent 2.8.2's two open cells (inference settlement at full paid and at full free opening capacity) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
