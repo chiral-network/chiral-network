@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-21 (seventy-ninth round) — Acceptance: the native owner-challenge expiry window is exact
+
+- In step at `7c64549b`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-owner-control-authorization` 2.2.3, which completes 2.2). The task was small and mechanical, so no workflow was used. The new `consumer::tests::native_challenge_expiry_window_is_exactly_now_exclusive_to_now_plus_600` calls `validate_challenge` at an explicit current time: expiries at or before now and at now + 601 or later are refused, now + 1 through now + 600 are accepted, the window moves with the supplied time, and the exact-bytes check still applies. Three boundary mutations (accept at now; reject at now + 600; accept at now + 601) each fail it, and the source was restored byte for byte. The test uses the existing `now` argument; no clock seam was added.
+- No code difference. The design's four "2.2.3 remains open" notes now cite the test. Only the archive (3.2) remains.
+- Checks (test-only change inside `consumer.rs`'s `mod tests`): `--lib` 429 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; desktop `--lib desktop::` 10/10; strict validation passes. Integration targets, npm and Python are unchanged since round 78's full suite.
+
 ## 2026-11-21 (seventy-eighth round) — Code: the desktop shows token counters and other integers above 2^53 exactly
 
 - In step at `0a2db426`; whitepaper unchanged; no new answers.
@@ -885,7 +892,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Archive `specify-owner-control-authorization` (3.2; 2.2.3 done in round 79). Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

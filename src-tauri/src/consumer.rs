@@ -5936,6 +5936,32 @@ mod tests {
         challenge.expires_at = 1000;
         assert!(validate_challenge(&challenge, b"abc", 100).is_err());
     }
+    /// Owner-control 2.2.3: the native receiver's plausibility window is exactly
+    /// `now < expires_at <= now + 600`, at an explicit current time (no sleeps). Catches an
+    /// expiry accepted at the current time, a bound tightened below `now + 600`, and one
+    /// loosened to admit `now + 601`. The bound is the receiver's own; it does not extend the
+    /// provider's 120-second issuance lifetime.
+    #[test]
+    fn native_challenge_expiry_window_is_exactly_now_exclusive_to_now_plus_600() {
+        let now = 1_795_000_000_u64;
+        let at = |expires_at: u64| Challenge { nonce: "n".into(), payload_hex: "0x616263".into(), expires_at };
+        let verdict = |expires_at: u64| validate_challenge(&at(expires_at), b"abc", now);
+        for refused in [0, now - 1, now, now + 601, now + 602, u64::MAX] {
+            assert_eq!(
+                verdict(refused),
+                Err("invalid owner challenge lifetime or nonce".into()),
+                "expiry {refused} at time {now} must be refused"
+            );
+        }
+        for accepted in [now + 1, now + 120, now + 599, now + 600] {
+            assert_eq!(verdict(accepted), Ok(()), "expiry {accepted} at time {now} must be accepted");
+        }
+        // The window moves with the explicit current time rather than any fixed clock.
+        assert_eq!(validate_challenge(&at(now + 600), b"abc", now - 1), Err("invalid owner challenge lifetime or nonce".into()));
+        assert_eq!(validate_challenge(&at(now), b"abc", now - 1), Ok(()));
+        // A plausible lifetime still requires the exact intended bytes.
+        assert_eq!(verdict(now + 600).is_ok(), validate_challenge(&at(now + 600), b"abd", now).is_err());
+    }
     #[test]
     fn sse_handles_split_unicode_crlf_and_usage() {
         let mut parser = SseParser::default();
