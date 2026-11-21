@@ -36,12 +36,35 @@
   - [x] 3.2.1 Every paid-opening fault follows actual native/provider chain verification against controlled canonical RPC replies and a fresh provider HTTP credit commit. Native reopening preserves the original journal and acknowledgement; corrected replay neither duplicates credit nor rotates/re-exposes the root. Explicit native credential issuance recovers API access while preserving the existing provider root and all original financial records. Signed terms, admission and original preparation are restored prerequisites, not live-chain/broadcast evidence.
   - [x] 3.2.2 Free-opening faults follow genuine public HTTP creation, with no preloaded account/payment/acknowledgement. Native reopening and corrected replay preserve the pending original and free financial records; explicit native issuance restores API access while retaining the provider root. Later reopening refreshes without another opening or credential rotation. Both RPC tripwires remain untouched and both wallet journals remain empty, including under wide response-only claims.
   - [x] 3.2.3 Fresh native top-up creates/signs/journals/submits one original; independent provider RPC verification precedes actual HTTP credit. Reopened provider/native faulty `resume` and corrected `fund` preserve original-operation ownership and exact pending state until valid acceptance, without duplicate funding/fees or credential rotation. Prior usage/spend/hold and original financial rows remain intact; only legitimate submitted-to-accepted journal evidence advances. A later authorized account refresh performs no RPC or further top-up. Original opening/profile/usage are restored prerequisites, not live chain/engine evidence.
-- [ ] 3.3 Retain request-accounting 3.2.1's renewed-report receipt coverage and distinguish original account terms, known waived usage, unknown request exposure and account funding-loss compensation. Reuse its completed regression rather than rewriting its report binding.
-- [ ] 3.4 Confirm the stricter decoder reads current genuine persisted schema-3 account/native records without changing their money representation. Corrupt/unsupported records fail closed and remain intact; no automatic legacy migration, reset or conversion.
+- [x] 3.3 Retain request-accounting 3.2.1's renewed-report receipt coverage and distinguish original account terms, known waived usage, unknown request exposure and account funding-loss compensation. Reuse its completed regression rather than rewriting its report binding.
+  - Request-accounting 3.2.1's `native_receipts_preserve_renewed_evidence_through_settlement_and_reopening` is retained unchanged; its report binding is not rewritten.
+  - `signed_receipts_keep_original_terms_waived_usage_unknown_exposure_and_funding_loss_distinct` (`inference_account_records_test.rs`) carries all four quantities in one genuine provider-signed receipt that actual native `Consumer::receipt` accepts:
+    - the original `c…` account model, price and concurrency, while renewed requests carry the `d…` report;
+    - a waived request whose usage (1, 2) and 5-wei waiver are recorded, with the balance identity holding only without the waiver;
+    - restart- and orphan-released unknown requests at counters (0, 0) with 29 + 11 wei exposure;
+    - frozen funding-loss compensation of 10 wei after a 1000-wei reversal.
+  - Four re-signed conflations are refused without changing saved bytes, the watermark, the credential or the journal: renewed account model, credited waiver, accumulated exposure and erased loss.
+  - Wide sums: a re-signed claim conserving 2 × u128::MAX in funded, loss, reversed and spent is accepted, advancing only the watermark. One-wei and 2^128 shortfalls are refused with the same preservation.
+  - Six mutations fail it: receiver waiver-as-credit; receiver model check removed; ledger-invented unknown counters; and the receiver identity in wrapping `u128`, `f64` or checked `u128`. Before review added the wide cases, the wrapping and `f64` versions passed the records and presentation tests.
+- [x] 3.4 Confirm the stricter decoder reads current genuine persisted schema-3 account/native records without changing their money representation. Corrupt/unsupported records fail closed and remain intact; no automatic legacy migration, reset or conversion.
+  - `persisted_schema3_and_native_records_read_exactly_and_corruption_fails_closed` (`inference_account_records_test.rs`) covers genuine records. Stored accounts and requests decode strictly and re-encode to identical bytes. Reopened ledger reads, the operator listing, receipts and served HTTP bodies carry those bytes, and native files contain them verbatim; reads rewrite nothing.
+  - It also covers corruption, on ledger copies and native files: extra, positional, missing and raw duplicate members; a 2^64 counter; `"010"` wei and a `"05"` waiver; unbalanced money; one-wei and 2^128 wide shortfalls; positional request usage; cached renewed terms; an unsupported saved member; and schemas `2`/`4`.
+    - Each fails closed for that account only, without a provider request from native code. Both native aggregate listings refuse as a whole.
+    - Every row and file byte is unchanged, and nothing migrates, repairs or resets.
+    - A hand-written wide but balanced stored statement is served and signed exactly. It is a control for the read check, not a genuine record.
+  - Semantic corruption previously failed open: the provider served and signed `"010"`, and the native `account` silently replaced it. Fixed (design "Code differences").
+  - Eleven mutations fail the test:
+    - each of the three new checks removed, and `deny_unknown_fields` removed;
+    - waiver validation removed from the provider read and from the native check;
+    - ledger and native decoding buffered through `serde_json::Value`;
+    - the provider identity in wrapping `u128`, `f64` or checked `u128`.
+  - Before review added the matching cases, the two waiver and two `Value` mutations passed this test. No stored wide case existed for the three provider-identity mutations to fail on.
 
 ## 4. Integrate verified behavior
 
-- [ ] 4.1 Update requirement/source/test correspondence and operator/client documentation with observed results and remaining release limits; leave the whitepaper unchanged.
+- [x] 4.1 Update requirement/source/test correspondence and operator/client documentation with observed results and remaining release limits; leave the whitepaper unchanged.
+  - design.md now has the 3.3/3.4 results, the task 3.4 code difference, the updated source map, a requirement-and-scenario correspondence table, operator and client notes, and the remaining limits.
+  - The whitepaper and book are unchanged. The full suite run afterwards with the task 3.4 read checks in place passed every headless target, including owner-control 61/61 and request-accounting 3.2.1's retained regression.
 - [ ] 4.2 Pass strict validation and required available project checks after implementation. Archive with `openspec archive specify-inference-account-snapshot --yes` only when every in-scope task is complete; never use `--skip-specs`.
 
 No deployment, live payment, account/server administration, installation, hardware qualification, whitepaper edit or unrelated source adoption is authorized. Full `UsageReceipt`, `RequestView`, `PerformanceOutcome`, `OpenResult` and credential-envelope field schemas remain separate specification work; this change covers their shared account/usage payloads, not replacement wrappers.

@@ -229,9 +229,17 @@ fn get_account(db: &Connection, id: &str) -> Result<AccountView, String> {
         })
         .optional()
         .map_err(sql)?;
-    decode(value.ok_or("not_found: account not found")?)
+    stored_account(decode(value.ok_or("not_found: account not found")?)?)
 }
-fn save_account(db: &Connection, account: &AccountView) -> Result<(), String> {
+/// Stored money is served, signed and spent exactly as written. A record the writer could not
+/// have produced fails closed here; a read never normalizes, repairs or migrates it.
+fn stored_account(account: AccountView) -> Result<AccountView, String> {
+    balanced(&account).map_err(|e| format!("ledger corruption: {e}"))?;
+    Ok(account)
+}
+/// The extended balance identity in exact wide arithmetic over canonical wei. The waiver is
+/// validated money, never a balance term.
+fn balanced(account: &AccountView) -> Result<(), String> {
     // Wide arithmetic accommodates consumed orphan funding without underflow.
     let left =
         U256::from(money(&account.funded_wei)?) + U256::from(money(&account.provider_loss_wei)?);
@@ -240,9 +248,14 @@ fn save_account(db: &Connection, account: &AccountView) -> Result<(), String> {
         + U256::from(money(&account.spent_wei)?)
         + U256::from(money(&account.reserved_wei)?)
         + U256::from(money(&account.available_wei)?);
+    money(&account.waived_wei)?;
     if left != right {
         return Err("ledger invariant: account does not balance".into());
     }
+    Ok(())
+}
+fn save_account(db: &Connection, account: &AccountView) -> Result<(), String> {
+    balanced(account)?;
     db.execute(
         "UPDATE accounts SET account=?2 WHERE id=?1",
         params![account.contract_id, encode(account)?],
@@ -1731,7 +1744,10 @@ impl BillingStore {
             &db,
             "SELECT account FROM accounts ORDER BY created DESC,rowid DESC LIMIT 100",
             [],
-        )
+        )?
+        .into_iter()
+        .map(stored_account)
+        .collect()
     }
     pub fn list_requests(&self) -> Result<Vec<RequestView>, String> {
         let db = self.db.lock().map_err(|_| "ledger lock poisoned")?;

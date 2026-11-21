@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-21 (eighty-first round) — Acceptance and code: account receipt distinctions; corrupt stored and cached accounts fail closed
+
+- In step at `16c7f73a`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-account-snapshot` 3.3, 3.4 and 4.1) through a workflow: write tests, then an adversarial review. New target `inference_account_records_test`:
+  - `signed_receipts_keep_original_terms_waived_usage_unknown_exposure_and_funding_loss_distinct` (3.3): one genuine provider-signed receipt, accepted by the real native `Consumer::receipt`, keeps four quantities apart: the original account terms (renewed requests carry their own report), a known waived usage whose waiver is never a balance term, 40 wei of unknown-usage request exposure at zero counters, and 10 wei of funding-loss compensation on a frozen account. Re-signed receipts that conflate any two are refused, and saved bytes, the watermark, the credential and the journal stay unchanged. Request-accounting 3.2.1's regression is retained unchanged.
+  - `persisted_schema3_and_native_records_read_exactly_and_corruption_fails_closed` (3.4): genuine schema-3 ledger rows and native files decode strictly and re-encode to identical bytes through every read path. Corrupt records (extra, positional, missing and duplicate members, a 2^64 counter, non-canonical wei and waiver, unbalanced money and wide shortfalls, positional request usage, cached renewed terms, an unsupported member) and ledger schemas 2 and 4 fail closed for that account only and change no row or file byte. Nothing migrates, repairs or resets.
+- Code difference found and fixed (design "Code differences"): semantically corrupt money failed open. The provider served and signed a stored `"spent_wei":"010"` or an unbalanced account, and the native `account` call silently replaced a corrupt cached statement from the provider. Now every stored account read and the operator listing apply the writer's balance identity (`billing_store::balanced`, waiver validated but never counted) and fail with `ledger corruption`. Loading a saved native account applies the existing terms-and-balance check and refuses, before any provider request, with "saved account snapshot is corrupt; it is preserved unchanged".
+- The review found six regressions the first tests missed: waiver validation dropped on either side, decoding through `serde_json::Value` (which tolerates duplicate members) on either side, and the receiver's identity in wrapping `u128` or `f64`. It added wide-sum, duplicate-member and non-canonical-waiver cases; all of these, and seven more mutations, now fail. Its documented, deliberate fail-closed effects: one corrupt local file makes both native aggregate listings refuse; one corrupt ledger account makes the operator listing refuse, can stop daemon startup recovery and quarantines its funding recheck (by inspection).
+- 3.3, 3.4 and 4.1 ticked; only the archive (4.2) remains. The change's notes that owner-control was not rerun now cite this round's full suite.
+- Checks: full suite under caffeinate with `--no-fail-fast`: bins build passes; 32 headless test targets, 743 passed, 12 ignored (helpers), 0 failed (`--lib` 429; `inference_account_records_test` 2/2; `inference_owner_control_test` 61/61; `application_startup_boundaries_test` 14/14); desktop `--lib desktop::` 10/10; `npm test` 88/88 in 18 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 76 OK; strict validation passes. No `pmset` sleep during the run.
+
 ## 2026-11-21 (eightieth round) — Archive: `specify-owner-control-authorization`
 
 - In step at `a8240688`; whitepaper unchanged; no new answers.
@@ -899,7 +910,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), the snapshot archive (4.2; 3.3–3.4 done in round 81; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

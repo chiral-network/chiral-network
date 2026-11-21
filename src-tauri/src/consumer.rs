@@ -838,6 +838,14 @@ impl Consumer {
                     .into(),
             );
         }
+        // A cached statement was accepted against these signed terms in canonical, balanced
+        // money. One that no longer is is corrupt: refuse it unchanged instead of listing,
+        // exporting from or silently replacing it.
+        if let Some(account) = &saved.account {
+            account_matches(account, &saved).map_err(|_| {
+                "saved account snapshot is corrupt; it is preserved unchanged".to_string()
+            })?;
+        }
         Ok(saved)
     }
     fn save_account(&self, saved: &SavedAccount) -> Result<(), String> {
