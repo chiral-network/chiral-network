@@ -3,7 +3,10 @@
 //! requirements 2, 6, 9 and 11, tasks 2.1, 2.3, 3.2, 3.9 and 3.11; `provider-daemon-lifecycle`
 //! requirement 11, task 2.2), and the process-level acceptance evidence of `provider-daemon-lifecycle`
 //! requirements 7 to 12, tasks 3.7 to 3.12 (module `lifecycle`, whose stub chat and embedding
-//! engines and chain RPC this test process serves itself).
+//! engines and chain RPC this test process serves itself), and, on macOS, the process-creation
+//! evidence of `application-startup-boundaries` task 3.1: the daemon, started suspended and
+//! watched by kqueue (`support/process_observer.rs`), creates no process with an external engine
+//! and only its managed engine with the CPU runtime, and reaches only its configured chain RPC.
 //!
 //! This target has `harness = false` (Cargo.toml): libtest would reject the launcher's
 //! `llama-server` arguments, so `main` acts as the stub engine when it runs under that name: it
@@ -23,6 +26,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
+
+#[path = "support/process_observer.rs"]
+mod process_observer;
 
 const ENGINE: &str = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
 const HELPER_PID: &str = "engine-helper.pid";
@@ -80,6 +86,13 @@ fn main() {
         ("sigterm_with_an_admitted_stream_refuses_new_requests_and_exits_once_it_settles", lifecycle::sigterm_with_an_admitted_stream_refuses_new_requests_and_exits_once_it_settles),
         ("a_stream_that_outlasts_the_shutdown_bound_is_released_under_unknown_usage", lifecycle::a_stream_that_outlasts_the_shutdown_bound_is_released_under_unknown_usage),
         ("prompts_completions_and_credentials_reach_no_output_administration_answer_or_deployment_file", lifecycle::prompts_completions_and_credentials_reach_no_output_administration_answer_or_deployment_file),
+    ]);
+    // `application-startup-boundaries` tasks 3.1: the daemon's process creation, observed by
+    // kqueue (macOS; the Linux `/proc` observation is still open).
+    #[cfg(target_os = "macos")]
+    tests.extend([
+        ("an_unmanaged_daemon_starts_no_process_and_reaches_only_its_configured_chain_rpc", lifecycle::an_unmanaged_daemon_starts_no_process_and_reaches_only_its_configured_chain_rpc as fn(&Runtime)),
+        ("a_managed_daemon_starts_only_its_engine_through_start_serve_and_shutdown", lifecycle::a_managed_daemon_starts_only_its_engine_through_start_serve_and_shutdown),
     ]);
     // Nothing here is ignored; `--ignored` selects no test, as under libtest.
     tests.retain(|(name, _)| {
@@ -352,19 +365,25 @@ impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         let _ = self.daemon.kill();
         let _ = self.daemon.wait();
-        #[cfg(unix)]
-        if let Some(pid) = self.provider.helper().filter(|pid| exists(*pid)) {
+        kill_stub_engines(self.provider);
+    }
+}
+
+/// Kills the stub engines that `provider`'s daemons started: the last one by its recorded id
+/// and, by the log of engine starts, every other one, as when two daemons ran for it; only a
+/// process whose command line names this provider's directory, so that a reused process id
+/// is never signalled.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn kill_stub_engines(provider: &Provider) {
+    #[cfg(unix)]
+    if let Some(pid) = provider.helper().filter(|pid| exists(*pid)) {
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+    #[cfg(unix)]
+    for pid in provider.engine_starts().iter().filter_map(|pid| pid.parse::<u32>().ok()).filter(|pid| exists(*pid)) {
+        let command = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output();
+        if command.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&*provider.directory.to_string_lossy())) {
             unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        }
-        // Every other stub engine this provider started, as when two daemons ran for it; only a
-        // process whose command line names this provider's directory, so that a reused process id
-        // is never signalled.
-        #[cfg(unix)]
-        for pid in self.provider.engine_starts().iter().filter_map(|pid| pid.parse::<u32>().ok()).filter(|pid| exists(*pid)) {
-            let command = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output();
-            if command.is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&*self.provider.directory.to_string_lossy())) {
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-            }
         }
     }
 }
@@ -1033,21 +1052,30 @@ mod lifecycle {
             let (gate, genesis) = (gate.clone(), genesis.clone());
             async move {
                 gate.pass().await;
-                let now = protocol::now().unwrap();
-                let block = |height: u64, hash: String| json!({"number": format!("0x{height:x}"), "hash": hash,
-                    "timestamp": format!("0x{:x}", now - (12 - height))});
-                let result = match (request["method"].as_str(), request["params"][0].as_str()) {
-                    (Some("eth_chainId"), _) => json!(chain_id),
-                    (Some("eth_syncing"), _) => json!(false),
-                    (Some("eth_getBlockByNumber"), Some("0x0")) => block(0, genesis),
-                    (Some("eth_getBlockByNumber"), Some("latest")) => block(12, format!("0x{}", "55".repeat(32))),
-                    (Some("eth_getBlockByNumber"), Some("safe")) => block(10, format!("0x{}", "56".repeat(32))),
-                    (Some("eth_getBlockByNumber"), Some("finalized")) => block(6, format!("0x{}", "57".repeat(32))),
-                    _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-                };
-                Json(json!({"jsonrpc": "2.0", "id": request["id"], "result": result})).into_response()
+                match chain_answer(chain_id, &genesis, &request) {
+                    Some(answer) => Json(answer).into_response(),
+                    None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                }
             }
         })
+    }
+
+    /// The answer of `chain_stub`'s chain to the JSON-RPC `request`; `None` for a method or
+    /// block it does not serve.
+    fn chain_answer(chain_id: &str, genesis: &str, request: &Value) -> Option<Value> {
+        let now = protocol::now().unwrap();
+        let block = |height: u64, hash: String| json!({"number": format!("0x{height:x}"), "hash": hash,
+            "timestamp": format!("0x{:x}", now - (12 - height))});
+        let result = match (request["method"].as_str(), request["params"][0].as_str()) {
+            (Some("eth_chainId"), _) => json!(chain_id),
+            (Some("eth_syncing"), _) => json!(false),
+            (Some("eth_getBlockByNumber"), Some("0x0")) => block(0, genesis.to_owned()),
+            (Some("eth_getBlockByNumber"), Some("latest")) => block(12, format!("0x{}", "55".repeat(32))),
+            (Some("eth_getBlockByNumber"), Some("safe")) => block(10, format!("0x{}", "56".repeat(32))),
+            (Some("eth_getBlockByNumber"), Some("finalized")) => block(6, format!("0x{}", "57".repeat(32))),
+            _ => return None,
+        };
+        Some(json!({"jsonrpc": "2.0", "id": request["id"], "result": result}))
     }
 
     /// Serves `provider`'s only model as `chat_model()` from the operator-owned stub engine on
@@ -1779,5 +1807,135 @@ mod lifecycle {
             assert!([PROMPT_MARKER, COMPLETION_MARKER, TOOL_MARKER, VECTOR_DIGITS].iter().all(|marker| !contains(&bytes, marker.as_bytes())),
                 "{context}: {file:?} carries request content");
         }
+    }
+
+    /// A chain RPC that answers as `chain_stub` does for the configured identity, and records the
+    /// path and JSON-RPC method of every request it receives, on any path.
+    #[cfg(target_os = "macos")]
+    fn recording_chain_stub(seen: Arc<std::sync::Mutex<Vec<(String, String)>>>) -> axum::Router {
+        use axum::{http::StatusCode, response::IntoResponse, Json};
+        axum::Router::new().fallback(move |uri: axum::http::Uri, body: axum::body::Bytes| {
+            let seen = seen.clone();
+            async move {
+                let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                seen.lock().unwrap().push((uri.path().to_owned(), request["method"].as_str().unwrap_or("<not JSON-RPC>").to_owned()));
+                match chain_answer("0x47", ESPACE_TESTNET_GENESIS, &request) {
+                    Some(answer) => Json(answer).into_response(),
+                    None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                }
+            }
+        })
+    }
+
+    /// `provider`'s daemon, started suspended and watched by kqueue from before its first
+    /// instruction (`process_observer`), with its output in `observed.stdout` and
+    /// `observed.stderr`; neither the provider configuration variable nor a proxy variable is
+    /// inherited.
+    #[cfg(target_os = "macos")]
+    fn observed_daemon(provider: &Provider) -> process_observer::Observed {
+        let mut remove = vec!["CHIRAL_PROVIDER_CONFIG"];
+        remove.extend(process_observer::PROXY_VARIABLES);
+        let environment = process_observer::environment(&remove, &[]);
+        process_observer::Observed::spawn(Path::new(env!("CARGO_BIN_EXE_chiral_daemon")),
+            &[std::ffi::OsStr::new("--config"), provider.config.as_os_str()], &environment,
+            &provider.directory.join("observed.stdout"), &provider.directory.join("observed.stderr"))
+    }
+
+    /// Waits until the observed daemon has printed its start line, then checks that `/healthz`
+    /// answers 200.
+    #[cfg(target_os = "macos")]
+    fn observed_served(provider: &Provider, daemon: &mut process_observer::Observed, case: &str) {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !logs_named(provider, "observed").contains("Chiral provider public=") {
+            assert!(daemon.try_wait().is_none(), "{case}: the daemon exited before serving\n{}", logs_named(provider, "observed"));
+            assert!(Instant::now() < deadline, "{case}: the daemon did not serve\n{}", logs_named(provider, "observed"));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(healthz(provider.public), "{case}: /healthz did not answer\n{}", logs_named(provider, "observed"));
+    }
+
+    /// Kills, when dropped, the stub engines that `provider`'s daemons started.
+    #[cfg(target_os = "macos")]
+    struct StubEngines<'a>(&'a Provider);
+
+    #[cfg(target_os = "macos")]
+    impl Drop for StubEngines<'_> {
+        fn drop(&mut self) {
+            kill_stub_engines(self.0);
+        }
+    }
+
+    /// `application-startup-boundaries` task 3.1 (requirement 1, scenario "A provider starts no
+    /// node or miner"), macOS part, for an external engine. A development daemon serving the chat
+    /// model of an operator-owned engine (this test process's `engine_stub`), with its chain RPC
+    /// at `/espace/rpc` of a recording loopback stub, starts, serves a free account's request
+    /// and exits with status 0 on `SIGTERM`. Watched by kqueue from before its first instruction
+    /// until it was reaped, it posted no fork notification: it created no process at all. Every
+    /// chain request reached the configured path and was an `eth_*` method, the identity check
+    /// first. Would catch a node, a miner or any other process that the daemon starts, and a
+    /// chain request to another path or of another namespace.
+    #[cfg(target_os = "macos")]
+    pub(super) fn an_unmanaged_daemon_starts_no_process_and_reaches_only_its_configured_chain_rpc(runtime: &Runtime) {
+        let services = Services::new();
+        let engine = services.serve(engine_stub(1, Held::new()));
+        let provider = runtime.provider("observed-unmanaged", "engine.token", None);
+        unmanaged(&provider, engine, 1);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rpc = services.serve(recording_chain_stub(seen.clone()));
+        edit_json(&provider.config, |config| config["network"]["rpc_url"] = json!(format!("http://127.0.0.1:{rpc}/espace/rpc")));
+        let (_, bearer) = seed_free_account(&provider, "22", 1);
+        let mut daemon = observed_daemon(&provider);
+        observed_served(&provider, &mut daemon, "unmanaged");
+        assert_eq!(chat(provider.public, &bearer, "observed-unmanaged", "hello", false).0, 200, "{}", logs_named(&provider, "observed"));
+        daemon.signal(libc::SIGTERM);
+        let status = daemon.wait_timeout(Duration::from_secs(90));
+        assert_eq!(status, Some(0), "{}", logs_named(&provider, "observed"));
+        assert_eq!(daemon.forks(), 0, "the daemon created a process\n{}", logs_named(&provider, "observed"));
+        let requests = seen.lock().unwrap().clone();
+        assert!(requests.len() >= 2, "{requests:?}");
+        assert_eq!(requests[0], ("/espace/rpc".to_owned(), "eth_chainId".to_owned()));
+        assert!(requests.iter().all(|(path, method)| path == "/espace/rpc" && method.starts_with("eth_")), "{requests:?}");
+    }
+
+    /// `application-startup-boundaries` task 3.1 (requirement 1, scenario "A provider starts no
+    /// node or miner"), macOS part, for a managed runtime: an extension of the cases above. The
+    /// development daemon with the CPU managed runtime, whose `llama-server` is the inventoried
+    /// stub engine, and a recording chain RPC, is watched by kqueue from before its first
+    /// instruction. Once it serves, its only child is the stub engine (the process that recorded
+    /// itself as the one engine start, running the inventoried `llama-server`) and it has reaped
+    /// no child, so it has created no other process while starting: the CPU profile runs no
+    /// device observer. On `SIGTERM` it exits with status 0 without creating any further
+    /// process (no new fork notification), and the engine no longer exists. Every chain request
+    /// reached the configured path and was an `eth_*` method. Would catch a node, a miner or
+    /// another process started beside the engine, during start, serving or shutdown.
+    #[cfg(target_os = "macos")]
+    pub(super) fn a_managed_daemon_starts_only_its_engine_through_start_serve_and_shutdown(runtime: &Runtime) {
+        let services = Services::new();
+        let provider = runtime.provider("observed-managed", "engine.token", None);
+        std::fs::write(provider.directory.join(SERVES_HEALTH), b"").unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let rpc = services.serve(recording_chain_stub(seen.clone()));
+        edit_json(&provider.config, |config| config["network"]["rpc_url"] = json!(format!("http://127.0.0.1:{rpc}/espace/rpc")));
+        let mut daemon = observed_daemon(&provider);
+        let _engines = StubEngines(&provider);
+        observed_served(&provider, &mut daemon, "managed");
+        let report = || logs_named(&provider, "observed");
+        let engine = provider.helper().unwrap_or_else(|| panic!("no engine\n{}", report()));
+        assert_eq!(provider.engine_starts(), [engine.to_string()], "{}", report());
+        assert_eq!(process_observer::children(daemon.pid()), [engine], "the daemon's children while serving");
+        assert_eq!(process_observer::reaped_children_elapsed(daemon.pid()), 0, "the daemon reaped a child it had started while starting");
+        assert_eq!(process_observer::executable(engine).canonicalize().unwrap(),
+            runtime.root.path().join("runtime").join(ENGINE).canonicalize().unwrap());
+        let forks = daemon.forks();
+        assert!(forks >= 1, "the observation missed the engine's start");
+
+        daemon.signal(libc::SIGTERM);
+        assert!(daemon.exited_within(Duration::from_secs(90)), "the daemon did not exit\n{}", report());
+        let engine_at_exit = exists(engine);
+        assert_eq!(daemon.wait_timeout(Duration::from_secs(5)), Some(0), "{}", report());
+        assert_eq!(daemon.forks(), forks, "the daemon created a process while serving or shutting down\n{}", report());
+        assert!(!engine_at_exit, "the engine still existed when the daemon exited");
+        let requests = seen.lock().unwrap().clone();
+        assert!(!requests.is_empty() && requests.iter().all(|(path, method)| path == "/espace/rpc" && method.starts_with("eth_")), "{requests:?}");
     }
 }

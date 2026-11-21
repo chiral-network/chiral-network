@@ -2994,11 +2994,15 @@ mod tests {
         /// Every inference request received: the identifier of the provider credential whose
         /// secret it presented (`unknown` for none) and the request body.
         inferences: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+        /// Every chain RPC request received, and every request to a path that the fixture does
+        /// not serve: its path and body.
+        rpc: std::sync::Mutex<Vec<(String, Value)>>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
         axum::Json(request): axum::Json<Value>,
     ) -> axum::Json<Value> {
+        state.rpc.lock().unwrap().push(("/".into(), request.clone()));
         let result = match request["method"].as_str().unwrap() {
             "eth_chainId" => json!("0x47"),
             "eth_syncing" => json!(false),
@@ -3086,6 +3090,23 @@ mod tests {
             method => panic!("unexpected funding RPC {method}"),
         };
         axum::Json(json!({"jsonrpc":"2.0","id":request["id"],"result":result}))
+    }
+    /// The provider's quote for the fixture's offer: the fixture's terms, signed.
+    async fn funding_propose(
+        axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
+    ) -> axum::Json<Value> {
+        let quote = protocol::sign(QUOTE_DOMAIN, state.quote.clone(), &state.key).unwrap();
+        axum::Json(serde_json::to_value(quote).unwrap())
+    }
+    /// Records a request to a path the fixture does not serve, and refuses it.
+    async fn funding_unserved(
+        axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
+        axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+        body: axum::body::Bytes,
+    ) -> axum::http::StatusCode {
+        let body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        state.rpc.lock().unwrap().push((uri.path().to_owned(), body));
+        axum::http::StatusCode::NOT_FOUND
     }
     async fn funding_control(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3451,6 +3472,7 @@ mod tests {
             balance: std::sync::Mutex::new(u128::MAX),
             controls: std::sync::Mutex::new(Vec::new()),
             inferences: std::sync::Mutex::new(Vec::new()),
+            rpc: std::sync::Mutex::new(Vec::new()),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -3479,6 +3501,8 @@ mod tests {
             )
             .route("/v1/chat/completions", axum::routing::post(funding_infer))
             .route("/v1/contracts/open", axum::routing::post(funding_control))
+            .route("/v1/contracts/propose", axum::routing::post(funding_propose))
+            .fallback(funding_unserved)
             .with_state(state.clone());
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -5308,6 +5332,73 @@ mod tests {
             [original.unwrap()]
         );
         task.abort();
+    }
+    /// `application-startup-boundaries` task 3.4 (requirement 4, scenario "A transfer the user
+    /// made is used only after it executes on eSpace"): a balance read, a quote requested from the
+    /// provider, the paid opening funded with it and a resume send the configured RPC endpoint
+    /// only `eth_*` methods: no Core-space (`cfx`) method, no other namespace and nothing to
+    /// another path.
+    /// The balance read is the wallet's `eth_getBalance`; every gas estimate and every broadcast
+    /// transaction is the opening payment from the consumer's eSpace wallet to the provider on
+    /// chain 71 (`validate_payment_envelope`), so no transaction is a cross-space call or goes to
+    /// any other recipient. Would catch a Core-space balance read, a Core-to-eSpace transfer made
+    /// by the application, or funding from anything but the eSpace balance.
+    #[tokio::test]
+    async fn balance_quote_fund_and_resume_send_only_espace_requests_to_the_configured_rpc() {
+        let directory = tempfile::tempdir().unwrap();
+        let (consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let q = saved.quote.payload.clone();
+        let balance = consumer.balance().await.unwrap();
+        assert_eq!((&balance["address"], &balance["network"]), (&json!(q.consumer_wallet), &json!(consumer.config.network.identity)));
+        assert_eq!(balance["balance_wei"], u128::MAX.to_string());
+        let quote = consumer.quote(&saved.offer, &q.funding_wei).await.unwrap();
+        assert_eq!(quote.payload, q);
+        consumer.fund(&saved.offer, &quote).await.unwrap();
+        consumer.resume(&q.id).await.unwrap();
+        task.abort();
+
+        let requests = state.rpc.lock().unwrap().clone();
+        let methods: std::collections::BTreeSet<String> = requests.iter().map(|(_, body)| body["method"].as_str().unwrap_or("").to_owned()).collect();
+        assert!(requests.iter().all(|(path, _)| path == "/"), "a request reached another path: {requests:?}");
+        assert!(methods.iter().all(|method| method.starts_with("eth_")), "{methods:?}");
+        for method in ["eth_getBalance", "eth_estimateGas", "eth_sendRawTransaction", "eth_getTransactionReceipt"] {
+            assert!(methods.contains(method), "{method} was not observed: {methods:?}");
+        }
+        let opening = protocol::opening_data(&q).unwrap();
+        for (_, body) in &requests {
+            match body["method"].as_str().unwrap() {
+                "eth_getBalance" => assert_eq!(body["params"][0], json!(q.consumer_wallet)),
+                "eth_estimateGas" => {
+                    assert_eq!(body["params"][0]["to"], json!(q.provider_wallet));
+                    assert_eq!(body["params"][0]["from"], json!(q.consumer_wallet));
+                }
+                "eth_sendRawTransaction" => {
+                    let raw = body["params"][0].as_str().unwrap();
+                    consumer.chain.validate_payment_envelope(raw, &q.consumer_wallet, &q.provider_wallet, &q.funding_wei, &opening).unwrap();
+                }
+                _ => {}
+            }
+        }
+        // The resume sends the original bytes again, never another transaction.
+        let submissions = state.submissions.lock().unwrap().clone();
+        assert!(!submissions.is_empty() && submissions.iter().all(|raw| *raw == submissions[0]), "{submissions:?}");
+        // Task 3.3 (requirement 3): the wallet, the agreement with its credential, the policy
+        // watermark and the nonce journal that the opening wrote are all in the network's
+        // namespace under the data_dir base, and nothing is beside it.
+        let namespace = consumer.config.network.scoped_dir(directory.path());
+        let mut pending = vec![directory.path().to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(folder) = pending.pop() {
+            for entry in std::fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() { pending.push(path); } else { files.push(path); }
+            }
+        }
+        assert!(files.iter().any(|path| path.starts_with(namespace.join("wallet-journal"))), "{files:?}");
+        let agreement = consumer.account_path(&q.id).unwrap();
+        assert!(agreement.starts_with(namespace.join("consumer")) && files.contains(&agreement), "no saved agreement: {files:?}");
+        assert!(files.iter().all(|path| path.starts_with(&namespace)), "state outside the namespace: {files:?}");
+        assert!(consumer.credential_export(&q.id, None).is_ok());
     }
     #[tokio::test]
     async fn paid_funding_persists_ack_before_broadcast_and_free_open_skips_intent() {
