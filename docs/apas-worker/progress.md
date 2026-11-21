@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-20 (seventy-fourth round) — Code: owner challenges get a durable, non-regressing rate minute
+
+- In step at `5d3553cc`; whitepaper unchanged; no new answers.
+- Code-difference step (`specify-challenge-rate-budgets` 2.4 and 2.5; design code difference 1, fixed). Before, challenge issuance charged its 600-per-ledger and 12-per-wallet budgets through a plain per-minute window: an older or reordered clock sample restarted an exhausted budget, and any later-time cleanup (for example proposal storage) deleted the challenge counters.
+- `billing_store.rs`: `challenge_rate_limit` replaces the generic `rate_limit`, whose only caller was challenge issuance. Inside the issuance transaction it selects `E = max(floor(t / 60), L)` from a `challenge-minute` watermark row and charges both budgets in `E`. Only a committed advance prunes older wallet rows; `cleanup_pending` no longer touches challenge rows. Retained counters without a watermark are adopted, never reset. Contradictory or unreadable evidence refuses fresh issuance with a `ledger` error and changes nothing. A refused or failed issuance rolls back the watermark, the counters and the tentative cleanup. The watermark is a `rate_limits` row, not `metadata`, because two existing tests compare the whole metadata table across wall-clock issuance. Schema 3, the quote clocks, lifetimes, pending capacity, authorization and the 429 mapping are unchanged.
+- One existing test relied on the old behaviour: `control_acknowledges_only_spendable_current_nonce_and_recovers_without_rpc_or_broadcast` issued fourteen proofs for one wallet and passed only because a simulated later cleanup erased the challenge counters. Its four later proofs now enter the newer minute; no request or assertion was removed.
+- Eight regressions (six `billing_store::tests`, one each in `inference_owner_authentication_test` and `inference_proposal_quota_test`) fail on the old code and pass with the fix: older and reordered samples, two writers racing for the last unit, other operations' later maintenance, failed future-minute issuance, adoption of 599 or 600 retained units, superseded wallet rows, and 30 inconsistent states. The review found three mutants that passed (a superseded row counted as current spend, a watermark accepted with its counters erased, a ledger count above 600 whose wallet rows sum to it) and added a test and two states until each failed.
+- Recorded risk, now a report question: the old limiter could itself leave out-of-order rows after two challenges across a minute boundary. A provider stopped in that state and restarted on the new code refuses owner challenges until its `challenge:*` rows are repaired by hand.
+- 2.4 and 2.5 are ticked; only the archive (3.2) remains.
+- Checks: full suite under caffeinate: bins build passes; 30 headless test targets, 733 passed, 12 ignored (helpers), 0 failed (`--lib` 424; `inference_owner_control_test` 61/61); desktop `--lib desktop::` 5/5; `npm test` 80/80 in 17 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 76 OK; `openspec validate --all --strict` 36 passed. No `pmset` sleep during the run.
+
 ## 2026-11-20 (seventy-third round) — Archive: `specify-profile-path-resolution`
 
 - In step at `cc1e51dc`; whitepaper unchanged; no new answers.
@@ -835,7 +846,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, challenge-clock non-regression, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Archive `specify-challenge-rate-budgets` (3.2; every other task is done, round 74). Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

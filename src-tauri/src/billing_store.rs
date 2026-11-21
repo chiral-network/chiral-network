@@ -429,8 +429,7 @@ impl BillingStore {
         }
         self.transaction(|tx| {
             cleanup_pending(tx, now)?;
-            rate_limit(tx, "challenge:global", now, 600)?;
-            rate_limit(tx, &format!("challenge:{}", payload.wallet), now, 12)?;
+            challenge_rate_limit(tx, &payload.wallet, now)?;
             let total: i64 = tx
                 .query_row("SELECT COUNT(*) FROM challenges", [], |r| r.get(0))
                 .map_err(sql)?;
@@ -572,7 +571,10 @@ fn cleanup_pending(tx: &Connection, now: u64) -> Result<(), String> {
         .map_err(sql)?;
     tx.execute("UPDATE funding_intents SET admission_until=0 WHERE admission_until>0 AND admission_until<=?1", [now]).map_err(sql)?;
     tx.execute("DELETE FROM funding_attempts WHERE updated<?1 AND json_extract(record,'$.status')='rejected' AND NOT EXISTS(SELECT 1 FROM funding_intents WHERE tx_hash=funding_attempts.tx_hash)", [now.saturating_sub(86_400)]).map_err(sql)?;
-    tx.execute("DELETE FROM rate_limits WHERE window<?1 AND bucket NOT GLOB 'quote:*' AND bucket<>'quote-work:global'", [now / 60])
+    // Proposal, signing-work and challenge rates prune only their own evidence,
+    // relative to their own committed minutes; another operation's time never does.
+    tx.execute("DELETE FROM rate_limits WHERE window<?1 AND bucket NOT GLOB 'quote:*' AND bucket<>'quote-work:global'
+        AND bucket NOT GLOB 'challenge:*' AND bucket<>'challenge-minute'", [now / 60])
         .map_err(sql)?;
     Ok(())
 }
@@ -689,22 +691,81 @@ fn proposal_rate_limit(tx: &Connection, now: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn rate_limit(tx: &Connection, bucket: &str, now: u64, maximum: u64) -> Result<(), String> {
-    let window = now / 60;
-    let (previous, count): (u64, u64) = tx
-        .query_row(
+// Committed challenge issuance has its own non-regressing minute E = max(W, L).
+// 'challenge-minute' is the watermark L with the ledger units committed in it,
+// beside the 'challenge:global' (600) and 'challenge:<wallet>' (12) counters.
+// All of it lives in rate_limits, apart from both quote clocks, so issuance
+// touches only challenge rows. A watermark is installed by the first committed
+// issuance: before that, retained counters are adopted at the greatest retained
+// minute. Inconsistent evidence fails closed rather than granting allowance.
+fn challenge_rate_limit(tx: &Connection, wallet: &str, now: u64) -> Result<(), String> {
+    const INVALID: &str = "ledger invariant: inconsistent challenge rate evidence";
+    let row = |bucket: &str| -> Result<Option<(u64, u64)>, String> {
+        tx.query_row(
             "SELECT window,count FROM rate_limits WHERE bucket=?1",
-            [bucket],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(sql)?
-        .unwrap_or((window, 0));
-    let count = if previous == window { count } else { 0 };
-    if count >= maximum {
+            [bucket], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(sql)
+    };
+    let watermark = row("challenge-minute")?;
+    let global = row("challenge:global")?;
+    if global.is_some_and(|(minute, count)| minute > u64::MAX / 60 || !(1..=600).contains(&count)) {
+        return Err(INVALID.into());
+    }
+    // An installed watermark always commits together with the ledger counter.
+    if watermark.is_some() && watermark != global {
+        return Err(INVALID.into());
+    }
+    let own_bucket = format!("challenge:{wallet}");
+    let (mut current, mut own) = (0_u64, 0_u64);
+    {
+        let mut statement = tx.prepare(
+            "SELECT bucket,window,count FROM rate_limits WHERE bucket GLOB 'challenge:*' AND bucket<>'challenge:global'",
+        ).map_err(sql)?;
+        let mut wallets = statement.query([]).map_err(sql)?;
+        while let Some(row) = wallets.next().map_err(sql)? {
+            let bucket: String = row.get(0).map_err(sql)?;
+            let minute: u64 = row.get(1).map_err(sql)?;
+            let count: u64 = row.get(2).map_err(sql)?;
+            // Spent wallet units need ledger evidence at or after their minute.
+            // Older rows are superseded, not current charges; commit prunes them.
+            let Some((global_minute, _)) = global else {
+                return Err(INVALID.into());
+            };
+            if minute > global_minute || !(1..=12).contains(&count) {
+                return Err(INVALID.into());
+            }
+            if minute == global_minute {
+                current = current.saturating_add(count);
+                if bucket == own_bucket {
+                    own = count;
+                }
+            }
+        }
+    }
+    if global.is_some_and(|(_, count)| count != current) {
+        return Err(INVALID.into());
+    }
+    let sampled = now / 60;
+    let window = global.map_or(sampled, |(previous, _)| sampled.max(previous));
+    let (spent, own) = match global {
+        Some((previous, count)) if previous == window => (count, own),
+        _ => (0, 0),
+    };
+    if spent >= 600 || own >= 12 {
         return Err("rate_limit: control request limit exceeded".into());
     }
-    tx.execute("INSERT INTO rate_limits(bucket,window,count) VALUES(?1,?2,?3) ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=excluded.count", params![bucket,window,count+1]).map_err(sql)?;
+    for (bucket, count) in [("challenge:global", spent + 1), ("challenge-minute", spent + 1),
+        (own_bucket.as_str(), own + 1)] {
+        tx.execute(
+            "INSERT INTO rate_limits(bucket,window,count) VALUES(?1,?2,?3)
+             ON CONFLICT(bucket) DO UPDATE SET window=excluded.window,count=excluded.count",
+            params![bucket, window, count],
+        ).map_err(sql)?;
+    }
+    tx.execute(
+        "DELETE FROM rate_limits WHERE bucket GLOB 'challenge:*' AND bucket<>'challenge:global' AND window<?1",
+        [window],
+    ).map_err(sql)?;
     Ok(())
 }
 fn validate_quote(quote: &Quote) -> Result<(), String> {

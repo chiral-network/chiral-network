@@ -545,3 +545,19 @@ Question:
 1. **May the application register itself to start at login when that start launches no node, miner or legacy service?** Line 31 forbids only starting a node or miner on login. Today nothing is registered, and the archived window-lifecycle and tray specs, like the target-design `desktop-share-online`, leave start-at-login out of scope. Options: (a) follow the book text: only a login start of a node, miner or legacy service is forbidden, and any desktop start-at-login needs its own change; (b) allow no start-at-login entry of any kind in this release. Proposed default (what the spec adopts): (a).
 
 Nonblocking: no requirement or task waits on the answer; option (b) would add one requirement. There are no code differences; acceptance evidence is tasks 3.1–3.5 and 4.1.
+
+## 2026-11-20 — Owner-challenge rate: should a ledger left inconsistent by the old limiter be repaired automatically?
+
+Status: open
+
+Where: change `specify-challenge-rate-budgets` (capability `inference-challenge-rate-budgets`), requirement 2 ("Unreadable or inconsistent retained rate evidence SHALL refuse fresh issuance") and design decision "Use conservative validation before issuing"; code `billing_store.rs::challenge_rate_limit` (round 74, tasks 2.4 and 2.5). The book (`POST /v1/auth/challenge`, "Public bounded challenge issuance") does not fix this.
+
+What happens now: owner challenges have a durable, non-regressing minute, like the quote clocks. Retained counters are adopted, and evidence that contradicts itself refuses fresh issuance with an internal `ledger invariant` error, not 429. Existing proofs, bearers and accounts keep working.
+
+The review found one way the old limiter itself could leave such rows. It sampled time before taking the ledger write lock, so two challenges on either side of a minute boundary could commit out of order. That left a wallet row ahead of the ledger counter, or a counter below the sum of its minute's wallet rows. The old limiter cleared this at the next later-minute operation. If a provider stops in that state and restarts on the new code, owner challenges stay refused until an operator restores consistent `challenge:*` rows by hand. No repair command exists. The case needs concurrent challenges across a minute boundary in the old daemon's last active minute.
+
+Question:
+
+1. **Should the new limiter adopt the old limiter's out-of-order shapes instead of failing closed?** Options: (a) keep failing closed, as the spec says, and document a manual repair; (b) adopt them conservatively: take the greatest retained minute and charge the larger of its ledger counter and the sum of its wallet rows, which never grants allowance the evidence does not show; (c) add an operator repair command that resets only `challenge:*` rows. Proposed default (what the code does): (a).
+
+Nonblocking: no task waits on the answer. Option (b) changes one requirement statement and the adoption tests; option (c) adds one operator task.

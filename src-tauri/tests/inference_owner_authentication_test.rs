@@ -353,3 +353,54 @@ fn wallet_challenge_rate_uses_fixed_forward_minutes_without_accumulating_allowan
         }
     }
 }
+
+fn issue_and_consume(ledger: &BillingStore, payload: &mut AuthPayload, sequence: u64, sample: u64) {
+    payload.nonce = format!("0x{sequence:064x}");
+    payload.expires_at = sample + 120;
+    ledger.create_challenge(payload, sample).unwrap();
+    consume_owner_challenge(ledger, payload, BODY, sample);
+}
+
+#[test]
+fn wallet_challenge_rate_keeps_older_and_reordered_samples_in_the_committed_minute() {
+    // The fixture's unit at t=100 is in minute 1; minute 2 then commits before any delayed sample.
+    let mut fixture = Fixture::new(payload());
+    consume_owner_challenge(&fixture.ledger, &fixture.payload, BODY, 100);
+    issue_and_consume(&fixture.ledger, &mut fixture.payload, 2, 120);
+    // Eleven delayed samples from minutes 0 and 1 spend minute 2's remaining units instead of
+    // reopening minute 1; each proof's lifetime still follows its own admission sample.
+    for (sequence, sample) in (3..=13).zip([119, 100, 60, 0, 119, 61, 30, 110, 90, 1, 45]) {
+        issue_and_consume(&fixture.ledger, &mut fixture.payload, sequence, sample);
+    }
+    let mut excess = fixture.payload.clone();
+    excess.nonce = format!("0x{:064x}", 14);
+    excess.expires_at = 181;
+    assert!(fixture.ledger.create_challenge(&excess, 60).unwrap_err().starts_with("invalid_challenge:"));
+    // Minute 2's thirteenth unit is refused at older and equal-minute samples.
+    for sample in [0, 100, 179] {
+        excess.expires_at = sample + 120;
+        assert_challenge_rate_refusal(&fixture.ledger, &excess, sample);
+    }
+    // A reordered writer on another connection cannot revive the exhausted minute.
+    let other_connection = BillingStore::open(&fixture.path, &fixture.payload.network).unwrap();
+    excess.expires_at = 150;
+    assert_challenge_rate_refusal(&other_connection, &excess, 30);
+    drop(other_connection);
+
+    let Fixture { ledger, mut payload, path, _directory } = fixture;
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &payload.network).unwrap();
+    for sample in [119, 179] {
+        excess.expires_at = sample + 120;
+        assert_challenge_rate_refusal(&reopened, &excess, sample);
+    }
+    // Only a strictly newer committed minute reopens the wallet with its normal twelve units;
+    // delayed samples then spend that minute too.
+    issue_and_consume(&reopened, &mut payload, 15, 180);
+    for sequence in 16..=26 {
+        issue_and_consume(&reopened, &mut payload, sequence, 179 - (sequence - 16) * 10);
+    }
+    excess.nonce = format!("0x{:064x}", 27);
+    excess.expires_at = 359;
+    assert_challenge_rate_refusal(&reopened, &excess, 239);
+}

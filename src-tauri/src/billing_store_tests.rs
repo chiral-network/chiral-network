@@ -2946,7 +2946,19 @@ async fn owner_post(
     raw: &str,
     ledger: &BillingStore,
 ) -> reqwest::Response {
-    let now = protocol::now().unwrap();
+    owner_post_at(client, base, path, raw, ledger, protocol::now().unwrap()).await
+}
+
+/// Issues the owner challenge at `now`, a provider admission sample that a test may
+/// advance to its own simulated time; the proof still authenticates at wall-clock time.
+async fn owner_post_at(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    raw: &str,
+    ledger: &BillingStore,
+    now: u64,
+) -> reqwest::Response {
     let body = serde_json::to_vec(&json!({"raw_transaction":raw})).unwrap();
     let wallet = crate::wallet::address_from_private_key(OWNER_KEY).unwrap();
     let proof = AuthPayload {
@@ -3221,12 +3233,15 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
     ledger
         .transaction(|tx| cleanup_pending(tx, now + 301))
         .unwrap();
+    // That maintenance cannot reset challenge rates, so the next owner proofs are
+    // issued at the same simulated time and enter its newer challenge minute.
+    let later = now + 301;
     fixture.nonce.store(1, Ordering::Release);
     *fixture.owner_balance.lock().unwrap() = 0;
     fixture.outage.store(true, Ordering::Release);
     state.accepting.store(false, Ordering::Release);
     state.qualified_models.write().unwrap().clear();
-    let response = owner_post(&client, &base, &path, &signed.raw_transaction, &ledger).await;
+    let response = owner_post_at(&client, &base, &path, &signed.raw_transaction, &ledger, later).await;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert_eq!(
         encode(&response.json::<Signed<FundingIntent>>().await.unwrap()).unwrap(),
@@ -3280,7 +3295,7 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
     let topup_path = format!("/v1/contracts/{}/topup", q.payload.id);
     *fixture.receipt.lock().unwrap() = Value::Null;
     assert_eq!(
-        owner_post(&client, &base, &topup_path, &topup.raw_transaction, &ledger)
+        owner_post_at(&client, &base, &topup_path, &topup.raw_transaction, &ledger, later)
             .await
             .status(),
         reqwest::StatusCode::CONFLICT
@@ -3289,7 +3304,7 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
     observe(&topup.tx_hash, native_fixture_gas(&protocol::topup_data(&q.payload.id).unwrap()));
     for _ in 0..2 {
         let response =
-            owner_post(&client, &base, &topup_path, &topup.raw_transaction, &ledger).await;
+            owner_post_at(&client, &base, &topup_path, &topup.raw_transaction, &ledger, later).await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let account: AccountView = response.json().await.unwrap();
         assert_eq!(account.funded_wei, "2000");
@@ -3298,7 +3313,8 @@ async fn control_acknowledges_only_spendable_current_nonce_and_recovers_without_
         assert_eq!(account.reserved_wei, "0");
     }
     // Cleanup removed the unacknowledged quote; restore a currently valid offer
-    // so this checks the admission gate, not a missing-record rejection.
+    // so this checks the admission gate, not a missing-record rejection. This
+    // wall-clock proof is an older sample spending the later minute's units.
     ledger.store_quote(&second, now).unwrap();
     assert_eq!(
         owner_post(
@@ -4933,4 +4949,459 @@ async fn credential_management_stays_reachable_while_every_admission_gate_is_clo
     }
     assert!(!routes.state.accepting.load(Ordering::Acquire) && !routes.state.funding_ready.load(Ordering::Acquire));
     assert_eq!(protected(), before);
+}
+
+// Challenge issuance keeps its own non-regressing minute clock. These fixtures read
+// or restore only challenge-rate rows; they never claim observed public issuances.
+fn rate_challenge(wallet: &str, nonce: u64, sample: u64) -> AuthPayload {
+    AuthPayload {
+        network: network(),
+        provider_wallet: crate::wallet::address_from_private_key(PROVIDER_KEY).unwrap(),
+        wallet: wallet.into(), method: "GET".into(), path: "/v1/models".into(),
+        body_hash: protocol::hash_hex(b""), nonce: format!("0x{nonce:064x}"),
+        expires_at: sample + crate::auth::CHALLENGE_TTL_SECS,
+    }
+}
+
+/// Storage consumption releases occupancy so eight pending slots cannot mask 12/13.
+fn issue_consumed(store: &BillingStore, wallet: &str, nonce: u64, sample: u64) -> Result<(), String> {
+    let challenge = rate_challenge(wallet, nonce, sample);
+    store.create_challenge(&challenge, sample)?;
+    store.consume_challenge(&challenge.nonce, &challenge, sample).unwrap();
+    Ok(())
+}
+
+/// The challenge watermark and ledger counter rows, as (window, count).
+fn challenge_clock(store: &BillingStore) -> (Option<(u64, u64)>, Option<(u64, u64)>) {
+    let db = store.db.lock().unwrap();
+    let row = |bucket: &str| db.query_row(
+        "SELECT window,count FROM rate_limits WHERE bucket=?1", [bucket],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().unwrap();
+    (row("challenge-minute"), row("challenge:global"))
+}
+
+fn challenge_wallet_rows(store: &BillingStore) -> Vec<(String, u64, u64)> {
+    let db = store.db.lock().unwrap();
+    let mut statement = db.prepare(
+        "SELECT bucket,window,count FROM rate_limits
+         WHERE bucket GLOB 'challenge:*' AND bucket<>'challenge:global' ORDER BY bucket",
+    ).unwrap();
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    rows
+}
+
+fn challenge_rate_snapshot(store: &BillingStore) -> Vec<Vec<String>> {
+    let db = store.db.lock().unwrap();
+    [
+        "SELECT json_array(key,value) FROM metadata ORDER BY key",
+        "SELECT json_array(bucket,window,count) FROM rate_limits ORDER BY bucket",
+        "SELECT json_array(nonce,wallet,expires,record) FROM challenges ORDER BY nonce",
+        "SELECT json_array(id,owner,expires,record) FROM quotes ORDER BY id",
+        "SELECT json_array(id,owner,quote,account,sequence,created) FROM accounts ORDER BY id",
+        "SELECT json_array(id,contract,token_hash,record,revoked) FROM credentials ORDER BY id",
+        "SELECT json_array(id,contract,request_key,credential,status,created,record) FROM requests ORDER BY id",
+        "SELECT json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until) FROM funding_intents ORDER BY contract",
+    ].into_iter().map(|query| {
+        db.prepare(query).unwrap().query_map([], |row| row.get(0)).unwrap()
+            .collect::<Result<Vec<String>, _>>().unwrap()
+    }).collect()
+}
+
+fn quote_at(funding: u128, free: bool, now: u64) -> Signed<Quote> {
+    let mut payload = quote(funding, free).payload;
+    payload.issued_at = now;
+    payload.expires_at = now + 300;
+    protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap()
+}
+
+fn assert_accepted_state(store: &BillingStore, agreement: &Signed<Quote>, payment: &VerifiedPayment,
+    opened: &crate::protocol::OpenResult, now: u64) {
+    assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(), encode(&opened.account).unwrap());
+    let root = opened.credential.as_ref().unwrap();
+    assert_eq!(store.authenticate(&root.bearer, now).unwrap().credential_id, root.id);
+    assert_eq!(store.quote(&agreement.payload.id).unwrap().payload, agreement.payload);
+    assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
+}
+
+#[test]
+fn challenge_rate_older_and_reordered_samples_spend_only_the_committed_minute() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("challenge-clock.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let owner = format!("0x{:040x}", 0xa1);
+    let other = format!("0x{:040x}", 0xb2);
+    // Minute 3 commits first. Delayed samples from minutes 0-2 spend its remaining units.
+    issue_consumed(&store, &owner, 1, 180).unwrap();
+    for (nonce, sample) in (2..=10).zip([120, 0, 179, 60, 119, 1, 150, 59, 178]) {
+        issue_consumed(&store, &owner, nonce, sample).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((3, nonce)), Some((3, nonce))), "sample {sample}");
+    }
+    // A delayed sample keeps its own admission-time lifetime, not the logical minute's.
+    let mut delayed = rate_challenge(&owner, 11, 60);
+    delayed.expires_at = 181;
+    assert!(store.create_challenge(&delayed, 60).unwrap_err().starts_with("invalid_challenge:"));
+    delayed.expires_at = 121;
+    store.create_challenge(&delayed, 60).unwrap();
+    assert!(store.consume_challenge(&delayed.nonce, &delayed, 121).is_err(), "rate minute must not extend expiry");
+    assert_eq!(challenge_clock(&store), (Some((3, 11)), Some((3, 11))));
+    drop(store);
+
+    // Two writers with older samples compete for the owner's twelfth minute-3 unit.
+    let candidates = [(rate_challenge(&owner, 12, 60), 60), (rate_challenge(&owner, 13, 120), 120)];
+    let writers = [0, 1].map(|_| BillingStore::open(&path, &network()).unwrap());
+    let barrier = Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = writers.into_iter().zip(&candidates).map(|(ledger, (candidate, sample))| {
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                ledger.create_challenge(candidate, *sample)
+            })
+        }).collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1, "{results:?}");
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    assert_eq!(challenge_clock(&reopened), (Some((3, 12)), Some((3, 12))));
+    for ((candidate, _), result) in candidates.iter().zip(&results) {
+        match result {
+            Ok(()) => assert_eq!(reopened.challenge(&candidate.nonce).unwrap().nonce, candidate.nonce),
+            Err(error) => {
+                assert!(error.starts_with("rate_limit:"), "{error}");
+                assert!(reopened.challenge(&candidate.nonce).is_err());
+            }
+        }
+    }
+    // Older, equal-minute and reopened samples all observe the exhausted wallet.
+    for (nonce, sample) in [(14, 0), (15, 119), (16, 179)] {
+        let before = challenge_rate_snapshot(&reopened);
+        assert!(reopened.create_challenge(&rate_challenge(&owner, nonce, sample), sample)
+            .unwrap_err().starts_with("rate_limit:"), "sample {sample}");
+        assert_eq!(challenge_rate_snapshot(&reopened), before);
+    }
+    // Another wallet's delayed sample spends the shared minute-3 ledger budget.
+    issue_consumed(&reopened, &other, 17, 30).unwrap();
+    assert_eq!(challenge_clock(&reopened), (Some((3, 13)), Some((3, 13))));
+    assert_eq!(challenge_wallet_rows(&reopened),
+        vec![(format!("challenge:{owner}"), 3, 12), (format!("challenge:{other}"), 3, 1)]);
+    // Only a strictly newer committed minute reopens the wallet, with normal budgets and pruning.
+    issue_consumed(&reopened, &owner, 18, 240).unwrap();
+    assert_eq!(challenge_clock(&reopened), (Some((4, 1)), Some((4, 1))));
+    assert_eq!(challenge_wallet_rows(&reopened), vec![(format!("challenge:{owner}"), 4, 1)]);
+    for nonce in 19..=29 { issue_consumed(&reopened, &owner, nonce, 179).unwrap(); }
+    assert_eq!(challenge_clock(&reopened), (Some((4, 12)), Some((4, 12))));
+    assert!(reopened.create_challenge(&rate_challenge(&owner, 30, 299), 299)
+        .unwrap_err().starts_with("rate_limit:"));
+}
+
+#[test]
+fn challenge_and_quote_clocks_survive_each_others_later_maintenance() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("independent-clocks.sqlite");
+    let store = BillingStore::open(&path, &network()).unwrap();
+    let (agreement, payment, opened) = paid(&store);
+    let owner = format!("0x{:040x}", 0xa1);
+    // Minute 2: the owner exhausts twelve units and three other wallets spend one each.
+    for nonce in 1..=12 { issue_consumed(&store, &owner, nonce, 120).unwrap(); }
+    for nonce in 13..=15 { issue_consumed(&store, &format!("0x{nonce:040x}"), nonce, 125).unwrap(); }
+    let held = rate_challenge(&format!("0x{:040x}", 0xd4), 16, 130);
+    store.create_challenge(&held, 130).unwrap();
+    let challenge_rows = |store: &BillingStore| challenge_rate_snapshot(store)[1].iter()
+        .filter(|row| row.contains("\"challenge")).cloned().collect::<Vec<_>>();
+    let committed = challenge_rows(&store);
+    assert_eq!(challenge_clock(&store), (Some((2, 16)), Some((2, 16))));
+    assert_eq!(committed.len(), 7);
+
+    // Proposal storage, quote signing work, inference, credential, fee and proof
+    // operations all commit later-minute maintenance without touching challenge rates.
+    let root = opened.credential.as_ref().unwrap();
+    let proposal = quote_at(1000, false, 600);
+    store.store_quote(&proposal, 600).unwrap();
+    assert!(store.challenge(&held.nonce).is_err(), "later proposal cleanup actually ran");
+    assert_eq!(challenge_rows(&store), committed, "later proposal cleanup reset challenge rates");
+    assert!(store.sign_quote(proposal.payload.clone(), PROVIDER_KEY, 600).unwrap_err().starts_with("rate_limit:"));
+    let held_request = store.reserve(&agreement.payload.id, &root.id, "later-inference", 10, 10, 610,
+        &agreement.payload.model).unwrap();
+    store.settle(&held_request.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 5 }, "completed", 620).unwrap();
+    app_credential(&store, &agreement.payload.id, None, vec!["read".into()]);
+    store.prepare_fee_batches(630, true).unwrap();
+    assert_eq!(store.recover_requests(640).unwrap(), 0);
+    assert_eq!(challenge_rows(&store), committed);
+    assert_eq!(committed_quote_rate(&store), (Some("10".into()), 10, 1, 0));
+    assert_eq!(quote_work_rate(&store), ("10".into(), 10, 600));
+    let settled_account = encode(&store.account(&agreement.payload.id).unwrap()).unwrap();
+    assert_ne!(settled_account, encode(&opened.account).unwrap(), "later inference actually settled");
+    drop(store);
+    let store = BillingStore::open(&path, &network()).unwrap();
+    for (nonce, sample) in [(20, 60), (21, 150)] {
+        assert!(store.create_challenge(&rate_challenge(&owner, nonce, sample), sample)
+            .unwrap_err().starts_with("rate_limit:"), "sample {sample}");
+    }
+    issue_consumed(&store, &format!("0x{:040x}", 0xc3), 22, 150).unwrap();
+    assert_eq!(challenge_clock(&store), (Some((2, 17)), Some((2, 17))));
+
+    // A later challenge minute prunes only superseded challenge wallet rows and
+    // neither advances nor resets either quote clock.
+    issue_consumed(&store, &owner, 23, 900).unwrap();
+    assert_eq!(challenge_clock(&store), (Some((15, 1)), Some((15, 1))));
+    assert_eq!(challenge_wallet_rows(&store), vec![(format!("challenge:{owner}"), 15, 1)]);
+    assert_eq!(committed_quote_rate(&store), (Some("10".into()), 10, 1, 0));
+    assert_eq!(quote_work_rate(&store), ("10".into(), 10, 600));
+    let older_quote = quote_at(1000, false, 600);
+    store.store_quote(&older_quote, 600).unwrap();
+    assert_eq!(committed_quote_rate(&store), (Some("10".into()), 10, 2, 0));
+    assert!(store.sign_quote(older_quote.payload.clone(), PROVIDER_KEY, 600).unwrap_err().starts_with("rate_limit:"));
+    assert_eq!(quote_work_rate(&store), ("10".into(), 10, 600));
+
+    // A later proposal minute likewise leaves the challenge watermark at minute 15.
+    store.store_quote(&quote_at(1000, false, 1200), 1200).unwrap();
+    assert_eq!(committed_quote_rate(&store), (Some("20".into()), 20, 1, 0));
+    assert_eq!(challenge_clock(&store), (Some((15, 1)), Some((15, 1))));
+    issue_consumed(&store, &owner, 24, 899).unwrap();
+    assert_eq!(challenge_clock(&store), (Some((15, 2)), Some((15, 2))));
+    assert_eq!(challenge_wallet_rows(&store), vec![(format!("challenge:{owner}"), 15, 2)]);
+    assert_eq!(encode(&store.account(&agreement.payload.id).unwrap()).unwrap(), settled_account);
+    assert!(store.funding_intent(&agreement.payload, &payment.raw_transaction).unwrap().is_some());
+    assert_eq!(store.authenticate(&root.bearer, 900).unwrap().credential_id, root.id);
+}
+
+#[test]
+fn failed_future_minute_challenge_rolls_back_watermark_counters_and_cleanup() {
+    for failure in ["collision", "insertion", "capacity"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("challenge-rollback.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        let owner = format!("0x{:040x}", 0xa1);
+        let busy = format!("0x{:040x}", 0xb2);
+        let other = format!("0x{:040x}", 0xc3);
+        // Committed minute 2: the owner spends eleven units and keeps one proof
+        // until 240, `busy` fills its eight pending slots and one proof expires at 130.
+        for nonce in 1..=10 { issue_consumed(&store, &owner, nonce, 120).unwrap(); }
+        let kept = rate_challenge(&owner, 11, 120);
+        store.create_challenge(&kept, 120).unwrap();
+        for nonce in 21..=28 { store.create_challenge(&rate_challenge(&busy, nonce, 120), 120).unwrap(); }
+        let mut expiring = rate_challenge(&other, 31, 125);
+        expiring.expires_at = 130;
+        store.create_challenge(&expiring, 125).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((2, 20)), Some((2, 20))));
+        let (candidate, sample) = match failure {
+            // Unexpired at 200, so the insertion collides after cleanup removed `expiring`.
+            "collision" => {
+                let mut candidate = rate_challenge(&other, 11, 200);
+                candidate.method = "DELETE".into();
+                (candidate, 200)
+            }
+            "insertion" => {
+                let candidate = rate_challenge(&other, 41, 600);
+                store.db.lock().unwrap().execute_batch(&format!(
+                    "CREATE TRIGGER refuse_future_challenge AFTER INSERT ON challenges WHEN NEW.nonce='{}'
+                     BEGIN SELECT RAISE(ABORT,'injected future challenge failure'); END;", candidate.nonce,
+                )).unwrap();
+                (candidate, 600)
+            }
+            _ => (rate_challenge(&busy, 29, 200), 200),
+        };
+        let before = challenge_rate_snapshot(&store);
+        let error = store.create_challenge(&candidate, sample).unwrap_err();
+        match failure {
+            "collision" => assert!(error.starts_with("ledger database:"), "{error}"),
+            "insertion" => assert!(error.contains("injected future challenge failure"), "{error}"),
+            _ => assert!(error.starts_with("rate_limit: too many pending challenges"), "{error}"),
+        }
+        assert_eq!(challenge_rate_snapshot(&store), before, "{failure}");
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        assert_eq!(challenge_rate_snapshot(&store), before, "{failure}");
+        assert_eq!(challenge_clock(&store), (Some((2, 20)), Some((2, 20))), "{failure}");
+        // The tentatively cleaned proof is still pending and consumable at its own time.
+        store.consume_challenge(&expiring.nonce, &expiring, 129).unwrap();
+        // An older sample sees exactly minute 2's remaining allowance: the owner's twelfth unit.
+        store.create_challenge(&rate_challenge(&owner, 12, 60), 60).unwrap();
+        for (nonce, sample) in [(13, 100), (14, 179)] {
+            assert!(store.create_challenge(&rate_challenge(&owner, nonce, sample), sample)
+                .unwrap_err().starts_with("rate_limit:"), "{failure} at {sample}");
+        }
+        assert_eq!(challenge_clock(&store), (Some((2, 21)), Some((2, 21))));
+        assert_accepted_state(&store, &agreement, &payment, &opened, 179);
+        // Only a successful later admission enters a newer minute.
+        store.create_challenge(&rate_challenge(&other, 51, 240), 240).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((4, 1)), Some((4, 1))));
+        assert_eq!(challenge_wallet_rows(&store), vec![(format!("challenge:{other}"), 4, 1)]);
+    }
+}
+
+#[test]
+fn retained_challenge_counters_are_adopted_without_fresh_allowance() {
+    for spent in [599_u64, 600] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("challenge-adoption.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        let owner = format!("0x{:040x}", 0xa1);
+        let fresh = format!("0x{:040x}", 0xc3);
+        // A real pending proof; its lifetime is independent of the restored counters.
+        let held = rate_challenge(&format!("0x{:040x}", 0xd4), 1, 180);
+        store.create_challenge(&held, 180).unwrap();
+        // Retained old-limiter evidence for minute 3 without a watermark: the owner's
+        // twelve units, other wallets filling `spent` and one superseded minute-2 row.
+        {
+            let db = store.db.lock().unwrap();
+            db.execute_batch("DELETE FROM rate_limits WHERE bucket GLOB 'challenge:*' OR bucket='challenge-minute'").unwrap();
+            db.execute("INSERT INTO rate_limits VALUES('challenge:global',3,?1)", [spent]).unwrap();
+            db.execute("INSERT INTO rate_limits VALUES(?1,3,12)", [format!("challenge:{owner}")]).unwrap();
+            let mut remaining = spent - 12;
+            for index in 0.. {
+                if remaining == 0 { break; }
+                let units = remaining.min(12);
+                db.execute("INSERT INTO rate_limits VALUES(?1,3,?2)",
+                    params![format!("challenge:0x{:040x}", 0x1000 + index), units]).unwrap();
+                remaining -= units;
+            }
+            db.execute("INSERT INTO rate_limits VALUES(?1,2,5)", [format!("challenge:0x{:040x}", 0xee)]).unwrap();
+        }
+        let before = challenge_rate_snapshot(&store);
+        // A later-minute candidate tentatively adopts and advances, then collides: nothing is installed.
+        assert!(store.create_challenge(&rate_challenge(&fresh, 1, 240), 240)
+            .unwrap_err().starts_with("ledger database:"));
+        assert_eq!(challenge_rate_snapshot(&store), before, "{spent}");
+        // Older and same-minute samples cannot reopen the owner's retained twelve units.
+        for sample in [120, 0, 200] {
+            assert!(store.create_challenge(&rate_challenge(&owner, 2 + sample, sample), sample)
+                .unwrap_err().starts_with("rate_limit:"), "{spent} at {sample}");
+            assert_eq!(challenge_rate_snapshot(&store), before, "{spent} at {sample}");
+        }
+        let last = rate_challenge(&fresh, 500, 60);
+        if spent == 599 {
+            store.create_challenge(&last, 60).unwrap();
+            assert_eq!(challenge_clock(&store), (Some((3, 600)), Some((3, 600))));
+            let rows = challenge_wallet_rows(&store);
+            assert!(rows.iter().all(|(_, window, _)| *window == 3), "superseded rows are pruned on commit");
+            assert!(rows.contains(&(format!("challenge:{owner}"), 3, 12)));
+            assert!(rows.contains(&(format!("challenge:{fresh}"), 3, 1)));
+        } else {
+            assert!(store.create_challenge(&last, 60).unwrap_err().starts_with("rate_limit:"));
+            assert_eq!(challenge_rate_snapshot(&store), before);
+            assert_eq!(challenge_clock(&store), (None, Some((3, 600))));
+        }
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        // Adoption alone cannot grant the six-hundred-and-first ledger unit.
+        for (wallet, nonce, sample) in [(&fresh, 501, 179), (&format!("0x{:040x}", 0xf5), 502, 0)] {
+            assert!(store.create_challenge(&rate_challenge(wallet, nonce, sample), sample)
+                .unwrap_err().starts_with("rate_limit:"), "{spent} at {sample}");
+        }
+        // A strictly newer minute starts normal budgets; retained minute-3 rows are pruned.
+        store.create_challenge(&rate_challenge(&owner, 600, 240), 240).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((4, 1)), Some((4, 1))));
+        assert_eq!(challenge_wallet_rows(&store), vec![(format!("challenge:{owner}"), 4, 1)]);
+        store.consume_challenge(&held.nonce, &held, 240).unwrap();
+        assert_accepted_state(&store, &agreement, &payment, &opened, 240);
+    }
+}
+
+#[test]
+fn superseded_challenge_wallet_rows_are_not_charges_in_the_adopted_minute() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = BillingStore::open(&directory.path().join("challenge-superseded.sqlite"), &network()).unwrap();
+    let current = format!("0x{:040x}", 0xa1);
+    let superseded = format!("0x{:040x}", 0xb2);
+    // Retained old-limiter rows without a watermark: minute 3 holds two units for `current`,
+    // while `superseded` exhausted minute 2, which is no longer the greatest retained minute.
+    store.db.lock().unwrap().execute_batch(&format!(
+        "INSERT INTO rate_limits VALUES('challenge:global',3,2),('challenge:{current}',3,2),('challenge:{superseded}',2,12);",
+    )).unwrap();
+    // An older sample lands in adopted minute 3, where `superseded` has spent nothing:
+    // its stale minute-2 count neither refuses it nor carries into minute 3.
+    issue_consumed(&store, &superseded, 1, 120).unwrap();
+    assert_eq!(challenge_clock(&store), (Some((3, 3)), Some((3, 3))));
+    assert_eq!(challenge_wallet_rows(&store), vec![
+        (format!("challenge:{current}"), 3, 2), (format!("challenge:{superseded}"), 3, 1)]);
+    for nonce in 2..=12 { issue_consumed(&store, &superseded, nonce, 179).unwrap(); }
+    assert!(store.create_challenge(&rate_challenge(&superseded, 13, 150), 150)
+        .unwrap_err().starts_with("rate_limit:"));
+    assert_eq!(challenge_clock(&store), (Some((3, 14)), Some((3, 14))));
+}
+
+#[test]
+fn inconsistent_challenge_rate_evidence_fails_closed_without_erasing_state() {
+    let a = format!("0x{:040x}", 0xa1);
+    let b = format!("0x{:040x}", 0xb2);
+    let c = format!("0x{:040x}", 0xc3);
+    let fresh = format!("0x{:040x}", 0xf5);
+    let installed = "bucket IN ('challenge:global','challenge-minute')";
+    let mutations = [
+        // An installed watermark disagreeing with, or lacking, the ledger counter.
+        "DELETE FROM rate_limits WHERE bucket='challenge:global'".to_string(),
+        // The watermark alone: its counters were erased, so it must not fall back to a fresh baseline.
+        "DELETE FROM rate_limits WHERE bucket GLOB 'challenge:*'".into(),
+        "UPDATE rate_limits SET window=4 WHERE bucket='challenge-minute'".into(),
+        "UPDATE rate_limits SET window=6 WHERE bucket='challenge-minute'".into(),
+        "UPDATE rate_limits SET count=2 WHERE bucket='challenge-minute'".into(),
+        "UPDATE rate_limits SET window='invalid' WHERE bucket='challenge-minute'".into(),
+        "UPDATE rate_limits SET count=-1 WHERE bucket='challenge-minute'".into(),
+        // Ledger units out of range, unreadable or disagreeing with current wallet units.
+        format!("UPDATE rate_limits SET count=2 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count=4 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count=0 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count=601 WHERE {installed}"),
+        // 601 ledger units that their 52 wallet rows sum to exactly: over budget, not merely mismatched.
+        format!("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<50)
+             INSERT INTO rate_limits SELECT printf('challenge:0x%040x',4096+i),5,CASE WHEN i=50 THEN 10 ELSE 12 END FROM n;
+             UPDATE rate_limits SET count=601 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count='invalid' WHERE {installed}"),
+        format!("UPDATE rate_limits SET window=-1 WHERE {installed}"),
+        format!("UPDATE rate_limits SET window=1.5 WHERE {installed}"),
+        "UPDATE rate_limits SET window=9223372036854775807 WHERE bucket GLOB 'challenge:*' OR bucket='challenge-minute'".into(),
+        // Wallet units without ledger evidence, ahead of the minute, out of range or unreadable.
+        format!("DELETE FROM rate_limits WHERE {installed}"),
+        format!("INSERT INTO rate_limits VALUES('challenge:{c}',6,1)"),
+        format!("UPDATE rate_limits SET count=13 WHERE bucket='challenge:{a}'; UPDATE rate_limits SET count=14 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count=0 WHERE bucket='challenge:{b}'; UPDATE rate_limits SET count=2 WHERE {installed}"),
+        format!("UPDATE rate_limits SET count=-1 WHERE bucket='challenge:{b}'"),
+        format!("UPDATE rate_limits SET count='invalid' WHERE bucket='challenge:{b}'"),
+        format!("UPDATE rate_limits SET window=-1 WHERE bucket='challenge:{b}'"),
+        format!("UPDATE rate_limits SET window='invalid' WHERE bucket='challenge:{b}'"),
+        // Retained evidence before watermark adoption.
+        format!("DELETE FROM rate_limits WHERE bucket='challenge-minute'; INSERT INTO rate_limits VALUES('challenge:{c}',6,1)"),
+        "DELETE FROM rate_limits WHERE bucket='challenge-minute'; UPDATE rate_limits SET window=4 WHERE bucket='challenge:global'".into(),
+        "DELETE FROM rate_limits WHERE bucket='challenge-minute'; UPDATE rate_limits SET count=4 WHERE bucket='challenge:global'".into(),
+        format!("DELETE FROM rate_limits WHERE bucket='challenge-minute'; DELETE FROM rate_limits WHERE bucket IN ('challenge:{a}','challenge:{b}')"),
+        format!("DELETE FROM rate_limits WHERE bucket='challenge-minute'; UPDATE rate_limits SET count=13 WHERE bucket='challenge:{a}'; UPDATE rate_limits SET count=14 WHERE bucket='challenge:global'"),
+        "DELETE FROM rate_limits WHERE bucket='challenge-minute'; UPDATE rate_limits SET count=601 WHERE bucket='challenge:global'".into(),
+    ];
+    for mutation in mutations {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("invalid-challenge-rate.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (agreement, payment, opened) = paid(&store);
+        // Committed minute 5: `a` spends two units and holds one proof, `b` spends one.
+        issue_consumed(&store, &a, 1, 300).unwrap();
+        let held = rate_challenge(&a, 2, 300);
+        store.create_challenge(&held, 300).unwrap();
+        issue_consumed(&store, &b, 3, 300).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((5, 3)), Some((5, 3))));
+        store.db.lock().unwrap().execute_batch(&mutation).unwrap();
+        let before = challenge_rate_snapshot(&store);
+        drop(store);
+        let store = BillingStore::open(&path, &network()).unwrap();
+        // Neither the same minute nor a strictly newer one invents allowance or repairs evidence.
+        for (nonce, sample) in [(10, 300), (11, 900)] {
+            let error = store.create_challenge(&rate_challenge(&fresh, nonce, sample), sample).unwrap_err();
+            assert!(error.starts_with("ledger "), "{mutation} at {sample}: {error}");
+            assert_eq!(challenge_rate_snapshot(&store), before, "{mutation}");
+        }
+        // Existing proofs and accepted state survive; nothing was deleted.
+        store.consume_challenge(&held.nonce, &held, 301).unwrap();
+        assert_accepted_state(&store, &agreement, &payment, &opened, 301);
+        // Explicit restoration of consistent evidence, not automatic repair, reopens issuance.
+        store.db.lock().unwrap().execute_batch(&format!(
+            "DELETE FROM rate_limits WHERE bucket GLOB 'challenge:*' OR bucket='challenge-minute';
+             INSERT INTO rate_limits VALUES('challenge:global',5,1),('challenge-minute',5,1),('challenge:{a}',5,1);",
+        )).unwrap();
+        issue_consumed(&store, &fresh, 12, 900).unwrap();
+        assert_eq!(challenge_clock(&store), (Some((15, 1)), Some((15, 1))), "{mutation}");
+    }
 }

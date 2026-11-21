@@ -1378,3 +1378,101 @@ fn free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_cre
     assert!(ledger.quote(&excess.payload.id).unwrap_err().starts_with("not_found:"));
     assert_recovery(&ledger, expiry + 1);
 }
+
+fn committed_quote_clock(path: &std::path::Path) -> (String, u64, u64) {
+    rusqlite::Connection::open(path).unwrap().query_row(
+        "SELECT value,window,count FROM metadata,rate_limits
+         WHERE key='quote_committed_minute' AND bucket='quote:global'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap()
+}
+
+#[test]
+fn challenge_ledger_rate_holds_600_601_across_older_samples_and_later_proposal_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("billing.sqlite");
+    let ledger = BillingStore::open(&path, &network()).unwrap();
+    let owner = wallet::address_from_private_key(CHALLENGE_OWNER_KEY).unwrap();
+    let original = quote(1, 1, &owner, "test/challenge-clock", ("0", "0"));
+    ledger.store_quote(&original, NOW).unwrap();
+    let opened = ledger.open_account(&original, None, NOW).unwrap();
+    let read = ledger.issue_credential(&original.payload.id, &CredentialIssueRequest {
+        expires_at: NOW + 3000, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["read".into()],
+    }, NOW).unwrap();
+    // `rate_challenge` derives each storage fixture's lifetime from its admission sample.
+    let at = |template: &AuthPayload, nonce: u64, sample: u64| AuthPayload {
+        nonce: format!("0x{nonce:064x}"), expires_at: sample + 60, ..template.clone()
+    };
+    let template = rate_challenge(&original.payload, 0, NOW);
+
+    // Minute 3 commits first; 599 delayed samples from minutes 0-2 spend only its
+    // remaining ledger units. One pending record per wallet isolates 600/601.
+    let samples = [120, 179, 0, 60, 150, 119, 1];
+    let mut accepted = Vec::with_capacity(600);
+    for sequence in 1..=600_u64 {
+        let sample = if sequence == 1 { 180 } else { samples[sequence as usize % samples.len()] };
+        let mut challenge = at(&template, sequence, sample);
+        challenge.wallet = format!("0x{:040x}", 0x10000 + sequence);
+        ledger.create_challenge(&challenge, sample).unwrap();
+        accepted.push(challenge);
+    }
+    let mut fresh = template.clone();
+    fresh.wallet = OTHER_PAYER.into();
+    // Neither a fresh wallet nor the owner's unused allowance yields a 601st unit.
+    for (candidate, nonce, sample) in [(&fresh, 601, 0), (&fresh, 602, 120), (&template, 603, 179)] {
+        assert_challenge_rate_rejected_at(&ledger, &at(candidate, nonce, sample), sample);
+    }
+    let other_connection = BillingStore::open(&path, &network()).unwrap();
+    assert_challenge_rate_rejected_at(&other_connection, &at(&fresh, 604, 60), 60);
+    drop(other_connection);
+
+    // Later-minute proposal storage reclaims expired pending challenges, and later inference
+    // and bearer reads run, without resetting or deleting committed challenge evidence.
+    let later = 600;
+    let key = format!("{:064x}", 1);
+    let proposal_at = |sequence: u64, issued_at: u64| {
+        let mut payload = quote_payload(&original.payload.provider_wallet, sequence, PAYER,
+            "test/challenge-clock", ("0", "0"));
+        payload.issued_at = issued_at;
+        payload.expires_at = issued_at + 900;
+        protocol::sign(QUOTE_DOMAIN, payload, &key).unwrap()
+    };
+    ledger.store_quote(&proposal_at(700, later), later).unwrap();
+    assert!(ledger.challenge(&accepted[0].nonce).is_err(), "later proposal cleanup actually ran");
+    assert_eq!(committed_quote_clock(&path), ("10".into(), 10, 1));
+    let reservation = ledger.reserve(&original.payload.id, &opened.credential.as_ref().unwrap().id,
+        "after-later-proposal", 1, 1, later, &original.payload.model).unwrap();
+    assert_read_context(&ledger, &read, &original.payload, later);
+    drop(ledger);
+    let reopened = BillingStore::open(&path, &network()).unwrap();
+    for (candidate, nonce, sample) in [(&fresh, 605, 179), (&template, 606, 0)] {
+        assert_challenge_rate_rejected_at(&reopened, &at(candidate, nonce, sample), sample);
+    }
+
+    // A strictly newer challenge minute starts normal budgets but neither advances nor
+    // resets the committed-proposal clock: an older quote sample still counts in minute 10.
+    reopened.create_challenge(&at(&fresh, 607, 1200), 1200).unwrap();
+    assert_eq!(committed_quote_clock(&path), ("10".into(), 10, 1));
+    reopened.store_quote(&proposal_at(701, later), later).unwrap();
+    assert_eq!(committed_quote_clock(&path), ("10".into(), 10, 2));
+    // Delayed challenge samples now spend minute 20: the owner obtains exactly twelve.
+    for nonce in 608..619 {
+        let challenge = at(&template, nonce, 179);
+        reopened.create_challenge(&challenge, 179).unwrap();
+        consume_rate_challenge(&reopened, &challenge, 179);
+    }
+    let twelfth = at(&template, 619, 0);
+    reopened.create_challenge(&twelfth, 0).unwrap();
+    assert_challenge_rate_rejected_at(&reopened, &at(&template, 620, 1259), 1259);
+    consume_rate_challenge(&reopened, &twelfth, 0);
+
+    let request = reopened.request_view(&original.payload.id, "after-later-proposal").unwrap();
+    assert_eq!(request.id, reservation.id);
+    assert_eq!(request.status, "reserved");
+    assert_read_context(&reopened, &read, &original.payload, 1200);
+    let authenticated = reopened.authenticate(&opened.credential.as_ref().unwrap().bearer, 1200).unwrap();
+    assert_eq!(authenticated.credential_id, opened.credential.as_ref().unwrap().id);
+    let saved = reopened.quote(&original.payload.id).unwrap();
+    assert_eq!(saved.payload, original.payload);
+    assert_eq!(saved.signature, original.signature);
+}
