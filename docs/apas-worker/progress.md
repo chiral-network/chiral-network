@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-21 (seventy-fifth round) — Archive: `specify-challenge-rate-budgets`
+
+- In step at `759f699d`; whitepaper unchanged; no new answers.
+- Task 3.2 ticked, then `openspec archive specify-challenge-rate-budgets --yes`: the change is now `openspec/changes/archive/2026-11-21-specify-challenge-rate-budgets`, and `openspec/specs/inference-challenge-rate-budgets/spec.md` is the seventh normative capability (3 requirements added). The placeholder Purpose was replaced with a one-sentence purpose. The archived design's relative links were moved one level up so they still resolve, and the round-74 report question now points at the spec.
+- Every task had passed: 2.4 and 2.5 in round 74's full suite, the rest earlier. The open report question (adopting the old limiter's out-of-order rows) is nonblocking; option (b) would be a new change to this capability.
+- Checks: `openspec validate --all --strict --no-interactive` 36 passed, 0 failed; `openspec validate inference-challenge-rate-budgets --type spec --strict` valid; every relative link in the archived design resolves. No code changed.
+
 ## 2026-11-20 (seventy-fourth round) — Code: owner challenges get a durable, non-regressing rate minute
 
 - In step at `5d3553cc`; whitepaper unchanged; no new answers.
@@ -846,7 +853,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Archive `specify-challenge-rate-budgets` (3.2; every other task is done, round 74). Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Non-reserving 3.3/4.3, snapshot 2.5/3.3–3.4, request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. Archive `specify-proposal-rate-budgets` once `specify-non-reserving-quotes` completes. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

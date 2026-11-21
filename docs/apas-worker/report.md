@@ -550,7 +550,7 @@ Nonblocking: no requirement or task waits on the answer; option (b) would add on
 
 Status: open
 
-Where: change `specify-challenge-rate-budgets` (capability `inference-challenge-rate-budgets`), requirement 2 ("Unreadable or inconsistent retained rate evidence SHALL refuse fresh issuance") and design decision "Use conservative validation before issuing"; code `billing_store.rs::challenge_rate_limit` (round 74, tasks 2.4 and 2.5). The book (`POST /v1/auth/challenge`, "Public bounded challenge issuance") does not fix this.
+Where: `openspec/specs/inference-challenge-rate-budgets/spec.md` (archived from `specify-challenge-rate-budgets` in round 75), requirement 2 ("Unreadable or inconsistent retained rate evidence SHALL refuse fresh issuance") and design decision "Use conservative validation before issuing"; code `billing_store.rs::challenge_rate_limit` (round 74, tasks 2.4 and 2.5). The book (`POST /v1/auth/challenge`, "Public bounded challenge issuance") does not fix this.
 
 What happens now: owner challenges have a durable, non-regressing minute, like the quote clocks. Retained counters are adopted, and evidence that contradicts itself refuses fresh issuance with an internal `ledger invariant` error, not 429. Existing proofs, bearers and accounts keep working.
 
