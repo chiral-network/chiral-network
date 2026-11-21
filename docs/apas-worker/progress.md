@@ -1,5 +1,25 @@
 # APAS progress
 
+## 2026-11-21 (eighty-eighth round) — Acceptance: request-accounting 2.3 complete (native and SDK clients never retry paid inference)
+
+- In step at `6c49cca5`; whitepaper unchanged; no new answers.
+- Acceptance step for 2.3's last statement ("Native workflows and supplied SDK examples SHALL NOT automatically retry paid inference with a new key or another provider after an ambiguous response, cancellation or interrupted stream"), through a workflow: write tests, then an adversarial review. No product code changed and no code difference was found.
+- Native: `consumer::tests::lost_interrupted_and_cancelled_paid_inference_is_sent_once_and_reconciled_by_its_key` uses a controlled raw-HTTP loopback provider that reports each dispatched key over a channel before losing it. Drops happen at deterministic points, with no sleeps. Seven calls lose or end their dispatch differently: a lost reply and a truncated JSON body for `infer`; a lost opening and an SSE stream closed after two events for `stream_kind`; a live stream cancelled with `cancel_request`; and in-flight `stream_kind` and `infer` dropped the way the desktop does. After each call:
+  - exactly one dispatch is seen for its key;
+  - the local journal holds exactly the dispatched keys, also after reopening;
+  - `request_status` with the same key reconciles at the same provider;
+  - another saved account's provider, the catalog and the RPC accept no connection;
+  - the account files are byte-identical.
+  Thirteen mutations each fail it, among them a resend under a new or the same key, a self-recursive retry, a stream that keeps reading after cancel, a missing journal write, rerouting, and a spawned background resend.
+- SDK examples (static; the openai packages are not installed, so nothing runs): `tests/sdkExamples.test.ts` (TypeScript and svelte/compiler AST) and `scripts/test_sdk_examples.py` (`ast`) check `examples/openai-client.mjs`, `examples/openai_client.py` and both Usage.svelte snippets. Each source must have:
+  - one client with retries 0 (the SDKs default to 2, so omitting the setting fails);
+  - exactly one completions call, outside loops, re-callable code, except/catch and finally blocks;
+  - in the examples, one printed key generated once, a base URL only from the exported credential, and a non-zero exit that names the key to inspect;
+  - in the snippets, environment-only settings, with failures left to propagate.
+  The review found five holes in the first version, which have been closed: retries or base URL reassigned after construction; a fallback written into the credentials; option spreads; and re-running the script. There are now 71 mutated copies plus 9 real-file edits, and each fails its own finding.
+- Recorded limits: the CLI and desktop wrappers call `infer` and `stream_kind` once per action, but this is checked by inspection only. The controlled provider is not the production gateway, whose reservation, cancellation and settlement of lost requests stay in 3.1. The Usage snippets send no Idempotency-Key, which desktop-gui-pages allows.
+- 2.3 ticked; section 2 of request-accounting is complete. Checks: `--lib` 449 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; desktop `--lib desktop::` 10/10; `npm test` 124/124 in 19 files; `npm run check` 0 errors, 0 warnings; `python3 -m unittest discover -s scripts` 80 OK; strict validation passes.
+
 ## 2026-11-21 (eighty-seventh round) — Acceptance: request-accounting 2.3 portable part (request identity and attributable recovery reads)
 
 - In step at `6230e83b`; whitepaper unchanged; no new answers.
@@ -978,7 +998,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3 (only native/SDK no-automatic-retry left, round 87) and 3.1–3.4 (2.2 and 2.5 done in rounds 85–86), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 3.1–3.4 and 4.x (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

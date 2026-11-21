@@ -6908,4 +6908,490 @@ mod tests {
         server.abort();
         target_task.abort();
     }
+    /// The two SSE events the controlled provider of the lost-reply test sends before a loss.
+    const LOSSY_EVENTS: [&str; 2] = [
+        r#"{"id":"chatcmpl-lossy","object":"chat.completion.chunk","created":1,"model":"model-a","choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}"#,
+        r#"{"id":"chatcmpl-lossy","object":"chat.completion.chunk","created":1,"model":"model-a","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}"#,
+    ];
+    /// What the controlled provider does with an inference dispatch once it has read the
+    /// whole request and reported its key.
+    enum Loss {
+        /// Close the connection without a response byte: the reply is lost.
+        BeforeResponse,
+        /// Send `200` JSON headers declaring 64 body bytes and 8 of them, then close.
+        InsideBody,
+        /// Send `200` SSE headers and `LOSSY_EVENTS` as complete chunks, wait for the test's
+        /// release, then close without the chunked body's last chunk.
+        InsideStream(tokio::sync::oneshot::Receiver<()>),
+        /// Send `200` SSE headers and `LOSSY_EVENTS`, then hold the connection until the
+        /// client closes it, and report that.
+        StreamUntilClosed,
+        /// Send nothing and hold the connection until the client closes it, and report that.
+        SilentUntilClosed,
+    }
+    /// What the controlled provider reports to the test, in order.
+    #[derive(Debug, PartialEq)]
+    enum Observed {
+        /// An inference dispatch with this `Idempotency-Key` was read completely.
+        Dispatched(String),
+        /// The client closed the connection of the dispatch with this key.
+        Closed(String),
+    }
+    /// The controlled provider's state.
+    struct Lossy {
+        /// The account's bearer at this provider. Requests are recorded with whether they
+        /// carried it, never with the bearer itself.
+        bearer: String,
+        /// What to do with the next dispatches, in order. A dispatch nothing is scripted for,
+        /// such as an automatic retry, is closed like `Loss::BeforeResponse`.
+        script: std::sync::Mutex<std::collections::VecDeque<Loss>>,
+        /// Every request as `METHOD path key=… bearer=… stream=…`, in arrival order.
+        seen: std::sync::Mutex<Vec<String>>,
+        /// The `Idempotency-Key` and the opaque request identifier of each dispatch.
+        requests: std::sync::Mutex<Vec<(String, String)>>,
+        observed: tokio::sync::mpsc::UnboundedSender<Observed>,
+    }
+    /// Reads one HTTP/1.1 request with a `Content-Length` body (or none): its method, path,
+    /// lower-case headers and body. `None` when the client closes first.
+    async fn read_request(
+        socket: &mut tokio::net::TcpStream,
+    ) -> Option<(String, String, Vec<(String, String)>, Vec<u8>)> {
+        use tokio::io::AsyncReadExt;
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let end = loop {
+            if let Some(end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end;
+            }
+            match socket.read(&mut chunk).await {
+                Ok(read) if read > 0 && buffer.len() < 64 * 1024 => {
+                    buffer.extend_from_slice(&chunk[..read])
+                }
+                _ => return None,
+            }
+        };
+        let head = std::str::from_utf8(&buffer[..end]).ok()?;
+        let mut lines = head.split("\r\n");
+        let mut start = lines.next()?.split(' ');
+        let (method, path) = (start.next()?.to_owned(), start.next()?.to_owned());
+        let headers: Vec<(String, String)> = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+            .collect();
+        let length: usize = match headers.iter().find(|(name, _)| name == "content-length") {
+            Some((_, value)) => value.parse().ok()?,
+            None => 0,
+        };
+        let mut body = buffer[end + 4..].to_vec();
+        while body.len() < length {
+            match socket.read(&mut chunk).await {
+                Ok(read) if read > 0 => body.extend_from_slice(&chunk[..read]),
+                _ => return None,
+            }
+        }
+        Some((method, path, headers, body))
+    }
+    /// Waits until the client closes `socket`.
+    async fn until_closed(socket: &mut tokio::net::TcpStream) {
+        use tokio::io::AsyncReadExt;
+        let mut byte = [0u8; 1];
+        while matches!(socket.read(&mut byte).await, Ok(read) if read > 0) {}
+    }
+    /// One connection to the controlled provider. An inference dispatch is recorded, reported
+    /// and lost as scripted; a status or cancellation read by key or opaque identifier is
+    /// answered from the dispatch record; the connection then closes.
+    async fn lossy_connection(state: Arc<Lossy>, mut socket: tokio::net::TcpStream) {
+        use tokio::io::AsyncWriteExt;
+        let Some((method, path, headers, body)) = read_request(&mut socket).await else {
+            return;
+        };
+        let header = |name: &str| headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+        let key = header("idempotency-key");
+        let bearer = header("authorization") == Some(format!("Bearer {}", state.bearer));
+        let stream = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .map_or("-".to_string(), |body| body["stream"].to_string());
+        state.seen.lock().unwrap().push(format!(
+            "{method} {path} key={} bearer={bearer} stream={stream}",
+            key.as_deref().unwrap_or("-")
+        ));
+        if method == "POST" && path == "/v1/chat/completions" {
+            let key = key.unwrap_or_default();
+            let id = {
+                let mut requests = state.requests.lock().unwrap();
+                let id = format!("0x{:064x}", requests.len() + 1);
+                requests.push((key.clone(), id.clone()));
+                id
+            };
+            let loss = state.script.lock().unwrap().pop_front().unwrap_or(Loss::BeforeResponse);
+            let _ = state.observed.send(Observed::Dispatched(key.clone()));
+            let mut stream = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\nx-request-id: {id}\r\n\r\n"
+            );
+            for event in LOSSY_EVENTS {
+                let frame = format!("data: {event}\n\n");
+                stream.push_str(&format!("{:x}\r\n{frame}\r\n", frame.len()));
+            }
+            match loss {
+                Loss::BeforeResponse => {}
+                Loss::InsideBody => {
+                    let partial = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\nx-request-id: {id}\r\n\r\n{{\"id\":\"c"
+                    );
+                    let _ = socket.write_all(partial.as_bytes()).await;
+                }
+                Loss::InsideStream(release) => {
+                    let _ = socket.write_all(stream.as_bytes()).await;
+                    let _ = release.await;
+                }
+                Loss::StreamUntilClosed => {
+                    let _ = socket.write_all(stream.as_bytes()).await;
+                    until_closed(&mut socket).await;
+                    let _ = state.observed.send(Observed::Closed(key));
+                }
+                Loss::SilentUntilClosed => {
+                    until_closed(&mut socket).await;
+                    let _ = state.observed.send(Observed::Closed(key));
+                }
+            }
+            // Dropping the socket closes the connection.
+            return;
+        }
+        let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        let record = |target: &str| {
+            state
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(key, id)| key == target || id == target)
+                .cloned()
+        };
+        let missing = json!({"error": {"code": "not_found", "message": "Request not found"}});
+        let (status, document) = match (method.as_str(), segments.as_slice()) {
+            ("GET", ["v1", "requests", target]) => match record(target) {
+                Some((key, id)) => (
+                    "200 OK",
+                    json!({"id": id, "idempotency_key": key, "status": "reserved"}),
+                ),
+                None => ("404 Not Found", missing),
+            },
+            ("POST", ["v1", "requests", target, "cancel"]) => match record(target) {
+                Some((_, id)) => ("202 Accepted", json!({"id": id, "status": "cancelling"})),
+                None => ("404 Not Found", missing),
+            },
+            _ => ("404 Not Found", missing),
+        };
+        let body = document.to_string();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+    }
+    /// The controlled provider's next report. The bound only turns a hang into a failure.
+    async fn next_observed(
+        observed: &mut tokio::sync::mpsc::UnboundedReceiver<Observed>,
+    ) -> Observed {
+        tokio::time::timeout(Duration::from_secs(30), observed.recv())
+            .await
+            .expect("the controlled provider reported nothing within 30 s")
+            .expect("the controlled provider stopped")
+    }
+    /// The controlled provider's next report, which must be a dispatch: its key.
+    async fn next_dispatch(observed: &mut tokio::sync::mpsc::UnboundedReceiver<Observed>) -> String {
+        match next_observed(observed).await {
+            Observed::Dispatched(key) => key,
+            other => panic!("expected a dispatch, observed {other:?}"),
+        }
+    }
+    /// The native stream's next event as (kind, data); `None` once its task has ended. The
+    /// bound only turns a hang into a failure.
+    async fn next_event(stream: &mut InferenceStream) -> Option<(String, Value)> {
+        tokio::time::timeout(Duration::from_secs(30), stream.events.recv())
+            .await
+            .expect("the native stream produced nothing within 30 s")
+            .map(|event| (event.kind, event.data))
+    }
+    /// The opaque identifier the controlled provider gave the dispatch with `key`.
+    fn request_of(state: &Lossy, key: &str) -> String {
+        state.requests.lock().unwrap().iter().find(|(k, _)| k == key).unwrap().1.clone()
+    }
+    /// After a lost, interrupted or cancelled call: the controlled provider has received
+    /// exactly `keys`, one dispatch each, and has reported nothing more; the local journal of
+    /// `id` lists exactly those keys.
+    fn dispatched_exactly(
+        consumer: &Consumer,
+        id: &str,
+        state: &Lossy,
+        observed: &mut tokio::sync::mpsc::UnboundedReceiver<Observed>,
+        keys: &[String],
+    ) {
+        assert!(
+            matches!(observed.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Empty)),
+            "the provider observed more than the call's one dispatch"
+        );
+        let received: Vec<String> =
+            state.requests.lock().unwrap().iter().map(|(key, _)| key.clone()).collect();
+        assert_eq!(received, keys);
+        assert_eq!(journaled(consumer, id), sorted(keys));
+    }
+    /// The request keys the local journal of `id` lists, sorted (the journal orders by
+    /// creation second, which ties).
+    fn journaled(consumer: &Consumer, id: &str) -> Vec<String> {
+        let journal = consumer.local_requests(id).unwrap();
+        assert_eq!(journal["scope"], "local_dispatch_keys_not_settlement");
+        let keys: Vec<String> = journal["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                assert_eq!(request["contract_id"], id);
+                request["request_key"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        sorted(&keys)
+    }
+    fn sorted(keys: &[String]) -> Vec<String> {
+        let mut keys = keys.to_vec();
+        keys.sort();
+        keys
+    }
+    /// The explicit reconciliation read: `target`, a key or opaque identifier, reaches the
+    /// same provider and returns its record of the original dispatch.
+    async fn reconciled(consumer: &Consumer, id: &str, state: &Lossy, target: &str) {
+        let (key, request) = state
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(key, request)| key == target || request == target)
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            consumer.request_status(id, target).await.unwrap(),
+            json!({"id": request, "idempotency_key": key, "status": "reserved"})
+        );
+    }
+    /// inference-request-accounting requirement *Request identity prevents automatic paid
+    /// replay*, task 2.3: native workflows do not retry paid inference automatically, with a
+    /// new key or at another provider, after an ambiguous response, an interrupted stream or a
+    /// cancellation. A controlled loopback provider speaking raw HTTP/1.1 (development mode)
+    /// reads each dispatch completely and reports its key, then loses it at an exact point:
+    /// it closes before any response byte (`infer`, then `stream_kind`); closes inside a
+    /// declared JSON body (`infer`); closes a chunked SSE stream after two events, on the
+    /// test's signal; or holds the connection until the native side cancels: a live stream
+    /// through `cancel_request` and then the stream's own cancellation, and an in-flight
+    /// `stream_kind` or `infer` dropped before any response, as the desktop does when its
+    /// user cancels a stream that has not opened. Every call dispatches exactly once under one
+    /// fresh UUID key with the account bearer, which a dispatch error names and the local
+    /// journal keeps, also after reopening. The provider receives nothing more for that call:
+    /// only the test's own reads, with that key and the stream's opaque identifier, which
+    /// reach the same provider and return its record. Another saved account's provider for the
+    /// same model, the catalog and the chain RPC (each a loopback listener) accept no
+    /// connection, and the account file, with its credential, is unchanged. The controlled
+    /// provider is not the production gateway; these requests' settlement belongs to 3.1.
+    #[tokio::test]
+    async fn lost_interrupted_and_cancelled_paid_inference_is_sent_once_and_reconciled_by_its_key() {
+        use std::sync::atomic::Ordering;
+        const SECRET: &str = "sk-chiral-lossy-secret-0123456789abcdef";
+        const OTHER_SECRET: &str = "sk-chiral-other-secret-0123456789abcdef";
+        let (other, other_connections, other_task) = connection_recorder().await;
+        let (catalog, catalog_connections, catalog_task) = connection_recorder().await;
+        let (rpc, rpc_connections, rpc_task) = connection_recorder().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(Lossy {
+            bearer: SECRET.into(),
+            script: Default::default(),
+            seen: Default::default(),
+            requests: Default::default(),
+            observed: sender,
+        });
+        let serving = state.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(lossy_connection(serving.clone(), socket));
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = configuration(directory.path());
+        config.development = true;
+        config.catalog_url = Some(format!("http://{catalog}"));
+        config.network.rpc_url = format!("http://{rpc}");
+        let consumer = Consumer::new(config.clone()).unwrap();
+        consumer.wallet_create().unwrap();
+        // Account A at the controlled provider, and account B for the same model at another
+        // provider, each with a stored inference credential.
+        let provider_key = wallet::generate_private_key();
+        let (offer, quote) = funding_terms(&consumer, &provider_key, &origin, false, false);
+        let id = quote.payload.id.clone();
+        let other_key = wallet::generate_private_key();
+        let (other_offer, other_quote) =
+            funding_terms(&consumer, &other_key, &format!("http://{other}"), false, false);
+        let mut other_terms = other_quote.payload;
+        other_terms.id = format!("0x{}", "02".repeat(32));
+        let other_quote = protocol::sign(QUOTE_DOMAIN, other_terms, &other_key).unwrap();
+        let other_id = other_quote.payload.id.clone();
+        for (offer, quote, bearer) in
+            [(offer, quote, SECRET), (other_offer, other_quote, OTHER_SECRET)]
+        {
+            let mut saved = saved_funding(offer, quote);
+            let credential = Credential {
+                id: "credential-a".into(),
+                bearer: bearer.into(),
+                contract_id: saved.quote.payload.id.clone(),
+                expires_at: protocol::now().unwrap() + 3600,
+            };
+            consumer.store_credential(&mut saved, credential, true).unwrap();
+            consumer.save_account(&saved).unwrap();
+        }
+        let files = [consumer.account_path(&id).unwrap(), consumer.account_path(&other_id).unwrap()];
+        let accounts = files.each_ref().map(|file| fs::read(file).unwrap());
+        let chat = json!({"model":"model-a","messages":[{"role":"user","content":"a paid prompt"}],"max_tokens":8});
+        let lost = |key: &str| {
+            format!("inference dispatch interrupted; inspect request {key} before creating another request")
+        };
+        let mut keys: Vec<String> = Vec::new();
+
+        // 1. `infer`: the reply is lost before any response byte.
+        state.script.lock().unwrap().push_back(Loss::BeforeResponse);
+        let error = consumer.infer(&id, "chat", chat.clone()).await.unwrap_err();
+        let key = next_dispatch(&mut observed).await;
+        assert_eq!(error, lost(&key));
+        keys.push(key.clone());
+        dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+        reconciled(&consumer, &id, &state, &key).await;
+
+        // 2. `infer`: the connection closes inside the declared JSON body.
+        state.script.lock().unwrap().push_back(Loss::InsideBody);
+        let error = consumer.infer(&id, "chat", chat.clone()).await.unwrap_err();
+        let key = next_dispatch(&mut observed).await;
+        assert_eq!(error, "HTTP response interrupted; do not replay paid generation");
+        keys.push(key.clone());
+        dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+        reconciled(&consumer, &id, &state, &key).await;
+
+        // 3. `stream_kind`: the reply is lost before any response byte.
+        state.script.lock().unwrap().push_back(Loss::BeforeResponse);
+        let error = consumer.stream_kind(&id, "chat", chat.clone()).await.err().unwrap();
+        let key = next_dispatch(&mut observed).await;
+        assert_eq!(error, lost(&key));
+        keys.push(key.clone());
+        dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+        reconciled(&consumer, &id, &state, &key).await;
+
+        // 4. An SSE stream interrupted after two events. The stream's task ends with one
+        // error event: nothing is resent.
+        let (release, released) = tokio::sync::oneshot::channel();
+        state.script.lock().unwrap().push_back(Loss::InsideStream(released));
+        let mut stream = consumer.stream_kind(&id, "chat", chat.clone()).await.unwrap();
+        let key = next_dispatch(&mut observed).await;
+        let request = request_of(&state, &key);
+        assert_eq!(next_event(&mut stream).await, Some(("started".into(), json!({"request_id": request}))));
+        for event in LOSSY_EVENTS {
+            let data: Value = serde_json::from_str(event).unwrap();
+            assert_eq!(next_event(&mut stream).await, Some(("chunk".into(), data)));
+        }
+        release.send(()).unwrap();
+        let interrupted = json!({"message": "stream interrupted; inspect usage, do not replay"});
+        assert_eq!(next_event(&mut stream).await, Some(("error".into(), interrupted)));
+        assert_eq!(next_event(&mut stream).await, None);
+        keys.push(key.clone());
+        dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+        reconciled(&consumer, &id, &state, &key).await;
+        reconciled(&consumer, &id, &state, &request).await;
+
+        // 5. A live stream cancelled natively: the provider cancellation, then the stream's
+        // own cancellation, which closes its connection.
+        state.script.lock().unwrap().push_back(Loss::StreamUntilClosed);
+        let mut stream = consumer.stream_kind(&id, "chat", chat.clone()).await.unwrap();
+        let key = next_dispatch(&mut observed).await;
+        let request = request_of(&state, &key);
+        assert_eq!(next_event(&mut stream).await, Some(("started".into(), json!({"request_id": request}))));
+        for event in LOSSY_EVENTS {
+            let data: Value = serde_json::from_str(event).unwrap();
+            assert_eq!(next_event(&mut stream).await, Some(("chunk".into(), data)));
+        }
+        assert_eq!(
+            consumer.cancel_request(&id, &request).await.unwrap(),
+            json!({"id": request, "status": "cancelling"})
+        );
+        stream.cancel.cancel();
+        assert_eq!(next_event(&mut stream).await, Some(("cancelled".into(), Value::Null)));
+        assert_eq!(next_event(&mut stream).await, None);
+        assert_eq!(next_observed(&mut observed).await, Observed::Closed(key.clone()));
+        keys.push(key.clone());
+        dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+        reconciled(&consumer, &id, &state, &key).await;
+        reconciled(&consumer, &id, &state, &request).await;
+
+        // 6. An in-flight `stream_kind`, then `infer`, dropped before any response.
+        for streaming in [true, false] {
+            state.script.lock().unwrap().push_back(Loss::SilentUntilClosed);
+            let mut call: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + '_>> =
+                if streaming {
+                    Box::pin(async { consumer.stream_kind(&id, "chat", chat.clone()).await.is_ok() })
+                } else {
+                    Box::pin(async { consumer.infer(&id, "chat", chat.clone()).await.is_ok() })
+                };
+            let key = tokio::select! {
+                key = next_dispatch(&mut observed) => key,
+                _ = &mut call => panic!("the call finished although the provider sent nothing"),
+            };
+            drop(call);
+            assert_eq!(next_observed(&mut observed).await, Observed::Closed(key.clone()));
+            keys.push(key.clone());
+            dispatched_exactly(&consumer, &id, &state, &mut observed, &keys);
+            reconciled(&consumer, &id, &state, &key).await;
+        }
+
+        // One fresh version-4 UUID key per call, and the provider's complete transcript: each
+        // dispatch once with the account bearer, followed only by the test's own reads.
+        for key in &keys {
+            assert_eq!(uuid::Uuid::parse_str(key).unwrap().get_version_num(), 4);
+        }
+        assert_eq!(keys.iter().collect::<std::collections::BTreeSet<_>>().len(), keys.len());
+        let dispatch = |key: &str, stream: bool| {
+            format!("POST /v1/chat/completions key={key} bearer=true stream={stream}")
+        };
+        let read = |target: &str| format!("GET /v1/requests/{target} key=- bearer=true stream=-");
+        let (stream4, stream5) = (request_of(&state, &keys[3]), request_of(&state, &keys[4]));
+        let expected = vec![
+            dispatch(&keys[0], false),
+            read(&keys[0]),
+            dispatch(&keys[1], false),
+            read(&keys[1]),
+            dispatch(&keys[2], true),
+            read(&keys[2]),
+            dispatch(&keys[3], true),
+            read(&keys[3]),
+            read(&stream4),
+            dispatch(&keys[4], true),
+            format!("POST /v1/requests/{stream5}/cancel key=- bearer=true stream=-"),
+            read(&keys[4]),
+            read(&stream5),
+            dispatch(&keys[5], true),
+            read(&keys[5]),
+            dispatch(&keys[6], false),
+            read(&keys[6]),
+        ];
+        assert_eq!(*state.seen.lock().unwrap(), expected);
+        // The journal survives reopening; the other account has none.
+        let reopened = Consumer::new(config).unwrap();
+        assert_eq!(journaled(&reopened, &id), sorted(&keys));
+        assert_eq!(reopened.local_requests(&other_id).unwrap()["requests"], json!([]));
+        // No credential or account change (compared without printing: the files hold bearers).
+        for (file, before) in files.iter().zip(&accounts) {
+            assert!(fs::read(file).unwrap() == *before, "an account file changed");
+        }
+        assert_eq!(other_connections.load(Ordering::SeqCst), 0, "another provider was contacted");
+        assert_eq!(catalog_connections.load(Ordering::SeqCst), 0, "the catalog was contacted");
+        assert_eq!(rpc_connections.load(Ordering::SeqCst), 0, "the chain RPC was contacted");
+        server.abort();
+        other_task.abort();
+        catalog_task.abort();
+        rpc_task.abort();
+    }
 }

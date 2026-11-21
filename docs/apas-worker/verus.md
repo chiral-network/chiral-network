@@ -360,3 +360,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 - `request_pages_and_receipts_hold_the_100_newest_account_requests_newest_first` and `timestamp_before_pages_can_omit_requests_sharing_the_boundary_timestamp` — **replaceable in part**: the page selection (the 100 greatest by (created, insertion) strictly before `before`, newest first) and its tie-omission consequence are properties of a sort-and-take function over a modeled list that Verus could prove; the SQL query and signed receipt are outside it.
 - `receipt_sequences_are_durable_per_account_and_failed_issuance_commits_nothing` — **replaceable in part**: per-account strict monotonicity and exhaustion at i64::MAX are a counter-map invariant Verus could state; SQLite faults, commit refusal and reopening are not.
 - `request_identity_and_attribution_survive_settlement_reopening_and_duplicates`, `a_receipt_waits_for_a_competing_settlement_and_binds_only_committed_state`, `request_and_receipt_reads_are_account_scoped_and_change_no_financial_row` and `completed_inference_retains_no_content_and_duplicates_never_replay_it` — **not replaceable**: SQLite locking and reopening, HTTP routers, bearer and owner-proof authentication, a loopback engine and files on disk.
+
+## Judged 2026-11-21 — no automatic paid retry (request-accounting 2.3, last statement)
+
+- `consumer::tests::lost_interrupted_and_cancelled_paid_inference_is_sent_once_and_reconciled_by_its_key` — **not replaceable**: sockets dropped mid-request and mid-stream, async cancellation, protected files and a reopened consumer.
+- `tests/sdkExamples.test.ts` and `scripts/test_sdk_examples.py` — **not replaceable**: static analysis of JavaScript, Python and Svelte sources, outside Verus's scope.
