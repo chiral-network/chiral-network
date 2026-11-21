@@ -4844,6 +4844,97 @@ mod tests {
         }
     }
 
+    /// inference-request-accounting task 3.1 (d), restart case for a paid account, with
+    /// provider-daemon-lifecycle requirement 6: "the gateway SHALL stop new admission and
+    /// retain the original request for recovery", and *Restart recovers orphaned reservations
+    /// before new admission*. A development chat provider holds a funded account (1,000,000 wei,
+    /// 995,000 available after the fee); its chat request reserves 10 wei and costs 4. An
+    /// `AFTER UPDATE` trigger with `RAISE(FAIL)` refuses the request's terminal write, so the
+    /// settlement transaction must roll back the account and credential writes before it. The
+    /// request answers 500 `internal_error`, stays `reserved` with its whole 10-wei hold in the
+    /// account and credential, and admission closes. While closed, a new request is refused 503
+    /// `provider_paused` with nothing recorded, the request reads as `reserved` from the gateway
+    /// and the control plane, and its key is the 409 naming it. The ledger then accepts writes and
+    /// the daemon restarts. When the start returns, before any request, startup recovery has
+    /// released the hold as `restart_unknown_usage`: no charge or usage, 10 wei of request
+    /// exposure, the account back at 995,000 available with nothing reserved or spent and its own
+    /// funding-loss compensation untouched, the credential's hold gone. Admission is open with no
+    /// failure reported, the key still answers 409 with the recovered status, and a new request is
+    /// reserved and charged at the agreement's rates.
+    #[tokio::test]
+    async fn a_paid_settlement_failure_keeps_its_hold_until_a_restart_releases_it_before_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipts = Receipts::default();
+        let (config, servers) = development_chat_provider(directory.path(), settled_chain(receipts.clone())).await;
+        let runtime = ProviderRuntime::start(config.clone()).await.unwrap();
+        let (contract, credential, _) = funded_account(&runtime.state, &receipts, "44", 1_000_000);
+        let balances = |runtime: &ProviderRuntime| {
+            let account = runtime.state.ledger.account(&contract).unwrap();
+            let held = runtime.state.ledger.credentials(&contract).unwrap().into_iter()
+                .find(|entry| entry.id == credential.id).unwrap();
+            (account.available_wei, account.reserved_wei, account.spent_wei, account.provider_loss_wei,
+                (account.usage.prompt_tokens, account.usage.completion_tokens), held.reserved_wei, held.spent_wei)
+        };
+        let opened = || ("995000".to_owned(), "0".to_owned(), "0".to_owned(), "0".to_owned(), (0, 0), "0".to_owned(), "0".to_owned());
+        assert_eq!(balances(&runtime), opened());
+        let ledger = ledger_connection(&runtime);
+        ledger.execute_batch("CREATE TRIGGER refuse_paid_settlement AFTER UPDATE ON requests
+            WHEN OLD.request_key='unsettled' AND NEW.status<>'reserved'
+            BEGIN SELECT RAISE(FAIL,'injected settlement write failure'); END;").unwrap();
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "unsettled").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::INTERNAL_SERVER_ERROR, &json!("internal_error")), "{answer}");
+        assert_eq!(runtime.state.settlement_fault(), Some(inference_gateway::DURABLE_SETTLEMENT_FAILED));
+        assert!(!runtime.state.accepting.load(Ordering::Acquire));
+        let held = runtime.state.ledger.request_view(&contract, "unsettled").unwrap();
+        assert_eq!((held.status.as_str(), held.max_cost_wei.as_str(), held.cost_wei.as_str(), held.provider_loss_wei.as_str(),
+            held.prompt_tokens_reserved, held.max_output_tokens), ("reserved", "10", "0", "0", 2, 4));
+        let holding = ("994990".to_owned(), "10".to_owned(), "0".to_owned(), "0".to_owned(), (0, 0), "10".to_owned(), "0".to_owned());
+        assert_eq!(balances(&runtime), holding, "a failed settlement left a partial or acknowledged debit");
+
+        // While admission is closed: nothing new is admitted, the request stays readable.
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "while-closed").await;
+        assert_eq!((status, &answer["error"]["code"]), (StatusCode::SERVICE_UNAVAILABLE, &json!("provider_paused")), "{answer}");
+        assert!(runtime.state.ledger.request_view(&contract, "while-closed").is_err());
+        let record = serde_json::to_value(&held).unwrap();
+        for path in ["/v1/requests/unsettled".to_owned(), format!("/v1/contracts/{contract}/requests/unsettled")] {
+            assert_eq!(call(&runtime.public_router(), "GET", &path, &bearer_header(&credential.bearer), None).await,
+                (StatusCode::OK, record.clone()), "{path}");
+        }
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "unsettled").await;
+        assert_eq!((status, &answer["error"]["code"], &answer["error"]["request_id"], &answer["error"]["request_status"]),
+            (StatusCode::CONFLICT, &json!("duplicate_request"), &json!(held.id), &json!("reserved")), "{answer}");
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["settlement_error"], &view["ledger"]["active_requests"]),
+            (&json!(false), &json!(inference_gateway::DURABLE_SETTLEMENT_FAILED), &json!(1)), "{view}");
+        assert_eq!(balances(&runtime), holding);
+        ledger.execute_batch("DROP TRIGGER refuse_paid_settlement").unwrap();
+        drop(ledger);
+        runtime.dht.stop().await;
+        drop(runtime);
+
+        // Recovered by the start, before any request.
+        let runtime = ProviderRuntime::start(config).await.unwrap();
+        let recovered = runtime.state.ledger.request_view(&contract, "unsettled").unwrap();
+        assert_eq!((recovered.id.as_str(), recovered.status.as_str(), recovered.usage.prompt_tokens, recovered.usage.completion_tokens,
+            recovered.cost_wei.as_str(), recovered.provider_loss_wei.as_str(), recovered.max_cost_wei.as_str()),
+            (held.id.as_str(), "restart_unknown_usage", 0, 0, "0", "10", "10"));
+        assert_eq!(balances(&runtime), opened(), "recovery did not return exactly the hold");
+        let view = admin(&runtime, "GET", "/admin/status").await.1;
+        assert_eq!((&view["accepting"], &view["settlement_error"], &view["ledger"]["active_requests"]),
+            (&json!(true), &Value::Null, &json!(0)), "{view}");
+        let (status, answer) = chat_request(&runtime, &credential.bearer, "unsettled").await;
+        assert_eq!((status, &answer["error"]["code"], &answer["error"]["request_status"]),
+            (StatusCode::CONFLICT, &json!("duplicate_request"), &json!("restart_unknown_usage")), "{answer}");
+        assert_eq!(balances(&runtime), opened());
+        completes_at_agreement_rates(&runtime, &contract, &credential.bearer, "after-the-restart").await;
+        assert_eq!(balances(&runtime), ("994996".to_owned(), "0".to_owned(), "4".to_owned(), "0".to_owned(), (2, 1),
+            "0".to_owned(), "4".to_owned()));
+        runtime.dht.stop().await;
+        for server in servers {
+            server.abort();
+        }
+    }
+
     /// provider-daemon-lifecycle requirement 5 (task 3.5): the daemon's periodic pass
     /// (`ProviderRuntime::maintenance`, whose period unit tests shorten) keeps running after a
     /// failed pass and while the provider drains. A published provider with a credited funding can

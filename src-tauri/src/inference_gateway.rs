@@ -416,6 +416,17 @@ impl Settlement {
                 self.settled = true;
                 Ok(())
             }
+            // The ledger committed an explicit invalid-usage release (the account's cumulative
+            // usage counters cannot take this usage): a terminal result without a charge, not
+            // a persistence failure, so admission stays open (inference-request-accounting).
+            Err(error) if error.starts_with("usage_over_reservation") => {
+                self.settled = true;
+                Err(ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "usage_not_accounted",
+                    "Usage could not be accounted for this account; the request was released without a charge",
+                ))
+            }
             Err(_) => {
                 // Never acknowledge a successful completion with an unpersisted debit.
                 // A repeated settle is idempotent; restart recovery remains authoritative.

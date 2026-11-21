@@ -4631,18 +4631,21 @@ fn quote_work_invalid_evidence_fails_closed_without_blocking_paid_settlement() {
 // control and inference routers read the real clock.
 
 /// A paid account opened at `now` on `store`, funded with `funding` wei, whose signed
-/// concurrency limit is `max_concurrency`. Verified funding is a ledger prerequisite
-/// after the chain boundary, as in `paid`.
+/// concurrency limit is `max_concurrency` and whose agreement is otherwise `quote`'s, then
+/// changed by `edit`. Verified funding is a ledger prerequisite after the chain boundary,
+/// as in `paid`.
 fn paid_at(
     store: &BillingStore,
     funding: u128,
     max_concurrency: u32,
     now: u64,
+    edit: impl FnOnce(&mut Quote),
 ) -> (Signed<Quote>, crate::protocol::OpenResult) {
     let mut payload = quote(funding, false).payload;
     payload.max_concurrency = max_concurrency;
     payload.issued_at = now;
     payload.expires_at = now + 300;
+    edit(&mut payload);
     let agreement = protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap();
     store.store_quote(&agreement, now).unwrap();
     let funding_payment = payment(&agreement.payload, true, funding, 1);
@@ -4676,6 +4679,12 @@ impl CredentialRoutes {
     /// `new`, with the account opened at the explicit ledger time `opened_at`. The
     /// routers still read the real clock.
     fn opened_at(funding: u128, max_concurrency: u32, opened_at: u64) -> Self {
+        Self::opened_with(funding, max_concurrency, opened_at, |_| {})
+    }
+
+    /// `opened_at`, whose agreement, and so the served model and price, is first changed
+    /// by `edit`.
+    fn opened_with(funding: u128, max_concurrency: u32, opened_at: u64, edit: impl FnOnce(&mut Quote)) -> Self {
         use crate::{
             app::ProviderState,
             chain_client::ChainClient,
@@ -4687,7 +4696,7 @@ impl CredentialRoutes {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("ledger.sqlite");
         let ledger = Arc::new(BillingStore::open(&path, &network()).unwrap());
-        let (agreement, opened) = paid_at(&ledger, funding, max_concurrency, opened_at);
+        let (agreement, opened) = paid_at(&ledger, funding, max_concurrency, opened_at, edit);
         let network_config = NetworkConfig {
             identity: network(),
             rpc_url: "http://127.0.0.1:1".into(),
@@ -8562,4 +8571,1638 @@ async fn completed_inference_retains_no_content_and_duplicates_never_replay_it()
         }
     }
     engine.abort();
+}
+
+// inference-request-accounting task 3.1: the production public gateway, driven through its
+// router over the paid `CredentialRoutes` ledger (one wei per token). Its private engine is
+// a controlled loopback stub: explicit test evidence of what the gateway prepares,
+// reserves, dispatches and settles, never a runtime fallback, model qualification or
+// observed llama.cpp tokenization and usage. The gateway reads the real clock, so each
+// ledger time is bounded by clock samples taken around the call; nothing waits for a clock
+// except where a credential must expire on it.
+
+/// The controlled tokenizer's ID of `word`: deterministic and below 1,000,003, except the
+/// word `huge-token`, whose ID 2^31 is beyond any engine token ID.
+fn controlled_token(word: &str) -> u64 {
+    if word == "huge-token" {
+        return 1 << 31;
+    }
+    word.bytes().fold(17, |hash, byte| (hash * 131 + u64::from(byte)) % 1_000_003)
+}
+
+/// The controlled tokenization of `text`: one token per whitespace-separated word.
+fn controlled_tokens(text: &str) -> Vec<u64> {
+    text.split_whitespace().map(controlled_token).collect()
+}
+
+/// The controlled chat template: the first message between two marker words, so a chat
+/// message of n words is prepared into n + 2 tokens.
+fn controlled_rendered(content: &str) -> String {
+    format!("<user> {content} <assistant>")
+}
+
+/// The value of the word `name=value` in `text`, the controlled engine's instructions.
+fn controlled_directive<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    text.split_whitespace().find_map(|word| word.strip_prefix(name)?.strip_prefix('='))
+}
+
+/// What the controlled engine records, its gates and its event channel.
+struct ControlledShared {
+    calls: Mutex<Vec<String>>,
+    templated: Mutex<Vec<Value>>,
+    tokenized: Mutex<Vec<Value>>,
+    generated: Mutex<Vec<Value>>,
+    snapshots: Mutex<Vec<(String, ExpiryRows)>>,
+    observe: Option<std::path::PathBuf>,
+    gates: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    events: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+impl ControlledShared {
+    fn gate(&self, name: &str) -> Arc<tokio::sync::Semaphore> {
+        self.gates.lock().unwrap().entry(name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(0))).clone()
+    }
+    /// Records every ledger row as the engine receives `call`, when observing.
+    fn observe(&self, call: String) {
+        if let Some(path) = &self.observe {
+            self.snapshots.lock().unwrap().push((call, expiry_ledger_rows(path)));
+        }
+    }
+    /// Reports `held <gate>`, then waits until the test releases `gate`.
+    async fn hold(&self, gate: &str) {
+        let _ = self.events.send(format!("held {gate}"));
+        self.gate(gate).acquire().await.unwrap().forget();
+    }
+    /// Reports `held <gate>`, then never continues.
+    async fn stall(&self, gate: &str) {
+        let _ = self.events.send(format!("held {gate}"));
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Reports `dropped <gate>` when the engine answer it marks is abandoned before its end.
+struct ControlledInFlight {
+    gate: String,
+    events: tokio::sync::mpsc::UnboundedSender<String>,
+    finished: std::cell::Cell<bool>,
+}
+
+impl Drop for ControlledInFlight {
+    fn drop(&mut self) {
+        if !self.finished.get() {
+            let _ = self.events.send(format!("dropped {}", self.gate));
+        }
+    }
+}
+
+enum ControlledStep {
+    Send(String),
+    Wait(String),
+    Stall(String),
+    /// The engine ends its answer here, cleanly, without the rest of the stream.
+    End,
+}
+
+/// The controlled engine's chat generation, an SSE stream for the gateway's private stream
+/// with final usage. The prompt count is the rendered message's token count; the message
+/// words instruct the engine:
+/// - `out=N`: N output tokens `w0 `, `w1 `, … (default 3), then a `stop` finish;
+/// - `usage=exact` (default), `prompt+1`, `prompt-1`, `over` (one more completion token
+///   than `max_tokens`), `total+1`, `no-total`, `text` (a string prompt count) or `missing`
+///   (no usage event): the final usage event;
+/// - `wait=G:P` or `stall=G:P`, with P `before-headers`, `after-output` or `after-usage`:
+///   at P, report `held G` and wait for the test to release G, or never continue;
+/// - `end=P`, with P `after-output` or `after-usage`: the stream ends at P, without the
+///   finish, usage or `[DONE]` that would follow;
+/// - `generation-fails`: the generation is refused with a 500 before any output.
+///
+/// An answer abandoned before its end reports `dropped G`.
+async fn controlled_chat(shared: Arc<ControlledShared>, headers: axum::http::HeaderMap, body: Value)
+    -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let id = headers.get("x-request-id").map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default();
+    shared.observe(format!("POST /v1/chat/completions id={id}"));
+    shared.generated.lock().unwrap().push(body.clone());
+    let content = body["messages"][0]["content"].as_str().unwrap_or_default().to_owned();
+    if content.split_whitespace().any(|word| word == "generation-fails") {
+        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({"error": {"code": 500, "message": "controlled engine failure"}}))).into_response();
+    }
+    let prompt = controlled_tokens(&controlled_rendered(&content)).len() as u64;
+    let maximum = body["max_tokens"].as_u64().unwrap_or_default();
+    let output: u64 = controlled_directive(&content, "out").map_or(3, |count| count.parse().unwrap());
+    let (mode, gate, point) = match (controlled_directive(&content, "wait"), controlled_directive(&content, "stall")) {
+        (Some(plan), None) => ("wait", plan.split_once(':').unwrap().0, plan.split_once(':').unwrap().1),
+        (None, Some(plan)) => ("stall", plan.split_once(':').unwrap().0, plan.split_once(':').unwrap().1),
+        (None, None) => ("none", "unnamed", "none"),
+        _ => panic!("one hold per request"),
+    };
+    let marker = ControlledInFlight { gate: gate.to_owned(), events: shared.events.clone(), finished: Default::default() };
+    if point == "before-headers" {
+        if mode == "stall" {
+            shared.stall(gate).await;
+        }
+        shared.hold(gate).await;
+    }
+    let chunk = |choices: Value| format!("data: {}\n\n", json!({"id": "engine-response",
+        "object": "chat.completion.chunk", "model": body["model"], "created": 1, "choices": choices}));
+    let hold = |at: &str| match (mode, point == at) {
+        ("wait", true) => Some(ControlledStep::Wait(gate.to_owned())),
+        ("stall", true) => Some(ControlledStep::Stall(gate.to_owned())),
+        _ => None,
+    };
+    let end = |at: &str| (controlled_directive(&content, "end") == Some(at)).then_some(ControlledStep::End);
+    let mut steps: Vec<ControlledStep> = (0..output)
+        .map(|index| ControlledStep::Send(chunk(json!([{"index": 0, "delta": {"content": format!("w{index} ")},
+            "finish_reason": null}]))))
+        .collect();
+    steps.extend(hold("after-output"));
+    steps.extend(end("after-output"));
+    steps.push(ControlledStep::Send(chunk(json!([{"index": 0, "delta": {}, "finish_reason": "stop"}]))));
+    let usage = match controlled_directive(&content, "usage").unwrap_or("exact") {
+        "exact" => Some(json!({"prompt_tokens": prompt, "completion_tokens": output, "total_tokens": prompt + output})),
+        "prompt+1" => Some(json!({"prompt_tokens": prompt + 1, "completion_tokens": output, "total_tokens": prompt + 1 + output})),
+        "prompt-1" => Some(json!({"prompt_tokens": prompt - 1, "completion_tokens": output, "total_tokens": prompt - 1 + output})),
+        "over" => Some(json!({"prompt_tokens": prompt, "completion_tokens": maximum + 1, "total_tokens": prompt + maximum + 1})),
+        "total+1" => Some(json!({"prompt_tokens": prompt, "completion_tokens": output, "total_tokens": prompt + output + 1})),
+        "no-total" => Some(json!({"prompt_tokens": prompt, "completion_tokens": output})),
+        "text" => Some(json!({"prompt_tokens": prompt.to_string(), "completion_tokens": output, "total_tokens": prompt + output})),
+        "missing" => None,
+        other => panic!("unknown usage instruction {other}"),
+    };
+    if let Some(usage) = usage {
+        let mut event = json!({"id": "engine-response", "object": "chat.completion.chunk", "model": body["model"],
+            "created": 1, "choices": []});
+        event["usage"] = usage;
+        steps.push(ControlledStep::Send(format!("data: {event}\n\n")));
+    }
+    steps.extend(hold("after-usage"));
+    steps.extend(end("after-usage"));
+    steps.push(ControlledStep::Send("data: [DONE]\n\n".into()));
+    let stream = futures_util::stream::unfold((steps.into_iter(), shared, marker), |(mut steps, shared, marker)| async move {
+        loop {
+            match steps.next() {
+                None | Some(ControlledStep::End) => {
+                    marker.finished.set(true);
+                    return None;
+                }
+                Some(ControlledStep::Send(text)) => {
+                    return Some((Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(text)), (steps, shared, marker)))
+                }
+                Some(ControlledStep::Wait(gate)) => shared.hold(&gate).await,
+                Some(ControlledStep::Stall(gate)) => shared.stall(&gate).await,
+            }
+        }
+    });
+    ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], axum::body::Body::from_stream(stream)).into_response()
+}
+
+/// The controlled engine's text completion of the prompt's token IDs: three output tokens
+/// with their IDs, then a `stop` finish carrying exact usage.
+async fn controlled_completion(shared: Arc<ControlledShared>, headers: axum::http::HeaderMap, body: Value)
+    -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let id = headers.get("x-request-id").map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default();
+    shared.observe(format!("POST /v1/completions id={id}"));
+    shared.generated.lock().unwrap().push(body.clone());
+    let prompt = body["prompt"].as_array().map_or(0, Vec::len) as u64;
+    let chunk = |text: &str, finish: Value, tokens: Value| json!({"id": "engine-response", "object": "text_completion",
+        "model": body["model"], "created": 1, "choices": [{"index": 0, "text": text, "finish_reason": finish, "logprobs": null}],
+        "__verbose": {"tokens": tokens}});
+    let mut text: String = (0..3u64)
+        .map(|index| format!("data: {}\n\n", chunk(&format!("w{index} "), Value::Null, json!([500 + index]))))
+        .collect();
+    let mut finish = chunk("", json!("stop"), json!([]));
+    finish["__verbose"]["truncated"] = json!(false);
+    finish["usage"] = json!({"prompt_tokens": prompt, "completion_tokens": 3, "total_tokens": prompt + 3});
+    text.push_str(&format!("data: {finish}\n\ndata: [DONE]\n\n"));
+    ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], text).into_response()
+}
+
+/// The controlled engine's embeddings: one vector per token-ID input and usage counting
+/// every input token, or one more when an input holds the token of `embedding-miscount`.
+async fn controlled_embedding(shared: Arc<ControlledShared>, headers: axum::http::HeaderMap, body: Value)
+    -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let id = headers.get("x-request-id").map(|value| value.to_str().unwrap().to_owned()).unwrap_or_default();
+    shared.observe(format!("POST /v1/embeddings id={id}"));
+    shared.generated.lock().unwrap().push(body.clone());
+    let inputs = body["input"].as_array().cloned().unwrap_or_default();
+    let mut tokens: u64 = inputs.iter().map(|input| input.as_array().map_or(0, Vec::len) as u64).sum();
+    let miscount = controlled_token("embedding-miscount");
+    if inputs.iter().filter_map(Value::as_array).flatten().any(|token| token.as_u64() == Some(miscount)) {
+        tokens += 1;
+    }
+    let data: Vec<Value> = (0..inputs.len())
+        .map(|index| json!({"index": index, "object": "embedding", "embedding": [0.5]}))
+        .collect();
+    axum::Json(json!({"model": body["model"], "object": "list", "data": data,
+        "usage": {"prompt_tokens": tokens, "total_tokens": tokens}})).into_response()
+}
+
+/// The records an engine call left, taken by `ControlledEngine::take`.
+#[derive(Debug, PartialEq)]
+struct ControlledRecords {
+    calls: Vec<String>,
+    templated: Vec<Value>,
+    tokenized: Vec<Value>,
+    generated: Vec<Value>,
+    snapshots: Vec<(String, ExpiryRows)>,
+}
+
+/// A controlled llama.cpp-shaped private engine on a loopback listener. It records every
+/// call as `METHOD path` (generation calls with ` id=<X-Request-Id>`), the template,
+/// tokenization and generation bodies and, when observing, every ledger row at each
+/// tokenization and generation call. `/apply-template` renders with `controlled_rendered`,
+/// or answers 500 for a message containing the word `template-fails`. `/tokenize` prepares
+/// with `controlled_tokens`, answers 500 for `tokenize-fails`, and for `tokenize-wait=G`
+/// reports `held G` and waits for G first. `template-delay-ms=N` and `tokenize-delay-ms=N`
+/// delay those answers by N ms. Generation follows `controlled_chat`,
+/// `controlled_completion` and `controlled_embedding`.
+struct ControlledEngine {
+    base: String,
+    shared: Arc<ControlledShared>,
+    events: tokio::sync::mpsc::UnboundedReceiver<String>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for ControlledEngine {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl ControlledEngine {
+    async fn start(observe: Option<std::path::PathBuf>) -> Self {
+        use axum::{response::IntoResponse, routing::{get, post}, Json, Router};
+        let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let shared = Arc::new(ControlledShared {
+            calls: Default::default(), templated: Default::default(), tokenized: Default::default(),
+            generated: Default::default(), snapshots: Default::default(), observe,
+            gates: Default::default(), events,
+        });
+        let failure = || (axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": {"code": 500, "message": "controlled engine failure"}}))).into_response();
+        let (template, tokenize, chat, completion, embedding, recorded) =
+            (shared.clone(), shared.clone(), shared.clone(), shared.clone(), shared.clone(), shared.clone());
+        let engine = Router::new()
+            .route("/health", get(|| async { axum::http::StatusCode::OK }))
+            .route("/apply-template", post(move |Json(body): Json<Value>| {
+                let shared = template.clone();
+                async move {
+                    shared.templated.lock().unwrap().push(body.clone());
+                    let content = body["messages"][0]["content"].as_str().unwrap_or_default();
+                    if content.split_whitespace().any(|word| word == "template-fails") {
+                        return failure();
+                    }
+                    if let Some(delay) = controlled_directive(content, "template-delay-ms") {
+                        tokio::time::sleep(Duration::from_millis(delay.parse().unwrap())).await;
+                    }
+                    Json(json!({"prompt": controlled_rendered(content)})).into_response()
+                }
+            }))
+            .route("/tokenize", post(move |Json(body): Json<Value>| {
+                let shared = tokenize.clone();
+                async move {
+                    shared.observe("POST /tokenize".into());
+                    shared.tokenized.lock().unwrap().push(body.clone());
+                    let text = body["content"].as_str().unwrap_or_default().to_owned();
+                    if text.split_whitespace().any(|word| word == "tokenize-fails") {
+                        return failure();
+                    }
+                    if let Some(delay) = controlled_directive(&text, "tokenize-delay-ms") {
+                        tokio::time::sleep(Duration::from_millis(delay.parse().unwrap())).await;
+                    }
+                    if let Some(gate) = controlled_directive(&text, "tokenize-wait") {
+                        shared.hold(gate).await;
+                    }
+                    Json(json!({"tokens": controlled_tokens(&text)})).into_response()
+                }
+            }))
+            .route("/v1/chat/completions", post(move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                controlled_chat(chat.clone(), headers, body)
+            }))
+            .route("/v1/completions", post(move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                controlled_completion(completion.clone(), headers, body)
+            }))
+            .route("/v1/embeddings", post(move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                controlled_embedding(embedding.clone(), headers, body)
+            }))
+            .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+            .layer(axum::middleware::from_fn(move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let shared = recorded.clone();
+                async move {
+                    let path = request.uri().path().to_owned();
+                    let mut call = format!("{} {path}", request.method());
+                    if path.starts_with("/v1/") {
+                        let id = request.headers().get("x-request-id").map(|value| value.to_str().unwrap().to_owned());
+                        call.push_str(&format!(" id={}", id.unwrap_or_default()));
+                    }
+                    shared.calls.lock().unwrap().push(call);
+                    next.run(request).await
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() });
+        Self { base, shared, events: receiver, task }
+    }
+
+    /// Takes everything recorded since the last take.
+    fn take(&self) -> ControlledRecords {
+        let take = |values: &Mutex<Vec<Value>>| std::mem::take(&mut *values.lock().unwrap());
+        ControlledRecords {
+            calls: std::mem::take(&mut *self.shared.calls.lock().unwrap()),
+            templated: take(&self.shared.templated),
+            tokenized: take(&self.shared.tokenized),
+            generated: take(&self.shared.generated),
+            snapshots: std::mem::take(&mut *self.shared.snapshots.lock().unwrap()),
+        }
+    }
+
+    /// Asserts that nothing reached the engine since the last take.
+    fn untouched(&self, context: &str) {
+        let records = self.take();
+        assert!(records.calls.is_empty(), "{context}: the engine received {:?}", records.calls);
+    }
+
+    /// Lets the request held at `gate` continue.
+    fn release(&self, gate: &str) {
+        self.shared.gate(gate).add_permits(1);
+    }
+
+    /// The next engine event, within 30 seconds.
+    async fn event(&mut self) -> String {
+        tokio::time::timeout(Duration::from_secs(30), self.events.recv())
+            .await
+            .expect("no engine event within 30 s")
+            .unwrap()
+    }
+
+    /// The next `count` engine events, sorted.
+    async fn events(&mut self, count: usize) -> Vec<String> {
+        let mut events = Vec::new();
+        for _ in 0..count {
+            events.push(self.event().await);
+        }
+        events.sort();
+        events
+    }
+}
+
+/// The paid `CredentialRoutes` fixture (1,000 wei funded, 995 available, one wei per token,
+/// four concurrent requests) whose agreement advertises chat, completions and embeddings,
+/// served by a `ControlledEngine` with a generation deadline of `deadline_secs`, and one
+/// public router for the whole test, so that cancellation reaches its in-flight requests.
+struct GatewayFixture {
+    routes: CredentialRoutes,
+    app: axum::Router,
+    engine: ControlledEngine,
+    root: Credential,
+}
+
+async fn gateway_fixture(observe: bool, deadline_secs: u64) -> GatewayFixture {
+    let mut routes = CredentialRoutes::opened_with(1000, 4, protocol::now().unwrap(), |agreement| {
+        agreement.model.capabilities = vec!["chat".into(), "completions".into(), "embeddings".into()];
+    });
+    let engine = ControlledEngine::start(observe.then(|| routes.path.clone())).await;
+    {
+        let state = Arc::get_mut(&mut routes.state).unwrap();
+        let served = &mut Arc::get_mut(&mut state.config).unwrap().models[0];
+        served.engine_url = engine.base.clone();
+        served.request_timeout_secs = deadline_secs;
+    }
+    let app = crate::inference_gateway::router(routes.state.clone());
+    let root = routes.opened.credential.clone().unwrap();
+    GatewayFixture { routes, app, engine, root }
+}
+
+/// A request to the public router with `bearer`, an optional `Idempotency-Key` and an
+/// optional JSON body.
+fn gateway_request(method: &str, path: &str, bearer: &str, key: Option<&str>, body: Option<&Value>)
+    -> axum::http::Request<axum::body::Body> {
+    let mut request = axum::http::Request::builder().method(method).uri(path)
+        .header("authorization", format!("Bearer {bearer}"));
+    if let Some(key) = key {
+        request = request.header("idempotency-key", key);
+    }
+    match body {
+        Some(body) => request.header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string())).unwrap(),
+        None => request.body(axum::body::Body::empty()).unwrap(),
+    }
+}
+
+/// A chat request for the fixture's model with `content` as its one message.
+fn gateway_chat(bearer: &str, key: &str, content: &str, max_tokens: u64, stream: bool)
+    -> axum::http::Request<axum::body::Body> {
+    gateway_request("POST", "/v1/chat/completions", bearer, Some(key), Some(&json!({"model": "test/model",
+        "messages": [{"role": "user", "content": content}], "max_tokens": max_tokens, "stream": stream})))
+}
+
+/// `gateway_chat`, streaming with `stream_options.include_usage`, so that the client sees
+/// the final usage event once the gateway has read it.
+fn gateway_usage_stream(bearer: &str, key: &str, content: &str) -> axum::http::Request<axum::body::Body> {
+    gateway_request("POST", "/v1/chat/completions", bearer, Some(key), Some(&json!({"model": "test/model",
+        "messages": [{"role": "user", "content": content}], "max_tokens": 4, "stream": true,
+        "stream_options": {"include_usage": true}})))
+}
+
+/// The status, `x-request-id` and text of a complete answer, which never holds a bearer.
+async fn gateway_answer(response: axum::response::Response) -> (axum::http::StatusCode, Option<String>, String) {
+    let status = response.status();
+    let header = response.headers().get("x-request-id").map(|value| value.to_str().unwrap().to_owned());
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(!text.contains("chiral_"), "an answer held a bearer");
+    (status, header, text)
+}
+
+/// The text of a streamed answer up to its end, and whether it ended with an error.
+async fn gateway_stream_end(body: &mut axum::body::BodyDataStream, text: &mut String) -> bool {
+    use futures_util::StreamExt;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(30), body.next()).await.expect("the stream neither ended nor failed") {
+            Some(Ok(bytes)) => text.push_str(std::str::from_utf8(&bytes).unwrap()),
+            Some(Err(_)) => return true,
+            None => return false,
+        }
+    }
+}
+
+/// Reads a streamed answer until its text contains `marker`.
+async fn gateway_stream_until(body: &mut axum::body::BodyDataStream, text: &mut String, marker: &str) {
+    use futures_util::StreamExt;
+    while !text.contains(marker) {
+        let bytes = tokio::time::timeout(Duration::from_secs(30), body.next()).await
+            .unwrap_or_else(|_| panic!("no {marker} within 30 s: {text}"))
+            .unwrap_or_else(|| panic!("the stream ended before {marker}: {text}"))
+            .unwrap();
+        text.push_str(std::str::from_utf8(&bytes).unwrap());
+    }
+}
+
+/// The JSON events of a public SSE text, without `[DONE]`.
+fn gateway_events(text: &str) -> Vec<Value> {
+    text.split("\n\n").filter_map(|event| event.strip_prefix("data: ")).filter(|data| *data != "[DONE]")
+        .map(|data| serde_json::from_str(data).unwrap()).collect()
+}
+
+impl GatewayFixture {
+    fn id(&self) -> String {
+        self.routes.id()
+    }
+    fn rows(&self) -> ExpiryRows {
+        expiry_ledger_rows(&self.routes.path)
+    }
+    fn view(&self, key: &str) -> RequestView {
+        self.routes.ledger().request_view(&self.id(), key).unwrap()
+    }
+    fn recorded(&self, key: &str) -> bool {
+        self.routes.ledger().request_view(&self.id(), key).is_ok()
+    }
+    async fn call(&self, request: axum::http::Request<axum::body::Body>) -> axum::response::Response {
+        use tower::ServiceExt;
+        self.app.clone().oneshot(request).await.unwrap()
+    }
+    /// Sends `request` from a task, as a client that may go away.
+    fn spawn(&self, request: axum::http::Request<axum::body::Body>) -> tokio::task::JoinHandle<axum::response::Response> {
+        use tower::ServiceExt;
+        let app = self.app.clone();
+        tokio::spawn(async move { app.oneshot(request).await.unwrap() })
+    }
+    /// The request of `key` once it has left `reserved`, within 30 seconds.
+    async fn settled(&self, key: &str) -> RequestView {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let view = self.view(key);
+            if view.status != "reserved" {
+                return view;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{key} never settled");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    /// Sends the cancellation of `target` with `bearer`: status, `x-request-id` and answer.
+    async fn cancel(&self, bearer: &str, target: &str) -> (axum::http::StatusCode, Option<String>, Value) {
+        let (status, header, text) = gateway_answer(self.call(gateway_request("POST",
+            &format!("/v1/requests/{target}/cancel"), bearer, None, None)).await).await;
+        (status, header, serde_json::from_str(&text).unwrap())
+    }
+    /// `GET /v1/requests/<target>` with `bearer`: status and answer.
+    async fn status(&self, bearer: &str, target: &str) -> (axum::http::StatusCode, Value) {
+        let (status, _, text) = gateway_answer(self.call(gateway_request("GET",
+            &format!("/v1/requests/{target}"), bearer, None, None)).await).await;
+        (status, serde_json::from_str(&text).unwrap())
+    }
+    /// Sends a chat request of `key` with each bearer, once non-streaming with `content`, and
+    /// with the first bearer once streaming with another message, and asserts that each is
+    /// answered with exactly the 409 naming the key's request and its current status, and
+    /// that neither the engine nor any ledger row saw anything of it.
+    async fn duplicates(&self, key: &str, content: &str, bearers: &[&str]) {
+        let view = self.view(key);
+        let conflict = json!({"error": {
+            "message": "Request already exists and will not be replayed. Retrieve its status; response content is not retained.",
+            "type": "invalid_request_error", "param": null, "code": "duplicate_request",
+            "request_id": view.id, "request_status": view.status,
+        }});
+        let rows = self.rows();
+        self.engine.untouched(key);
+        let mut attempts: Vec<(&str, String, bool)> = bearers.iter().map(|bearer| (*bearer, content.to_owned(), false)).collect();
+        attempts.push((bearers[0], format!("another message for {key}"), true));
+        for (bearer, content, stream) in attempts {
+            let (status, header, text) = gateway_answer(self.call(gateway_chat(bearer, key, &content, 4, stream)).await).await;
+            assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()), (axum::http::StatusCode::CONFLICT, conflict.clone()),
+                "{key}: stream {stream}");
+            assert_eq!(header.as_deref(), Some(view.id.as_str()), "{key}");
+        }
+        self.engine.untouched(key);
+        assert_eq!(self.rows(), rows, "{key}: a duplicate changed the ledger");
+    }
+}
+
+/// `before` with the gateway's reservation of `key` by `credential` added: exactly a
+/// reservation of `prompt` input and `output` maximum output tokens holding `maximum` wei,
+/// whose opaque identifier, account and creation time are read from the request's row in
+/// `after`, where its identity must equal those literals; the creation time must lie within
+/// the clock samples `window`. `maximum` moves from the account's available credit to the
+/// account's and the credential's holds. Amounts are the caller's fixed literals.
+#[allow(clippy::too_many_arguments)]
+fn gateway_reserved(before: &ExpiryRows, after: &ExpiryRows, key: &str, credential: &str,
+    prompt: u64, output: u64, maximum: i128, window: (u64, u64)) -> ExpiryRows {
+    let found = after["requests"].iter().find(|row| row[2] == key)
+        .unwrap_or_else(|| panic!("{key} was not reserved"));
+    let id = found[0].as_str().unwrap().to_owned();
+    let contract = found[1].as_str().unwrap().to_owned();
+    let created = found[5].as_u64().unwrap();
+    assert!(window.0 <= created && created <= window.1, "{key}: created at {created}, outside {window:?}");
+    assert!(opaque_request_id(&id), "{key}");
+    let row = json!([id, contract, key, credential, "reserved", created, {
+        "id": id, "request_id": key, "contract_id": contract, "credential_id": credential, "status": "reserved",
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0}, "cost_wei": "0", "max_cost_wei": maximum.to_string(),
+        "provider_loss_wei": "0", "prompt_tokens_reserved": prompt, "max_output_tokens": output,
+        "created_at": created, "settled_at": null, "performance": null, "waived_wei": "0"}]);
+    assert_eq!((&found[3], request_identity(&found[6])), (&row[3], request_identity(&row[6])), "{key}: reserved identity");
+    let mut expected = before.clone();
+    let requests = expected.get_mut("requests").unwrap();
+    requests.push(row);
+    requests.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    let account = &mut expiry_row(&mut expected, "accounts", &contract)[3];
+    expiry_shift(&mut account["available_wei"], -maximum);
+    expiry_shift(&mut account["reserved_wei"], maximum);
+    expiry_shift(&mut expiry_row(&mut expected, "credentials", credential)[3]["reserved_wei"], maximum);
+    expected
+}
+
+/// `before`, in which request `id` is reserved, with the gateway's settlement as `status`
+/// applied by `expect_terminal` from the caller's literals: `known` usage and charge, or a
+/// whole release. The settlement time read from `after` must lie within the clock samples
+/// `window`. The gateway's unqualified performance record is copied from `after` once its
+/// members other than the three measured durations are checked.
+fn gateway_settled(before: &ExpiryRows, after: &ExpiryRows, id: &str, status: &str,
+    known: Option<(u64, u64, i128)>, window: (u64, u64)) -> ExpiryRows {
+    let record = &after["requests"].iter().find(|row| row[0] == id)
+        .unwrap_or_else(|| panic!("no request {id}"))[6];
+    let settled_at = record["settled_at"].as_u64().unwrap_or_else(|| panic!("{id} is not settled"));
+    assert!(window.0 <= settled_at && settled_at <= window.1, "{id}: settled at {settled_at}, outside {window:?}");
+    let performance = record["performance"].clone();
+    let mut outcome = performance.clone();
+    for duration in ["ttft_us", "decode_us", "elapsed_us"] {
+        assert!(outcome[duration].is_null() || outcome[duration].is_u64(), "{id}: {performance}");
+        outcome[duration] = Value::Null;
+    }
+    assert_eq!(outcome, json!({"evidence_sha256": "", "policy": "unqualified", "eligibility": "unqualified",
+        "ttft_us": null, "decode_us": null, "elapsed_us": null, "output_tokens": known.map(|(_, output, _)| output),
+        "attained": null, "remedy": "none"}), "{id}");
+    let mut expected = before.clone();
+    expect_terminal(&mut expected, id, status, known, settled_at);
+    expiry_row(&mut expected, "requests", id)[6]["performance"] = performance;
+    expected
+}
+
+/// Task 3.1 (a), the gateway's exact preparation. *Maximum reservation and nominal usage
+/// cost round once*: "Exact prompt/template tokenization and supported bounded options SHALL
+/// precede reservation"; *Reservation atomically binds authority limits and credit*: "Before
+/// paid engine dispatch the provider SHALL durably create the request and reserve M" and "A
+/// definite reservation refusal or failed reservation transaction SHALL leave no partial
+/// request or hold and SHALL NOT dispatch inference".
+///
+/// The controlled engine records every ledger row when tokenization and generation reach
+/// it. A chat message of five words is rendered by the engine's template and tokenized into
+/// exactly seven tokens; while it is tokenized no row has changed, and when its generation
+/// arrives, carrying the opaque identifier, the ledger already holds exactly that request
+/// with seven prepared input and four output tokens and an 11-wei hold, nothing else. A text
+/// completion of three words dispatches exactly the three token IDs the tokenizer returned
+/// (an 8-wei hold); an embedding batch of two inputs dispatches each input's IDs and holds
+/// its five input tokens only (5 wei, no output budget). Each then settles at its validated
+/// usage (10, 6 and 5 wei) with complete rows derived from fixed literals.
+///
+/// A failing template, a failing tokenizer, a token ID beyond the engine's range, a model
+/// whose qualification is withdrawn while its prompt is tokenized, admission closed while
+/// it is tokenized and a tokenization that outlives the deadline (504 `tokenization_timeout`
+/// or, when the engine client's equal timeout ends it first, 502) each answer an error object
+/// with no request recorded, no ledger row changed and no generation dispatched; only the
+/// preparation steps named reach the engine. A template and a tokenization that each answer
+/// within the engine client's timeout but together outlive the deadline are refused by the
+/// gateway's deadline alone: 504 `tokenization_timeout`, nothing recorded or dispatched.
+#[tokio::test]
+async fn gateway_reserves_and_dispatches_exactly_the_prepared_prompt_and_failed_preparation_holds_nothing() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    let mut fixture = gateway_fixture(true, 60).await;
+    let root = fixture.root.clone();
+    let model = fixture.routes.agreement.payload.model.id.clone();
+
+    // Chat: the template's rendering is tokenized into seven tokens, then reserved.
+    let content = "alpha beta gamma delta epsilon";
+    let rendered = controlled_rendered(content);
+    assert_eq!(controlled_tokens(&rendered).len(), 7);
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let (status, header, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "prepared-chat", content, 4, false)).await).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(answer["choices"][0]["message"]["content"], "w0 w1 w2 ");
+    assert_eq!(answer["usage"], json!({"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}));
+    let id = fixture.view("prepared-chat").id;
+    assert_eq!(header.as_deref(), Some(id.as_str()));
+    let records = fixture.engine.take();
+    let dispatch = format!("POST /v1/chat/completions id={id}");
+    assert_eq!(records.calls, ["GET /health", "POST /apply-template", "POST /tokenize", dispatch.as_str()]);
+    assert_eq!(records.templated.len(), 1);
+    assert_eq!(records.templated[0]["messages"], json!([{"role": "user", "content": content}]));
+    assert_eq!(records.tokenized, [json!({"content": rendered, "add_special": true, "parse_special": true})]);
+    assert_eq!(records.generated.len(), 1);
+    let generated = &records.generated[0];
+    assert_eq!((&generated["model"], &generated["messages"], &generated["max_tokens"], &generated["n"], &generated["stream"],
+        &generated["stream_options"]), (&json!(model), &records.templated[0]["messages"], &json!(4), &json!(1), &json!(true),
+        &json!({"include_usage": true})));
+    let reserved = gateway_reserved(&rows, &records.snapshots[1].1, "prepared-chat", &root.id, 7, 4, 11, (start, end));
+    assert_eq!(records.snapshots, [("POST /tokenize".to_owned(), rows.clone()), (dispatch, reserved.clone())],
+        "the ledger was not exactly the prepared reservation at tokenization and dispatch");
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &id, "completed", Some((7, 3, 10)), (start, end)));
+
+    // Text completion: exactly the tokenizer's IDs are reserved and dispatched.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let body = json!({"model": model, "prompt": "one two three", "max_tokens": 5});
+    let (status, header, text) = gateway_answer(fixture.call(gateway_request("POST", "/v1/completions", &root.bearer,
+        Some("prepared-completion"), Some(&body))).await).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["choices"][0]["text"], "w0 w1 w2 ");
+    let id = fixture.view("prepared-completion").id;
+    assert_eq!(header.as_deref(), Some(id.as_str()));
+    let records = fixture.engine.take();
+    let dispatch = format!("POST /v1/completions id={id}");
+    assert_eq!(records.calls, ["GET /health", "POST /tokenize", dispatch.as_str()]);
+    assert_eq!(records.tokenized, [json!({"content": "one two three", "add_special": true, "parse_special": true})]);
+    assert_eq!(records.generated.len(), 1);
+    assert_eq!(records.generated[0]["prompt"], json!(controlled_tokens("one two three")), "the dispatched prompt");
+    let reserved = gateway_reserved(&rows, &records.snapshots[1].1, "prepared-completion", &root.id, 3, 5, 8, (start, end));
+    assert_eq!(records.snapshots, [("POST /tokenize".to_owned(), rows.clone()), (dispatch, reserved.clone())]);
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &id, "completed", Some((3, 3, 6)), (start, end)));
+
+    // Embeddings: each input's IDs are dispatched; only their five input tokens are held.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let inputs = ["red green", "blue cyan magenta"];
+    let body = json!({"model": model, "input": inputs});
+    let (status, header, text) = gateway_answer(fixture.call(gateway_request("POST", "/v1/embeddings", &root.bearer,
+        Some("prepared-embedding"), Some(&body))).await).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!((answer["data"].as_array().unwrap().len(), &answer["usage"]),
+        (2, &json!({"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5})));
+    let id = fixture.view("prepared-embedding").id;
+    assert_eq!(header.as_deref(), Some(id.as_str()));
+    let records = fixture.engine.take();
+    let dispatch = format!("POST /v1/embeddings id={id}");
+    assert_eq!(records.calls, ["GET /health", "POST /tokenize", "POST /tokenize", dispatch.as_str()]);
+    assert_eq!(records.tokenized, inputs.map(|input| json!({"content": input, "add_special": true, "parse_special": true})));
+    assert_eq!(records.generated.len(), 1);
+    assert_eq!(records.generated[0]["input"], json!(inputs.map(controlled_tokens)), "the dispatched inputs");
+    let reserved = gateway_reserved(&rows, &records.snapshots[2].1, "prepared-embedding", &root.id, 5, 0, 5, (start, end));
+    assert_eq!(records.snapshots, [("POST /tokenize".to_owned(), rows.clone()), ("POST /tokenize".to_owned(), rows.clone()),
+        (dispatch, reserved.clone())]);
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &id, "completed", Some((5, 0, 5)), (start, end)));
+
+    // Failed preparation reserves and dispatches nothing.
+    let refused = |records: &ControlledRecords, rows: &ExpiryRows, key: &str, calls: &[&str]| {
+        assert_eq!(records.calls, calls, "{key}");
+        assert!(records.generated.is_empty(), "{key}: dispatched");
+        assert!(records.snapshots.iter().all(|(_, observed)| observed == rows), "{key}: the ledger changed during preparation");
+    };
+    for (key, path, body, status, code, calls) in [
+        ("template-failure", "/v1/chat/completions",
+            json!({"model": model, "messages": [{"role": "user", "content": "template-fails here"}], "max_tokens": 4}),
+            StatusCode::BAD_GATEWAY, "engine_error", &["GET /health", "POST /apply-template"][..]),
+        ("tokenizer-failure", "/v1/chat/completions",
+            json!({"model": model, "messages": [{"role": "user", "content": "tokenize-fails here"}], "max_tokens": 4}),
+            StatusCode::BAD_GATEWAY, "engine_error", &["GET /health", "POST /apply-template", "POST /tokenize"][..]),
+        ("token-out-of-range", "/v1/completions", json!({"model": model, "prompt": "huge-token here", "max_tokens": 4}),
+            StatusCode::BAD_GATEWAY, "engine_error", &["GET /health", "POST /tokenize"][..]),
+    ] {
+        let rows = fixture.rows();
+        let (actual, _, text) = gateway_answer(fixture.call(gateway_request("POST", path, &root.bearer, Some(key), Some(&body))).await).await;
+        let answer: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((actual, answer["error"]["code"].as_str()), (status, Some(code)), "{key}: {text}");
+        assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"], "{key}");
+        refused(&fixture.engine.take(), &rows, key, calls);
+        assert!(!fixture.recorded(key), "{key}: recorded");
+        assert_eq!(fixture.rows(), rows, "{key}: the ledger changed");
+    }
+    let state = fixture.routes.state.clone();
+    for (key, status, code) in [
+        ("withdrawn-while-tokenized", StatusCode::SERVICE_UNAVAILABLE, "model_unqualified"),
+        ("paused-while-tokenized", StatusCode::SERVICE_UNAVAILABLE, "provider_paused"),
+    ] {
+        let rows = fixture.rows();
+        let pending = fixture.spawn(gateway_chat(&root.bearer, key, &format!("waiting tokenize-wait={key}"), 4, false));
+        assert_eq!(fixture.engine.event().await, format!("held {key}"));
+        if code == "model_unqualified" {
+            state.qualified_models.write().unwrap().remove(&model);
+        } else {
+            state.accepting.store(false, Ordering::Release);
+        }
+        fixture.engine.release(key);
+        let (actual, _, text) = gateway_answer(pending.await.unwrap()).await;
+        assert_eq!((actual, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()), (status, Some(code)), "{key}: {text}");
+        refused(&fixture.engine.take(), &rows, key, &["GET /health", "POST /apply-template", "POST /tokenize"]);
+        assert!(!fixture.recorded(key), "{key}: recorded");
+        assert_eq!(fixture.rows(), rows, "{key}: the ledger changed");
+        state.qualified_models.write().unwrap().insert(model.clone());
+        state.accepting.store(true, Ordering::Release);
+    }
+
+    // A tokenization that outlives the one-second deadline. The engine client's own request
+    // timeout equals that deadline, so whichever ends the stalled tokenization first answers.
+    let fixture = gateway_fixture(true, 1).await;
+    let rows = fixture.rows();
+    let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&fixture.root.bearer, "tokenization-deadline",
+        "waiting tokenize-wait=never", 4, false)).await).await;
+    let outcome = (status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str().map(str::to_owned));
+    assert!([(StatusCode::GATEWAY_TIMEOUT, Some("tokenization_timeout".to_owned())),
+        (StatusCode::BAD_GATEWAY, Some("engine_error".to_owned()))].contains(&outcome), "{text}");
+    refused(&fixture.engine.take(), &rows, "tokenization-deadline", &["GET /health", "POST /apply-template", "POST /tokenize"]);
+    assert!(!fixture.recorded("tokenization-deadline"));
+    assert_eq!(fixture.rows(), rows);
+
+    // Review addition: the gateway's own deadline, not the engine client's. The template and
+    // the tokenizer each answer after 1.2 s, within the engine client's two-second timeout, but
+    // together outlive the gateway's two-second deadline, which alone refuses the request.
+    let fixture = gateway_fixture(true, 2).await;
+    let rows = fixture.rows();
+    let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&fixture.root.bearer, "slow-preparation",
+        "template-delay-ms=1200 tokenize-delay-ms=1200", 4, false)).await).await;
+    assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+        (StatusCode::GATEWAY_TIMEOUT, Some("tokenization_timeout")), "{text}");
+    refused(&fixture.engine.take(), &rows, "slow-preparation", &["GET /health", "POST /apply-template", "POST /tokenize"]);
+    assert!(!fixture.recorded("slow-preparation"));
+    assert_eq!(fixture.rows(), rows);
+}
+
+/// Task 3.1 (b), *Request identity prevents automatic paid replay* at the gateway: "Once
+/// reserved, an account/key SHALL NOT create another execution or hold", and "A public
+/// duplicate SHALL return HTTP 409 with `duplicate_request`, the original request identifier
+/// and its current status". Each duplicate below is sent by every `infer` bearer of the
+/// account, non-streaming with the original message and streaming with another, and gets
+/// exactly that 409 with the original `x-request-id`, no engine call and no row change.
+///
+/// - In flight: a request held after its output is duplicated as `reserved`, then completes
+///   once (7 of 8 wei) and is duplicated as `completed`.
+/// - Racing: two requests with one key (root and application credentials, different
+///   prompts) are both past the gateway's duplicate check and held at tokenization; once
+///   released, exactly one is reserved and dispatched, and the other gets the ledger's
+///   refusal as the same 409 naming the winner as `reserved`, with no hold of its own.
+/// - Lost replies: a client that leaves after the final usage was read (streaming, once it
+///   saw its usage event; non-streaming, which sees nothing before its answer, after a 500 ms
+///   pause) settles `disconnected` at its known usage (7 wei); one that leaves during output settles
+///   `disconnected_unknown_usage`, releasing its whole 8-wei hold as exposure; a reply dropped
+///   after completion stays `completed`. The engine sees each abandoned generation dropped,
+///   the key's status reads the terminal record, and each retry under the key is the 409.
+///
+/// Every step's complete rows come from fixed literals; seven operations dispatch exactly
+/// seven generations.
+#[tokio::test]
+async fn gateway_duplicates_in_flight_racing_or_after_a_lost_reply_never_dispatch_or_hold_again() {
+    use axum::http::StatusCode;
+    let mut fixture = gateway_fixture(false, 60).await;
+    let root = fixture.root.clone();
+    let application = fixture.routes.issue(4, &["infer", "read"]);
+    let bearers = [root.bearer.as_str(), application.bearer.as_str()];
+    let mut generations = 0;
+
+    // In flight, then completed.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let content = "held wait=in-flight:after-output";
+    let held = fixture.spawn(gateway_chat(&root.bearer, "in-flight", content, 4, false));
+    assert_eq!(fixture.engine.event().await, "held in-flight");
+    let reserved = gateway_reserved(&rows, &fixture.rows(), "in-flight", &root.id, 4, 4, 8, (start, protocol::now().unwrap()));
+    assert_eq!(fixture.rows(), reserved);
+    let id = fixture.view("in-flight").id;
+    let records = fixture.engine.take();
+    assert_eq!(records.calls.last().map(String::as_str), Some(format!("POST /v1/chat/completions id={id}").as_str()));
+    generations += records.generated.len();
+    fixture.duplicates("in-flight", content, &bearers).await;
+    fixture.engine.release("in-flight");
+    let (status, header, text) = gateway_answer(held.await.unwrap()).await;
+    let end = protocol::now().unwrap();
+    assert_eq!((status, header.as_deref()), (StatusCode::OK, Some(id.as_str())), "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["choices"][0]["message"]["content"], "w0 w1 w2 ");
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &id, "completed", Some((4, 3, 7)), (start, end)));
+    fixture.duplicates("in-flight", content, &bearers).await;
+
+    // Racing under one key: both are prepared, one is reserved.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let contents = [(&root, "racing tokenize-wait=race wait=race-won:after-output", 5),
+        (&application, "racing slowly tokenize-wait=race wait=race-won:after-output", 6)];
+    let racers: Vec<_> = contents.iter()
+        .map(|(credential, content, _)| fixture.spawn(gateway_chat(&credential.bearer, "raced", content, 4, false)))
+        .collect();
+    assert_eq!(fixture.engine.events(2).await, ["held race", "held race"]);
+    assert!(!fixture.recorded("raced"), "reserved before both were prepared");
+    fixture.engine.release("race");
+    fixture.engine.release("race");
+    assert_eq!(fixture.engine.event().await, "held race-won");
+    let winner = fixture.view("raced");
+    let (credential, content, prompt) = contents.iter().find(|(credential, _, _)| credential.id == winner.credential_id).unwrap();
+    let mut racers = racers.into_iter();
+    let (a, b) = (racers.next().unwrap(), racers.next().unwrap());
+    let (loser, first) = match futures_util::future::select(a, b).await {
+        futures_util::future::Either::Left((answer, other)) | futures_util::future::Either::Right((answer, other)) => (answer, other),
+    };
+    let (status, header, text) = gateway_answer(loser.unwrap()).await;
+    assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()), (StatusCode::CONFLICT, json!({"error": {
+        "message": "Request already exists and will not be replayed. Retrieve its status; response content is not retained.",
+        "type": "invalid_request_error", "param": null, "code": "duplicate_request",
+        "request_id": winner.id, "request_status": "reserved"}})), "the losing racer");
+    assert_eq!(header.as_deref(), Some(winner.id.as_str()));
+    let reserved = gateway_reserved(&rows, &fixture.rows(), "raced", &credential.id, *prompt, 4, *prompt as i128 + 4,
+        (start, protocol::now().unwrap()));
+    assert_eq!(fixture.rows(), reserved, "the losing racer held or recorded something");
+    let records = fixture.engine.take();
+    assert_eq!(records.calls.iter().filter(|call| call.as_str() == "POST /tokenize").count(), 2);
+    assert_eq!(records.generated.len(), 1, "both racers were dispatched");
+    generations += 1;
+    fixture.engine.release("race-won");
+    let (status, _, text) = gateway_answer(first.await.unwrap()).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &winner.id, "completed",
+        Some((*prompt, 3, *prompt as i128 + 3)), (start, end)));
+    fixture.duplicates("raced", content, &bearers).await;
+
+    // Lost replies: (key, message, streaming, terminal status, known usage). A streaming
+    // client asks for the usage event, so it leaves only once the gateway has read the final
+    // usage; a non-streaming client sees nothing before its answer, so it leaves after a
+    // 500 ms pause in which the gateway reads the usage the engine has already sent.
+    for (key, content, stream, terminal, known) in [
+        ("lost-after-usage", "lost wait=lost-after-usage:after-usage", false, "disconnected", Some((4, 3, 7))),
+        ("lost-during-output", "lost stall=lost-during-output:after-output", false, "disconnected_unknown_usage", None),
+        ("lost-stream-after-usage", "lost wait=lost-stream-after-usage:after-usage", true, "disconnected", Some((4, 3, 7))),
+        ("lost-stream-during-output", "lost stall=lost-stream-during-output:after-output", true,
+            "disconnected_unknown_usage", None),
+    ] {
+        let rows = fixture.rows();
+        let start = protocol::now().unwrap();
+        if stream {
+            let response = fixture.call(gateway_usage_stream(&root.bearer, key, content)).await;
+            assert_eq!(response.status(), StatusCode::OK, "{key}");
+            let mut body = response.into_body().into_data_stream();
+            let mut text = String::new();
+            gateway_stream_until(&mut body, &mut text, if known.is_some() { "\"usage\"" } else { "w2 " }).await;
+            assert_eq!(fixture.engine.event().await, format!("held {key}"));
+            assert_eq!(fixture.view(key).status, "reserved", "{key}");
+            drop(body);
+        } else {
+            let client = fixture.spawn(gateway_chat(&root.bearer, key, content, 4, false));
+            assert_eq!(fixture.engine.event().await, format!("held {key}"));
+            if known.is_some() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            assert_eq!(fixture.view(key).status, "reserved", "{key}");
+            client.abort();
+            assert!(client.await.unwrap_err().is_cancelled(), "{key}");
+        }
+        assert_eq!(fixture.engine.event().await, format!("dropped {key}"), "the abandoned generation went on");
+        let view = fixture.settled(key).await;
+        let end = protocol::now().unwrap();
+        assert_eq!(view.status, terminal, "{key}");
+        let reserved = gateway_reserved(&rows, &fixture.rows(), key, &root.id, 4, 4, 8, (start, end));
+        assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, terminal, known, (start, end)), "{key}");
+        assert_eq!(fixture.status(&root.bearer, key).await, (StatusCode::OK, serde_json::to_value(&view).unwrap()), "{key}");
+        generations += fixture.engine.take().generated.len();
+        fixture.duplicates(key, content, &bearers).await;
+    }
+
+    // A reply dropped after completion: the request completed before its answer was sent.
+    let response = fixture.call(gateway_chat(&root.bearer, "lost-after-completion", "lost", 4, false)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(response);
+    assert_eq!(fixture.view("lost-after-completion").status, "completed");
+    generations += fixture.engine.take().generated.len();
+    fixture.duplicates("lost-after-completion", "lost", &bearers).await;
+    assert_eq!(generations, 7, "each operation was dispatched exactly once");
+}
+
+/// Task 3.1 (c), cancellation at the gateway. *Billable usage is authoritative and matches
+/// the reservation*: "Known usage after cancellation ... SHALL remain eligible for its exact
+/// charge. Receiving a cancellation acknowledgement such as 202 `cancelling` ... SHALL NOT
+/// establish a free execution"; *Unknown usage releases the hold without inventing
+/// execution*: "Absent ... usage SHALL resolve an unsettled request with zero charge, its
+/// whole hold returned, and an explicit `*_unknown_usage` terminal status".
+///
+/// Each request holds 8 wei (four prepared input and four output tokens) and is cancelled
+/// with its owner's root bearer, by key or by the opaque identifier, while the engine holds
+/// it: `POST /v1/requests/<id>/cancel` answers 202 `cancelling` naming it, the engine sees the
+/// generation dropped, and the request's own answer is a 409 `request_cancelled` error object
+/// (or, streaming, a final error event of that code) with no output after it.
+/// - Known: once the final usage was read (a streaming client saw its usage event; a
+///   non-streaming one after a 500 ms pause), the request settles `cancelled` and is charged
+///   its 7 wei of known usage.
+/// - Unknown: cancelled during output (both modes) or before the engine answered at all, it
+///   settles `cancelled_unknown_usage`: no charge or usage, the whole hold returned to the
+///   account and the credential, and 8 wei of request exposure.
+///
+/// Cancelling any settled request, by key or opaque identifier, and a completed control
+/// answers 200 with exactly its stored record, signals nothing and changes no row; an
+/// unknown key is 404. Complete rows come from fixed literals.
+#[tokio::test]
+async fn gateway_cancellation_charges_known_usage_and_releases_unknown_holds_at_provider_expense() {
+    use axum::http::StatusCode;
+    let mut fixture = gateway_fixture(false, 60).await;
+    let root = fixture.root.clone();
+    let mut settled = Vec::new();
+    // (key, message, streaming, cancel by opaque identifier, terminal status, known usage)
+    for (key, content, stream, by_id, terminal, known) in [
+        ("cancel-known", "cancel wait=cancel-known:after-usage", false, false, "cancelled", Some((4, 3, 7))),
+        ("cancel-known-stream", "cancel wait=cancel-known-stream:after-usage", true, true, "cancelled", Some((4, 3, 7))),
+        ("cancel-unknown", "cancel stall=cancel-unknown:after-output", false, true, "cancelled_unknown_usage", None),
+        ("cancel-unknown-stream", "cancel stall=cancel-unknown-stream:after-output", true, false,
+            "cancelled_unknown_usage", None),
+        ("cancel-before-answer", "cancel stall=cancel-before-answer:before-headers", false, false,
+            "cancelled_unknown_usage", None),
+    ] {
+        let rows = fixture.rows();
+        let start = protocol::now().unwrap();
+        let (client, mut stream_body, mut text) = if stream {
+            let response = fixture.call(gateway_usage_stream(&root.bearer, key, content)).await;
+            assert_eq!(response.status(), StatusCode::OK, "{key}");
+            let mut body = response.into_body().into_data_stream();
+            let mut text = String::new();
+            gateway_stream_until(&mut body, &mut text, if known.is_some() { "\"usage\"" } else { "w2 " }).await;
+            (None, Some(body), text)
+        } else {
+            (Some(fixture.spawn(gateway_chat(&root.bearer, key, content, 4, false))), None, String::new())
+        };
+        assert_eq!(fixture.engine.event().await, format!("held {key}"));
+        if known.is_some() && !stream {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let held = fixture.view(key);
+        assert_eq!(held.status, "reserved", "{key}");
+        let target = if by_id { held.id.clone() } else { key.to_owned() };
+        let (status, header, answer) = fixture.cancel(&root.bearer, &target).await;
+        assert_eq!((status, header.as_deref(), answer), (StatusCode::ACCEPTED, Some(held.id.as_str()),
+            json!({"id": held.id, "status": "cancelling"})), "{key}");
+        assert_eq!(fixture.engine.event().await, format!("dropped {key}"), "the cancelled generation went on");
+        if let Some(client) = client {
+            let (status, header, text) = gateway_answer(client.await.unwrap()).await;
+            let answer: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!((status, header.as_deref(), answer["error"]["code"].as_str()),
+                (StatusCode::CONFLICT, Some(held.id.as_str()), Some("request_cancelled")), "{key}: {text}");
+            assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"], "{key}");
+        } else {
+            let failed = gateway_stream_end(stream_body.as_mut().unwrap(), &mut text).await;
+            let events = gateway_events(&text);
+            assert!(!failed, "{key}: {text}");
+            let last = events.last().unwrap();
+            assert_eq!((&last["error"]["code"], events.iter().filter(|event| event.get("error").is_some()).count()),
+                (&json!("request_cancelled"), 1), "{key}: {text}");
+        }
+        let view = fixture.settled(key).await;
+        let end = protocol::now().unwrap();
+        assert_eq!(view.status, terminal, "{key}");
+        let reserved = gateway_reserved(&rows, &fixture.rows(), key, &root.id, 4, 4, 8, (start, end));
+        assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, terminal, known, (start, end)), "{key}");
+        let records = fixture.engine.take();
+        assert_eq!(records.generated.len(), 1, "{key}");
+        settled.push(view);
+    }
+
+    // A completed control, then cancellations of settled requests: a read only.
+    let (status, _, _) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "cancel-completed", "done", 4, false)).await).await;
+    assert_eq!(status, StatusCode::OK);
+    settled.push(fixture.view("cancel-completed"));
+    fixture.engine.take();
+    for view in &settled {
+        for target in [view.request_id.as_str(), view.id.as_str()] {
+            let rows = fixture.rows();
+            let (status, header, answer) = fixture.cancel(&root.bearer, target).await;
+            assert_eq!((status, header.as_deref(), answer), (StatusCode::OK, Some(view.id.as_str()),
+                serde_json::to_value(view).unwrap()), "{target}");
+            assert_eq!(fixture.rows(), rows, "{target}: cancelling a settled request changed the ledger");
+            fixture.engine.untouched(target);
+        }
+    }
+    let rows = fixture.rows();
+    let (status, _, answer) = fixture.cancel(&root.bearer, "never-sent").await;
+    assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("request_not_found")));
+    assert_eq!(fixture.rows(), rows);
+}
+
+/// Task 3.1 (c), a dispatched request that ends in an engine failure or at the generation
+/// deadline instead of a cancellation. *Billable usage is authoritative and matches the
+/// reservation*: "Known usage after cancellation, disconnection or a failed response SHALL
+/// remain eligible for its exact charge" and "Absence of validated usage SHALL follow the
+/// explicit unknown-usage rule instead"; *Unknown usage releases the hold without inventing
+/// execution*.
+///
+/// Each request holds 8 wei (four prepared input and four output tokens) under a two-second
+/// generation deadline, and the engine sends two output tokens unless it fails first. Then
+/// the engine's stream ends without `[DONE]` after the final usage, or before the finish and
+/// usage; or the engine stalls after the final usage, during output or before answering,
+/// until the gateway's deadline drops the generation; or it refuses the generation with a
+/// 500. Non-streaming, each answers an error object only, with none of the output: 502
+/// `engine_error` for an ended stream or a refusal, 504 `engine_timeout` at the deadline.
+/// Streaming, the output ends with one final error event of that code before the only
+/// `[DONE]`. With the final usage read, the request settles `failed` or `timed_out` and is
+/// charged its known 6 wei. Without it, it settles `failed_unknown_usage` or
+/// `timed_out_unknown_usage`: no charge or usage, the whole 8 wei returned to the account and
+/// the credential, and 8 wei of request exposure. The engine sees each stalled generation
+/// dropped, each key is the 409 afterwards with no second dispatch, and no settlement failure
+/// is recorded. Complete rows come from fixed literals.
+#[tokio::test]
+async fn gateway_failed_and_timed_out_responses_charge_known_usage_and_release_unknown_holds() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    let mut fixture = gateway_fixture(false, 2).await;
+    let root = fixture.root.clone();
+    let state = fixture.routes.state.clone();
+    let (ended, late) = ((StatusCode::BAD_GATEWAY, "engine_error"), (StatusCode::GATEWAY_TIMEOUT, "engine_timeout"));
+    // (key, message, streaming, answer, terminal status, known usage, stalled by the engine)
+    for (key, content, stream, (code_status, code), terminal, known, stalled) in [
+        ("ended-after-usage", "out=2 end=after-usage", false, ended, "failed", Some((4, 2, 6)), false),
+        ("ended-after-usage-stream", "out=2 end=after-usage", true, ended, "failed", Some((4, 2, 6)), false),
+        ("ended-during-output", "out=2 end=after-output", false, ended, "failed_unknown_usage", None, false),
+        ("ended-during-output-stream", "out=2 end=after-output", true, ended, "failed_unknown_usage", None, false),
+        ("refused-generation", "refused generation-fails", false, ended, "failed_unknown_usage", None, false),
+        ("late-after-usage", "out=2 stall=late-after-usage:after-usage", false, late, "timed_out", Some((4, 2, 6)), true),
+        ("late-after-usage-stream", "out=2 stall=late-after-usage-stream:after-usage", true, late, "timed_out",
+            Some((4, 2, 6)), true),
+        ("late-during-output", "out=2 stall=late-during-output:after-output", false, late, "timed_out_unknown_usage",
+            None, true),
+        ("late-before-answer", "late stall=late-before-answer:before-headers", false, late, "timed_out_unknown_usage",
+            None, true),
+    ] {
+        let rows = fixture.rows();
+        let start = protocol::now().unwrap();
+        let response = fixture.call(gateway_chat(&root.bearer, key, content, 4, stream)).await;
+        let header = response.headers().get("x-request-id").map(|value| value.to_str().unwrap().to_owned());
+        if stream {
+            assert_eq!(response.status(), StatusCode::OK, "{key}");
+            let mut body = response.into_body().into_data_stream();
+            let mut text = String::new();
+            // Two output events and the finish leave the bounded queue room for the error event.
+            assert!(!gateway_stream_end(&mut body, &mut text).await, "{key}: {text}");
+            let events = gateway_events(&text);
+            let errors: Vec<&Value> = events.iter().filter(|event| event.get("error").is_some()).collect();
+            assert_eq!(errors.len(), 1, "{key}: {text}");
+            assert_eq!((&errors[0]["error"]["code"], &errors[0]["error"]["type"]), (&json!(code), &json!("server_error")), "{key}");
+            assert!(events.last().unwrap().get("error").is_some(), "{key}: output after the error: {text}");
+            assert!(text.contains("w0 ") && text.contains("w1 "), "{key}: {text}");
+            assert_eq!(text.matches("data: [DONE]").count(), 1, "{key}: {text}");
+            assert!(text.ends_with("data: [DONE]\n\n"), "{key}: {text}");
+        } else {
+            let (status, _, text) = gateway_answer(response).await;
+            let answer: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!((status, answer["error"]["code"].as_str()), (code_status, Some(code)), "{key}: {text}");
+            assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"], "{key}");
+            assert!(!text.contains("w0"), "{key}: output was returned: {text}");
+        }
+        let view = fixture.settled(key).await;
+        let end = protocol::now().unwrap();
+        assert_eq!((view.status.as_str(), header.as_deref()), (terminal, Some(view.id.as_str())), "{key}");
+        let reserved = gateway_reserved(&rows, &fixture.rows(), key, &root.id, 4, 4, 8, (start, end));
+        assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, terminal, known, (start, end)), "{key}");
+        if stalled {
+            assert_eq!(fixture.engine.events(2).await, [format!("dropped {key}"), format!("held {key}")],
+                "{key}: the generation outlived its deadline");
+        }
+        assert!(fixture.engine.events.try_recv().is_err(), "{key}: an unexpected engine event");
+        assert_eq!(fixture.engine.take().generated.len(), 1, "{key}");
+        assert_eq!(fixture.status(&root.bearer, key).await, (StatusCode::OK, serde_json::to_value(&view).unwrap()), "{key}");
+        fixture.duplicates(key, content, &[&root.bearer]).await;
+        assert!(state.settlement_fault().is_none() && state.accepting.load(Ordering::Acquire), "{key}");
+    }
+}
+
+/// Task 3.1 (d), a durable settlement failure at the gateway. *Terminal request accounting
+/// is atomic and at most once*: "Financial persistence failure SHALL NOT be acknowledged as
+/// successful durable settlement; the gateway SHALL stop new admission and retain the
+/// original request for recovery", scenario *Persistence failure cannot acknowledge an
+/// unrecorded debit*; *Quote pressure and new-admission gates cannot strand settlement*:
+/// settlement and authorized reads of existing requests continue.
+///
+/// Four requests are in progress: an application credential's request held after its
+/// output, two root requests held after their output (one streaming), and an application
+/// request held while it is tokenized. An `AFTER UPDATE` trigger with `RAISE(FAIL)` then
+/// refuses the two root requests' terminal writes; `FAIL` keeps the statement's own work in
+/// the transaction, so the production transaction must roll back the account and credential
+/// writes before it. Released, the non-streaming one answers 500 `internal_error` with no
+/// output and the stream ends with one final `internal_error` event, not a completion. Both
+/// stay `reserved` with every row exactly as reserved (the gateway's retries fail alike),
+/// and the provider records `DURABLE_SETTLEMENT_FAILED`, closing admission and new funding.
+///
+/// While admission is closed, the request being tokenized and new requests of both
+/// credentials are refused 503 `provider_paused` (the first after tokenization, the others
+/// before any engine call) with nothing recorded, and the application's earlier request
+/// still completes at its 7 wei. Status, cancellation (a read, as nothing is in flight),
+/// duplicate (409 `reserved`, no engine call), control-plane request and account reads and a
+/// signed receipt binding both reserved requests stay available; only the receipt sequence
+/// changes. Explicit startup recovery over the reopened ledger, once the trigger is gone,
+/// then releases both 8-wei holds as `restart_unknown_usage` with 8 wei of exposure each and
+/// no charge, leaving every other row unchanged. (Daemon startup ordering is
+/// `a_paid_settlement_failure_keeps_its_hold_until_a_restart_releases_it_before_admission`.)
+#[tokio::test]
+async fn gateway_settlement_failure_keeps_holds_stops_admission_and_keeps_existing_reads() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    let mut fixture = gateway_fixture(false, 60).await;
+    let root = fixture.root.clone();
+    let application = fixture.routes.issue(2, &["infer", "read"]);
+    let contract = fixture.id();
+    let state = fixture.routes.state.clone();
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let admitted = fixture.spawn(gateway_chat(&application.bearer, "admitted-before", "admitted wait=admitted:after-output", 4, false));
+    let failing = fixture.spawn(gateway_chat(&root.bearer, "settle-fault", "failing wait=failing:after-output", 4, false));
+    let streaming = fixture.call(gateway_chat(&root.bearer, "settle-fault-stream", "failing wait=failing-stream:after-output", 4, true)).await;
+    assert_eq!(streaming.status(), StatusCode::OK);
+    let mut stream_body = streaming.into_body().into_data_stream();
+    let mut stream_text = String::new();
+    gateway_stream_until(&mut stream_body, &mut stream_text, "w2 ").await;
+    let preparing = fixture.spawn(gateway_chat(&application.bearer, "prepared-during-failure", "preparing tokenize-wait=preparing", 4, false));
+    assert_eq!(fixture.engine.events(4).await, ["held admitted", "held failing", "held failing-stream", "held preparing"]);
+    let window = (start, protocol::now().unwrap());
+    let mut held = gateway_reserved(&rows, &fixture.rows(), "admitted-before", &application.id, 4, 4, 8, window);
+    held = gateway_reserved(&held, &fixture.rows(), "settle-fault", &root.id, 4, 4, 8, window);
+    held = gateway_reserved(&held, &fixture.rows(), "settle-fault-stream", &root.id, 4, 4, 8, window);
+    assert_eq!(fixture.rows(), held);
+    let faults = Connection::open(&fixture.routes.path).unwrap();
+    faults.busy_timeout(Duration::from_secs(5)).unwrap();
+    faults.execute_batch("CREATE TRIGGER gateway_settlement_fault AFTER UPDATE ON requests
+        WHEN OLD.request_key IN ('settle-fault','settle-fault-stream') AND NEW.status<>'reserved'
+        BEGIN SELECT RAISE(FAIL,'injected gateway settlement failure'); END;").unwrap();
+    fixture.engine.take();
+
+    // Neither failed settlement is acknowledged; both holds stay exactly as reserved.
+    fixture.engine.release("failing");
+    let (status, header, text) = gateway_answer(failing.await.unwrap()).await;
+    let failed = fixture.view("settle-fault");
+    assert_eq!((status, header.as_deref()), (StatusCode::INTERNAL_SERVER_ERROR, Some(failed.id.as_str())), "{text}");
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(answer, json!({"error": {"message": "The provider could not complete this operation",
+        "type": "server_error", "param": null, "code": "internal_error"}}));
+    assert_eq!(state.settlement_fault(), Some(crate::inference_gateway::DURABLE_SETTLEMENT_FAILED));
+    assert!(!state.accepting.load(Ordering::Acquire) && !state.funding_ready.load(Ordering::Acquire));
+    assert_eq!(fixture.rows(), held, "a failed settlement left a partial or acknowledged debit");
+    fixture.engine.release("failing-stream");
+    let ended_with_error = gateway_stream_end(&mut stream_body, &mut stream_text).await;
+    let events = gateway_events(&stream_text);
+    let errors: Vec<&Value> = events.iter().filter(|event| event.get("error").is_some()).collect();
+    assert!(!ended_with_error && errors.len() == 1 && events.last().unwrap().get("error").is_some(),
+        "the failed stream ended like a completion: {stream_text}");
+    assert_eq!(stream_text.matches("data: [DONE]").count(), 1, "{stream_text}");
+    assert!(stream_text.find("\"internal_error\"") < stream_text.find("data: [DONE]"),
+        "the stream was completed before its settlement failed: {stream_text}");
+    assert_eq!(errors[0], &json!({"error": {"message": "The provider could not complete this operation",
+        "type": "server_error", "param": null, "code": "internal_error"}}));
+    assert_eq!(fixture.rows(), held, "a failed streaming settlement left a partial or acknowledged debit");
+    assert_eq!(fixture.view("settle-fault-stream").status, "reserved");
+
+    // Admission is closed: a request being prepared and new requests reserve nothing.
+    fixture.engine.take();
+    fixture.engine.release("preparing");
+    let (status, _, text) = gateway_answer(preparing.await.unwrap()).await;
+    assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("provider_paused")), "{text}");
+    assert!(fixture.engine.take().generated.is_empty(), "the prepared request was dispatched");
+    for (bearer, key) in [(&root.bearer, "new-after-failure"), (&application.bearer, "new-after-failure-application")] {
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(bearer, key, "new", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, Some("provider_paused")), "{key}: {text}");
+        fixture.engine.untouched(key);
+        assert!(!fixture.recorded(key), "{key}");
+    }
+    for key in ["prepared-during-failure", "new-after-failure", "new-after-failure-application"] {
+        assert!(!fixture.recorded(key), "{key}");
+    }
+    assert_eq!(fixture.rows(), held);
+
+    // The request admitted before the failure still settles while admission stays closed.
+    fixture.engine.release("admitted");
+    let (status, _, text) = gateway_answer(admitted.await.unwrap()).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let completed = gateway_settled(&held, &fixture.rows(), &fixture.view("admitted-before").id, "completed",
+        Some((4, 3, 7)), (start, end));
+    assert_eq!(fixture.rows(), completed);
+    assert_eq!(state.settlement_fault(), Some(crate::inference_gateway::DURABLE_SETTLEMENT_FAILED));
+    assert!(!state.accepting.load(Ordering::Acquire));
+
+    // Existing reads stay available and change nothing but the receipt sequence.
+    fixture.engine.take();
+    let streamed = fixture.view("settle-fault-stream");
+    for (key, view) in [("settle-fault", &failed), ("settle-fault-stream", &streamed)] {
+        let record = serde_json::to_value(view).unwrap();
+        assert_eq!(view.status, "reserved");
+        for target in [key, view.id.as_str()] {
+            assert_eq!(fixture.status(&root.bearer, target).await, (StatusCode::OK, record.clone()), "{target}");
+            assert_eq!(fixture.cancel(&root.bearer, target).await, (StatusCode::OK, Some(view.id.clone()), record.clone()),
+                "{target}: a cancellation found it in flight");
+        }
+        let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/requests/{key}"),
+            Some(&root.bearer)).await;
+        assert_eq!((status, document), (StatusCode::OK, record), "{key}");
+    }
+    fixture.duplicates("settle-fault", "failing", &[&root.bearer, &application.bearer]).await;
+    assert_eq!(fixture.rows(), completed);
+    let account = serde_json::to_value(fixture.routes.ledger().account(&contract).unwrap()).unwrap();
+    assert_eq!((&account["reserved_wei"], &account["available_wei"]), (&json!("16"), &json!("972")));
+    let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}"), Some(&root.bearer)).await;
+    assert_eq!((status, document), (StatusCode::OK, account.clone()));
+    let (status, document) = read_route(&fixture.routes, false, &format!("/v1/contracts/{contract}/receipt"), Some(&root.bearer)).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    let payload = routed_receipt(&fixture.routes, document);
+    assert_eq!(payload["account"], account);
+    for view in [&failed, &streamed] {
+        assert!(payload["requests"].as_array().unwrap().contains(&serde_json::to_value(view).unwrap()), "{}", view.request_id);
+    }
+    let mut expected = completed.clone();
+    let sequence = &mut expiry_row(&mut expected, "accounts", &contract)[4];
+    *sequence = json!(sequence.as_u64().unwrap() + 1);
+    assert_eq!(fixture.rows(), expected, "a read changed more than the receipt sequence");
+    fixture.engine.untouched("reads");
+
+    // Startup recovery over the reopened ledger releases both holds once, without a charge.
+    faults.execute_batch("DROP TRIGGER gateway_settlement_fault").unwrap();
+    let recovered_at = protocol::now().unwrap();
+    let reopened = BillingStore::open(&fixture.routes.path, &network()).unwrap();
+    assert_eq!(reopened.recover_requests(recovered_at).unwrap(), 2);
+    for view in [&failed, &streamed] {
+        expect_terminal(&mut expected, &view.id, "restart_unknown_usage", None, recovered_at);
+    }
+    assert_eq!(fixture.rows(), expected);
+    let account = &expected["accounts"].iter().find(|row| row[0] == contract).unwrap()[3];
+    assert_eq!((&account["reserved_wei"], &account["available_wei"], &account["spent_wei"]),
+        (&json!("0"), &json!("988"), &json!("7")));
+}
+
+/// Task 3.1 (e), the gateway's own usage validation. *Billable usage is authoritative and
+/// matches the reservation*: "any reported total SHALL agree with their checked sum ...
+/// Input usage SHALL equal the exact prepared count and output usage SHALL not exceed the
+/// authorized maximum. Missing, malformed, inconsistent ... usage SHALL NOT be replaced",
+/// scenario *Prompt or output mismatch*: "the request is not charged from those counts" and
+/// "its unsettled hold is resolved under the explicit unknown-usage policy rather than left
+/// locked or charged an estimate".
+///
+/// Each chat request holds 9 wei (five prepared input and four output tokens) while the
+/// engine streams two output tokens and then final usage with one more or one fewer
+/// prompt token than prepared, five completion tokens (over the four authorized), a total
+/// one above the sum, no total, a prompt count as a string, or no usage event. Non-streaming
+/// it answers 502 with an error object only (`engine_usage_mismatch` for the counts that
+/// contradict the reservation, `engine_error` for malformed or missing usage) and none of
+/// the output; streaming, its output ends with one final error event of that code. Each
+/// settles `failed_unknown_usage`: no charge or usage, the whole 9 wei returned to the account
+/// and the credential, and 9 wei of request exposure, from fixed-literal complete rows. The
+/// gateway's validation precedes the ledger's, so none reaches the ledger's own
+/// `invalid_usage_unknown_usage` release or stops admission. An embedding batch prepared into
+/// two tokens whose engine usage counts three is released the same way (2 wei). A control
+/// with exact usage is charged its 7 wei.
+#[tokio::test]
+async fn gateway_usage_validation_releases_the_whole_hold_without_inventing_tokens() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    let fixture = gateway_fixture(false, 60).await;
+    let root = fixture.root.clone();
+    let state = fixture.routes.state.clone();
+    for stream in [false, true] {
+        for (case, instruction, code) in [
+            ("prompt-over", "usage=prompt+1", "engine_usage_mismatch"),
+            ("prompt-under", "usage=prompt-1", "engine_usage_mismatch"),
+            ("output-over", "usage=over", "engine_usage_mismatch"),
+            ("false-total", "usage=total+1", "engine_error"),
+            ("no-total", "usage=no-total", "engine_error"),
+            ("text-count", "usage=text", "engine_error"),
+            ("no-usage", "usage=missing", "engine_error"),
+        ] {
+            let key = format!("{case}-{stream}");
+            let rows = fixture.rows();
+            let start = protocol::now().unwrap();
+            // Two output events and the finish leave the bounded queue room for the error event.
+            let response = fixture.call(gateway_chat(&root.bearer, &key, &format!("checked out=2 {instruction}"), 4, stream)).await;
+            if stream {
+                assert_eq!(response.status(), StatusCode::OK, "{key}");
+                let mut body = response.into_body().into_data_stream();
+                let mut text = String::new();
+                assert!(!gateway_stream_end(&mut body, &mut text).await, "{key}: {text}");
+                let events = gateway_events(&text);
+                let errors: Vec<&Value> = events.iter().filter(|event| event.get("error").is_some()).collect();
+                assert_eq!(errors.len(), 1, "{key}: {text}");
+                assert_eq!((&errors[0]["error"]["code"], &errors[0]["error"]["type"]), (&json!(code), &json!("server_error")), "{key}");
+                assert!(events.last().unwrap().get("error").is_some(), "{key}: output after the error: {text}");
+                assert!(!text.contains("\"usage\""), "{key}: {text}");
+            } else {
+                let (status, _, text) = gateway_answer(response).await;
+                let answer: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::BAD_GATEWAY, Some(code)), "{key}: {text}");
+                assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"], "{key}");
+                assert!(!text.contains("w0"), "{key}: output was returned: {text}");
+            }
+            let view = fixture.settled(&key).await;
+            let end = protocol::now().unwrap();
+            assert_eq!(view.status, "failed_unknown_usage", "{key}");
+            let reserved = gateway_reserved(&rows, &fixture.rows(), &key, &root.id, 5, 4, 9, (start, end));
+            assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, "failed_unknown_usage", None,
+                (start, end)), "{key}");
+            assert_eq!(fixture.rows(), rows.clone().into_iter().map(|(table, mut entries)| {
+                if table == "requests" {
+                    entries = fixture.rows()["requests"].clone();
+                }
+                (table, entries)
+            }).collect::<ExpiryRows>(), "{key}: the release changed more than its own request record");
+            assert_eq!(fixture.engine.take().generated.len(), 1, "{key}");
+            assert!(state.settlement_fault().is_none() && state.accepting.load(Ordering::Acquire), "{key}");
+        }
+    }
+
+    // An embedding batch whose engine usage contradicts its two prepared tokens.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let body = json!({"model": "test/model", "input": ["embedding-miscount here"]});
+    let (status, _, text) = gateway_answer(fixture.call(gateway_request("POST", "/v1/embeddings", &root.bearer,
+        Some("embedding-miscount"), Some(&body))).await).await;
+    let end = protocol::now().unwrap();
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("engine_usage_mismatch")), "{text}");
+    assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"]);
+    let view = fixture.view("embedding-miscount");
+    let reserved = gateway_reserved(&rows, &fixture.rows(), "embedding-miscount", &root.id, 2, 0, 2, (start, end));
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, "failed_unknown_usage", None, (start, end)));
+
+    // Control: exact usage is charged.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let (status, _, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "exact-usage", "checked usage=exact", 4, false)).await).await;
+    let end = protocol::now().unwrap();
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let view = fixture.view("exact-usage");
+    let reserved = gateway_reserved(&rows, &fixture.rows(), "exact-usage", &root.id, 4, 4, 8, (start, end));
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, "completed", Some((4, 3, 7)), (start, end)));
+}
+
+/// Task 3.1 (f), scenario *Revocation during an admitted request* at the gateway: "WHEN its
+/// credential expires, is revoked or is explicitly rotated before settlement THEN the original
+/// hold survives and the request settles against that original credential's accounting AND no
+/// replacement credential gains its hold or authorizes a duplicate execution".
+///
+/// Three application credentials of the account each have one request in generation, 8 wei
+/// held (four prepared input and four output tokens): E's credential expires three seconds
+/// after issuance on the provider's real clock, R's is revoked and T's is rotated into a
+/// successor while their requests run. The test polls the clock until E's `expires_at`; no
+/// product time is substituted and no stored timestamp rewritten. Then every ended bearer is
+/// refused 401 for its request's status and cancellation and for new inference, with no
+/// engine call and no row change; the successor holds nothing, its duplicate of T's key is
+/// the 409 naming T as `reserved` with no engine call, and its status read attributes T to
+/// the rotated credential. E then completes and is charged 7 wei against its expired
+/// credential (spend cap 50), R is cancelled by the root after its final usage and charged
+/// 7 wei against its revoked credential, and T is cancelled during output and releases its
+/// whole hold from the rotated credential with 8 wei of exposure. The successor's spend and
+/// hold stay zero. Complete rows come from fixed literals.
+#[tokio::test]
+async fn credentials_ending_during_generation_settle_against_their_original_accounting() {
+    use axum::http::StatusCode;
+    let mut fixture = gateway_fixture(false, 60).await;
+    let root = fixture.root.clone();
+    let contract = fixture.id();
+    let ledger = fixture.routes.ledger();
+    let issued_at = protocol::now().unwrap();
+    let expires_at = issued_at + 3;
+    let expiring = ledger.issue_credential(&contract, &CredentialIssueRequest {
+        expires_at, spend_cap_wei: Some("50".into()), max_concurrency: 1, scopes: vec!["infer".into(), "read".into()],
+    }, issued_at).unwrap();
+    let revoked = fixture.routes.issue(1, &["infer", "read"]);
+    let rotated = fixture.routes.issue(1, &["infer", "read"]);
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let completing = fixture.spawn(gateway_chat(&expiring.bearer, "expiring", "ending wait=expiring:after-output", 4, false));
+    let response = fixture.call(gateway_usage_stream(&revoked.bearer, "revoking", "ending wait=revoking:after-usage")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut revoking = response.into_body().into_data_stream();
+    let mut revoking_text = String::new();
+    gateway_stream_until(&mut revoking, &mut revoking_text, "\"usage\"").await;
+    let cancelled = fixture.spawn(gateway_chat(&rotated.bearer, "rotating", "ending stall=rotating:after-output", 4, false));
+    assert_eq!(fixture.engine.events(3).await, ["held expiring", "held revoking", "held rotating"]);
+    let window = (start, protocol::now().unwrap());
+    assert!(window.1 < expires_at, "the expiring request was not admitted before its credential's expiry");
+    let mut expected = gateway_reserved(&rows, &fixture.rows(), "expiring", &expiring.id, 4, 4, 8, window);
+    expected = gateway_reserved(&expected, &fixture.rows(), "revoking", &revoked.id, 4, 4, 8, window);
+    expected = gateway_reserved(&expected, &fixture.rows(), "rotating", &rotated.id, 4, 4, 8, window);
+    assert_eq!(fixture.rows(), expected);
+
+    // Revocation and rotation while generating; then E's expiry on the real clock.
+    ledger.revoke_credential(&contract, &revoked.id).unwrap();
+    let now = protocol::now().unwrap();
+    let successor = ledger.rotate_credential(&contract, &rotated.id, &CredentialIssueRequest {
+        expires_at: now + 3600, spend_cap_wei: None, max_concurrency: 1, scopes: vec!["infer".into(), "read".into()],
+    }, now).unwrap();
+    for credential in [&revoked.id, &rotated.id] {
+        let row = expiry_row(&mut expected, "credentials", credential);
+        row[3]["revoked"] = json!(true);
+        row[4] = json!(1);
+    }
+    let after = fixture.rows();
+    let successor_row = after["credentials"].iter().find(|row| row[0] == successor.id).unwrap().clone();
+    assert_eq!((&successor_row[3]["spent_wei"], &successor_row[3]["reserved_wei"], &successor_row[3]["revoked"]),
+        (&json!("0"), &json!("0"), &json!(false)));
+    let credentials = expected.get_mut("credentials").unwrap();
+    credentials.push(successor_row);
+    credentials.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
+    assert_eq!(after, expected, "revocation or rotation moved a running hold");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while protocol::now().unwrap() < expires_at {
+        assert!(tokio::time::Instant::now() < deadline, "the clock did not reach the expiry");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Ended bearers are refused everywhere; the successor holds nothing and cannot duplicate.
+    fixture.engine.take();
+    for (bearer, key) in [(&expiring.bearer, "expiring"), (&revoked.bearer, "revoking"), (&rotated.bearer, "rotating")] {
+        let (status, answer) = fixture.status(bearer, key).await;
+        assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_api_key")), "{key}");
+        let (status, _, answer) = fixture.cancel(bearer, key).await;
+        assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::UNAUTHORIZED, Some("invalid_api_key")), "{key}");
+        let (status, _, text) = gateway_answer(fixture.call(gateway_chat(bearer, &format!("{key}-again"), "again", 4, false)).await).await;
+        assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+            (StatusCode::UNAUTHORIZED, Some("invalid_api_key")), "{key}");
+    }
+    fixture.engine.untouched("ended bearers");
+    assert_eq!(fixture.rows(), expected);
+    fixture.duplicates("rotating", "ending stall=rotating:after-output", &[&successor.bearer]).await;
+    let (status, answer) = fixture.status(&successor.bearer, "rotating").await;
+    assert_eq!((status, &answer["credential_id"], &answer["status"]), (StatusCode::OK, &json!(rotated.id), &json!("reserved")));
+
+    // Each request settles against its original credential.
+    fixture.engine.release("expiring");
+    let (status, _, text) = gateway_answer(completing.await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["choices"][0]["message"]["content"], "w0 w1 w2 ");
+    let (status, _, _) = fixture.cancel(&root.bearer, "revoking").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let failed = gateway_stream_end(&mut revoking, &mut revoking_text).await;
+    assert!(!failed && gateway_events(&revoking_text).last().unwrap()["error"]["code"] == "request_cancelled", "{revoking_text}");
+    let (status, _, _) = fixture.cancel(&root.bearer, "rotating").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, _, text) = gateway_answer(cancelled.await.unwrap()).await;
+    assert_eq!((status, serde_json::from_str::<Value>(&text).unwrap()["error"]["code"].as_str()),
+        (StatusCode::CONFLICT, Some("request_cancelled")));
+    let end = protocol::now().unwrap();
+    for (key, status, known) in [("expiring", "completed", Some((4, 3, 7))), ("revoking", "cancelled", Some((4, 3, 7))),
+        ("rotating", "cancelled_unknown_usage", None)] {
+        let view = fixture.settled(key).await;
+        assert_eq!(view.status, status, "{key}");
+        expected = gateway_settled(&expected, &fixture.rows(), &view.id, status, known, (start, end));
+    }
+    assert_eq!(fixture.rows(), expected);
+    let credential = |id: &str| expiry_credential(fixture.routes.ledger(), &contract, id);
+    for (id, spent) in [(&expiring.id, "7"), (&revoked.id, "7"), (&rotated.id, "0"), (&successor.id, "0")] {
+        let view = credential(id);
+        assert_eq!((view.spent_wei.as_str(), view.reserved_wei.as_str()), (spent, "0"));
+    }
+    fixture.duplicates("rotating", "ending", &[&successor.bearer, &root.bearer]).await;
+}
+
+/// Task 3.1 (e), the ledger's own invalid-usage release reached through the gateway.
+/// *Unknown usage releases the hold without inventing execution*: "cumulative usage-counter
+/// overflow SHALL commit an `invalid_usage_unknown_usage` release and surface the invalid-usage
+/// error rather than leave the hold locked"; *Terminal request accounting is atomic and at most
+/// once*: "An explicit invalid-usage terminal release is distinct from a transaction failure",
+/// and only a settlement the provider "cannot durably record" closes admission
+/// (provider-daemon-lifecycle requirement 6).
+///
+/// The agreement's signed limits admit any u64 token count, and a seeded known request brings
+/// the account's cumulative completion counter to u64::MAX - 2 (its usage and charge are ledger
+/// inputs). A chat request holding 8 wei then completes with valid usage of four prompt and
+/// three completion tokens, which the counter cannot take. The ledger commits the release: no
+/// charge or usage, the whole hold back and 8 wei of exposure, both counters unchanged. The
+/// client gets a 500 `usage_not_accounted` error object, not the output and not a success, but
+/// no settlement failure is recorded and admission and new funding stay open. The next request
+/// (two completion tokens) brings the counter to exactly u64::MAX and is charged its 6 wei,
+/// streaming. A streaming request whose two completion tokens the counter can then no longer
+/// take ends with one `usage_not_accounted` event before its only `[DONE]`, with the same
+/// committed release and admission still open. Complete rows come from fixed literals; the
+/// gateway's performance record keeps its measured output tokens beside the zeroed usage.
+#[tokio::test]
+async fn gateway_cumulative_usage_overflow_is_an_invalid_usage_release_not_a_settlement_failure() {
+    use axum::http::StatusCode;
+    use std::sync::atomic::Ordering;
+    const NEAR: u64 = u64::MAX - 2;
+    const FUNDING: u128 = 100_000_000_000_000_000_000;
+    let mut routes = CredentialRoutes::opened_with(FUNDING, 4, protocol::now().unwrap(), |agreement| {
+        agreement.model.context_length = u64::MAX;
+        agreement.model.max_output_tokens = u64::MAX;
+    });
+    let engine = ControlledEngine::start(None).await;
+    {
+        let state = Arc::get_mut(&mut routes.state).unwrap();
+        let served = &mut Arc::get_mut(&mut state.config).unwrap().models[0];
+        served.engine_url = engine.base.clone();
+        served.request_timeout_secs = 60;
+    }
+    let app = crate::inference_gateway::router(routes.state.clone());
+    let root = routes.opened.credential.clone().unwrap();
+    let fixture = GatewayFixture { routes, app, engine, root: root.clone() };
+    let contract = fixture.id();
+    let model = fixture.routes.agreement.payload.model.clone();
+    let now = protocol::now().unwrap();
+    let seed = fixture.routes.ledger().reserve(&contract, &root.id, "seed", 0, NEAR, now, &model).unwrap();
+    fixture.routes.ledger().settle(&seed.id, &TokenUsage { prompt_tokens: 0, completion_tokens: NEAR }, "completed", now).unwrap();
+    let state = fixture.routes.state.clone();
+
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let (status, header, text) = gateway_answer(fixture.call(gateway_chat(&root.bearer, "overflowing", "overflow out=3", 4, false)).await).await;
+    let end = protocol::now().unwrap();
+    let view = fixture.view("overflowing");
+    assert_eq!(state.settlement_fault(), None, "a committed invalid-usage release was reported as a settlement failure");
+    assert!(state.accepting.load(Ordering::Acquire) && state.funding_ready.load(Ordering::Acquire));
+    assert_eq!((status, header.as_deref()), (StatusCode::INTERNAL_SERVER_ERROR, Some(view.id.as_str())), "{text}");
+    let answer: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(answer.as_object().unwrap().keys().collect::<Vec<_>>(), ["error"], "{text}");
+    assert_eq!(answer["error"]["code"], "usage_not_accounted", "{text}");
+    let mut expected = gateway_reserved(&rows, &fixture.rows(), "overflowing", &root.id, 4, 4, 8, (start, end));
+    let record = fixture.rows()["requests"].iter().find(|row| row[0] == view.id).unwrap()[6].clone();
+    let settled_at = record["settled_at"].as_u64().unwrap();
+    assert!(start <= settled_at && settled_at <= end);
+    assert_eq!((&record["performance"]["output_tokens"], &record["performance"]["policy"]), (&json!(3), &json!("unqualified")));
+    expect_terminal(&mut expected, &view.id, "invalid_usage_unknown_usage", None, settled_at);
+    expiry_row(&mut expected, "requests", &view.id)[6]["performance"] = record["performance"].clone();
+    assert_eq!(fixture.rows(), expected);
+    let account = fixture.routes.ledger().account(&contract).unwrap();
+    assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), (0, NEAR));
+
+    // Admission stayed open: the next request reaches exactly u64::MAX and is charged.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let response = fixture.call(gateway_chat(&root.bearer, "reaching-the-maximum", "fits out=2", 4, true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body().into_data_stream();
+    let mut text = String::new();
+    assert!(!gateway_stream_end(&mut body, &mut text).await, "{text}");
+    assert!(text.ends_with("data: [DONE]\n\n") && !text.contains("\"error\""), "{text}");
+    let view = fixture.settled("reaching-the-maximum").await;
+    let end = protocol::now().unwrap();
+    let reserved = gateway_reserved(&rows, &fixture.rows(), "reaching-the-maximum", &root.id, 4, 4, 8, (start, end));
+    assert_eq!(fixture.rows(), gateway_settled(&reserved, &fixture.rows(), &view.id, "completed", Some((4, 2, 6)), (start, end)));
+    let account = fixture.routes.ledger().account(&contract).unwrap();
+    assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), (4, u64::MAX));
+    assert_eq!(state.settlement_fault(), None);
+
+    // Review addition: a stream overflowing the counter, now at u64::MAX, ends with one
+    // `usage_not_accounted` event before its only `[DONE]`; the release is committed and
+    // admission stays open. Two output events and the finish leave the queue room for it.
+    let rows = fixture.rows();
+    let start = protocol::now().unwrap();
+    let response = fixture.call(gateway_chat(&root.bearer, "overflowing-stream", "overflow out=2", 4, true)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body().into_data_stream();
+    let mut text = String::new();
+    assert!(!gateway_stream_end(&mut body, &mut text).await, "{text}");
+    let end = protocol::now().unwrap();
+    let events = gateway_events(&text);
+    let errors: Vec<&Value> = events.iter().filter(|event| event.get("error").is_some()).collect();
+    assert_eq!(errors.len(), 1, "{text}");
+    assert_eq!((&errors[0]["error"]["code"], &errors[0]["error"]["type"]), (&json!("usage_not_accounted"), &json!("server_error")));
+    assert!(events.last().unwrap().get("error").is_some() && text.ends_with("data: [DONE]\n\n"), "{text}");
+    assert_eq!(text.matches("data: [DONE]").count(), 1, "{text}");
+    assert_eq!(state.settlement_fault(), None, "a committed invalid-usage release was reported as a settlement failure");
+    assert!(state.accepting.load(Ordering::Acquire) && state.funding_ready.load(Ordering::Acquire));
+    let view = fixture.view("overflowing-stream");
+    let mut expected = gateway_reserved(&rows, &fixture.rows(), "overflowing-stream", &root.id, 4, 4, 8, (start, end));
+    let record = fixture.rows()["requests"].iter().find(|row| row[0] == view.id).unwrap()[6].clone();
+    let settled_at = record["settled_at"].as_u64().unwrap();
+    assert!(start <= settled_at && settled_at <= end);
+    assert_eq!((&record["performance"]["output_tokens"], &record["performance"]["policy"]), (&json!(2), &json!("unqualified")));
+    expect_terminal(&mut expected, &view.id, "invalid_usage_unknown_usage", None, settled_at);
+    expiry_row(&mut expected, "requests", &view.id)[6]["performance"] = record["performance"].clone();
+    assert_eq!(fixture.rows(), expected);
+    let account = fixture.routes.ledger().account(&contract).unwrap();
+    assert_eq!((account.usage.prompt_tokens, account.usage.completion_tokens), (4, u64::MAX));
 }
