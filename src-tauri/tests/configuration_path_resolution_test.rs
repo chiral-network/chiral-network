@@ -1,7 +1,8 @@
 //! Relay and RPC-gateway configuration files resolve their relative paths against their own
 //! directory, never against the process working directory, while path arguments given on the
 //! command line follow the working directory (book line 449; `docs/provider-qualification.md`
-//! line 173). See `openspec/changes/specify-profile-path-resolution`, requirement 1 (task 3.1).
+//! line 173). See `openspec/specs/profile-path-resolution/spec.md`, requirement 1 (task 3.1 of
+//! the archived change `2026-11-20-specify-profile-path-resolution`).
 //!
 //! The real `relay_server` and `chiral_rpc_gateway` binaries run with their configuration file in
 //! one temporary directory and a different working directory that holds decoy files under the

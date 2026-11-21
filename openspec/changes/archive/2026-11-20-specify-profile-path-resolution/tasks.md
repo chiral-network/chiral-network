@@ -45,4 +45,4 @@ Task 3.N corresponds to requirement N in the spec and to row N of the design cov
 ## 4. Integrate
 
 - [x] 4.1 Run the full headless test suite and strict validation; confirm the whitepaper checksum is unchanged. Done 2026-11-18: the full headless suite passed (501 passed, 2 ignored), the desktop-feature `desktop::` tests passed (4), strict validation passes, and the whitepaper is unchanged (SHA-256 `eda22ce0…3933`).
-- [ ] 4.2 Archive with `openspec archive specify-profile-path-resolution --yes` after tasks 3.1 and 3.5 pass. The spec text references no pending capability, so no archive order applies.
+- [x] 4.2 Archive with `openspec archive specify-profile-path-resolution --yes` after tasks 3.1 and 3.5 pass. The spec text references no pending capability, so no archive order applies. Done 2026-11-20 in round 73, after the round-72 full suite passed with 3.1 and 3.5 ticked; strict validation of every change and spec passed afterwards.

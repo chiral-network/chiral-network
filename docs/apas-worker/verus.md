@@ -141,7 +141,7 @@ Requirement source: `openspec/changes/specify-version-policy/specs/client-versio
 
 ## Judged 2026-11-18 — profile path resolution regressions
 
-Requirement source: `openspec/changes/specify-profile-path-resolution/specs/profile-path-resolution/spec.md`.
+Requirement source: `openspec/specs/profile-path-resolution/spec.md` (archived 2026-11-20 from `openspec/changes/archive/2026-11-20-specify-profile-path-resolution`).
 
 - The six tests in `src-tauri/tests/consumer_profile_paths_test.rs` — **not replaceable**: they run the `chiral` binary from different working directories and inspect files on disk; Verus models neither processes nor the file system.
 - `consumer::tests::every_relative_profile_path_resolves_against_the_profile_directory` — **replaceable in principle** for the join rule (absolute paths unchanged, relative paths joined to the base), which is pure; `std::path` would need an external specification. It waits for the Verus report entry; the test stays.

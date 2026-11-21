@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-20 (seventy-third round) — Archive: `specify-profile-path-resolution`
+
+- In step at `cc1e51dc`; whitepaper unchanged; no new answers.
+- Task 4.2 ticked, then `openspec archive specify-profile-path-resolution --yes`: the change is now `openspec/changes/archive/2026-11-20-specify-profile-path-resolution`, and `openspec/specs/profile-path-resolution/spec.md` is the sixth normative capability (5 requirements added). The archive's placeholder Purpose was replaced with a one-sentence purpose, as for the other archived specs, and the two links to the change's old path (verus.md and the doc comment of `configuration_path_resolution_test`) now point at the spec.
+- Every task had passed: 3.1 and 3.5 in round 72's full suite, the rest earlier. No pending change depends on this capability being pending.
+- Checks: `openspec validate --all --strict --no-interactive` 36 passed, 0 failed; `openspec validate profile-path-resolution --type spec --strict` valid; `cargo check --tests` passes after the doc-comment change. No code changed.
+
 ## 2026-11-20 (seventy-second round) — Acceptance: provider, relay and gateway paths resolve against their configuration; a refused profile is shown and the earlier one stays loaded
 
 - In step at `8e60d226`; whitepaper unchanged; no new answers.
@@ -824,7 +831,7 @@
 Code differences, then missing specifications (spec before code):
 
 1. Code differences: none open except reputation 2.4 and funding-settlement 2.4 (author question) and offer-discovery 2.4 (design choice). All missing specifications in `docs/apas-worker/comparison-2026-11-18.md` are written (round 59). `specify-managed-engine-launch` acceptance is done on this host: 3.1, 3.6, 3.7 and 3.11 need only Linux, Windows or real-device runs, and 4.1 is real-host evidence. The shared publication assertions of `inference-offer-discovery` 3.11 and 3.15 can cite round 62's 3.10 test.
-2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api (3.x done on this host; 3.2 needs the SDK example runs), provider-daemon-lifecycle (3.x done on this host except 3.5, which waits on the version-policy gate, and 3.11's listener-failure path, which needs the daemon's serve-and-shutdown sequence in the library, plus Windows console events) and no-background-start (3.3–3.5 done; 3.1 and 3.2 need the Linux `/proc` observation). `specify-profile-path-resolution` is ready to archive (task 4.2; next round).
+2. `docs/apas-worker/comparison-2026-11-18.md` is complete except `specify-offer-discovery` task 2.4 (needs a design choice). Its new changes' acceptance tasks 3.x are open (outbound-http-safeguards 3.x is done; 4.1 needs a deployment): account-credentials (3.x done on this host; 3.7 needs a Windows run, 3.8 the SDK example runs), public-inference-api (3.x done on this host; 3.2 needs the SDK example runs), provider-daemon-lifecycle (3.x done on this host except 3.5, which waits on the version-policy gate, and 3.11's listener-failure path, which needs the daemon's serve-and-shutdown sequence in the library, plus Windows console events) and no-background-start (3.3–3.5 done; 3.1 and 3.2 need the Linux `/proc` observation). `specify-profile-path-resolution` is archived (round 73).
 
 Earlier open work, unchanged:
 
