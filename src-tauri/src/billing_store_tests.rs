@@ -7421,3 +7421,1145 @@ fn exhausted_inference_budgets_do_not_strand_admitted_holds() {
     }
     assert_eq!(unrelated(&expiry_ledger_rows(&path)), allowance, "quote or challenge allowance changed");
 }
+
+// inference-request-accounting task 2.3: attributable request and receipt recovery.
+// Ledger steps take explicit logical operation times. The router tests use the
+// CredentialRoutes fixture, whose production routers read the real clock, with ledger
+// fixtures at logical times before that clock. Post-verification funding and supplied
+// usage are ledger prerequisites, not chain or engine evidence.
+
+/// The members of a request record: accounting metadata only, no prompt or output.
+const REQUEST_MEMBERS: [&str; 15] = [
+    "contract_id", "cost_wei", "created_at", "credential_id", "id", "max_cost_wei",
+    "max_output_tokens", "performance", "prompt_tokens_reserved", "provider_loss_wei",
+    "request_id", "settled_at", "status", "usage", "waived_wei",
+];
+
+/// The members of a signed receipt's payload.
+const RECEIPT_MEMBERS: [&str; 6] = ["account", "issued_at", "network", "provider_wallet", "requests", "sequence"];
+
+fn members(value: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+/// Whether `id` has the ledger's opaque identifier form: `0x` and 64 lowercase hex digits.
+fn opaque_request_id(id: &str) -> bool {
+    id.len() == 66
+        && id.starts_with("0x")
+        && id[2..].bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// The stored record of request `id` in complete ledger rows.
+fn request_record(rows: &ExpiryRows, id: &str) -> Value {
+    rows["requests"]
+        .iter()
+        .find(|row| row[0] == id)
+        .unwrap_or_else(|| panic!("no request row {id}"))[6]
+        .clone()
+}
+
+/// What a request keeps for its lifetime: its opaque and client identifiers, account and
+/// credential attribution, original token bounds, maximum hold and creation time.
+fn request_identity(record: &Value) -> Value {
+    json!({
+        "id": record["id"], "request_id": record["request_id"], "contract_id": record["contract_id"],
+        "credential_id": record["credential_id"], "prompt_tokens_reserved": record["prompt_tokens_reserved"],
+        "max_output_tokens": record["max_output_tokens"], "max_cost_wei": record["max_cost_wei"],
+        "created_at": record["created_at"],
+    })
+}
+
+/// inference-request-accounting *Request identity prevents automatic paid replay*, scenarios
+/// *Duplicate reserved or terminal request* and *Account-scoped keys and absent keys*, at
+/// the ledger (task 2.3). Paid account A (one wei per token) reserves four client keys
+/// through its root and an `infer` application credential; free account B reserves A's
+/// first key. Each reservation persists an opaque `0x` + 64-hex identifier, distinct from
+/// its key and from every other request, B's for the same key included. Either identifier
+/// reads the same record, and neither account can read the other's.
+///
+/// While reserved, after known, explicit unknown and invalid-usage settlement and after
+/// restart recovery, before and after reopening, each identity (both identifiers, account,
+/// credential, token bounds, maximum hold, creation time) equals the fixed literals of its
+/// reservation, and the complete rows equal the terminal accounting derived from those
+/// literals. Every duplicate, through either credential, with the original or changed
+/// bounds, and spelled as the key or as the request's opaque identifier, returns
+/// `duplicate_request` with every ledger row unchanged (no second request, hold or charge),
+/// and the key still names the original. Later terminal calls return the first result.
+/// B admits A's opaque identifier as its own key, and A a fresh key: identity is per account.
+#[test]
+fn request_identity_and_attribution_survive_settlement_reopening_and_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let a = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let app = app_credential(&store, &a, None, vec!["infer".into()]);
+    let free = quote(0, true);
+    store.store_quote(&free, 105).unwrap();
+    let b = free.payload.id.clone();
+    let b_root = store.open_account(&free, None, 106).unwrap().credential.unwrap();
+    let shapes: [(&str, &str, u64, u64, u64); 4] = [
+        ("known-key", app.id.as_str(), 10, 20, 110),
+        ("unknown-key", root.id.as_str(), 5, 5, 111),
+        ("invalid-key", app.id.as_str(), 3, 4, 112),
+        ("restart-key", root.id.as_str(), 2, 2, 113),
+    ];
+    let mut ids = Vec::new();
+    let mut identities = Vec::new();
+    for (key, credential, prompt, output, at) in shapes {
+        let held = store.reserve(&a, credential, key, prompt, output, at, &model).unwrap();
+        identities.push(json!({
+            "id": held.id, "request_id": key, "contract_id": a, "credential_id": credential,
+            "prompt_tokens_reserved": prompt, "max_output_tokens": output,
+            "max_cost_wei": (prompt + output).to_string(), "created_at": at,
+        }));
+        ids.push(held.id);
+    }
+    let b_held = store.reserve(&b, &b_root.id, "known-key", 10, 20, 114, &free.payload.model).unwrap();
+    store.settle(&b_held.id, &TokenUsage { prompt_tokens: 10, completion_tokens: 5 }, "completed", 115).unwrap();
+    let mut all: Vec<&str> = ids.iter().map(String::as_str).collect();
+    all.push(&b_held.id);
+    for (index, id) in all.iter().enumerate() {
+        assert!(opaque_request_id(id), "{id} is not an opaque request identifier");
+        assert!(all[index + 1..].iter().all(|other| other != id), "request identifiers repeat");
+        assert!(shapes.iter().all(|(key, ..)| key != id), "an identifier equals its client key");
+    }
+
+    // Identity and account-scoped reads; returns the complete rows.
+    let reads = |store: &BillingStore, stage: &str| {
+        let rows = expiry_ledger_rows(&path);
+        for ((key, ..), (id, identity)) in shapes.iter().zip(ids.iter().zip(&identities)) {
+            let record = request_record(&rows, id);
+            assert_eq!(request_identity(&record), *identity, "{stage}: {key}");
+            for lookup in [*key, id.as_str()] {
+                let read = serde_json::to_value(store.request_view(&a, lookup).unwrap()).unwrap();
+                assert_eq!(read, record, "{stage}: {lookup}");
+            }
+            assert!(store.request_view(&b, id).unwrap_err().starts_with("not_found:"), "{stage}: B read A's {key}");
+        }
+        assert_eq!(store.request_view(&b, "known-key").unwrap().id, b_held.id, "{stage}");
+        assert!(store.request_view(&a, &b_held.id).unwrap_err().starts_with("not_found:"), "{stage}");
+        rows
+    };
+    // Every duplicate is refused without a row changing, and the key still names the original.
+    let duplicates = |store: &BillingStore, at: u64, stage: &str| {
+        let before = expiry_ledger_rows(&path);
+        for ((key, ..), id) in shapes.iter().zip(&ids) {
+            for credential in [&root.id, &app.id] {
+                for (prompt, output) in [(1, 1), (10, 20)] {
+                    for spelling in [*key, id.as_str()] {
+                        let error = store.reserve(&a, credential, spelling, prompt, output, at, &model).unwrap_err();
+                        assert!(error.starts_with("duplicate_request:"), "{stage}: {key} as {spelling}: {error}");
+                    }
+                }
+            }
+            assert_eq!(store.request_view(&a, key).unwrap().id, *id, "{stage}: {key} names another request");
+        }
+        assert_eq!(expiry_ledger_rows(&path), before, "{stage}: a duplicate changed the ledger");
+    };
+
+    let reserved = reads(&store, "reserved");
+    duplicates(&store, 116, "reserved");
+
+    // Terminal outcomes, expected from the fixed literals (one wei per token).
+    let mut expected = reserved;
+    expect_terminal(&mut expected, &ids[0], "completed", Some((10, 7, 17)), 120);
+    store.settle(&ids[0], &TokenUsage { prompt_tokens: 10, completion_tokens: 7 }, "completed", 120).unwrap();
+    expect_terminal(&mut expected, &ids[1], "cancelled_unknown_usage", None, 121);
+    store.settle(&ids[1], &TokenUsage::default(), "cancelled_unknown_usage", 121).unwrap();
+    expect_terminal(&mut expected, &ids[2], "invalid_usage_unknown_usage", None, 122);
+    let error = store
+        .settle(&ids[2], &TokenUsage { prompt_tokens: 3, completion_tokens: 5 }, "completed", 122)
+        .unwrap_err();
+    assert!(error.starts_with("usage_over_reservation:"), "{error}");
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    expect_terminal(&mut expected, &ids[3], "restart_unknown_usage", None, 130);
+    assert_eq!(store.recover_requests(130).unwrap(), 1);
+    assert_eq!(expiry_ledger_rows(&path), expected, "terminal accounting");
+    let account = store.account(&a).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        ("978", "0", "17")
+    );
+
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        let stage = if reopened { "terminal, reopened" } else { "terminal" };
+        assert_eq!(reads(&store, stage), expected, "{stage}");
+        duplicates(&store, 131, stage);
+        for id in &ids {
+            let replay = store
+                .settle(id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", 132)
+                .unwrap();
+            assert_eq!(serde_json::to_value(replay).unwrap(), request_record(&expected, id), "{stage}");
+        }
+        assert_eq!(store.recover_requests(133).unwrap(), 0, "{stage}");
+        assert_eq!(expiry_ledger_rows(&path), expected, "{stage}");
+    }
+
+    // The identifier namespace is the account's: B admits A's opaque identifier as its own
+    // key, which reads B's request in B and still A's request in A.
+    let spelled = store.reserve(&b, &b_root.id, &ids[0], 1, 1, 140, &free.payload.model).unwrap();
+    assert!(opaque_request_id(&spelled.id) && spelled.id != ids[0]);
+    assert_eq!(store.request_view(&b, &ids[0]).unwrap().id, spelled.id);
+    assert_eq!(store.request_view(&a, &ids[0]).unwrap().request_id, "known-key");
+    let fresh = store.reserve(&a, &app.id, "fresh-key", 1, 1, 141, &model).unwrap();
+    assert_eq!(fresh.max_cost_wei, "2");
+    assert_eq!(store.request_view(&a, "fresh-key").unwrap().credential_id, app.id);
+}
+
+/// Task 2.3, requirement *Request and receipt history supports attributable recovery*:
+/// "Request lists SHALL be account-scoped bounded pages of at most 100, ordered by
+/// descending creation time with descending insertion order for ties", and a receipt binds
+/// "a consistent account/request snapshot and at most the 100 most recent account
+/// requests". Paid account A's root reserves 103 one-wei requests whose creation times are
+/// out of insertion order, with two- and three-way ties (`250 + 37n mod 50`); free account
+/// B reserves every tenth key at the same time. The fixture computes the expected order from
+/// those times and the insertion order, not from the ledger's query.
+///
+/// At 100 records the page holds all of them; at 101 and 103 it holds exactly the 100
+/// newest, the omitted oldest stay individually readable, and the page never contains B's
+/// requests (B's own page holds only B's). A receipt's payload has exactly the members
+/// `{network, provider_wallet, account, requests, sequence, issued_at}`, binds the complete
+/// network and provider wallet, the account exactly as stored and that same 100-request
+/// page, each request with only the accounting members; it changes only the receipt
+/// sequence, also after reopening. B's receipt binds only B's requests.
+#[test]
+fn request_pages_and_receipts_hold_the_100_newest_account_requests_newest_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let a = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let free = quote(0, true);
+    store.store_quote(&free, 105).unwrap();
+    let b = free.payload.id.clone();
+    let b_root = store.open_account(&free, None, 106).unwrap().credential.unwrap();
+    let created = |n: u64| 250 + (n * 37) % 50;
+    // The fixture's own newest-first order: creation time, then insertion order, descending.
+    let newest_first = |inserted: &[(u64, u64, String)]| {
+        let mut order = inserted.to_vec();
+        order.sort_by(|x, y| (y.0, y.1).cmp(&(x.0, x.1)));
+        order.into_iter().map(|(_, _, id)| id).collect::<Vec<_>>()
+    };
+    let page = |store: &BillingStore, account: &str| -> Vec<Value> {
+        store.requests(account, None).unwrap().iter().map(|request| serde_json::to_value(request).unwrap()).collect()
+    };
+    let mut inserted: Vec<(u64, u64, String)> = Vec::new();
+    let mut b_inserted: Vec<(u64, u64, String)> = Vec::new();
+    for n in 0..103u64 {
+        let at = created(n);
+        let key = format!("page-{n}");
+        let held = store.reserve(&a, &root.id, &key, 1, 0, at, &model).unwrap();
+        if n < 101 {
+            if n % 4 == 0 {
+                store.settle(&held.id, &TokenUsage::default(), "cancelled_unknown_usage", at).unwrap();
+            } else {
+                store.settle(&held.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", at).unwrap();
+            }
+        }
+        inserted.push((at, n, held.id));
+        if n % 10 == 0 {
+            let other = store.reserve(&b, &b_root.id, &key, 1, 0, at, &free.payload.model).unwrap();
+            store.settle(&other.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", at).unwrap();
+            b_inserted.push((at, n, other.id));
+        }
+        if matches!(n, 99 | 100 | 102) {
+            let records = n as usize + 1;
+            let rows = expiry_ledger_rows(&path);
+            let order = newest_first(&inserted);
+            let expected: Vec<Value> = order.iter().take(100).map(|id| request_record(&rows, id)).collect();
+            let listed = page(&store, &a);
+            assert_eq!(listed.len(), 100, "{records} records");
+            assert_eq!(listed, expected, "{records} records");
+            assert_eq!(order.len() - 100, records - 100, "{records} records");
+            for omitted in &order[100..] {
+                let read = serde_json::to_value(store.request_view(&a, omitted).unwrap()).unwrap();
+                assert_eq!(read, request_record(&rows, omitted), "{records} records: an omitted request");
+            }
+            assert!(listed.iter().all(|request| request["contract_id"] == a), "{records} records");
+        }
+    }
+    // The three omitted requests are the oldest: the three-way tie at 250, newest insertion first.
+    let order = newest_first(&inserted);
+    assert_eq!(order[100..], [inserted[100].2.clone(), inserted[50].2.clone(), inserted[0].2.clone()]);
+    let b_page = page(&store, &b);
+    let b_order = newest_first(&b_inserted);
+    assert_eq!(b_page.iter().map(|request| request["id"].as_str().unwrap().to_string()).collect::<Vec<_>>(), b_order);
+    assert!(b_page.iter().all(|request| request["contract_id"] == b));
+    let account = store.account(&a).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        ("918", "2", "75")
+    );
+
+    for (reopened, sequence) in [(false, 1u64), (true, 2)] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        let rows = expiry_ledger_rows(&path);
+        let expected_page: Vec<Value> = order.iter().take(100).map(|id| request_record(&rows, id)).collect();
+        let issued_at = 400 + sequence;
+        let receipt = store.receipt(&a, PROVIDER_KEY, issued_at).unwrap();
+        protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
+        let payload = serde_json::to_value(&receipt.payload).unwrap();
+        assert_eq!(members(&payload), RECEIPT_MEMBERS);
+        let mut expected_rows = rows.clone();
+        let account_row = expiry_row(&mut expected_rows, "accounts", &a);
+        assert_eq!(payload["account"], account_row[3], "reopened {reopened}");
+        account_row[4] = json!(sequence);
+        assert_eq!(payload["requests"], Value::Array(expected_page), "reopened {reopened}");
+        assert_eq!(
+            (&payload["network"], &payload["provider_wallet"], &payload["sequence"], &payload["issued_at"]),
+            (&serde_json::to_value(network()).unwrap(), &json!(q.payload.provider_wallet), &json!(sequence), &json!(issued_at))
+        );
+        for request in payload["requests"].as_array().unwrap() {
+            assert_eq!(members(request), REQUEST_MEMBERS);
+        }
+        assert_eq!(expiry_ledger_rows(&path), expected_rows, "a receipt changed more than its sequence");
+    }
+    let b_receipt = store.receipt(&b, PROVIDER_KEY, 410).unwrap();
+    assert_eq!(b_receipt.payload.account.contract_id, b);
+    assert_eq!(b_receipt.payload.requests.iter().map(|request| request.id.clone()).collect::<Vec<_>>(), b_order);
+}
+
+/// Task 2.3: "an optional `before` timestamp SHALL exclude requests created at or after that
+/// timestamp. This timestamp paging SHALL NOT be advertised as an exhaustive tie-safe
+/// cursor". The documented limit, not a defect: one account holds four requests at
+/// 1,000-1,003, six tied at T = 1,100 and 96 at T + 1 to T + 96. The 100-request first page
+/// ends inside the tie, at its four newest insertions. A client continuing with
+/// `before = T` (the last item's creation time) gets only the four older requests, so the
+/// two remaining T requests appear on neither page; continuing with `before = T + 1` instead
+/// repeats the four tied requests already listed. The omitted requests are retained and
+/// readable by key, and a receipt's 100 newest omit them too.
+#[test]
+fn timestamp_before_pages_can_omit_requests_sharing_the_boundary_timestamp() {
+    const T: u64 = 1100;
+    let store = memory();
+    let (q, _, opened) = paid(&store);
+    let a = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let make = |key: String, at: u64| {
+        let held = store.reserve(&a, &root.id, &key, 1, 0, at, &model).unwrap();
+        store.settle(&held.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed", at).unwrap();
+        held.id
+    };
+    let older: Vec<String> = (0..4).map(|n| make(format!("older-{n}"), 1000 + n)).collect();
+    let tied: Vec<String> = (0..6).map(|n| make(format!("tied-{n}"), T)).collect();
+    let newer: Vec<String> = (0..96).map(|n| make(format!("newer-{n}"), T + 1 + n)).collect();
+    let ids = |page: Vec<RequestView>| page.into_iter().map(|request| request.id).collect::<Vec<_>>();
+    let reversed = |ids: &[String]| ids.iter().rev().cloned().collect::<Vec<_>>();
+
+    let first = ids(store.requests(&a, None).unwrap());
+    let mut expected = reversed(&newer);
+    expected.extend(reversed(&tied[2..]));
+    assert_eq!(first, expected);
+    assert_eq!(store.request_view(&a, first.last().unwrap()).unwrap().created_at, T);
+
+    let exclusive = ids(store.requests(&a, Some(T)).unwrap());
+    assert_eq!(exclusive, reversed(&older));
+    let listed: std::collections::HashSet<&String> = first.iter().chain(&exclusive).collect();
+    let omitted: Vec<&String> = older.iter().chain(&tied).chain(&newer).filter(|id| !listed.contains(id)).collect();
+    assert_eq!(omitted, [&tied[0], &tied[1]], "the boundary tie's unseen requests");
+
+    let inclusive = ids(store.requests(&a, Some(T + 1)).unwrap());
+    let mut expected = reversed(&tied);
+    expected.extend(reversed(&older));
+    assert_eq!(inclusive, expected);
+    assert_eq!(inclusive[..4], first[96..], "the inclusive cursor repeats listed requests");
+
+    for (n, id) in tied[..2].iter().enumerate() {
+        let view = store.request_view(&a, &format!("tied-{n}")).unwrap();
+        assert_eq!((view.id.as_str(), view.created_at, view.status.as_str()), (id.as_str(), T, "completed"));
+    }
+    let receipt = store.receipt(&a, PROVIDER_KEY, 1300).unwrap();
+    assert_eq!(receipt.payload.requests.iter().map(|request| request.id.clone()).collect::<Vec<_>>(), first);
+}
+
+/// Task 2.3: "The positive receipt sequence SHALL increase durably per account across
+/// restart; signing or persistence failure SHALL not return a successful uncommitted
+/// receipt", and receipt issuance "may advance only its receipt sequence". Receipts for paid
+/// account A and free accounts B and C, interleaved across two reopenings, number 1, 2, ...
+/// per account independently; each verifies, binds the stored account and changes only its
+/// own account's sequence (complete rows).
+///
+/// Each failure returns no receipt and leaves every row unchanged: another signer
+/// (`wrong_provider`), a malformed signing key, an A-scoped `AFTER UPDATE OF sequence`
+/// trigger raising `RAISE(FAIL)` (before and after reopening, while B still advances), and a
+/// deferred foreign-key witness that refuses the commit after the sequence write (before
+/// and after reopening; no witness survives). After the fixtures are removed, A's next
+/// receipt takes exactly the next number: no gap, no reuse. With C's stored sequence
+/// restored to `i64::MAX - 1` (issuing 2^63 receipts is not feasible), C's next receipt
+/// takes `i64::MAX` and the following one is refused as exhausted with no row changed, also
+/// after reopening, while A and B continue.
+#[test]
+fn receipt_sequences_are_durable_per_account_and_failed_issuance_commits_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.sqlite");
+    let mut store = BillingStore::open(&path, &network()).unwrap();
+    let (q, _, opened) = paid(&store);
+    let a = q.payload.id.clone();
+    let model = q.payload.model.clone();
+    let root = opened.credential.unwrap();
+    let settled = store.reserve(&a, &root.id, "receipt-settled", 1, 1, 103, &model).unwrap();
+    store.settle(&settled.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", 104).unwrap();
+    store.reserve(&a, &root.id, "receipt-held", 10, 20, 105, &model).unwrap();
+    let [b, c] = [0, 1].map(|_| {
+        let free = quote(0, true);
+        store.store_quote(&free, 106).unwrap();
+        store.open_account(&free, None, 106).unwrap();
+        free.payload.id
+    });
+    let provider = q.payload.provider_wallet.clone();
+    let issue = |store: &BillingStore, account: &str, at: u64, sequence: u64| {
+        let mut expected = expiry_ledger_rows(&path);
+        let receipt = store.receipt(account, PROVIDER_KEY, at).unwrap();
+        protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &provider).unwrap();
+        let row = expiry_row(&mut expected, "accounts", account);
+        assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), row[3], "{account}");
+        assert_eq!((receipt.payload.sequence, receipt.payload.issued_at), (sequence, at), "{account}");
+        row[4] = json!(sequence);
+        assert_eq!(expiry_ledger_rows(&path), expected, "a receipt changed more than its own sequence");
+    };
+    let refused = |store: &BillingStore, account: &str, key: &str, expected_error: &str, stage: &str| {
+        let before = expiry_ledger_rows(&path);
+        let error = store.receipt(account, key, 200).unwrap_err();
+        assert!(error.contains(expected_error), "{stage}: {error}");
+        assert_eq!(expiry_ledger_rows(&path), before, "{stage}: a failed receipt changed the ledger");
+    };
+
+    issue(&store, &a, 110, 1);
+    issue(&store, &b, 111, 1);
+    issue(&store, &a, 112, 2);
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    issue(&store, &b, 113, 2);
+    issue(&store, &a, 114, 3);
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    issue(&store, &c, 115, 1);
+    issue(&store, &a, 116, 4);
+
+    refused(&store, &a, OWNER_KEY, "wrong_provider:", "another signer");
+    refused(&store, &a, "not-a-signing-key", "", "a malformed signing key");
+
+    let fixture = Connection::open(&path).unwrap();
+    fixture
+        .execute_batch(&format!(
+            "CREATE TRIGGER receipt_sequence_fault AFTER UPDATE OF sequence ON accounts WHEN NEW.id='{a}'
+             BEGIN SELECT RAISE(FAIL,'injected receipt sequence failure'); END;"
+        ))
+        .unwrap();
+    refused(&store, &a, PROVIDER_KEY, "injected receipt sequence failure", "sequence write failure");
+    issue(&store, &b, 120, 3);
+    drop(store);
+    store = BillingStore::open(&path, &network()).unwrap();
+    refused(&store, &a, PROVIDER_KEY, "injected receipt sequence failure", "sequence write failure, reopened");
+    fixture.execute_batch("DROP TRIGGER receipt_sequence_fault").unwrap();
+
+    let before = expiry_ledger_rows(&path);
+    fixture
+        .execute_batch(&format!(
+            "CREATE TABLE receipt_commit_parent(id TEXT PRIMARY KEY);
+             CREATE TABLE receipt_commit_witness(account TEXT NOT NULL
+                 REFERENCES receipt_commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+             CREATE TRIGGER receipt_commit_fault AFTER UPDATE OF sequence ON accounts WHEN NEW.id='{a}'
+             BEGIN INSERT INTO receipt_commit_witness VALUES(NEW.id); END;"
+        ))
+        .unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        let error = store.receipt(&a, PROVIDER_KEY, 121).unwrap_err();
+        assert!(error.contains("FOREIGN KEY constraint failed"), "reopened {reopened}: {error}");
+        let (witnesses, sequence): (u64, u64) = fixture
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM receipt_commit_witness),(SELECT sequence FROM accounts WHERE id=?1)",
+                [&a],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((witnesses, sequence), (0, 4), "reopened {reopened}: a refused commit persisted");
+    }
+    fixture
+        .execute_batch("DROP TRIGGER receipt_commit_fault; DROP TABLE receipt_commit_witness; DROP TABLE receipt_commit_parent;")
+        .unwrap();
+    assert_eq!(expiry_ledger_rows(&path), before, "a refused commit changed the ledger");
+    issue(&store, &a, 122, 5);
+
+    fixture
+        .execute("UPDATE accounts SET sequence=?1 WHERE id=?2", params![i64::MAX - 1, c])
+        .unwrap();
+    issue(&store, &c, 123, i64::MAX as u64);
+    for reopened in [false, true] {
+        if reopened {
+            drop(store);
+            store = BillingStore::open(&path, &network()).unwrap();
+        }
+        let before = expiry_ledger_rows(&path);
+        assert_eq!(store.receipt(&c, PROVIDER_KEY, 124).unwrap_err(), "receipt sequence exhausted");
+        assert_eq!(expiry_ledger_rows(&path), before, "reopened {reopened}: exhaustion changed the ledger");
+    }
+    issue(&store, &a, 125, 6);
+    issue(&store, &b, 126, 4);
+}
+
+/// Task 2.3: a receipt binds "a consistent account/request snapshot" when another writer
+/// competes, by a deterministic schedule. A competing connection applies the production
+/// settlement transition (`settle_request`) of a 30-wei hold inside its own uncommitted
+/// write transaction. A receipt writer on an independent connection starts and must wait
+/// for the write lock (its busy handler reports the wait and holds it there). The competing
+/// transaction then commits, or rolls back, and the receipt continues.
+///
+/// The receipt binds exactly the committed state: the settled request and account (17 wei
+/// charged, 966 available, 10 reserved) after a commit, the original hold (953 available,
+/// 40 reserved) after a rollback, never a mixture, and only its sequence changes. Two
+/// further receipt writers waiting behind one competing writer then take sequences 3 and 4,
+/// never the same number. Would catch a request page or sequence read outside the receipt's
+/// write transaction.
+#[test]
+fn a_receipt_waits_for_a_competing_settlement_and_binds_only_committed_state() {
+    use std::{cell::RefCell, sync::mpsc, time::Duration};
+    thread_local! {
+        static RECEIPT_WAIT: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> =
+            const { RefCell::new(None) };
+    }
+    // rusqlite accepts a function pointer. The first wait for the write lock is reported
+    // and held until released; later waits retry every millisecond for up to ten seconds.
+    fn wait_for_release(attempts: i32) -> bool {
+        RECEIPT_WAIT.with(|slot| match slot.borrow_mut().take() {
+            Some((blocked, release)) => {
+                blocked.send(()).is_ok() && release.recv_timeout(Duration::from_secs(10)).is_ok()
+            }
+            None => {
+                std::thread::sleep(Duration::from_millis(1));
+                attempts < 10_000
+            }
+        })
+    }
+    /// A receipt writer's own connection, opened before any competing writer holds the lock.
+    fn receipt_writer(path: &Path) -> BillingStore {
+        let writer = BillingStore::open(path, &network()).unwrap();
+        writer.db.lock().unwrap().busy_handler(Some(wait_for_release)).unwrap();
+        writer
+    }
+    type Started = (mpsc::Receiver<()>, mpsc::Sender<()>, std::thread::JoinHandle<Result<Signed<UsageReceipt>, String>>);
+    fn start_receipt(writer: BillingStore, account: &str, issued_at: u64) -> Started {
+        let (blocked_tx, blocked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let account = account.to_string();
+        let worker = std::thread::spawn(move || {
+            RECEIPT_WAIT.with(|slot| *slot.borrow_mut() = Some((blocked_tx, release_rx)));
+            writer.receipt(&account, PROVIDER_KEY, issued_at)
+        });
+        (blocked_rx, release_tx, worker)
+    }
+
+    for commit in [true, false] {
+        let case = if commit { "committed" } else { "rolled back" };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.sqlite");
+        let store = BillingStore::open(&path, &network()).unwrap();
+        let (q, _, opened) = paid(&store);
+        let id = q.payload.id.clone();
+        let model = q.payload.model.clone();
+        let root = opened.credential.unwrap();
+        let prior = store.reserve(&id, &root.id, "receipt-prior", 1, 1, 103, &model).unwrap();
+        store.settle(&prior.id, &TokenUsage { prompt_tokens: 1, completion_tokens: 1 }, "completed", 104).unwrap();
+        let contended = store.reserve(&id, &root.id, "receipt-contended", 10, 20, 105, &model).unwrap();
+        let held = store.reserve(&id, &root.id, "receipt-held", 5, 5, 106, &model).unwrap();
+        assert_eq!(store.receipt(&id, PROVIDER_KEY, 107).unwrap().payload.sequence, 1);
+        let mut expected = expiry_ledger_rows(&path);
+        if commit {
+            expect_terminal(&mut expected, &contended.id, "completed", Some((10, 7, 17)), 110);
+        }
+        expiry_row(&mut expected, "accounts", &id)[4] = json!(2);
+
+        let writer = receipt_writer(&path);
+        let mut competitor = Connection::open(&path).unwrap();
+        let transaction = competitor.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        let (settled, invalid) = settle_request(
+            &transaction,
+            &contended.id,
+            &TokenUsage { prompt_tokens: 10, completion_tokens: 7 },
+            "completed",
+            None,
+            110,
+        )
+        .unwrap();
+        assert_eq!((settled.status.as_str(), settled.cost_wei.as_str(), invalid), ("completed", "17", false));
+        let (blocked, release, worker) = start_receipt(writer, &id, 111);
+        blocked
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("{case}: the receipt must wait for the competing write lock"));
+        assert!(!worker.is_finished(), "{case}");
+        if commit {
+            transaction.commit().unwrap();
+        } else {
+            transaction.rollback().unwrap();
+        }
+        release.send(()).unwrap();
+        let receipt = worker.join().unwrap().unwrap();
+        protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
+        assert_eq!(expiry_ledger_rows(&path), expected, "{case}");
+        assert_eq!(receipt.payload.sequence, 2, "{case}");
+        let account_row = expiry_row(&mut expected, "accounts", &id)[3].clone();
+        assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), account_row, "{case}");
+        let records: Vec<Value> = [&held.id, &contended.id, &prior.id].iter().map(|request| request_record(&expected, request)).collect();
+        assert_eq!(serde_json::to_value(&receipt.payload.requests).unwrap(), Value::Array(records), "{case}");
+        let account = &receipt.payload.account;
+        assert_eq!(
+            (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+            if commit { ("966", "10", "19") } else { ("953", "40", "2") },
+            "{case}"
+        );
+
+        // Two receipt writers waiting behind one competing writer take distinct numbers.
+        let writers = [receipt_writer(&path), receipt_writer(&path)];
+        let mut competitor = Connection::open(&path).unwrap();
+        let transaction = competitor.transaction_with_behavior(TransactionBehavior::Immediate).unwrap();
+        let started: Vec<Started> = writers
+            .into_iter()
+            .zip([112, 113])
+            .map(|(writer, issued_at)| start_receipt(writer, &id, issued_at))
+            .collect();
+        for (blocked, _, _) in &started {
+            blocked
+                .recv_timeout(Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("{case}: each receipt must wait for the competing write lock"));
+        }
+        transaction.commit().unwrap();
+        for (_, release, _) in &started {
+            release.send(()).unwrap();
+        }
+        let mut sequences: Vec<u64> = started
+            .into_iter()
+            .map(|(_, _, worker)| {
+                let receipt = worker.join().unwrap().unwrap();
+                protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &q.payload.provider_wallet).unwrap();
+                assert_eq!(serde_json::to_value(&receipt.payload.account).unwrap(), account_row, "{case}");
+                receipt.payload.sequence
+            })
+            .collect();
+        sequences.sort();
+        assert_eq!(sequences, [3, 4], "{case}: concurrent receipts reused a sequence number");
+        expiry_row(&mut expected, "accounts", &id)[4] = json!(4);
+        assert_eq!(expiry_ledger_rows(&path), expected, "{case}");
+    }
+}
+
+/// One bodiless GET to the control router or, when `public`, the public inference router,
+/// with `bearer` when given. Returns the status and document; no response echoes the bearer.
+async fn read_route(
+    routes: &CredentialRoutes,
+    public: bool,
+    path: &str,
+    bearer: Option<&str>,
+) -> (axum::http::StatusCode, Value) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder().method("GET").uri(path);
+    if let Some(bearer) = bearer {
+        request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    let request = request.body(axum::body::Body::empty()).unwrap();
+    let response = if public {
+        crate::inference_gateway::router(routes.state.clone()).oneshot(request).await.unwrap()
+    } else {
+        crate::contracts::router(routes.state.clone()).oneshot(request).await.unwrap()
+    };
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    if let Some(bearer) = bearer {
+        assert!(!contains(&bytes, bearer.as_bytes()), "a response echoed the bearer");
+    }
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// Decodes and verifies a signed receipt document from `routes`' provider and returns its
+/// payload, which must have exactly the receipt members and the complete network/provider.
+fn routed_receipt(routes: &CredentialRoutes, document: Value) -> Value {
+    let receipt: Signed<UsageReceipt> = serde_json::from_value(document).unwrap();
+    protocol::verify(protocol::RECEIPT_DOMAIN, &receipt, &routes.state.wallet).unwrap();
+    let payload = serde_json::to_value(&receipt.payload).unwrap();
+    assert_eq!(members(&payload), RECEIPT_MEMBERS);
+    assert_eq!(
+        (&payload["network"], &payload["provider_wallet"]),
+        (&serde_json::to_value(network()).unwrap(), &json!(routes.state.wallet))
+    );
+    payload
+}
+
+/// Task 2.3 through the production control and public inference routers: "Request status
+/// and receipt access SHALL retain account isolation and existing read authorization", and
+/// "Reads SHALL preserve financial amounts and original request outcomes; receipt issuance
+/// may advance only its receipt sequence". Paid account A holds 101 one-wei requests at
+/// distinct logical times through its root and an `infer`-only credential (known, explicit
+/// unknown and one still reserved); free account B, same owner, holds a request under A's
+/// newest key.
+///
+/// A `read`-only bearer, the root bearer and owner proofs read the 100-request list (the
+/// 100 newest, newest first), its `before` continuation (the oldest), the held request by
+/// opaque identifier and by key, the oldest by key, and (bearers) the public status of the
+/// key, each equal to its stored record; every ledger row stays identical (owner proofs
+/// consume only their own challenge, leaving an unrelated pending proof of the same wallet,
+/// and change only the challenge issuance budget). Each receipt binds the stored account and the same
+/// 100 records and changes only A's receipt sequence. No credential, an `infer`-only bearer,
+/// a revoked bearer, an expired bearer (a restored past `expires_at`; nothing waits) and
+/// B's bearer are refused on every control read, and all but B's on the public status,
+/// with every row unchanged. B's bearer reads only B: the key names B's own request on the
+/// public route, A's opaque identifier is not found there, and B's receipt binds only B.
+#[tokio::test]
+async fn request_and_receipt_reads_are_account_scoped_and_change_no_financial_row() {
+    use axum::http::StatusCode;
+    let routes = CredentialRoutes::new(1000, 4);
+    let a = routes.id();
+    let model = routes.agreement.payload.model.clone();
+    let root = routes.opened.credential.clone().unwrap();
+    let now = protocol::now().unwrap();
+    let reader = routes.issue(1, &["read"]);
+    let infer_only = routes.issue(2, &["infer"]);
+    let revoked = routes.issue(1, &["infer", "read"]);
+    routes.ledger().revoke_credential(&a, &revoked.id).unwrap();
+    let expired = routes.issue(1, &["infer", "read"]);
+    let restored = Connection::open(&routes.path)
+        .unwrap()
+        .execute(
+            "UPDATE credentials SET record=json_set(record,'$.expires_at',?1) WHERE id=?2",
+            params![now - 1, expired.id],
+        )
+        .unwrap();
+    assert_eq!(restored, 1);
+    let free = {
+        let mut payload = quote(0, true).payload;
+        payload.issued_at = now;
+        payload.expires_at = now + 300;
+        protocol::sign(protocol::QUOTE_DOMAIN, payload, PROVIDER_KEY).unwrap()
+    };
+    routes.ledger().store_quote(&free, now).unwrap();
+    let b = free.payload.id.clone();
+    let foreign = routes.ledger().open_account(&free, None, now).unwrap().credential.unwrap();
+
+    let base = now - 1000;
+    let mut ids = Vec::new();
+    for n in 0..101u64 {
+        let credential = if n % 2 == 0 { &root.id } else { &infer_only.id };
+        let held = routes.ledger().reserve(&a, credential, &format!("page-{n}"), 1, 0, base + n, &model).unwrap();
+        if n < 100 {
+            let (usage, status) = if n % 5 == 0 {
+                (TokenUsage::default(), "cancelled_unknown_usage")
+            } else {
+                (TokenUsage { prompt_tokens: 1, completion_tokens: 0 }, "completed")
+            };
+            routes.ledger().settle(&held.id, &usage, status, base + n).unwrap();
+        }
+        ids.push(held.id);
+    }
+    let held_id = ids[100].clone();
+    let b_request = routes.ledger().reserve(&b, &foreign.id, "page-100", 1, 0, base + 100, &free.payload.model).unwrap();
+    // The first control request binds the provider identity; later ones change nothing.
+    let (status, _) = read_route(&routes, false, &format!("/v1/contracts/{a}"), Some(&reader.bearer)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut baseline = expiry_ledger_rows(&routes.path);
+    let account = routes.ledger().account(&a).unwrap();
+    assert_eq!(
+        (account.available_wei.as_str(), account.reserved_wei.as_str(), account.spent_wei.as_str()),
+        ("914", "1", "80")
+    );
+    let page: Vec<Value> = ids[1..].iter().rev().map(|id| request_record(&baseline, id)).collect();
+    let oldest = request_record(&baseline, &ids[0]);
+    let held = request_record(&baseline, &held_id);
+    let list = format!("/v1/contracts/{a}/requests");
+    let continuation = format!("{list}?before={}", base + 1);
+    let by_id = format!("{list}/{held_id}");
+    let by_key = format!("{list}/page-100");
+    let oldest_by_key = format!("{list}/page-0");
+    let receipt_path = format!("/v1/contracts/{a}/receipt");
+    let status_path = "/v1/requests/page-100";
+    let reads: [(bool, &str, Value); 6] = [
+        (false, &list, Value::Array(page.clone())),
+        (false, &continuation, json!([oldest])),
+        (false, &by_id, held.clone()),
+        (false, &by_key, held.clone()),
+        (false, &oldest_by_key, oldest.clone()),
+        (true, status_path, held.clone()),
+    ];
+    // Owner proofs may change only the challenge issuance budget (`challenge*` buckets);
+    // every other row, the challenges table included, is compared.
+    let owner_view = |rows: &ExpiryRows| {
+        let mut rows = rows.clone();
+        rows.get_mut("rate_limits").unwrap().retain(|row| !row[0].as_str().unwrap().starts_with("challenge"));
+        rows
+    };
+    let mut sequence = 0;
+    let mut check_receipt = |document: Value, baseline: &mut ExpiryRows, reader: &str| {
+        let payload = routed_receipt(&routes, document);
+        let account = expiry_row(baseline, "accounts", &a);
+        assert_eq!(payload["account"], account[3], "{reader}");
+        assert_eq!(payload["requests"], Value::Array(page.clone()), "{reader}");
+        sequence += 1;
+        assert_eq!(payload["sequence"], json!(sequence), "{reader}");
+        account[4] = json!(sequence);
+    };
+
+    for (reader_name, bearer) in [("read bearer", &reader.bearer), ("root bearer", &root.bearer)] {
+        for (public, path, expected) in &reads {
+            let (status, document) = read_route(&routes, *public, path, Some(bearer)).await;
+            assert_eq!((status, &document), (StatusCode::OK, expected), "{reader_name}: {path}");
+            if path.contains("/requests/") {
+                assert_eq!(members(&document), REQUEST_MEMBERS);
+            }
+        }
+        assert_eq!(expiry_ledger_rows(&routes.path), baseline, "{reader_name}: a request read changed the ledger");
+        let (status, document) = read_route(&routes, false, &receipt_path, Some(bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{reader_name}: {document}");
+        check_receipt(document, &mut baseline, reader_name);
+        assert_eq!(expiry_ledger_rows(&routes.path), baseline, "{reader_name}: a receipt changed more than its sequence");
+    }
+    // An unrelated pending proof of the same owner wallet: each owner read consumes only its
+    // own proof, so this one stays pending.
+    let pending = AuthPayload {
+        network: network(),
+        provider_wallet: routes.state.wallet.clone(),
+        wallet: crate::wallet::address_from_private_key(OWNER_KEY).unwrap(),
+        method: "GET".into(),
+        path: format!("/v1/contracts/{a}/credentials"),
+        body_hash: protocol::hash_hex(b""),
+        nonce: protocol::random_id(),
+        expires_at: protocol::now().unwrap() + 120,
+    };
+    routes.ledger().create_challenge(&pending, protocol::now().unwrap()).unwrap();
+    let mut owner_baseline = expiry_ledger_rows(&routes.path);
+    assert_eq!(owner_baseline["challenges"].len(), 1);
+    for (public, path, expected) in &reads {
+        if *public {
+            continue;
+        }
+        let (status, document, nonce) = routes.owner("GET", path, Vec::new()).await;
+        assert_eq!((status, &document), (StatusCode::OK, expected), "owner: {path}");
+        assert!(routes.ledger().challenge(&nonce).is_err(), "owner: {path}: the proof was not consumed");
+    }
+    assert_eq!(owner_view(&expiry_ledger_rows(&routes.path)), owner_view(&owner_baseline), "owner reads changed the ledger");
+    let (status, document, _) = routes.owner("GET", &receipt_path, Vec::new()).await;
+    assert_eq!(status, StatusCode::OK, "{document}");
+    check_receipt(document, &mut owner_baseline, "owner");
+    assert_eq!(owner_view(&expiry_ledger_rows(&routes.path)), owner_view(&owner_baseline), "an owner receipt changed more than its sequence");
+    assert_eq!(routes.ledger().challenge(&pending.nonce).unwrap().path, pending.path, "an owner read consumed another proof");
+
+    // Refused authority, with every row unchanged.
+    let baseline = expiry_ledger_rows(&routes.path);
+    let control_reads = [list.as_str(), continuation.as_str(), by_id.as_str(), by_key.as_str(), receipt_path.as_str()];
+    for (who, bearer, status, control_code, public_code) in [
+        ("no credential", None, StatusCode::UNAUTHORIZED, "unauthorized", Some("invalid_api_key")),
+        ("an infer-only bearer", Some(infer_only.bearer.as_str()), StatusCode::FORBIDDEN, "forbidden", Some("credential_scope")),
+        ("a revoked bearer", Some(revoked.bearer.as_str()), StatusCode::UNAUTHORIZED, "unauthorized", Some("invalid_api_key")),
+        ("an expired bearer", Some(expired.bearer.as_str()), StatusCode::UNAUTHORIZED, "unauthorized", Some("invalid_api_key")),
+        ("another account's bearer", Some(foreign.bearer.as_str()), StatusCode::FORBIDDEN, "forbidden", None),
+    ] {
+        for path in control_reads {
+            let (code, document) = read_route(&routes, false, path, bearer).await;
+            assert_eq!((code, document["error"]["code"].as_str()), (status, Some(control_code)), "{who}: {path}: {document}");
+        }
+        if let Some(public_code) = public_code {
+            let (code, document) = read_route(&routes, true, status_path, bearer).await;
+            assert_eq!((code, document["error"]["code"].as_str()), (status, Some(public_code)), "{who}: {document}");
+        }
+        assert_eq!(expiry_ledger_rows(&routes.path), baseline, "{who}: a refused read changed the ledger");
+    }
+    // Another account's bearer resolves keys and identifiers only within its own account.
+    let (code, document) = read_route(&routes, true, status_path, Some(&foreign.bearer)).await;
+    assert_eq!((code, &document), (StatusCode::OK, &request_record(&baseline, &b_request.id)));
+    assert_eq!(document["contract_id"], b);
+    let (code, document) = read_route(&routes, true, &format!("/v1/requests/{held_id}"), Some(&foreign.bearer)).await;
+    assert_eq!((code, document["error"]["code"].as_str()), (StatusCode::NOT_FOUND, Some("request_not_found")));
+    assert_eq!(expiry_ledger_rows(&routes.path), baseline);
+    let (code, document) = read_route(&routes, false, &format!("/v1/contracts/{b}/receipt"), Some(&foreign.bearer)).await;
+    assert_eq!(code, StatusCode::OK, "{document}");
+    let payload = routed_receipt(&routes, document);
+    assert_eq!(payload["requests"], json!([request_record(&baseline, &b_request.id)]));
+    assert_eq!(payload["account"]["contract_id"], b);
+    for credential in [&root, &reader] {
+        routes.authenticates(credential);
+    }
+}
+
+const CONTENT_PROMPT: &str = "zebra-quartz-prompt-7319";
+const CONTENT_RENDERED: &str = "rendered-marker-5521";
+const CONTENT_OUTPUT: [&str; 3] = ["Opal", "ine", " Lantern-4417"];
+
+/// A private llama.cpp-shaped engine for the paid fixture's chat agreement on a loopback
+/// listener, recording every call as `METHOD path`. Its template renders any prompt to
+/// `CONTENT_RENDERED`, tokenization prepares two tokens, and a private stream with final
+/// usage generates the three `CONTENT_OUTPUT` pieces, a `stop` finish and usage of two
+/// prompt and three completion tokens. Any other generation request is answered 400.
+async fn content_engine(log: Arc<Mutex<Vec<String>>>) -> (String, tokio::task::JoinHandle<()>) {
+    use axum::{
+        response::IntoResponse,
+        routing::{get, post},
+        Json, Router,
+    };
+    let generate = |Json(body): Json<Value>| async move {
+        if body["stream"] != true || body["stream_options"] != json!({"include_usage": true}) {
+            return axum::http::StatusCode::BAD_REQUEST.into_response();
+        }
+        let chunk = |choices: Value| {
+            json!({"id": "engine-response", "object": "chat.completion.chunk", "model": "test/model", "created": 1, "choices": choices})
+        };
+        let mut events: Vec<Value> = CONTENT_OUTPUT
+            .iter()
+            .map(|piece| chunk(json!([{"index": 0, "delta": {"content": piece}, "finish_reason": null}])))
+            .collect();
+        events.push(chunk(json!([{"index": 0, "delta": {}, "finish_reason": "stop"}])));
+        let mut usage = chunk(json!([]));
+        usage["usage"] = json!({"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5});
+        events.push(usage);
+        let mut text: String = events.iter().map(|event| format!("data: {event}\n\n")).collect();
+        text.push_str("data: [DONE]\n\n");
+        ([(axum::http::header::CONTENT_TYPE, "text/event-stream")], text).into_response()
+    };
+    let engine = Router::new()
+        .route("/health", get(|| async { axum::http::StatusCode::OK }))
+        .route("/apply-template", post(|| async { Json(json!({"prompt": CONTENT_RENDERED})) }))
+        .route("/tokenize", post(|| async { Json(json!({"tokens": [10, 11]})) }))
+        .route("/v1/chat/completions", post(generate))
+        .fallback(|| async { axum::http::StatusCode::NOT_FOUND })
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(format!("{} {}", request.method(), request.uri().path()));
+                    next.run(request).await
+                }
+            },
+        ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    (base, tokio::spawn(async move { axum::serve(listener, engine).await.unwrap() }))
+}
+
+/// One chat request to the public inference router with `bearer`, each of `keys` as an
+/// `Idempotency-Key` header, and `body`. Returns the status, the answer and `x-request-id`.
+async fn chat_route(
+    routes: &CredentialRoutes,
+    bearer: &str,
+    keys: &[&[u8]],
+    body: &Value,
+) -> (axum::http::StatusCode, Value, Option<String>) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json");
+    for key in keys {
+        request = request.header("idempotency-key", axum::http::HeaderValue::from_bytes(key).unwrap());
+    }
+    let request = request.body(axum::body::Body::from(body.to_string())).unwrap();
+    let response = crate::inference_gateway::router(routes.state.clone()).oneshot(request).await.unwrap();
+    let status = response.status();
+    let header = response.headers().get("x-request-id").map(|value| value.to_str().unwrap().to_string());
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    assert!(!contains(&bytes, bearer.as_bytes()), "a response echoed the bearer");
+    (status, serde_json::from_slice(&bytes).unwrap(), header)
+}
+
+/// Every file under `directory`, recursively.
+fn files_under(directory: &Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(files_under(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// Task 2.3, requirement *Request identity prevents automatic paid replay*: "A public
+/// duplicate SHALL return HTTP 409 with `duplicate_request`, the original request identifier
+/// and its current status, rather than replay generation or retained output", with the
+/// key syntax and absent-key rule, through the production public router and a controlled
+/// private engine (not model qualification or observed llama.cpp usage).
+///
+/// A paid chat request under `content-key` dispatches once (health, template,
+/// tokenization, generation) and is charged its five wei. Repeating the key (non-streaming,
+/// streaming, a different prompt, another `infer` credential) gets exactly the 409 body
+/// naming the original identifier and `completed`, with that `x-request-id`: no engine call
+/// and no ledger row changes. Two requests without a key each get a fresh version-4 UUID key
+/// and their own dispatch and charge. Two keys, a non-ASCII key, an empty key, a path
+/// character, a space, each of the other 28 printable ASCII characters outside the alphabet
+/// and 129 characters are refused 400 before any engine call or row change; 128 characters
+/// of the whole allowed alphabet are admitted under that exact key.
+///
+/// Neither status, list, request and receipt reads (bearer and owner proof) nor any file
+/// under the provider's data directory contain the prompt, the rendered template or the
+/// generated text; request records have only the accounting members.
+#[tokio::test]
+async fn completed_inference_retains_no_content_and_duplicates_never_replay_it() {
+    use axum::http::StatusCode;
+    let mut routes = CredentialRoutes::new(1000, 2);
+    let log: Arc<Mutex<Vec<String>>> = Default::default();
+    let (engine_url, engine) = content_engine(log.clone()).await;
+    {
+        let state = Arc::get_mut(&mut routes.state).unwrap();
+        let served = &mut Arc::get_mut(&mut state.config).unwrap().models[0];
+        served.engine_url = engine_url;
+        // The served fixture's deadline, so a loaded test machine cannot time the engine out.
+        served.request_timeout_secs = 60;
+    }
+    let a = routes.id();
+    let root = routes.opened.credential.clone().unwrap();
+    let application = routes.issue(1, &["infer"]);
+    let calls = || log.lock().unwrap().clone();
+    let model_id = routes.agreement.payload.model.id.clone();
+    let body = |content: &str, stream: bool| {
+        json!({"model": model_id, "messages": [{"role": "user", "content": content}], "max_tokens": 4, "stream": stream})
+    };
+    let prompt = format!("Please remember {CONTENT_PROMPT}");
+    let dispatch = ["GET /health", "POST /apply-template", "POST /tokenize", "POST /v1/chat/completions"];
+
+    let (status, answer, header) = chat_route(&routes, &root.bearer, &[b"content-key"], &body(&prompt, false)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["choices"][0]["message"]["content"], CONTENT_OUTPUT.concat());
+    assert_eq!(calls(), dispatch);
+    let original = routes.ledger().request_view(&a, "content-key").unwrap();
+    assert_eq!(header.as_deref(), Some(original.id.as_str()));
+    assert!(opaque_request_id(&original.id));
+    assert_eq!(
+        (
+            original.status.as_str(), original.credential_id.as_str(), original.usage.prompt_tokens,
+            original.usage.completion_tokens, original.cost_wei.as_str(), original.max_cost_wei.as_str(),
+        ),
+        ("completed", root.id.as_str(), 2, 3, "5", "6")
+    );
+
+    // Duplicates name the original and never reach the engine.
+    let rows = expiry_ledger_rows(&routes.path);
+    let conflict = json!({"error": {
+        "message": "Request already exists and will not be replayed. Retrieve its status; response content is not retained.",
+        "type": "invalid_request_error", "param": null, "code": "duplicate_request",
+        "request_id": original.id, "request_status": "completed",
+    }});
+    for (bearer, content, stream) in [
+        (&root.bearer, prompt.as_str(), false),
+        (&root.bearer, prompt.as_str(), true),
+        (&root.bearer, "a different prompt", false),
+        (&application.bearer, prompt.as_str(), false),
+    ] {
+        let (status, answer, header) = chat_route(&routes, bearer, &[b"content-key"], &body(content, stream)).await;
+        assert_eq!((status, &answer), (StatusCode::CONFLICT, &conflict), "stream {stream}");
+        assert_eq!(header.as_deref(), Some(original.id.as_str()));
+    }
+    assert_eq!(calls(), dispatch, "a duplicate reached the engine");
+    assert_eq!(expiry_ledger_rows(&routes.path), rows, "a duplicate changed the ledger");
+
+    // Without a key, each request is a new operation under a fresh UUID.
+    let mut fresh = Vec::new();
+    for _ in 0..2 {
+        let (status, answer, header) = chat_route(&routes, &root.bearer, &[], &body(&prompt, false)).await;
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        let view = routes.ledger().request_view(&a, header.as_deref().unwrap()).unwrap();
+        assert_eq!(uuid::Uuid::parse_str(&view.request_id).unwrap().get_version_num(), 4);
+        assert_eq!((view.status.as_str(), view.cost_wei.as_str()), ("completed", "5"));
+        fresh.push(view);
+    }
+    assert!(fresh[0].request_id != fresh[1].request_id && fresh[0].id != fresh[1].id);
+    assert!(fresh.iter().all(|view| view.id != original.id && view.request_id != "content-key"));
+    assert_eq!(calls().len(), 3 * dispatch.len());
+    let account = routes.ledger().account(&a).unwrap();
+    assert_eq!((account.available_wei.as_str(), account.spent_wei.as_str()), ("980", "15"));
+
+    // Key syntax is checked before any engine call or ledger change.
+    let rows = expiry_ledger_rows(&routes.path);
+    let seen = calls();
+    let too_long = "k".repeat(129);
+    for (keys, code) in [
+        (vec![b"first".as_slice(), b"second".as_slice()], "invalid_idempotency_key"),
+        (vec![b"\xc3\xa9".as_slice()], "invalid_idempotency_key"),
+        (vec![b"".as_slice()], "invalid_request_id"),
+        (vec![b"bad/key".as_slice()], "invalid_request_id"),
+        (vec![b"bad key".as_slice()], "invalid_request_id"),
+        (vec![too_long.as_bytes()], "invalid_request_id"),
+    ] {
+        let (status, answer, _) = chat_route(&routes, &root.bearer, &keys, &body(&prompt, false)).await;
+        assert_eq!((status, answer["error"]["code"].as_str()), (StatusCode::BAD_REQUEST, Some(code)), "{answer}");
+    }
+    // Each of the other printable ASCII characters is outside the key alphabet, also
+    // inside an otherwise valid key.
+    let alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-";
+    let outside: Vec<[u8; 3]> =
+        (0x21u8..=0x7e).filter(|byte| !alphabet.as_bytes().contains(byte)).map(|byte| [b'k', byte, b'k']).collect();
+    assert_eq!(outside.len(), 94 - alphabet.len());
+    for key in &outside {
+        let (status, answer, _) = chat_route(&routes, &root.bearer, &[key.as_slice()], &body(&prompt, false)).await;
+        assert_eq!(
+            (status, answer["error"]["code"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid_request_id")),
+            "{}: {answer}",
+            String::from_utf8_lossy(key)
+        );
+    }
+    assert_eq!(calls(), seen, "an invalid key reached the engine");
+    assert_eq!(expiry_ledger_rows(&routes.path), rows, "an invalid key changed the ledger");
+    let longest = format!("{alphabet}{}", &alphabet[..128 - alphabet.len()]);
+    assert_eq!(longest.len(), 128);
+    let (status, answer, header) = chat_route(&routes, &root.bearer, &[longest.as_bytes()], &body(&prompt, false)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let admitted = routes.ledger().request_view(&a, &longest).unwrap();
+    assert_eq!((admitted.request_id.as_str(), header.as_deref()), (longest.as_str(), Some(admitted.id.as_str())));
+
+    // No read or stored file retains the prompt, the rendered template or the output.
+    let markers = [CONTENT_PROMPT, CONTENT_RENDERED, "Opaline", "Lantern-4417"];
+    let list = format!("/v1/contracts/{a}/requests");
+    let request = format!("{list}/{}", original.id);
+    let receipt = format!("/v1/contracts/{a}/receipt");
+    let mut documents = Vec::new();
+    for (public, path) in [(true, "/v1/requests/content-key"), (false, list.as_str()), (false, request.as_str()), (false, receipt.as_str())] {
+        let (status, document) = read_route(&routes, public, path, Some(&root.bearer)).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {document}");
+        documents.push(document);
+    }
+    for path in [&list, &request, &receipt] {
+        let (status, document, _) = routes.owner("GET", path, Vec::new()).await;
+        assert_eq!(status, StatusCode::OK, "owner {path}: {document}");
+        documents.push(document);
+    }
+    for document in &documents {
+        let text = document.to_string();
+        for marker in markers {
+            assert!(!text.contains(marker), "a read returned content {marker}");
+        }
+    }
+    let records: Vec<&Value> = [&documents[0], &documents[2], &documents[5]]
+        .into_iter()
+        .chain(documents[1].as_array().unwrap())
+        .chain(documents[3]["payload"]["requests"].as_array().unwrap())
+        .collect();
+    assert_eq!(records.len(), 3 + 4 + 4);
+    for record in records {
+        assert_eq!(members(record), REQUEST_MEMBERS);
+    }
+    for file in files_under(routes._directory.path()) {
+        let bytes = std::fs::read(&file).unwrap();
+        for marker in markers {
+            assert!(!contains(&bytes, marker.as_bytes()), "{} retains {marker}", file.display());
+        }
+    }
+    engine.abort();
+}

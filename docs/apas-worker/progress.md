@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-21 (eighty-seventh round) — Acceptance: request-accounting 2.3 portable part (request identity and attributable recovery reads)
+
+- In step at `6230e83b`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-inference-request-accounting` 2.3), through a workflow: write tests, then an adversarial review. Every statement and scenario of "Request identity prevents automatic paid replay" and "Request and receipt history supports attributable recovery" was mapped to test bodies. The code matches the spec, and no product code changed. Seven new `billing_store::tests`:
+  - **Identity** (`request_identity_and_attribution_survive_settlement_reopening_and_duplicates`): opaque request ids distinct from client keys and across accounts. Identity is unchanged through every terminal kind and reopening. Each duplicate, by key or id, changes nothing and names the original.
+  - **Pages and receipts** (`request_pages_and_receipts_hold_the_100_newest_account_requests_newest_first`): with 100, 101 and 103 requests, out-of-order times and ties, pages and receipts hold exactly the 100 newest of one account. A receipt has exactly six members, its request records are accounting-only, and only the sequence changes.
+  - **Pagination limit** (`timestamp_before_pages_can_omit_requests_sharing_the_boundary_timestamp`): the documented limit, semantics unchanged. Two of six tied requests appear on neither page, and the design now names this test.
+  - **Receipt sequences** (`receipt_sequences_are_durable_per_account_and_failed_issuance_commits_nothing`): each account has its own sequence across reopenings. A wrong signer, a malformed key, a sequence-update trigger fault or a commit refusal returns no receipt and changes no row, and the next success takes the next number. The sequence is exhausted at i64::MAX.
+  - **Competing settlement** (`a_receipt_waits_for_a_competing_settlement_and_binds_only_committed_state`): a receipt waits for an uncommitted settlement and binds either the committed or the rolled-back state, never a mixture.
+  - **Read scope** (`request_and_receipt_reads_are_account_scoped_and_change_no_financial_row`, production routers): read, root and owner reads return exact records, and every table is identical afterwards. Bearers with no credential, infer-only, revoked, expired or from another account are refused.
+  - **No stored content** (`completed_inference_retains_no_content_and_duplicates_never_replay_it`, controlled loopback engine): one dispatch per key, and duplicates get the exact 409 with no engine call. Keyless requests get fresh UUIDs, the key alphabet and length are enforced before the engine, and no read or file under the data directory contains the prompt, template or output.
+- Review: two of its mutations survived and were then caught: a `+` admitted in keys, and an owner proof deleting its wallet's other pending challenges (the read test had excluded the challenge tables). It strengthened both tests and ran 12 more mutations, which all fail. Seventeen author mutations also fail.
+- 2.3 stays open for one statement: native workflows and the supplied SDK examples must not automatically retry paid inference after an ambiguous response, cancellation or interrupted stream. The examples and Usage snippets set `max_retries=0` and `maxRetries: 0`, but no test asserts it. No test interrupts a native transport or stream or cancels natively; only the native redirect test and the mocked GUI Playground test cover part of it. This is the next step.
+- Checks (test module only): `--lib` 448 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --tests` pass; desktop `--lib desktop::` 10/10; strict validation passes. The full suite ran in round 86 on the same product code.
+
 ## 2026-11-21 (eighty-sixth round) — Acceptance and code: request-accounting 2.5 ledger edges; the unknown-usage budget counted a wildcard match
 
 - In step at `befc6f64`; whitepaper unchanged; no new answers.
@@ -963,7 +978,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3/3.1–3.4 (2.2 and 2.5 done in rounds 85–86), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5, 2.6, 2.7 and 2.8 (2.3 done in round 84), request-accounting 2.3 (only native/SDK no-automatic-retry left, round 87) and 3.1–3.4 (2.2 and 2.5 done in rounds 85–86), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
