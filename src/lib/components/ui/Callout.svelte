@@ -17,7 +17,8 @@
 
 <div class="flex items-start gap-3 px-4 py-3 rounded-xl border {s.box} {extra}" {role}>
   <Icon class="w-4 h-4 mt-0.5 shrink-0 {s.icon}" />
-  <div class="min-w-0 flex-1 text-sm leading-relaxed {s.body} {kind === 'error' ? 'whitespace-pre-wrap break-words' : ''}">
+  <!-- Exact wei, wallets and endpoints have no break points; wrap them at phone widths instead of overflowing. -->
+  <div class="min-w-0 flex-1 text-sm leading-relaxed break-words {s.body} {kind === 'error' ? 'whitespace-pre-wrap' : ''}">
     {#if title}<p class="font-semibold {s.title}">{title}</p>{/if}
     {@render children?.()}
   </div>

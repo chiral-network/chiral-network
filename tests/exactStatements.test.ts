@@ -156,6 +156,25 @@ describe('account and receipt presentation at 2^53 + 1, 2^64 - 1 and u128::MAX w
     expect(text(target)).not.toMatch(/18,446,744,073,709,552,000|9,007,199,254,740,992/);
   });
 
+  it('Usage wraps the exact provider-loss amount, which appears only in its warning, at phone width', async () => {
+    // desktop-gui-pages "Presentation may change": every required disclosure is present at phone
+    // widths. Provider loss and reversed funding are shown only in the reorganization warning;
+    // u128::MAX wei is 40 unbroken characters, which overflowed a 390 px window by 22 px until
+    // every callout body wrapped long words. jsdom has no layout, so this pins the wrap rule;
+    // the 390 px screenshots in the APAS progress log are the layout evidence.
+    usageHandlers(delivered().account);
+    mounted = mount(Usage, { target }); await settle();
+    const warning = byText(target, '.rounded-xl', /^Funding may be frozen or reversed/);
+    expect(text(warning)).toContain(`Provider loss: ${U128_MAX_CFX} CFX.`);
+    expect(definition(target, 'Provider loss')).toBeUndefined();
+    const body = [...warning!.querySelectorAll('div')].find(element => text(element).includes(U128_MAX_CFX));
+    expect(body?.classList.contains('break-words')).toBe(true);
+    // Every other callout on the page wraps the same way, whatever its kind.
+    const callouts = [...target.querySelectorAll('.rounded-xl.border')].filter(element => element.querySelector(':scope > svg'));
+    expect(callouts.length).toBeGreaterThan(1);
+    for (const callout of callouts) expect(callout.querySelector(':scope > div')?.classList.contains('break-words'), text(callout)).toBe(true);
+  });
+
   it('Account shows the exact u128::MAX available balance and the stated status', async () => {
     native.handlers = { accounts: () => [delivered().account] };
     mounted = mount(AccountPage, { target }); await settle();

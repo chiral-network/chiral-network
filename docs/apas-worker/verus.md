@@ -333,3 +333,7 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - The balance identity behind `billing_store::balanced` and the native `account_matches` (funded + provider loss = reversed + fee + spent + reserved + available, in wide arithmetic over canonical wei, with the waiver validated but never a term) — **replaceable in part**: the identity, its overflow-free evaluation over U256 and the rule that the waiver is excluded are pure integer arithmetic a Verus `ensures` clause could state; canonical-decimal parsing would need a model of the string decoder.
 - `inference_account_records_test::signed_receipts_keep_original_terms_waived_usage_unknown_exposure_and_funding_loss_distinct` and `persisted_schema3_and_native_records_read_exactly_and_corruption_fails_closed` — **not replaceable**: SQLite ledger rows, protected native files, routers, re-signed receipts and byte preservation across reopening are outside Verus's model.
+
+## Judged 2026-11-21 — callouts wrap long exact values
+
+- `tests/exactStatements.test.ts` › `Usage wraps the exact provider-loss amount, which appears only in its warning, at phone width` — **not replaceable**: rendered Svelte markup and CSS layout, outside Verus's scope.

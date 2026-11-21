@@ -1,5 +1,13 @@
 # APAS progress
 
+## 2026-11-21 (eighty-third round) — Code: callouts wrap long exact values at phone width
+
+- In step at `091f324c`; whitepaper unchanged; no new answers.
+- Code-difference step (`specify-desktop-gui-pages` requirement 15, "Presentation may change while required elements stay present and reachable"; book lines 838 and 971). Round 78's observation was rechecked with an overflow probe in headless Chrome at 390 px, using the scratchpad IPC stand-in with the shared exact fixture (never shipped). Usage was 412 px wide: the reorganization warning is the only place the page shows an account's provider loss and reversed funding, and a u128::MAX wei amount, 40 digits with no break point, ran past the window edge. Only error callouts wrapped long words.
+- Fix: every `ui/Callout.svelte` body now has `break-words`, and error callouts keep `whitespace-pre-wrap`. Afterwards, Usage, Account, Playground, Marketplace, Wallet, Network, Provider, Diagnostics and Settings are each exactly 390 px wide with no clipped text, the amount wraps inside the warning, and the 1440 px layout is unchanged (screenshots checked). The stat tiles' ellipsis is intended, because the overview repeats each value in full.
+- New test `exactStatements.test.ts` › `Usage wraps the exact provider-loss amount, which appears only in its warning, at phone width`: it asserts the amount appears only in the warning, that the warning wraps, and that every callout on Usage wraps. Reverting the class fails it. jsdom has no layout, so the screenshots are the layout evidence. Recorded as design code difference 5, and task 2.5 is ticked. 3.15's automated layout check and the native desktop screenshots (4.1) stay open.
+- Checks (frontend only): `npm test` 89/89 in 18 files; `npm run check` 0 errors, 0 warnings; `npm run build` passes; strict validation passes. Rust is unchanged since round 81's full suite.
+
 ## 2026-11-21 (eighty-second round) — Archive: `specify-inference-account-snapshot`
 
 - In step at `e7f2cac6`; whitepaper unchanged; no new answers.
@@ -917,7 +925,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), the 390 px reorganization-warning overflow of a long wei amount (snapshot archived, round 82), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
