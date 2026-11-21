@@ -36,7 +36,7 @@ Persist before returning a challenge, and never accept stateless signature-only 
 
 ## Requirement-to-source/test acceptance map
 
-This index covers all seven requirements in the [owner-control delta](specs/inference-owner-control/spec.md). Test targets are under [`src-tauri/tests`](../../../src-tauri/tests); unit cases are in the named source modules. The task-specific sections below define fixture boundaries, not additional requirements.
+This index covers all seven requirements in the [owner-control delta](specs/inference-owner-control/spec.md). Test targets are under [`src-tauri/tests`](../../../../src-tauri/tests); unit cases are in the named source modules. The task-specific sections below define fixture boundaries, not additional requirements.
 
 |Requirement|Production source|Scenario evidence and remaining limits|
 |---|---|---|
@@ -163,7 +163,7 @@ The issuer case requires HTTP 400 `invalid_request` and retains the successful v
 
 ## Operator and native-client usage consequences
 
-This acceptance work changes no endpoint, CLI flag, configuration, signing format or credential scope. Keep the [native CLI/SDK workflow](../../../README.md#developer-api-quick-start) and the whitepaper's [authorization matrix](../../../docs/chiral-book.md#authorization-matrix); do not add a second manual wallet/signing convention or put private keys in an SDK, frontend or command line.
+This acceptance work changes no endpoint, CLI flag, configuration, signing format or credential scope. Keep the [native CLI/SDK workflow](../../../../README.md#developer-api-quick-start) and the whitepaper's [authorization matrix](../../../../docs/chiral-book.md#authorization-matrix); do not add a second manual wallet/signing convention or put private keys in an SDK, frontend or command line.
 
 - For a control read, choose owner proof or the same account's read-scoped bearer deliberately. An explicit invalid owner proof is not rescued by a bearer in the same request. Inference bearers and local administrator tokens have different roles; neither substitutes for a consumer-owner mutation proof.
 - For direct HTTP integration, reconstruct the challenge against the selected provider/network and exact request before signing. Preserve body bytes and any query spelling; an empty GET/DELETE body is not `{}`. Native callers already perform reconstruction, but their current methods do not expose cursor pagination.

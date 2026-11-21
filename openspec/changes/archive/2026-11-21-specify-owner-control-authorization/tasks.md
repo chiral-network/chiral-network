@@ -26,4 +26,4 @@ Reuse existing tests and source evidence first. Add deterministic regression cov
 ## 3. Completion
 
 - [x] 3.1 Record the requirement-to-source/test acceptance correspondence and any resulting operator/native usage documentation changes; leave full payment recovery, credential lifecycle, and challenge rate-window policy to their explicit follow-on slices.
-- [ ] 3.2 Run the project checks and strict change validation after acceptance work, then archive with `openspec archive specify-owner-control-authorization --yes` only when every task is complete; never use `--skip-specs`.
+- [x] 3.2 Run the project checks and strict change validation after acceptance work, then archive with `openspec archive specify-owner-control-authorization --yes` only when every task is complete; never use `--skip-specs`. Done 2026-11-21 (round 80): round 78's full suite at `7c64549b` (31 headless targets, 740 passed, 0 failed, including `inference_owner_control_test` 61/61; desktop, npm, Svelte and Python checks), round 79's `--lib`, bins and `--tests` checks after the last test, and strict validation passed; archived.

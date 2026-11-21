@@ -1,5 +1,12 @@
 # APAS progress
 
+## 2026-11-21 (eightieth round) — Archive: `specify-owner-control-authorization`
+
+- In step at `a8240688`; whitepaper unchanged; no new answers.
+- Task 3.2 ticked, then `openspec archive specify-owner-control-authorization --yes`: the change is now `openspec/changes/archive/2026-11-21-specify-owner-control-authorization`, and `openspec/specs/inference-owner-control/spec.md` is a new normative capability (7 requirements added). The placeholder Purpose was replaced with one sentence. The archived design's relative links were moved one level up. The two links from the archived challenge-rate design now point at the archive, and one of them had a stale heading anchor, which is corrected.
+- Every task had passed: 2.2.3 in round 79's `--lib` run, and the rest in round 78's full suite and earlier. Two pending changes (`specify-account-credentials`, `specify-opening-funding-intent`) name this capability in text only; nothing links to the old path.
+- Checks: `openspec validate --all --strict --no-interactive` 34 passed, 0 failed; `openspec validate inference-owner-control --type spec --strict` valid; every relative link in both archived designs resolves. No code changed.
+
 ## 2026-11-21 (seventy-ninth round) — Acceptance: the native owner-challenge expiry window is exact
 
 - In step at `7c64549b`; whitepaper unchanged; no new answers.
@@ -892,7 +899,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Archive `specify-owner-control-authorization` (3.2; 2.2.3 done in round 79). Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.3.2 review (non-reserving and proposal-rate are archived, round 77), snapshot 3.3–3.4 (2.5 done in round 78; a long wei amount overflows the reorganization warning at 390 px), request-accounting 2.2.4/2.3/2.5/3.1–3.3, and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
