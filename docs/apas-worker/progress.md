@@ -1,5 +1,21 @@
 # APAS progress
 
+## 2026-11-22 (hundredth round) — Opening-intent 3.2 preparation: clause-gap tests and spec wording
+
+- In step at `c7d15ffe`; whitepaper unchanged; no new answers.
+- Step through a workflow: write tests and fix wording, then an adversarial review. It closes the three clause limits round 99 recorded and the wording that blocked a coherent archive. design.md gains "Task 3.2 preparation: fresh-preparation chain state and saved-acknowledgement guards". No production code changed and no seam was added; the native setup reuses round 97's `cfg(test)` broadcast-start hook.
+- Five new tests:
+  - `chain_client::tests::fresh_preparation_refuses_every_unhealthy_view_before_reading_sender_state`: 11 unhealthy views (another chain ID or genesis, syncing, a sync-health error, a null safe block, safe above the head or later than it, another block at the head height, a stale head, a future head, a stale safe block). Fresh preparation and send each fail after exactly the identity, sync and frontier reads, with no nonce, balance, gas or estimate read, no journal row and no submission.
+  - `chain_client::tests::unhealthy_views_never_replace_or_submit_an_existing_original`: an existing original is retrieved unchanged with no RPC, is never submitted under an unhealthy view, and is submitted once when the node is healthy.
+  - `consumer::tests::native_fresh_preparation_refuses_unhealthy_unaffordable_or_occupied_nonce_state`: the 11 views, value plus gas minus 1 wei, and an occupied pending nonce, through fresh `fund`, reopened `fund` and `resume`. None writes a journal row, saves raw or hash, or makes a challenge, intent request or submission. At exact cost, the account opens with one submission.
+  - `consumer::tests::native_unhealthy_node_keeps_an_acknowledged_original_recoverable`.
+  - `consumer::tests::native_saved_acknowledgement_without_its_original_or_hash_is_refused_before_any_request`: both `verify_funding_intent` branches ("acknowledgement has no original signed payment" and "saved funding transaction hash differs from its signed bytes"). They are reachable natively through `load_account`, where they are the first refusal.
+- Spec wording: three sentences in spec.md (lines 87, 133 and 244) now name the main capability `inference-proposal-admission` and its requirements instead of the archived `specify-non-reserving-quotes` and `specify-proposal-rate-budgets`. The review checked that the normative meaning is unchanged and that no other spec text changed.
+- Mutations: the author ran 10 and the review 4; each fails a named test. Seven passed every earlier consumer and chain test: skip the health check at fresh preparation (M1), check health after the sender-state reads (M2), refuse at exactly value plus gas (M4), accept a missing raw (M8), skip the saved-hash comparison (M9), accept another block at the head height (RV2), and accept a stale safe block (RV3).
+- The review reports the change ready to archive. Strict validation passes for this change and for all 34 items, no stale change name remains in spec.md, and every correspondence row cites passing tests or an evidence class. The remaining steps belong to the archive itself: link depth, the two sibling-archive links, the new main spec's Purpose, and the "pending" mentions in other changes.
+- Housekeeping: the disk had 28 GiB free, so I pruned 252,504 object files in `target/debug/deps` that no linked binary references, using the method from memory. That freed 36 GiB.
+- Checks: full suite on the working tree over `c7d15ffe`, as 3.2's project checks: headless bins build; `--all-targets` 809 passed, 0 failed, 12 ignored, across 32 targets; desktop `--lib desktop::` 10/10; npm 124 tests in 19 files; `svelte-check` 0 errors and 0 warnings; `npm run build` succeeds; script tests 80 OK; `openspec validate --all --strict` 34/34. The laptop did not sleep during the run.
+
 ## 2026-11-21 (ninety-ninth round) — Opening-intent 3.1: final correspondence, and 3.2 archive readiness
 
 - In step at `ff54db86`; whitepaper unchanged; no new answers.

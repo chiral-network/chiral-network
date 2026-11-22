@@ -256,6 +256,12 @@ struct Fixture {
     estimate_override: Mutex<Option<Value>>,
     block_transactions: AtomicU64,
     response_override: Mutex<Option<(String, Value)>>,
+    /// Opening-intent task 3.2: every RPC request received, as its method, with the tag of each
+    /// block and nonce read (`eth_getBlockByNumber:safe`, `eth_getTransactionCount:pending`).
+    methods: Mutex<Vec<String>>,
+    /// Opening-intent task 3.2: a block returned verbatim for a block tag (`safe`, `latest`)
+    /// instead of the scripted one, to present a contradictory or stale frontier.
+    block_override: Mutex<HashMap<&'static str, Value>>,
 }
 impl Fixture {
     fn new() -> Self {
@@ -285,10 +291,18 @@ impl Fixture {
             estimate_override: Mutex::new(None),
             block_transactions: AtomicU64::new(0),
             response_override: Mutex::new(None),
+            methods: Mutex::new(vec![]),
+            block_override: Mutex::new(HashMap::new()),
         }
     }
 }
 async fn fixture_rpc(State(f): State<Arc<Fixture>>, Json(request): Json<Value>) -> Json<Value> {
+    let method = request["method"].as_str().unwrap();
+    f.methods.lock().unwrap().push(match method {
+        "eth_getBlockByNumber" => format!("{method}:{}", request["params"][0].as_str().unwrap()),
+        "eth_getTransactionCount" => format!("{method}:{}", request["params"][1].as_str().unwrap()),
+        _ => method.to_owned(),
+    });
     if let Some((method, response)) = f.response_override.lock().unwrap().as_ref() {
         if request["method"] == method.as_str() {
             let mut response = response.clone();
@@ -309,6 +323,9 @@ async fn fixture_rpc(State(f): State<Arc<Fixture>>, Json(request): Json<Value>) 
             let tag = request["params"][0].as_str().unwrap();
             if tag == "safe" && f.malformed_frontier.load(Ordering::SeqCst) {
                 return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":null}));
+            }
+            if let Some(block) = f.block_override.lock().unwrap().get(tag) {
+                return Json(json!({"jsonrpc":"2.0","id":request["id"],"result":block}));
             }
             let height = match tag {
                 "latest" => 12,
@@ -687,6 +704,250 @@ async fn preparation_checks_chain_balance_and_nonce_before_persisting() {
         .unwrap()
         .is_empty());
     assert!(fixture.submissions.lock().unwrap().is_empty());
+    task.abort();
+}
+/// Opening-intent task 3.2: one unhealthy view of the configured node, the exact refusal it
+/// produces, and every RPC request a reopened client makes before that refusal.
+struct UnhealthyView {
+    name: &'static str,
+    apply: fn(&Fixture),
+    error: ChainError,
+    reads: &'static [&'static str],
+}
+const IDENTITY_READS: [&str; 4] =
+    ["eth_chainId", "eth_getBlockByNumber:0x0", "eth_chainId", "eth_syncing"];
+const FRONTIER_READS: [&str; 6] = [
+    "eth_chainId", "eth_getBlockByNumber:0x0", "eth_chainId", "eth_syncing",
+    "eth_getBlockByNumber:safe", "eth_getBlockByNumber:latest",
+];
+/// Opening-intent task 3.2: every way `settlement_view` refuses a node: another chain id or
+/// genesis, syncing or unavailable sync health, a malformed safe block, a safe frontier above,
+/// later than or different from the head, a stale or future head, and a stale safe frontier.
+/// Each block override is built from the fixture's fixed head (height 12, hash `0x11..`) and its
+/// fixed observation time, with margins far wider than the test's run time.
+fn unhealthy_views() -> Vec<UnhealthyView> {
+    fn block(height: u64, hash: &str, timestamp: u64) -> Value {
+        json!({"number":format!("0x{height:x}"),"hash":format!("0x{}", hash.repeat(32)),
+            "timestamp":format!("0x{timestamp:x}")})
+    }
+    let contradiction = || ChainError::Unavailable("RPC frontier contradicts the canonical head".into());
+    let stale = || ChainError::Unavailable("eSpace head or safe frontier is stale".into());
+    vec![
+        UnhealthyView { name: "another chain id", apply: |f| f.chain_id.store(1030, Ordering::SeqCst),
+            error: ChainError::Rejected("configured RPC chain id mismatch".into()), reads: &["eth_chainId"] },
+        UnhealthyView { name: "another genesis",
+            apply: |f| *f.genesis.lock().unwrap() = format!("0x{}", "aa".repeat(32)),
+            error: ChainError::Rejected("configured RPC genesis mismatch".into()),
+            reads: &["eth_chainId", "eth_getBlockByNumber:0x0"] },
+        UnhealthyView { name: "syncing", apply: |f| f.syncing.store(true, Ordering::SeqCst),
+            error: ChainError::Unavailable("eSpace node is syncing or sync health is unavailable".into()),
+            reads: &IDENTITY_READS },
+        UnhealthyView { name: "sync health unavailable",
+            apply: |f| f.syncing_unavailable.store(true, Ordering::SeqCst),
+            error: ChainError::Unavailable("chain RPC rejected request (code -32000)".into()),
+            reads: &IDENTITY_READS },
+        UnhealthyView { name: "malformed safe block", apply: |f| f.malformed_frontier.store(true, Ordering::SeqCst),
+            error: ChainError::Unavailable("RPC block hash missing".into()),
+            reads: &["eth_chainId", "eth_getBlockByNumber:0x0", "eth_chainId", "eth_syncing",
+                "eth_getBlockByNumber:safe"] },
+        UnhealthyView { name: "safe frontier above the head", apply: |f| f.frontier.store(13, Ordering::SeqCst),
+            error: contradiction(), reads: &FRONTIER_READS },
+        UnhealthyView { name: "safe frontier later than the head",
+            apply: |f| { f.block_override.lock().unwrap().insert("safe", block(10, "33", f.observed_at + 60)); },
+            error: contradiction(), reads: &FRONTIER_READS },
+        UnhealthyView { name: "another block at the head height",
+            apply: |f| { f.block_override.lock().unwrap().insert("safe", block(12, "ab", f.observed_at)); },
+            error: contradiction(), reads: &FRONTIER_READS },
+        UnhealthyView { name: "stale head", apply: |f| f.head_age.store(200, Ordering::SeqCst),
+            error: stale(), reads: &FRONTIER_READS },
+        UnhealthyView { name: "head in the future",
+            apply: |f| { f.block_override.lock().unwrap().insert("latest", block(12, "11", f.observed_at + 100_000)); },
+            error: stale(), reads: &FRONTIER_READS },
+        UnhealthyView { name: "stale safe frontier",
+            apply: |f| { f.block_override.lock().unwrap().insert("safe", block(10, "33", f.observed_at - 400)); },
+            error: stale(), reads: &FRONTIER_READS },
+    ]
+}
+/// Opening-intent task 3.2: restores the fixture's healthy node.
+fn heal(f: &Fixture) {
+    f.chain_id.store(CHAIN, Ordering::SeqCst);
+    *f.genesis.lock().unwrap() = crate::network::ESPACE_TESTNET_GENESIS.into();
+    f.syncing.store(false, Ordering::SeqCst);
+    f.syncing_unavailable.store(false, Ordering::SeqCst);
+    f.malformed_frontier.store(false, Ordering::SeqCst);
+    f.frontier.store(10, Ordering::SeqCst);
+    f.head_age.store(0, Ordering::SeqCst);
+    f.block_override.lock().unwrap().clear();
+}
+/// Opening-intent task 3.2: every row of every wallet-journal table, read independently.
+fn journal_rows(client: &ChainClient) -> Vec<String> {
+    let journal = Connection::open_with_flags(
+        client.dir.join("transactions.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let tables: Vec<String> = journal
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(tables.iter().any(|table| table == "transactions"));
+    let mut rows = Vec::new();
+    for table in tables {
+        let mut statement = journal.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
+        let columns = statement.column_count();
+        let mut query = statement.query([]).unwrap();
+        while let Some(row) = query.next().unwrap() {
+            let values: Vec<rusqlite::types::Value> =
+                (0..columns).map(|column| row.get(column).unwrap()).collect();
+            rows.push(format!("{table}: {values:?}"));
+        }
+    }
+    rows.sort();
+    rows
+}
+/// The RPC methods that only follow a healthy settlement view in fresh preparation.
+const AFTER_HEALTH: [&str; 5] = [
+    "eth_getTransactionCount:latest", "eth_getTransactionCount:pending", "eth_getBalance",
+    "eth_gasPrice", "eth_estimateGas",
+];
+/// Opening-intent task 3.2 (inference-opening-funding-intent, requirement "Native preparation
+/// durably owns one exact opening transaction": "Fresh preparation SHALL validate the configured
+/// chain and available sender state ... before journaling"; scenario "Unavailable funds or nonce
+/// prevent fresh preparation": "WHEN chain identity/health ... cannot satisfy fresh preparation
+/// THEN preparation creates neither another signed original nor a broadcast"). For each unhealthy
+/// view of `unhealthy_views`, a reopened client's fresh `prepare_payment_once` and fresh
+/// `send_payment_once` each return that view's exact error after exactly its identity, sync and
+/// frontier reads: no nonce, balance, fee or estimate read, no submission, no journal row in any
+/// table and no original for the operation. Positive control: with the node healthy again, the
+/// last refused operation prepares an original at nonce 0, reading the nonce, balance, fee and
+/// estimate only after the same healthy view. Would catch fresh preparation that reads sender
+/// state, signs or journals before (or without) a healthy, identity-checked settlement view.
+#[tokio::test]
+async fn fresh_preparation_refuses_every_unhealthy_view_before_reading_sender_state() {
+    let (fixture, config, task) = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let sender = wallet::address_from_private_key(&key()).unwrap();
+    let empty = journal_rows(&ChainClient::new(config.clone(), dir.path().into()).unwrap());
+    assert!(!empty.iter().any(|row| row.starts_with("transactions:")));
+    let operation = "open:fresh";
+    for view in unhealthy_views() {
+        for send in [false, true] {
+            let name = format!("{}, send={send}", view.name);
+            heal(&fixture);
+            (view.apply)(&fixture);
+            // A reopened client checks the genesis block again.
+            let client = ChainClient::new(config.clone(), dir.path().into()).unwrap();
+            fixture.methods.lock().unwrap().clear();
+            let result = if send {
+                client.send_payment_once(operation, &key(), &payee(), "100", b"commitment").await
+            } else {
+                client.prepare_payment_once(operation, &key(), &payee(), "100", b"commitment").await
+            };
+            assert_eq!(result.unwrap_err(), view.error, "{name}");
+            assert_eq!(*fixture.methods.lock().unwrap(), view.reads, "{name}");
+            assert!(client.records(&sender).unwrap().is_empty(), "{name}");
+            assert_eq!(client.original_payment_raw(operation, &sender).unwrap(), None, "{name}");
+            assert_eq!(journal_rows(&client), empty, "{name}");
+            assert!(fixture.submissions.lock().unwrap().is_empty(), "{name}");
+        }
+    }
+    heal(&fixture);
+    let client = ChainClient::new(config, dir.path().into()).unwrap();
+    fixture.methods.lock().unwrap().clear();
+    let prepared = client
+        .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+        .await
+        .unwrap();
+    assert_eq!(prepared.status, "prepared");
+    assert_eq!(decode(&prepared.raw_transaction, CHAIN).unwrap().nonce, 0);
+    let mut healthy: Vec<&str> = FRONTIER_READS.to_vec();
+    healthy.extend(AFTER_HEALTH);
+    healthy.extend(["eth_getTransactionCount:latest", "eth_getTransactionCount:pending"]);
+    assert_eq!(*fixture.methods.lock().unwrap(), healthy);
+    let records = client.records(&sender).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!((records[0].operation.as_str(), records[0].raw.as_str()), (operation, prepared.raw_transaction.as_str()));
+    assert!(fixture.submissions.lock().unwrap().is_empty());
+    task.abort();
+}
+/// Opening-intent task 3.2 (scenario "Unavailable funds or nonce prevent fresh preparation":
+/// "AND an existing original operation remains recoverable rather than being replaced"). An
+/// original is prepared at nonce 0 while the node is healthy. Then, for each unhealthy view, a
+/// reopened client: retrieves that operation with no RPC at all, getting the identical raw and
+/// hash, still `prepared`; is refused sending it with the view's exact error after exactly the
+/// view's reads, submitting nothing; and is refused a fresh preparation for another operation
+/// with the same error and no nonce, balance, fee or estimate read. Every journal row stays
+/// byte-identical. With the node healthy again, the other operation is still refused because the
+/// original owns the wallet, retrieval returns the same bytes, and sending submits exactly that
+/// original once. Would catch an unhealthy node making retrieval re-sign or fail, a send that
+/// skips reconciliation, or a fresh preparation that replaces the original.
+#[tokio::test]
+async fn unhealthy_views_never_replace_or_submit_an_existing_original() {
+    let (fixture, config, task) = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let sender = wallet::address_from_private_key(&key()).unwrap();
+    let operation = "open:existing";
+    let client = ChainClient::new(config.clone(), dir.path().into()).unwrap();
+    let original = client
+        .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+        .await
+        .unwrap();
+    assert_eq!(decode(&original.raw_transaction, CHAIN).unwrap().nonce, 0);
+    let journal = journal_rows(&client);
+    drop(client);
+    for view in unhealthy_views() {
+        let name = view.name;
+        heal(&fixture);
+        (view.apply)(&fixture);
+        let client = ChainClient::new(config.clone(), dir.path().into()).unwrap();
+        fixture.methods.lock().unwrap().clear();
+        let again = client
+            .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+            .await
+            .unwrap();
+        assert_eq!((&again.raw_transaction, &again.tx_hash, again.status.as_str()),
+            (&original.raw_transaction, &original.tx_hash, "prepared"), "{name}");
+        assert!(fixture.methods.lock().unwrap().is_empty(), "{name}: retrieval read the node");
+        let sent = client
+            .send_payment_once(operation, &key(), &payee(), "100", b"commitment")
+            .await;
+        assert_eq!(sent.unwrap_err(), view.error, "{name}");
+        assert_eq!(*fixture.methods.lock().unwrap(), view.reads, "{name}");
+        fixture.methods.lock().unwrap().clear();
+        let other = client
+            .prepare_payment_once("open:other", &key(), &payee(), "100", b"commitment")
+            .await;
+        assert_eq!(other.unwrap_err(), view.error, "{name}");
+        let reads = fixture.methods.lock().unwrap().clone();
+        assert!(!reads.iter().any(|read| AFTER_HEALTH.contains(&read.as_str())), "{name}: {reads:?}");
+        assert!(!reads.iter().any(|read| read == "eth_sendRawTransaction"), "{name}");
+        assert_eq!(journal_rows(&client), journal, "{name}");
+        assert!(fixture.submissions.lock().unwrap().is_empty(), "{name}");
+    }
+    heal(&fixture);
+    let client = ChainClient::new(config, dir.path().into()).unwrap();
+    assert_eq!(
+        client.prepare_payment_once("open:other", &key(), &payee(), "100", b"commitment").await.unwrap_err(),
+        ChainError::Pending("wallet already has an unresolved transaction; reconcile, resume, or explicitly cancel its operation".into())
+    );
+    let again = client
+        .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+        .await
+        .unwrap();
+    assert_eq!(again.raw_transaction, original.raw_transaction);
+    let sent = client
+        .send_payment_once(operation, &key(), &payee(), "100", b"commitment")
+        .await
+        .unwrap();
+    assert_eq!((sent.raw_transaction.as_str(), sent.status.as_str()), (original.raw_transaction.as_str(), "submitted"));
+    assert_eq!(*fixture.submissions.lock().unwrap(), [original.raw_transaction.clone()]);
+    let records = client.records(&sender).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!((records[0].operation.as_str(), records[0].raw.as_str(), records[0].status.as_str()),
+        (operation, original.raw_transaction.as_str(), "submitted"));
     task.abort();
 }
 #[test]

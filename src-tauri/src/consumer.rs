@@ -3077,15 +3077,135 @@ mod tests {
         /// test can change both between attempts.
         gas_price: std::sync::Mutex<u128>,
         gas_extra: std::sync::atomic::AtomicU64,
+        /// Opening-intent task 3.2: when set, the scripted node presents this unhealthy view
+        /// (`faulted_block`); `None` is the healthy node every other test uses.
+        chain_fault: std::sync::Mutex<Option<ChainFault>>,
+        /// Opening-intent task 3.2: when set, `eth_getTransactionCount` at `pending` reports this
+        /// nonce instead of `nonce`, as for an external transaction occupying the next nonce.
+        pending_nonce: std::sync::Mutex<Option<u64>>,
+    }
+    /// Opening-intent task 3.2: the unhealthy views of the configured node that a native fresh
+    /// preparation must refuse before reading sender state, one per refusal in
+    /// `ChainClient::settlement_view`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum ChainFault {
+        ChainId,
+        Genesis,
+        Syncing,
+        SyncUnavailable,
+        MalformedSafe,
+        SafeAboveHead,
+        SafeAfterHead,
+        SafeHashAtHead,
+        StaleHead,
+        FutureHead,
+        StaleSafe,
+    }
+    const CHAIN_FAULTS: [ChainFault; 11] = [
+        ChainFault::ChainId,
+        ChainFault::Genesis,
+        ChainFault::Syncing,
+        ChainFault::SyncUnavailable,
+        ChainFault::MalformedSafe,
+        ChainFault::SafeAboveHead,
+        ChainFault::SafeAfterHead,
+        ChainFault::SafeHashAtHead,
+        ChainFault::StaleHead,
+        ChainFault::FutureHead,
+        ChainFault::StaleSafe,
+    ];
+    /// Opening-intent task 3.2: the block a faulted node returns for `tag`, or `None` for the
+    /// healthy scripted block. Frontier views use a fixed head height, so the healthy fixture's
+    /// wall-time head growth between the safe and latest reads cannot hide a contradiction, and
+    /// every timestamp margin is far wider than a test's run time.
+    fn faulted_block(fault: ChainFault, tag: &str) -> Option<Value> {
+        use ChainFault::*;
+        const HEAD: u64 = 1_000;
+        let now = protocol::now().unwrap();
+        let block = |height: u64, hash: String, timestamp: u64| {
+            json!({"number":format!("0x{height:x}"),"hash":hash,"timestamp":format!("0x{timestamp:x}")})
+        };
+        let canonical = |height: u64| format!("0x{height:064x}");
+        match (fault, tag) {
+            (Genesis, "0x0") => Some(block(0, format!("0x{}", "aa".repeat(32)), 0)),
+            (MalformedSafe, "safe") => Some(Value::Null),
+            (SafeAboveHead, "safe") => Some(block(HEAD + 1, canonical(HEAD + 1), now - 10)),
+            (SafeAfterHead, "safe") => Some(block(HEAD - 10, canonical(HEAD - 10), now + 60)),
+            (SafeHashAtHead, "safe") => Some(block(HEAD, format!("0x{}", "ab".repeat(32)), now - 10)),
+            (StaleHead, "safe") => Some(block(HEAD - 10, canonical(HEAD - 10), now - 210)),
+            (StaleHead, "latest") => Some(block(HEAD, canonical(HEAD), now - 200)),
+            (FutureHead, "safe") => Some(block(HEAD - 10, canonical(HEAD - 10), now + 190)),
+            (FutureHead, "latest") => Some(block(HEAD, canonical(HEAD), now + 200)),
+            (StaleSafe, "safe") => Some(block(HEAD - 10, canonical(HEAD - 10), now - 400)),
+            (MalformedSafe | SafeAboveHead | SafeAfterHead | SafeHashAtHead | StaleSafe, "latest") => {
+                Some(block(HEAD, canonical(HEAD), now))
+            }
+            _ => None,
+        }
+    }
+    /// Opening-intent task 3.2: a faulted node's exact refusal, and every chain RPC request a
+    /// reopened consumer makes in one fresh preparation, or one send of a saved original, before
+    /// it (the wallet journal's identity check, then `settlement_view`).
+    fn fault_refusal(fault: ChainFault) -> (&'static str, Vec<&'static str>) {
+        use ChainFault::*;
+        let view = ["eth_chainId", "eth_getBlockByNumber:0x0", "eth_chainId", "eth_syncing"];
+        let frontier = [&view[..], &["eth_getBlockByNumber:safe", "eth_getBlockByNumber:latest"][..]].concat();
+        match fault {
+            ChainId => ("rejected: configured RPC chain id mismatch", vec!["eth_chainId"]),
+            Genesis => ("rejected: configured RPC genesis mismatch", view[..2].to_vec()),
+            Syncing => ("unavailable: eSpace node is syncing or sync health is unavailable", view.to_vec()),
+            SyncUnavailable => ("unavailable: chain RPC rejected request (code -32000)", view.to_vec()),
+            MalformedSafe => (
+                "unavailable: RPC block hash missing",
+                [&view[..], &["eth_getBlockByNumber:safe"][..]].concat(),
+            ),
+            SafeAboveHead | SafeAfterHead | SafeHashAtHead => {
+                ("unavailable: RPC frontier contradicts the canonical head", frontier)
+            }
+            StaleHead | FutureHead | StaleSafe => ("unavailable: eSpace head or safe frontier is stale", frontier),
+        }
+    }
+    /// Opening-intent task 3.2: the chain RPC requests the fixture received from index `from` on,
+    /// as methods, with the tag of each block and nonce read.
+    fn chain_reads(state: &FundingFixture, from: usize) -> Vec<String> {
+        state.rpc.lock().unwrap()[from..]
+            .iter()
+            .map(|(path, body)| {
+                let method = body["method"].as_str().unwrap_or_default();
+                match (path.as_str(), method) {
+                    ("/", "eth_getBlockByNumber") => format!("{method}:{}", body["params"][0].as_str().unwrap()),
+                    ("/", "eth_getTransactionCount") => format!("{method}:{}", body["params"][1].as_str().unwrap()),
+                    ("/", _) => method.to_owned(),
+                    _ => format!("unserved {path}"),
+                }
+            })
+            .collect()
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
         axum::Json(request): axum::Json<Value>,
     ) -> axum::Json<Value> {
         state.rpc.lock().unwrap().push(("/".into(), request.clone()));
+        let fault = *state.chain_fault.lock().unwrap();
         let result = match request["method"].as_str().unwrap() {
+            "eth_chainId" if fault == Some(ChainFault::ChainId) => json!("0x406"),
             "eth_chainId" => json!("0x47"),
-            "eth_syncing" => json!(false),
+            "eth_syncing" => match fault {
+                Some(ChainFault::Syncing) => {
+                    json!({"startingBlock":"0x0","currentBlock":"0x1","highestBlock":"0x2"})
+                }
+                Some(ChainFault::SyncUnavailable) => {
+                    return axum::Json(json!({"jsonrpc":"2.0","id":request["id"],
+                        "error":{"code":-32000,"message":"sync health unavailable"}}));
+                }
+                _ => json!(false),
+            },
+            "eth_getBlockByNumber" if fault
+                .and_then(|fault| faulted_block(fault, request["params"][0].as_str().unwrap()))
+                .is_some() =>
+            {
+                faulted_block(fault.unwrap(), request["params"][0].as_str().unwrap()).unwrap()
+            }
             "eth_getBlockByNumber" => {
                 let head = 100 + protocol::now().unwrap().saturating_sub(state.started_at);
                 let height = match request["params"][0].as_str().unwrap() {
@@ -3109,10 +3229,14 @@ mod tests {
                     + state.gas_extra.load(std::sync::atomic::Ordering::SeqCst);
                 json!(format!("0x{gas:x}"))
             }
-            "eth_getTransactionCount" => json!(format!(
-                "0x{:x}",
-                state.nonce.load(std::sync::atomic::Ordering::SeqCst)
-            )),
+            "eth_getTransactionCount" => {
+                let latest = state.nonce.load(std::sync::atomic::Ordering::SeqCst);
+                let nonce = match request["params"][1].as_str() {
+                    Some("pending") => state.pending_nonce.lock().unwrap().unwrap_or(latest),
+                    _ => latest,
+                };
+                json!(format!("0x{nonce:x}"))
+            }
             "eth_getBalance" => json!(format!("0x{:x}", *state.balance.lock().unwrap())),
             "eth_gasPrice" => json!(format!("0x{:x}", *state.gas_price.lock().unwrap())),
             "eth_getTransactionReceipt" => {
@@ -3586,6 +3710,8 @@ mod tests {
             obstruct_on_delivery: std::sync::Mutex::new(None),
             gas_price: std::sync::Mutex::new(1),
             gas_extra: std::sync::atomic::AtomicU64::new(0),
+            chain_fault: std::sync::Mutex::new(None),
+            pending_nonce: std::sync::Mutex::new(None),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -7243,6 +7369,296 @@ mod tests {
                 task.abort();
             }
         }
+    }
+    /// Opening-intent task 3.2 (requirement "Native preparation durably owns one exact opening
+    /// transaction": "Fresh preparation SHALL validate the configured chain and available sender
+    /// state, reject an unresolved conflicting wallet operation or occupied pending nonce, and
+    /// check funds for value plus gas before journaling"; scenario "Unavailable funds or nonce
+    /// prevent fresh preparation"). Live paid terms with nothing prepared. Fresh `fund`, then
+    /// reopened `resume` and, for every later cell, reopened `fund` and reopened `resume`, meet
+    /// each unhealthy node view of `ChainFault`, a balance one wei below the value plus the signed
+    /// gas cost, and an external transaction occupying the pending nonce. Each attempt returns the
+    /// cell's exact refusal after exactly the chain reads that precede it; for an unhealthy view
+    /// that is no nonce, balance, fee or estimate read. No attempt signs or journals an original,
+    /// saves a raw transaction or hash, sends a challenge or funding-intent request, or submits
+    /// anything. The saved terms-only file and every journal row stay byte-identical, and the
+    /// listing shows `preparation_pending`. Positive control: with the node healthy, no pending
+    /// transaction and a balance of exactly the value plus the signed gas cost, reopened `fund`
+    /// reads the same view, then the nonce, balance, fee and estimate, signs the node's exact
+    /// estimate at nonce 0, registers that original and submits it once. Would catch fresh
+    /// preparation that reads sender state before a healthy identity-checked view, a value-only
+    /// or off-by-one balance check, or preparation that queues behind a pending transaction.
+    #[tokio::test]
+    async fn native_fresh_preparation_refuses_unhealthy_unaffordable_or_occupied_nonce_state() {
+        #[derive(Clone, Copy, Debug)]
+        enum Cell {
+            Fault(ChainFault),
+            Unaffordable,
+            PendingNonce,
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let q = saved.quote.payload.clone();
+        let config = consumer.config.clone();
+        // The fixture's gas price is 1 wei and its estimate prices the opening calldata so.
+        let data = protocol::opening_data(&q).unwrap();
+        let gas = 21_000u64 + data.iter().map(|byte| if *byte == 0 { 10 } else { 40 }).sum::<u64>();
+        let cost = u128::from(gas) + q.funding_wei.parse::<u128>().unwrap();
+        let healthy = [
+            "eth_chainId", "eth_getBlockByNumber:0x0", "eth_chainId", "eth_syncing",
+            "eth_getBlockByNumber:safe", "eth_getBlockByNumber:latest",
+        ];
+        let nonce_reads = ["eth_getTransactionCount:latest", "eth_getTransactionCount:pending"];
+        let funds_reads = ["eth_getBalance", "eth_gasPrice", "eth_estimateGas"];
+        let mut cells: Vec<Cell> = CHAIN_FAULTS.iter().map(|fault| Cell::Fault(*fault)).collect();
+        cells.extend([Cell::Unaffordable, Cell::PendingNonce]);
+        let mut baseline: Option<(Vec<u8>, Vec<String>)> = None;
+        for cell in cells {
+            for with_fund in [true, false] {
+                let name = format!("{cell:?}, with_fund={with_fund}");
+                *state.chain_fault.lock().unwrap() = match cell {
+                    Cell::Fault(fault) => Some(fault),
+                    _ => None,
+                };
+                *state.balance.lock().unwrap() =
+                    if matches!(cell, Cell::Unaffordable) { cost - 1 } else { u128::MAX };
+                *state.pending_nonce.lock().unwrap() = matches!(cell, Cell::PendingNonce).then_some(1);
+                let (error, reads): (&str, Vec<&str>) = match cell {
+                    Cell::Fault(fault) => fault_refusal(fault),
+                    Cell::Unaffordable => (
+                        "rejected: insufficient balance for value plus estimated native gas",
+                        [&healthy[..], &nonce_reads[..], &funds_reads[..]].concat(),
+                    ),
+                    Cell::PendingNonce => (
+                        "pending: wallet has an external pending transaction; wait for its execution",
+                        [&healthy[..], &nonce_reads[..]].concat(),
+                    ),
+                };
+                // Each attempt uses a reopened consumer, whose wallet journal checks genesis again.
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+                let rpc = state.rpc.lock().unwrap().len();
+                let result = recover_opening(&consumer, &saved, with_fund).await;
+                assert_eq!(result.unwrap_err(), error, "{name}");
+                assert_eq!(chain_reads(&state, rpc), reads, "{name}");
+                assert!(state.controls.lock().unwrap().is_empty(), "{name}: provider request");
+                assert!(state.events.lock().unwrap().is_empty(), "{name}");
+                assert!(state.raw.lock().unwrap().is_none(), "{name}");
+                assert!(state.intent.lock().unwrap().is_none(), "{name}");
+                assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                let evidence = opening_evidence(&consumer, &q.id);
+                match &baseline {
+                    None => {
+                        // The first attempt, fresh `fund`, saved the signed terms and nothing else.
+                        assert_eq!(encode(&saved_opening(&state)).unwrap(), encode(&saved).unwrap(), "{name}");
+                        assert!(
+                            !evidence.1.iter().any(|row| row.starts_with("transactions:")),
+                            "{name}: {:?}",
+                            evidence.1
+                        );
+                        baseline = Some(evidence);
+                    }
+                    Some(baseline) => {
+                        assert_eq!(&evidence, baseline, "{name}: the saved file or journal changed")
+                    }
+                }
+                let pending = consumer.pending_accounts().unwrap();
+                assert_eq!(pending["pending"][0]["funding_stage"], "preparation_pending", "{name}");
+                assert!(pending["pending"][0]["tx_hash"].is_null(), "{name}");
+            }
+        }
+        *state.chain_fault.lock().unwrap() = None;
+        *state.pending_nonce.lock().unwrap() = None;
+        *state.balance.lock().unwrap() = cost;
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        let rpc = state.rpc.lock().unwrap().len();
+        let account = consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        assert_eq!(account.status, "active");
+        let preparation = [&healthy[..], &nonce_reads[..], &funds_reads[..], &nonce_reads[..]].concat();
+        assert_eq!(&chain_reads(&state, rpc)[..preparation.len()], &preparation[..]);
+        let ((raw, hash, nonce, status), operations) = journaled_opening(&consumer, &q.id);
+        assert_eq!((nonce.as_str(), status.as_str(), operations), ("0", "submitted", 1));
+        let bytes = hex::decode(&raw[2..]).unwrap();
+        let signed = rlp::Rlp::new(&bytes);
+        assert_eq!(
+            (signed.val_at::<u64>(0).unwrap(), signed.val_at::<u64>(1).unwrap(), signed.val_at::<u64>(2).unwrap()),
+            (0, 1, gas),
+            "nonce, gas price and gas limit"
+        );
+        let recovered = saved_opening(&state);
+        assert_eq!(
+            (recovered.raw_transaction.as_deref(), recovered.tx_hash.as_deref()),
+            (Some(raw.as_str()), Some(hash.as_str()))
+        );
+        assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()));
+        assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw]);
+        assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"]);
+        task.abort();
+    }
+    /// Opening-intent task 3.2: brings fresh `fund` to an acknowledged opening original that was
+    /// never submitted. Through the test-only hook, the node turns unhealthy (`Syncing`)
+    /// immediately before the broadcast-start write, after the provider's genuine acknowledgement
+    /// is durable; the start write commits and the first send meets the syncing node. Returns the
+    /// raw transaction and hash of the one journaled original.
+    async fn acknowledged_unsubmitted_opening(
+        consumer: &Consumer,
+        saved: &SavedAccount,
+        state: &Arc<FundingFixture>,
+    ) -> (String, String) {
+        let hook_state = state.clone();
+        let hook = BroadcastStartWriteHook::arm(move || {
+            *hook_state.chain_fault.lock().unwrap() = Some(ChainFault::Syncing);
+        });
+        let error = consumer.fund(&saved.offer, &saved.quote).await.unwrap_err();
+        drop(hook);
+        assert_eq!(error, fault_refusal(ChainFault::Syncing).0);
+        let ((raw, hash, nonce, status), operations) =
+            journaled_opening(consumer, &saved.quote.payload.id);
+        assert_eq!((nonce.as_str(), status.as_str(), operations), ("0", "prepared", 1));
+        let acknowledged = saved_opening(state);
+        let cached = state.intent.lock().unwrap().clone().unwrap();
+        let intent = acknowledged.funding_intent.as_ref().unwrap();
+        assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature));
+        assert_eq!(intent.payload.tx_hash, hash);
+        assert_eq!(
+            (acknowledged.raw_transaction.as_deref(), acknowledged.tx_hash.as_deref()),
+            (Some(raw.as_str()), Some(hash.as_str()))
+        );
+        assert!(acknowledged.funding_broadcast_started && acknowledged.account.is_none());
+        assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()));
+        assert_eq!(state.events.lock().unwrap().as_slice(), ["register"]);
+        assert!(state.submissions.lock().unwrap().is_empty());
+        (raw, hash)
+    }
+    /// Opening-intent task 3.2 (scenario "Unavailable funds or nonce prevent fresh preparation":
+    /// "AND an existing original operation remains recoverable rather than being replaced";
+    /// requirement "Restart recovery does not manufacture another opening"). An opening original
+    /// is prepared, acknowledged and marked started, but never submitted
+    /// (`acknowledged_unsubmitted_opening`). For each unhealthy view of `ChainFault`, reopened
+    /// `resume` and reopened `fund` each return the view's exact refusal after exactly the view's
+    /// chain reads: the original is retrieved from the journal with no nonce, balance, fee or
+    /// estimate read, the saved acknowledgement is reused with no challenge or registration
+    /// request, nothing is submitted, and the saved file and every journal row stay
+    /// byte-identical (one operation at nonce 0, `prepared`). Positive control: with the node
+    /// healthy, reopened `resume` submits exactly that original once and opens the account.
+    /// Would catch an unhealthy node letting recovery sign, register or submit anything, or making
+    /// it abandon or replace the original.
+    #[tokio::test]
+    async fn native_unhealthy_node_keeps_an_acknowledged_original_recoverable() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = saved.quote.payload.id.clone();
+        let config = consumer.config.clone();
+        let (raw, hash) = acknowledged_unsubmitted_opening(&consumer, &saved, &state).await;
+        let evidence = opening_evidence(&consumer, &id);
+        let controls = state.controls.lock().unwrap().len();
+        for fault in CHAIN_FAULTS {
+            for with_fund in [false, true] {
+                let name = format!("{fault:?}, with_fund={with_fund}");
+                *state.chain_fault.lock().unwrap() = Some(fault);
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+                let rpc = state.rpc.lock().unwrap().len();
+                let (error, reads) = fault_refusal(fault);
+                let result = recover_opening(&consumer, &saved, with_fund).await;
+                assert_eq!(result.unwrap_err(), error, "{name}");
+                assert_eq!(chain_reads(&state, rpc), reads, "{name}");
+                assert_eq!(state.controls.lock().unwrap().len(), controls, "{name}: provider request");
+                assert_eq!(state.events.lock().unwrap().as_slice(), ["register"], "{name}");
+                assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                assert_eq!(opening_evidence(&consumer, &id), evidence, "{name}: the saved file or journal changed");
+            }
+        }
+        *state.chain_fault.lock().unwrap() = None;
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        let account = consumer.resume(&id).await.unwrap();
+        assert_eq!(account.status, "active");
+        assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()]);
+        assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"]);
+        assert_eq!(
+            journaled_opening(&consumer, &id),
+            ((raw, hash, "0".into(), "submitted".into()), 1)
+        );
+        task.abort();
+    }
+    /// Opening-intent task 3.2 (requirement "Funding intent messages bind the original signed
+    /// payment"; requirement "Native broadcast follows verified durable acknowledgement": a saved
+    /// copy is verified again; the missing-original and saved-hash branches of
+    /// `Consumer::verify_funding_intent`). From an acknowledged opening original that was never
+    /// submitted (`acknowledged_unsubmitted_opening`), the saved file keeps the provider's genuine
+    /// acknowledgement but loses its original raw transaction, loses its saved hash, or holds the
+    /// hash of other bytes, with the start marker true or false. Reopened `resume` and reopened
+    /// `fund` each return exactly `acknowledgement has no original signed payment` or `saved
+    /// funding transaction hash differs from its signed bytes`, from `load_account`, which is the
+    /// first refusal: no chain RPC, challenge, registration or submission, and the tampered file
+    /// and every journal row stay byte-identical. Recovery control: with the genuine file
+    /// restored, reopened `resume` submits exactly the journaled original once and opens the
+    /// account. Would catch a saved acknowledgement accepted without its original bytes or with
+    /// another saved hash, after which recovery repairs the copy from the journal and submits.
+    #[tokio::test]
+    async fn native_saved_acknowledgement_without_its_original_or_hash_is_refused_before_any_request() {
+        let missing_raw = "acknowledgement has no original signed payment";
+        let other_hash = "saved funding transaction hash differs from its signed bytes";
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) = funding_fixture(directory.path(), false, false).await;
+        let id = saved.quote.payload.id.clone();
+        let config = consumer.config.clone();
+        let (raw, hash) = acknowledged_unsubmitted_opening(&consumer, &saved, &state).await;
+        *state.chain_fault.lock().unwrap() = None;
+        let genuine = fs::read(&state.account_path).unwrap();
+        let journal = opening_evidence(&consumer, &id).1;
+        let rpc = state.rpc.lock().unwrap().len();
+        let controls = state.controls.lock().unwrap().len();
+        let tampers: [(&str, fn(&mut SavedAccount), &str); 3] = [
+            ("original raw missing", |saved| saved.raw_transaction = None, missing_raw),
+            ("saved hash missing", |saved| saved.tx_hash = None, other_hash),
+            (
+                "saved hash of other bytes",
+                |saved| saved.tx_hash = Some(format!("0x{}", "88".repeat(32))),
+                other_hash,
+            ),
+        ];
+        for (tamper, apply, error) in tampers {
+            for started in [true, false] {
+                let mut tampered: SavedAccount = decode(&genuine).unwrap();
+                apply(&mut tampered);
+                tampered.funding_broadcast_started = started;
+                consumer.save_account(&tampered).unwrap();
+                let bytes = fs::read(&state.account_path).unwrap();
+                assert_ne!(bytes, genuine, "{tamper}, started={started}");
+                for with_fund in [false, true] {
+                    let name = format!("{tamper}, started={started}, with_fund={with_fund}");
+                    drop(consumer);
+                    consumer = Consumer::new(config.clone()).unwrap();
+                    let result = recover_opening(&consumer, &saved, with_fund).await;
+                    assert_eq!(result.unwrap_err(), error, "{name}");
+                    assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: chain RPC");
+                    assert_eq!(state.controls.lock().unwrap().len(), controls, "{name}: provider request");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register"], "{name}");
+                    assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                    assert_eq!(
+                        opening_evidence(&consumer, &id),
+                        (bytes.clone(), journal.clone()),
+                        "{name}: the saved file or journal changed"
+                    );
+                }
+            }
+        }
+        // Recovery control: the genuine acknowledged file restored.
+        private_write(&state.account_path, &genuine).unwrap();
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        let account = consumer.resume(&id).await.unwrap();
+        assert_eq!(account.status, "active");
+        assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()]);
+        assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"]);
+        assert_eq!(
+            journaled_opening(&consumer, &id),
+            ((raw, hash, "0".into(), "submitted".into()), 1)
+        );
+        task.abort();
     }
     #[tokio::test]
     async fn cancelling_before_preparation_never_creates_a_payment_or_reopens_the_intent() {
