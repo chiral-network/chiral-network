@@ -405,3 +405,9 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-21 — client acknowledgement and start-state persistence (opening-intent 2.5)
 
 - `native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits` and `native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write` — **replaceable in part**: that the native opening state machine reaches submission only from a state with a verified durable acknowledgement and a durable start marker, and that any failed write ends the attempt, is a reachability property of a modeled state machine Verus could prove. The real rename failure, the file and journal bytes, reopening and the mock provider and RPC are outside it.
+
+## Judged 2026-11-21 — native restart recovery (opening-intent 2.6)
+
+- `chain_client::tests::reopened_original_survives_fee_and_nonce_changes_and_refuses_other_terms` — **replaceable in part**: that retrieving an existing operation returns the journaled bytes regardless of fee or nonce inputs, and refuses an operation whose recipient, value or commitment differs, is a function of a modeled journal that Verus could prove; the SQLite journal, reopening and signing are outside it.
+- `native_unprepared_terms_are_refused_exactly_at_quote_expiry` and `native_expired_terms_create_no_payment_and_keep_an_unaccepted_original` — **replaceable in part**: the guard (refuse preparation when no original exists and `expires_at ≤ now`) is a pure predicate Verus could prove; the native files, mock provider and scripted RPC are outside it.
+- `native_journal_commit_before_local_copy_recovers_only_that_original`, `native_saved_account_recovery_refreshes_without_reopening_or_replacing_credentials` and `native_prepared_original_is_never_resigned_after_fee_or_nonce_changes` — **not replaceable**: reopened native files and journals, HTTP requests to the mock provider and credential secrets.

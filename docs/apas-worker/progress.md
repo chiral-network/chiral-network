@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-21 (ninety-eighth round) — Acceptance: opening-intent parent 2.6 (native restart recovery)
+
+- In step at `9ceb8bb8`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-opening-funding-intent` parent 2.6), through a workflow: write tests, then an adversarial review. design.md gains "Parent 2.6: native restart recovery". It covers nine clauses of *Restart recovery does not manufacture another opening*, its five crash checkpoints, and the reopening, fee and nonce sentences of *Native preparation durably owns one exact opening transaction*. Each maps to passing tests whose assertions were read in source. A lost, unsaved first opening reply is explicitly left to owner-control; no native test recovers a lost first paid opening reply, and nothing here claims it.
+- Six new tests (five in `consumer::tests`, one in `chain_client::tests`):
+  - `native_journal_commit_before_local_copy_recovers_only_that_original`: the journal committed before the consumer saved its copy. Through `resume` and repeated `fund`, after expiry and with a refused registration, the same nonce and bytes are recovered.
+  - `native_expired_terms_create_no_payment_and_keep_an_unaccepted_original`: expired unprepared terms are refused through every entry point with no RPC or request. An expired prepared original is still offered to the provider for an earlier acknowledgement, and on the provider's `expired_quote` refusal it stays byte-identical and is not broadcast.
+  - `native_saved_account_recovery_refreshes_without_reopening_or_replacing_credentials`: a saved paid account goes through both entry points with no open, registration or credential request and the same credential id and secret. A default revoked at the provider, expired, or revoked by the owner is not replaced. The review added a spare, explicitly issued credential that must never become the default.
+  - `native_prepared_original_is_never_resigned_after_fee_or_nonce_changes`, and `chain_client::tests::reopened_original_survives_fee_and_nonce_changes_and_refuses_other_terms` (a reopened journal also refuses a changed recipient, value or commitment).
+  - `native_unprepared_terms_are_refused_exactly_at_quote_expiry` (review): at `expires_at` two attempts are refused with nothing written or sent; at `expires_at−1` recovery prepares, submits once and opens.
+- Review findings, both closed: R1 (an expired default silently replaced by another stored credential) and R23 (the expiry guard treating unprepared terms as live at exactly `expires_at`) each passed all 100 consumer and chain tests. For R23 the review added a `cfg(test)`-only clock, `opening_expiry_now()`, feeding only that guard. In non-test builds it is `protocol::now()`; in `chiral` it disassembles to a single call to it, and `nm` finds no pin symbol in the five headless binaries.
+- Mutations: the author ran 11 and the review 10; each fails a named test. Four author mutations had passed all 95 pre-existing tests: M1 (the expiry guard ignores a journaled original), M4 (an expired default reopens the account), M6b (fees refreshed at first send) and M8 (recipient ignored for an existing operation).
+- Recorded limits: only the recovery guard's expiry edge is pinned; fresh `fund`'s quote check and the provider's own expiry edge are not. Native recovery does not consult provider-side revocation, so the test proves a revoked default is neither replaced nor reselected, not that recovery reports it. No code difference was found.
+- 2.6 ticked; all of opening-intent section 2 is now done. Checks: full suite (a non-test line now calls `opening_expiry_now()`, which is `protocol::now()` in non-test builds): headless bins build; `--all-targets` 804 passed, 0 failed, 12 ignored, across 32 targets; desktop `--lib desktop::` 10/10; npm 124 tests in 19 files; `svelte-check` 0 errors and 0 warnings; script tests 80 OK; strict validation passes. The laptop did not sleep during the run.
+
 ## 2026-11-21 (ninety-seventh round) — Acceptance: opening-intent 2.5.3 and parent 2.5 (client acknowledgement and start-state persistence)
 
 - In step at `9817712e`; whitepaper unchanged; no new answers.
@@ -1120,7 +1135,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.6, then 3.1 and 3.2 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 3.1 and 3.2 (section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

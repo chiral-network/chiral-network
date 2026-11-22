@@ -579,6 +579,79 @@ async fn prepare_is_durable_never_broadcasts_and_reserves_original_nonce() {
     assert_eq!(fixture.submissions.lock().unwrap().len(), 1);
     task.abort();
 }
+/// Opening-intent parent 2.6 (inference-opening-funding-intent, requirement "Native preparation
+/// durably owns one exact opening transaction": scenario "Preparation is durable without
+/// submission", "reopening the journal returns that original for the same operation and rejects
+/// changed recipient, value or commitment"; "Retrieving a prepared original SHALL NOT sign
+/// another transaction merely because time, fee estimates or the node's nonce changed"). After
+/// the journal is reopened, the node's gas price and gas estimate rise and its latest and
+/// pending nonces move past the original's. Preparing the same operation again, twice, returns
+/// the identical bytes and hash, still `prepared`, with the one journal record unchanged. The
+/// same operation with a changed recipient, value or commitment is refused by both preparation
+/// and sending, leaving that record unchanged and nothing submitted. Would catch re-signing a
+/// prepared original at a new fee or nonce, or binding an operation to changed terms.
+#[tokio::test]
+async fn reopened_original_survives_fee_and_nonce_changes_and_refuses_other_terms() {
+    let (fixture, config, task) = fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let sender = wallet::address_from_private_key(&key()).unwrap();
+    let operation = "open:reopened";
+    let client = ChainClient::new(config.clone(), dir.path().into()).unwrap();
+    let original = client
+        .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+        .await
+        .unwrap();
+    assert_eq!(original.status, "prepared");
+    let signed = decode(&original.raw_transaction, CHAIN).unwrap();
+    assert_eq!((signed.nonce, signed.max_fee), (0, 1001));
+    drop(client);
+    *fixture.gas_price.lock().unwrap() = 5_000;
+    *fixture.estimate_override.lock().unwrap() = Some(json!(format!("0x{:x}", signed.gas + 7_000)));
+    fixture.nonce.store(3, Ordering::SeqCst);
+    *fixture.pending_nonce.lock().unwrap() = Some(4);
+    let client = ChainClient::new(config, dir.path().into()).unwrap();
+    let record = || {
+        let records = client.records(&sender).unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        (record.operation.clone(), record.raw.clone(), record.status.clone(),
+            record.error.clone(), record.evidence.clone(), record.created_at)
+    };
+    let prepared = record();
+    assert_eq!((prepared.0.as_str(), prepared.1.as_str(), prepared.2.as_str()),
+        (operation, original.raw_transaction.as_str(), "prepared"));
+    for _ in 0..2 {
+        let again = client
+            .prepare_payment_once(operation, &key(), &payee(), "100", b"commitment")
+            .await
+            .unwrap();
+        assert_eq!((&again.raw_transaction, &again.tx_hash, again.status.as_str()),
+            (&original.raw_transaction, &original.tx_hash, "prepared"));
+        assert_eq!(record(), prepared);
+    }
+    let other = format!("0x{}", "44".repeat(20));
+    let payee = payee();
+    let changed: [(&str, &str, &str, &[u8]); 3] = [
+        ("recipient", &other, "100", b"commitment"),
+        ("value", &payee, "101", b"commitment"),
+        ("commitment", &payee, "100", b"other commitment"),
+    ];
+    for (name, to, value, data) in changed {
+        for send in [false, true] {
+            let result = if send {
+                client.send_payment_once(operation, &key(), to, value, data).await
+            } else {
+                client.prepare_payment_once(operation, &key(), to, value, data).await
+            };
+            assert_eq!(result.unwrap_err(),
+                ChainError::Rejected("operation id is already bound to different payment terms".into()),
+                "{name}, send={send}");
+            assert_eq!(record(), prepared, "{name}, send={send}");
+        }
+    }
+    assert!(fixture.submissions.lock().unwrap().is_empty());
+    task.abort();
+}
 #[tokio::test]
 async fn preparation_checks_chain_balance_and_nonce_before_persisting() {
     let (fixture, config, task) = fixture().await;

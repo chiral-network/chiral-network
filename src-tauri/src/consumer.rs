@@ -476,8 +476,28 @@ fn acknowledgement_receiver_now() -> Result<u64, String> {
         None => protocol::now(),
     }
 }
+/// The clock that recovery's opening quote-expiry guard (`resume_inner`: expired terms with
+/// neither saved nor journaled preparation) compares `expires_at` with. Production always
+/// samples wall time.
+#[cfg(not(test))]
+fn opening_expiry_now() -> Result<u64, String> {
+    protocol::now()
+}
+/// In-crate tests only: a clock pinned on the calling thread replaces wall time in the opening
+/// quote-expiry guard alone, so its exact edge is proved without sleeps or clock races
+/// (opening-intent parent 2.6 review).
+#[cfg(test)]
+fn opening_expiry_now() -> Result<u64, String> {
+    match PINNED_OPENING_EXPIRY_NOW.with(std::cell::Cell::get) {
+        Some(now) => Ok(now),
+        None => protocol::now(),
+    }
+}
 #[cfg(test)]
 thread_local! {
+    /// Opening-intent parent 2.6 review: pins `opening_expiry_now` on the calling thread.
+    static PINNED_OPENING_EXPIRY_NOW: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
     static PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW: std::cell::Cell<Option<u64>> =
         const { std::cell::Cell::new(None) };
     /// Opening-intent task 2.5.3: run on the calling thread immediately before the opening's
@@ -1687,7 +1707,7 @@ impl Consumer {
                 if original.as_deref() != Some(raw.as_str()) {
                     return Err("original funding journal entry is missing or inconsistent; refusing to sign a replacement".into());
                 }
-            } else if original.is_none() && saved.quote.payload.expires_at <= protocol::now()? {
+            } else if original.is_none() && saved.quote.payload.expires_at <= opening_expiry_now()? {
                 return Err("quote expired before preparing payment; no transfer was sent".into());
             }
             // Recover the same signed bytes even after a crash between journal and account persistence.
@@ -3052,6 +3072,11 @@ mod tests {
         /// account file aside and puts a directory at its path (task 2.5.2's obstruction) once,
         /// before it delivers its acknowledgement, so the consumer's acknowledgement write fails.
         obstruct_on_delivery: std::sync::Mutex<Option<(PathBuf, PathBuf)>>,
+        /// Parent task 2.6: the node's fee estimates. `eth_gasPrice` reports `gas_price` (1 wei
+        /// by default) and every `eth_estimateGas` answer adds `gas_extra` (0 by default), so a
+        /// test can change both between attempts.
+        gas_price: std::sync::Mutex<u128>,
+        gas_extra: std::sync::atomic::AtomicU64,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3080,7 +3105,8 @@ mod tests {
             "eth_estimateGas" => {
                 let data = request["params"][0]["data"].as_str().unwrap();
                 let bytes = hex::decode(data.strip_prefix("0x").unwrap()).unwrap();
-                let gas = 21_000u64 + bytes.iter().map(|byte| if *byte == 0 { 10 } else { 40 }).sum::<u64>();
+                let gas = 21_000u64 + bytes.iter().map(|byte| if *byte == 0 { 10 } else { 40 }).sum::<u64>()
+                    + state.gas_extra.load(std::sync::atomic::Ordering::SeqCst);
                 json!(format!("0x{gas:x}"))
             }
             "eth_getTransactionCount" => json!(format!(
@@ -3088,7 +3114,7 @@ mod tests {
                 state.nonce.load(std::sync::atomic::Ordering::SeqCst)
             )),
             "eth_getBalance" => json!(format!("0x{:x}", *state.balance.lock().unwrap())),
-            "eth_gasPrice" => json!("0x1"),
+            "eth_gasPrice" => json!(format!("0x{:x}", *state.gas_price.lock().unwrap())),
             "eth_getTransactionReceipt" => {
                 let receipt = state.receipt.lock().unwrap();
                 if receipt["transactionHash"] == request["params"][0] {
@@ -3558,6 +3584,8 @@ mod tests {
             registered_at: std::sync::Mutex::new(None),
             receiver_clock_on_delivery: std::sync::Mutex::new(None),
             obstruct_on_delivery: std::sync::Mutex::new(None),
+            gas_price: std::sync::Mutex::new(1),
+            gas_extra: std::sync::atomic::AtomicU64::new(0),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -6567,6 +6595,654 @@ mod tests {
         assert!(consumer.resume(&id).await.is_err());
         assert_eq!(state.submissions.lock().unwrap().len(), 2);
         task.abort();
+    }
+    /// Parent task 2.6: one native recovery attempt, by `resume` or by repeated `fund` with the
+    /// saved signed terms.
+    async fn recover_opening(
+        consumer: &Consumer,
+        saved: &SavedAccount,
+        with_fund: bool,
+    ) -> Result<AccountView, String> {
+        if with_fund {
+            consumer.fund(&saved.offer, &saved.quote).await
+        } else {
+            consumer.resume(&saved.quote.payload.id).await
+        }
+    }
+    /// Parent task 2.6: the fee, gas-estimate and balance reads, which precede signing a fresh
+    /// original, among the chain RPC requests the fixture received from index `from` on.
+    fn fresh_signing_reads(state: &FundingFixture, from: usize) -> usize {
+        state.rpc.lock().unwrap()[from..]
+            .iter()
+            .filter(|(_, body)| {
+                matches!(
+                    body["method"].as_str(),
+                    Some("eth_gasPrice" | "eth_estimateGas" | "eth_getBalance")
+                )
+            })
+            .count()
+    }
+    /// Opening-intent parent 2.6 (requirement "Restart recovery does not manufacture another
+    /// opening": "If the journal committed before the consumer saved its copy, recovery SHALL
+    /// retrieve that exact original and repair the missing local copy, not allocate another
+    /// nonce", and "An existing prepared original without a locally saved acknowledgement SHALL
+    /// remain eligible to request an earlier provider acknowledgement even after quote expiry;
+    /// absence of such acceptance SHALL block client broadcast while preserving the original";
+    /// scenario "Crash checkpoints keep one original", journal commit). The wallet journal holds
+    /// the prepared original but the saved agreement holds only the signed terms, as after a crash
+    /// between the journal commit and the consumer's save. Reopened `resume` and reopened repeated
+    /// `fund` each retrieve that original with no fee, gas or balance read, repair the local copy
+    /// and ask the provider to register exactly that original. With live terms, or expired terms
+    /// whose provider acceptance was registered before expiry, the provider's acknowledgement is
+    /// saved before the single submission of the original and the opening. With expired terms the
+    /// provider never accepted, the provider refuses, nothing is submitted, no chain RPC is made,
+    /// and the repaired copy and journal are left for recovery; the other entry point then meets
+    /// the same refusal and changes nothing. The journal keeps one operation at nonce 0
+    /// throughout. Would catch an expiry guard that ignores the journal, a repaired copy that is
+    /// not saved, or a recovery that signs another original.
+    #[tokio::test]
+    async fn native_journal_commit_before_local_copy_recovers_only_that_original() {
+        let cells = [
+            ("live terms", false, false),
+            ("expired terms accepted before expiry", true, true),
+            ("expired terms never accepted", true, false),
+        ];
+        for (terms, expired, accepted) in cells {
+            for first_with_fund in [false, true] {
+                let name = format!("{terms}, first_with_fund={first_with_fund}");
+                let directory = tempfile::tempdir().unwrap();
+                let (mut consumer, saved, state, task) =
+                    funding_fixture(directory.path(), expired, false).await;
+                let q = saved.quote.payload.clone();
+                // The journal commits the original; the consumer's save of its copy never happens.
+                let original = consumer
+                    .chain
+                    .prepare_payment_once(
+                        &format!("open:{}", q.id),
+                        &consumer.key().unwrap(),
+                        &q.provider_wallet,
+                        &q.funding_wei,
+                        &protocol::opening_data(&q).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                consumer.save_account(&saved).unwrap();
+                let terms_only = fs::read(&state.account_path).unwrap();
+                let (raw, hash) = (original.raw_transaction.clone(), original.tx_hash.clone());
+                let journaled = journaled_opening(&consumer, &q.id);
+                assert_eq!(
+                    journaled,
+                    ((raw.clone(), hash.clone(), "0".into(), "prepared".into()), 1),
+                    "{name}"
+                );
+                let journal = opening_evidence(&consumer, &q.id).1;
+                if accepted {
+                    // Fixture state: the provider registered this original before expiry.
+                    *state.intent.lock().unwrap() =
+                        Some(accepted_funding(&q, hash.clone(), &state.key));
+                    *state.raw.lock().unwrap() = Some(raw.clone());
+                }
+                let rpc = state.rpc.lock().unwrap().len();
+                let config = consumer.config.clone();
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+                let result = recover_opening(&consumer, &saved, first_with_fund).await;
+                assert_eq!(fresh_signing_reads(&state, rpc), 0, "{name}: a fresh signature was attempted");
+                assert_eq!(
+                    state.raw.lock().unwrap().as_deref(),
+                    Some(raw.as_str()),
+                    "{name}: the provider registered the journaled original"
+                );
+                let ((after_raw, after_hash, after_nonce, _), operations) =
+                    journaled_opening(&consumer, &q.id);
+                assert_eq!(
+                    (after_raw, after_hash, after_nonce, operations),
+                    (raw.clone(), hash.clone(), "0".into(), 1),
+                    "{name}"
+                );
+                if !expired || accepted {
+                    let account = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert_eq!(account.status, "active", "{name}");
+                    let recovered = saved_opening(&state);
+                    let cached = state.intent.lock().unwrap().clone().unwrap();
+                    let intent = recovered.funding_intent.as_ref().unwrap();
+                    assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature), "{name}");
+                    assert_eq!(intent.payload.tx_hash, hash, "{name}");
+                    assert_eq!(
+                        (recovered.raw_transaction.as_deref(), recovered.tx_hash.as_deref()),
+                        (Some(raw.as_str()), Some(hash.as_str())),
+                        "{name}"
+                    );
+                    assert!(recovered.funding_broadcast_started, "{name}");
+                    assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"], "{name}");
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(error.starts_with("expired_quote:"), "{name}: {error}");
+                    assert!(state.intent.lock().unwrap().is_none(), "{name}");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register"], "{name}");
+                    assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: chain RPC");
+                    assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                    let repaired = saved_opening(&state);
+                    assert_ne!(fs::read(&state.account_path).unwrap(), terms_only, "{name}");
+                    assert_eq!(
+                        (repaired.raw_transaction.as_deref(), repaired.tx_hash.as_deref()),
+                        (Some(raw.as_str()), Some(hash.as_str())),
+                        "{name}: the missing local copy is repaired"
+                    );
+                    assert!(repaired.funding_intent.is_none(), "{name}");
+                    assert!(!repaired.funding_broadcast_started && repaired.account.is_none(), "{name}");
+                    let pending = consumer.pending_accounts().unwrap();
+                    assert_eq!(pending["pending"][0]["funding_stage"], "registration_pending", "{name}");
+                    assert_eq!(pending["pending"][0]["tx_hash"], json!(hash), "{name}");
+                    let evidence = opening_evidence(&consumer, &q.id);
+                    assert_eq!(evidence.1, journal, "{name}: the journal is unchanged");
+                    // The other entry point, reopened, meets the same refusal.
+                    drop(consumer);
+                    consumer = Consumer::new(config).unwrap();
+                    let error = recover_opening(&consumer, &saved, !first_with_fund)
+                        .await
+                        .unwrap_err();
+                    assert!(error.starts_with("expired_quote:"), "{name}: {error}");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "register"], "{name}");
+                    assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()), "{name}");
+                    assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: chain RPC");
+                    assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                    assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+                }
+                task.abort();
+            }
+        }
+    }
+    /// Opening-intent parent 2.6 (scenario "Expired unaccepted preparation is not new funding
+    /// authority"; "An expired agreement with neither saved nor journaled preparation SHALL NOT
+    /// initiate a new payment"). Without any preparation, fresh `fund` refuses expired terms
+    /// before saving anything, and once the terms are saved, reopened `resume`, reopened `fund`
+    /// and repeated `fund` each return the exact "no transfer was sent" refusal; none makes a
+    /// chain RPC or provider request, and nothing is journaled. With a prepared original the
+    /// provider never accepted, reopened `resume`, repeated `fund` and reopened `fund` each still
+    /// ask the provider for an earlier acknowledgement of exactly that original, are refused, and
+    /// submit nothing and make no chain RPC; the saved original and journal stay byte-identical,
+    /// listed as pending registration and in the wallet history. Positive control: once the
+    /// provider holds an acceptance of that original registered before expiry, reopened `resume`
+    /// recovers the same original and submits it once. Would catch expired terms that prepare,
+    /// sign or submit a payment, expiry that erases or replaces a preparation, or expiry that
+    /// stops recovery from asking for an earlier acknowledgement.
+    #[tokio::test]
+    async fn native_expired_terms_create_no_payment_and_keep_an_unaccepted_original() {
+        // Expired terms with no preparation.
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) = funding_fixture(directory.path(), true, false).await;
+        let q = saved.quote.payload.clone();
+        assert_eq!(
+            consumer.fund(&saved.offer, &saved.quote).await.unwrap_err(),
+            "quote does not match selected offer, wallet, network or validity window"
+        );
+        assert!(!state.account_path.exists());
+        // The terms were saved before expiry by a `fund` that stopped before preparing.
+        consumer.save_account(&saved).unwrap();
+        let terms_only = opening_evidence(&consumer, &q.id);
+        assert!(terms_only.1.is_empty());
+        let config = consumer.config.clone();
+        for (attempt, with_fund) in [false, true, true].into_iter().enumerate() {
+            if attempt < 2 {
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+            }
+            assert_eq!(
+                recover_opening(&consumer, &saved, with_fund).await.unwrap_err(),
+                "quote expired before preparing payment; no transfer was sent",
+                "attempt {attempt}"
+            );
+            assert_eq!(opening_evidence(&consumer, &q.id), terms_only, "attempt {attempt}");
+        }
+        assert!(state.rpc.lock().unwrap().is_empty());
+        assert!(state.controls.lock().unwrap().is_empty());
+        assert!(state.events.lock().unwrap().is_empty());
+        assert!(state.submissions.lock().unwrap().is_empty());
+        assert_eq!(
+            consumer.pending_accounts().unwrap()["pending"][0]["funding_stage"],
+            "preparation_pending"
+        );
+        task.abort();
+
+        // Expired terms with a prepared original that the provider never accepted.
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, mut saved, state, task) =
+            funding_fixture(directory.path(), true, false).await;
+        let q = saved.quote.payload.clone();
+        let original = consumer
+            .chain
+            .prepare_payment_once(
+                &format!("open:{}", q.id),
+                &consumer.key().unwrap(),
+                &q.provider_wallet,
+                &q.funding_wei,
+                &protocol::opening_data(&q).unwrap(),
+            )
+            .await
+            .unwrap();
+        saved.raw_transaction = Some(original.raw_transaction.clone());
+        saved.tx_hash = Some(original.tx_hash.clone());
+        consumer.save_account(&saved).unwrap();
+        let prepared = opening_evidence(&consumer, &q.id);
+        let rpc = state.rpc.lock().unwrap().len();
+        let config = consumer.config.clone();
+        // Reopened `resume`, repeated `fund` on that consumer, then reopened `fund`.
+        for (attempt, with_fund) in [false, true, true].into_iter().enumerate() {
+            if attempt != 1 {
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+            }
+            let name = format!("attempt {attempt}");
+            let error = recover_opening(&consumer, &saved, with_fund).await.unwrap_err();
+            assert!(error.starts_with("expired_quote:"), "{name}: {error}");
+            assert_eq!(state.events.lock().unwrap().as_slice(), vec!["register"; attempt + 1], "{name}");
+            assert_eq!(
+                state.raw.lock().unwrap().as_deref(),
+                Some(original.raw_transaction.as_str()),
+                "{name}: the provider was asked about exactly the original"
+            );
+            assert!(state.intent.lock().unwrap().is_none(), "{name}");
+            assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: chain RPC");
+            assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+            assert_eq!(opening_evidence(&consumer, &q.id), prepared, "{name}");
+            let pending = consumer.pending_accounts().unwrap();
+            assert_eq!(pending["pending"][0]["funding_stage"], "registration_pending", "{name}");
+            assert_eq!(pending["pending"][0]["tx_hash"], json!(original.tx_hash), "{name}");
+            let history = consumer.chain.history(&consumer.address().unwrap()).await.unwrap();
+            assert_eq!(history["transactions"].as_array().unwrap().len(), 1, "{name}");
+            assert_eq!(history["transactions"][0]["raw_transaction"], json!(original.raw_transaction), "{name}");
+            assert_eq!(history["transactions"][0]["status"], "prepared", "{name}");
+        }
+        // Positive control (fixture state): the provider holds an acceptance of this original
+        // registered before expiry. Recovery uses the preserved original, not a replacement.
+        *state.intent.lock().unwrap() =
+            Some(accepted_funding(&q, original.tx_hash.clone(), &state.key));
+        drop(consumer);
+        consumer = Consumer::new(config).unwrap();
+        assert_eq!(consumer.resume(&q.id).await.unwrap().status, "active");
+        assert_eq!(fresh_signing_reads(&state, rpc), 0);
+        assert_eq!(state.submissions.lock().unwrap().as_slice(), [original.raw_transaction.clone()]);
+        assert_eq!(
+            state.events.lock().unwrap().as_slice(),
+            ["register", "register", "register", "register", "broadcast", "open"]
+        );
+        assert_eq!(
+            journaled_opening(&consumer, &q.id),
+            ((original.raw_transaction.clone(), original.tx_hash.clone(), "0".into(), "submitted".into()), 1)
+        );
+        task.abort();
+    }
+    /// Parent 2.6 review: pins this thread's opening quote-expiry clock (`opening_expiry_now`)
+    /// until dropped. Every other clock, including the provider fixture's and the acknowledgement
+    /// receiver's, stays on wall time.
+    struct PinnedExpiryClock;
+    impl PinnedExpiryClock {
+        fn at(now: u64) -> Self {
+            assert_eq!(
+                tokio::runtime::Handle::current().runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread,
+                "a pinned expiry clock is visible only on the pinning thread"
+            );
+            PINNED_OPENING_EXPIRY_NOW
+                .with(|pinned| assert_eq!(pinned.replace(Some(now)), None, "already pinned"));
+            assert_eq!(opening_expiry_now().unwrap(), now);
+            Self
+        }
+    }
+    impl Drop for PinnedExpiryClock {
+        fn drop(&mut self) {
+            PINNED_OPENING_EXPIRY_NOW.with(|pinned| pinned.set(None));
+        }
+    }
+    /// Opening-intent parent 2.6 review (requirement "Restart recovery does not manufacture
+    /// another opening": "An expired agreement with neither saved nor journaled preparation SHALL
+    /// NOT initiate a new payment"; a quote is valid in `[issued_at, expires_at)`). Saved signed
+    /// terms with no preparation are recovered by reopened `resume` or reopened repeated `fund`
+    /// with recovery's expiry clock pinned. At exactly `expires_at` each of two attempts returns
+    /// the exact "no transfer was sent" refusal with no chain RPC, provider request, event,
+    /// submission or journal row, and the saved file unchanged. One second earlier the same terms
+    /// are live: recovery prepares one original at nonce 0, registers it, submits it once and
+    /// opens. Would catch an expiry guard that still treats the quote as live at `expires_at`.
+    #[tokio::test]
+    async fn native_unprepared_terms_are_refused_exactly_at_quote_expiry() {
+        for with_fund in [false, true] {
+            let name = format!("with_fund={with_fund}");
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let q = saved.quote.payload.clone();
+            // The terms were saved by a `fund` that stopped before preparing.
+            consumer.save_account(&saved).unwrap();
+            let terms_only = opening_evidence(&consumer, &q.id);
+            assert!(terms_only.1.is_empty(), "{name}");
+            let config = consumer.config.clone();
+            {
+                let _clock = PinnedExpiryClock::at(q.expires_at);
+                for attempt in 0..2 {
+                    drop(consumer);
+                    consumer = Consumer::new(config.clone()).unwrap();
+                    assert_eq!(
+                        recover_opening(&consumer, &saved, with_fund).await.unwrap_err(),
+                        "quote expired before preparing payment; no transfer was sent",
+                        "{name}, attempt {attempt}"
+                    );
+                    assert_eq!(opening_evidence(&consumer, &q.id), terms_only, "{name}, attempt {attempt}");
+                }
+            }
+            assert!(state.rpc.lock().unwrap().is_empty(), "{name}: chain RPC");
+            assert!(state.controls.lock().unwrap().is_empty(), "{name}: provider request");
+            assert!(state.events.lock().unwrap().is_empty(), "{name}");
+            assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+            // One second before expiry the same saved terms are live.
+            let account = {
+                let _clock = PinnedExpiryClock::at(q.expires_at - 1);
+                drop(consumer);
+                consumer = Consumer::new(config).unwrap();
+                recover_opening(&consumer, &saved, with_fund)
+                    .await
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            assert_eq!(account.status, "active", "{name}");
+            let ((raw, hash, nonce, status), operations) = journaled_opening(&consumer, &q.id);
+            assert_eq!((nonce.as_str(), status.as_str(), operations), ("0", "submitted", 1), "{name}");
+            let opened = saved_opening(&state);
+            assert_eq!(
+                (opened.raw_transaction.as_deref(), opened.tx_hash.as_deref()),
+                (Some(raw.as_str()), Some(hash.as_str())),
+                "{name}"
+            );
+            assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+            assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"], "{name}");
+            task.abort();
+        }
+    }
+    /// Opening-intent parent 2.6 (scenario "Saved account recovery preserves exported
+    /// credentials": "When an account and exported credential are already saved, native recovery
+    /// SHALL refresh that account rather than reopen it or implicitly rotate/replace the
+    /// credential", and "a revoked or expired credential is not silently replaced by this
+    /// recovery path"). A paid or free opening has saved its account and exported credential;
+    /// then the provider reports the account frozen. In every stage, reopened `resume` and
+    /// reopened repeated `fund` each refresh the account with only an owner challenge and the
+    /// account read: no opening, registration or credential request, and no credential issued.
+    /// The saved credentials and default stay identical, and a paid opening keeps one journal
+    /// operation, resending only its original bytes while unaccepted and nothing once the original
+    /// is accepted at safe. Stages: unchanged; (paid) original accepted; credential revoked by the
+    /// provider, where the same revoked key is still the one exported; credential expired, where
+    /// export refuses it until it is explicitly rotated or replaced; and credential explicitly
+    /// revoked by the owner, where recovery leaves no default. A spare inference-capable credential,
+    /// explicitly issued while the default was valid, stays stored and exportable by identifier but
+    /// never becomes the default, so a silent reselection is observable (parent 2.6 review). Would
+    /// catch recovery that reopens a saved account, issues, rotates or reselects a credential,
+    /// silently replaces a revoked or expired default, or resubmits an accepted original.
+    #[tokio::test]
+    async fn native_saved_account_recovery_refreshes_without_reopening_or_replacing_credentials() {
+        use std::sync::atomic::Ordering;
+        for free in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, free).await;
+            let q = saved.quote.payload.clone();
+            assert_eq!(consumer.fund(&saved.offer, &saved.quote).await.unwrap().status, "active");
+            let exported = consumer.credential_export(&q.id, None).unwrap();
+            let opened = saved_opening(&state);
+            assert_eq!(opened.credentials.len(), 1);
+            let credential_id = opened.credentials[0].id.clone();
+            assert_eq!(exported["credential_id"], json!(credential_id));
+            assert_eq!(exported["api_key"], json!(opened.credentials[0].bearer));
+            assert_eq!(opened.active_credential.as_deref(), Some(credential_id.as_str()));
+            assert_eq!(state.credentials.lock().unwrap().len(), 1);
+            let original = opened.raw_transaction.clone();
+            assert_eq!(original.is_none(), free);
+            // Parent 2.6 review: a spare inference-capable credential, explicitly issued while the
+            // default is valid, is stored without becoming the default. Recovery must never
+            // select it, so a silent reselection of the default is observable.
+            let spare = consumer
+                .credential_issue(&q.id, credential_options(&["infer", "read"]))
+                .await
+                .unwrap();
+            let spare_id = spare["id"].as_str().unwrap().to_string();
+            let issued = saved_opening(&state);
+            assert_eq!(
+                issued.credentials.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                [credential_id.as_str(), spare_id.as_str()]
+            );
+            assert_eq!(issued.active_credential.as_deref(), Some(credential_id.as_str()));
+            assert_eq!(consumer.credential_export(&q.id, None).unwrap(), exported);
+            assert_eq!(state.credentials.lock().unwrap().len(), 2);
+            // The default's position in the provider's credential list, which only grows.
+            let provider_default = state
+                .credentials
+                .lock()
+                .unwrap()
+                .iter()
+                .position(|(c, _)| c.id == credential_id)
+                .unwrap();
+            // The provider now reports the account frozen, so a refresh is observable.
+            state.mode.store(5, Ordering::SeqCst);
+            let config = consumer.config.clone();
+            for stage in ["unchanged", "accepted", "revoked by the provider", "expired", "revoked by the owner"] {
+                match stage {
+                    "accepted" if free => continue,
+                    "accepted" => settle_fixture(&state, original.as_deref().unwrap(), true),
+                    "revoked by the provider" => {
+                        state.credentials.lock().unwrap()[provider_default].1.revoked = true;
+                    }
+                    "expired" => {
+                        // Fixture state: the saved default's lifetime has ended.
+                        let expired_at = protocol::now().unwrap() - 1;
+                        let mut account = consumer.load_account(&q.id).unwrap();
+                        account
+                            .credentials
+                            .iter_mut()
+                            .find(|c| c.id == credential_id)
+                            .unwrap()
+                            .expires_at = expired_at;
+                        consumer.save_account(&account).unwrap();
+                        state.credentials.lock().unwrap()[provider_default].1.expires_at = expired_at;
+                    }
+                    "revoked by the owner" => {
+                        consumer.credential_revoke(&q.id, &credential_id).await.unwrap();
+                    }
+                    _ => {}
+                }
+                for with_fund in [false, true] {
+                    let name = format!("free={free}, {stage}, with_fund={with_fund}");
+                    drop(consumer);
+                    consumer = Consumer::new(config.clone()).unwrap();
+                    let before = saved_opening(&state);
+                    let controls = state.controls.lock().unwrap().len();
+                    let events = state.events.lock().unwrap().len();
+                    let submissions = state.submissions.lock().unwrap().len();
+                    let account = recover_opening(&consumer, &saved, with_fund)
+                        .await
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert_eq!(account.status, "frozen", "{name}: the saved account is refreshed");
+                    assert_eq!(
+                        state.controls.lock().unwrap()[controls..],
+                        ["POST /v1/auth/challenge".to_string(), format!("GET /v1/contracts/{}", q.id)],
+                        "{name}: no opening, registration or credential request"
+                    );
+                    assert_eq!(state.credentials.lock().unwrap().len(), 2, "{name}: no credential issued");
+                    let after = saved_opening(&state);
+                    assert_eq!(after.account.as_ref().unwrap().status, "frozen", "{name}");
+                    assert_eq!(
+                        serde_json::to_value(&after.credentials).unwrap(),
+                        serde_json::to_value(&before.credentials).unwrap(),
+                        "{name}"
+                    );
+                    assert_eq!(after.active_credential, before.active_credential, "{name}");
+                    let sent = state.submissions.lock().unwrap()[submissions..].to_vec();
+                    let new_events = state.events.lock().unwrap()[events..].to_vec();
+                    assert_eq!(new_events, vec!["broadcast"; sent.len()], "{name}");
+                    match &original {
+                        Some(raw) if stage == "unchanged" => {
+                            assert_eq!(sent, [raw.clone()], "{name}: only the unaccepted original is resent")
+                        }
+                        _ => assert!(sent.is_empty(), "{name}: {sent:?}"),
+                    }
+                    if let Some(raw) = &original {
+                        assert_eq!(after.raw_transaction.as_ref(), Some(raw), "{name}");
+                        let ((journaled, _, nonce, status), operations) =
+                            journaled_opening(&consumer, &q.id);
+                        assert_eq!((&journaled, nonce.as_str(), operations), (raw, "0", 1), "{name}");
+                        if stage != "unchanged" {
+                            assert_eq!(status, "accepted", "{name}");
+                        }
+                    }
+                    let export = consumer.credential_export(&q.id, None);
+                    match stage {
+                        "expired" => {
+                            assert_eq!(
+                                export.unwrap_err(),
+                                "credential expired; explicitly rotate it or issue an inference-capable replacement",
+                                "{name}"
+                            );
+                            assert_eq!(after.credentials[0].id, credential_id, "{name}");
+                            assert_eq!(json!(after.credentials[0].bearer), exported["api_key"], "{name}");
+                            assert_eq!(after.active_credential.as_deref(), Some(credential_id.as_str()), "{name}");
+                            // A usable stored alternative exists but was not selected.
+                            assert_eq!(
+                                consumer.credential_export(&q.id, Some(&spare_id)).unwrap()["credential_id"],
+                                json!(spare_id),
+                                "{name}"
+                            );
+                        }
+                        "revoked by the owner" => {
+                            assert_eq!(
+                                export.unwrap_err(),
+                                "no active inference credential; explicitly issue an inference-capable credential",
+                                "{name}"
+                            );
+                            assert!(after.active_credential.is_none(), "{name}");
+                            assert_eq!(
+                                after.credentials.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+                                [spare_id.as_str()],
+                                "{name}: the spare stays stored but is not selected"
+                            );
+                            assert_eq!(
+                                consumer.credential_export(&q.id, Some(&spare_id)).unwrap()["credential_id"],
+                                json!(spare_id),
+                                "{name}"
+                            );
+                        }
+                        _ => assert_eq!(export.unwrap(), exported, "{name}: the exported key is kept"),
+                    }
+                    if stage == "revoked by the provider" {
+                        assert!(state.credentials.lock().unwrap()[provider_default].1.revoked, "{name}");
+                    }
+                }
+            }
+            task.abort();
+        }
+    }
+    /// Opening-intent parent 2.6 (requirement "Native preparation durably owns one exact opening
+    /// transaction": "Retrieving a prepared original SHALL NOT sign another transaction merely
+    /// because time, fee estimates or the node's nonce changed"; requirement "Restart recovery
+    /// does not manufacture another opening"). A fresh `fund` prepares the original at nonce 0
+    /// and gas price 1, and the provider accepts it, but its reply is lost. Then the node's gas
+    /// price and gas estimate rise, or its nonce moves past the original's with no receipt for
+    /// it. Reopened `resume` or reopened repeated `fund` retrieves the same journaled original
+    /// with no fee, gas or balance read and recovers the provider's acknowledgement of it. After
+    /// the fee change it submits exactly that original once and opens. After the nonce change,
+    /// reconciliation marks the original a nonce conflict and nothing is submitted, signed or
+    /// journaled; the other entry point, reopened, stops at that conflict without registering
+    /// again and changes nothing. Would catch re-signing a prepared original at the node's new
+    /// fee or nonce.
+    #[tokio::test]
+    async fn native_prepared_original_is_never_resigned_after_fee_or_nonce_changes() {
+        use std::sync::atomic::Ordering;
+        let conflict =
+            "rejected: journal operation nonce_conflict: sender nonce consumed without this canonical receipt";
+        for change in ["fees", "nonce"] {
+            for with_fund in [false, true] {
+                let name = format!("{change}, with_fund={with_fund}");
+                let directory = tempfile::tempdir().unwrap();
+                let (mut consumer, saved, state, task) =
+                    funding_fixture(directory.path(), false, false).await;
+                let q = saved.quote.payload.clone();
+                // The provider caches its acceptance of the fresh original, then the reply is lost.
+                state.mode.store(4, Ordering::SeqCst);
+                let error = consumer.fund(&saved.offer, &saved.quote).await.unwrap_err();
+                assert!(error.starts_with("provider_unavailable:"), "{name}: {error}");
+                state.mode.store(0, Ordering::SeqCst);
+                let prepared = saved_opening(&state);
+                assert!(prepared.funding_intent.is_none(), "{name}");
+                let raw = prepared.raw_transaction.clone().unwrap();
+                let hash = prepared.tx_hash.clone().unwrap();
+                let bytes = hex::decode(&raw[2..]).unwrap();
+                let signed = rlp::Rlp::new(&bytes);
+                assert_eq!((signed.val_at::<u64>(0).unwrap(), signed.val_at::<u64>(1).unwrap()), (0, 1), "{name}");
+                assert_eq!(
+                    journaled_opening(&consumer, &q.id),
+                    ((raw.clone(), hash.clone(), "0".into(), "prepared".into()), 1),
+                    "{name}"
+                );
+                match change {
+                    "fees" => {
+                        *state.gas_price.lock().unwrap() = 7;
+                        state.gas_extra.store(5_000, Ordering::SeqCst);
+                    }
+                    _ => state.nonce.store(1, Ordering::SeqCst),
+                }
+                let rpc = state.rpc.lock().unwrap().len();
+                let config = consumer.config.clone();
+                drop(consumer);
+                consumer = Consumer::new(config.clone()).unwrap();
+                let result = recover_opening(&consumer, &saved, with_fund).await;
+                assert_eq!(fresh_signing_reads(&state, rpc), 0, "{name}: a fresh signature was attempted");
+                assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()), "{name}");
+                let recovered = saved_opening(&state);
+                let cached = state.intent.lock().unwrap().clone().unwrap();
+                let intent = recovered.funding_intent.as_ref().unwrap();
+                assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature), "{name}");
+                assert_eq!(intent.payload.tx_hash, hash, "{name}");
+                assert!(recovered.funding_broadcast_started, "{name}");
+                assert_eq!(
+                    (recovered.raw_transaction.as_deref(), recovered.tx_hash.as_deref()),
+                    (Some(raw.as_str()), Some(hash.as_str())),
+                    "{name}"
+                );
+                if change == "fees" {
+                    let account = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+                    assert_eq!(account.status, "active", "{name}");
+                    assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+                    assert_eq!(
+                        state.events.lock().unwrap().as_slice(),
+                        ["register", "register", "broadcast", "open"],
+                        "{name}"
+                    );
+                    assert_eq!(
+                        journaled_opening(&consumer, &q.id),
+                        ((raw.clone(), hash.clone(), "0".into(), "submitted".into()), 1),
+                        "{name}"
+                    );
+                } else {
+                    assert_eq!(result.unwrap_err(), conflict, "{name}");
+                    assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "register"], "{name}");
+                    assert_eq!(
+                        journaled_opening(&consumer, &q.id),
+                        ((raw.clone(), hash.clone(), "0".into(), "nonce_conflict".into()), 1),
+                        "{name}"
+                    );
+                    let evidence = opening_evidence(&consumer, &q.id);
+                    drop(consumer);
+                    consumer = Consumer::new(config).unwrap();
+                    assert_eq!(
+                        recover_opening(&consumer, &saved, !with_fund).await.unwrap_err(),
+                        conflict,
+                        "{name}"
+                    );
+                    assert_eq!(fresh_signing_reads(&state, rpc), 0, "{name}: a fresh signature was attempted");
+                    assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                    assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "register"], "{name}");
+                    assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+                }
+                task.abort();
+            }
+        }
     }
     #[tokio::test]
     async fn cancelling_before_preparation_never_creates_a_payment_or_reopens_the_intent() {
