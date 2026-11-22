@@ -1,5 +1,27 @@
 # APAS progress
 
+## 2026-11-22 (hundred-and-third round) — Envelope-bounds 3.1: final evidence map, and 3.2 archive readiness
+
+- In step at `5cbec9ec`; whitepaper unchanged; no new answers.
+- Docs-only step (`specify-payment-envelope-resource-bounds` 3.1), through a workflow: write the map, then an adversarial review. design.md gains "Final requirement and scenario evidence map (task 3.1)". It has 14 rows, one per requirement (5) and scenario (9) in spec order, each with production source, passing tests and an evidence class:
+  - (a) public evidence through the route or native client;
+  - (b) direct calls to the private decoder;
+  - (c) the derived 14,448- and 10,388-byte ceiling;
+  - (d) unavailable qualification;
+  - (e) owned by another capability.
+  It cites 44 distinct tests, each confirmed to exist and not ignored. Stale "remains open" or "blocked" lines in the per-task sections and tasks.md are now dated past-tense statements, with no history deleted.
+- The review reclassified three older core tests that call private `decode` or `intrinsic` as (b) rather than (a), and noted that framing mutations at the route keep the original signature. It corrected the duplicate-layout count (5, not 6) and one gap description (alternate spellings are refused by the cached lookup before envelope admission). It also broadened the list of callers verified by source correspondence only.
+- Gaps recorded, each inside a row that cites passing tests: six sub-clauses with source correspondence only.
+  1. Signature `r`/`s` wider than 32 bytes or with a leading zero.
+  2. Typed chain ID wider than 8 bytes.
+  3. Priority fee wider than 16 bytes.
+  4. Recipient of 19 or 21 bytes, or a typed envelope with an empty recipient.
+  5. Typed parity above 1.
+  6. A resource-invalid candidate sent while an acknowledgement exists.
+  Separately, `chain_rpc_api::validate`'s `eth_sendRawTransaction` size bound has no test; it is classed (d).
+- 3.2 assessment: ready. Strict validation passes for this change and for all 34 items. The five requirement names are new and do not contradict `inference-opening-funding-intent` or `inference-wire-foundation`. The delta names no change, and the change has no markdown links to adjust. After the archive: write the Purpose and record the archive in `specify-funding-settlement` (proposal line 40, design line 26). Before archiving I will close the six gaps with tests, as round 100 did for opening-intent.
+- 3.1 ticked. Checks: strict validation of this change and of all 34 passes; the review reran `chain_client::tests` 40/40, `inference_funding_admission_test` 45/45 and the two cited `billing_store` tests. Docs only.
+
 ## 2026-11-22 (hundred-and-second round) — Acceptance: payment-envelope-resource-bounds 2.5 (direct defensive decoder budgets)
 
 - In step at `2f009b31`; whitepaper unchanged; no new answers.
