@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-22 (hundred-and-first round) — Opening-intent 3.2: archived as `inference-opening-funding-intent`
+
+- In step at `60e73473`; whitepaper unchanged; no new answers.
+- Mechanical step, done solo. Round 100's review reported the change ready, and its full suite (809 headless tests, desktop, npm, `svelte-check`, `npm run build`, script tests, 34/34 strict validation) is 3.2's record of project checks. Task 3.2 ticked with that record, then `openspec archive specify-opening-funding-intent --yes` ran, without `--skip-specs`. It created the main specification `openspec/specs/inference-opening-funding-intent/spec.md` with 9 added requirements and moved the change to `openspec/changes/archive/2026-11-22-specify-opening-funding-intent/`. The non-blocking warning is that the proposal's Why section exceeds 1,000 characters.
+- After the archive:
+  - The new main specification's TBD Purpose is replaced by a description of the capability.
+  - The archived design.md's 13 `../../../` links gained one more `../`, and its 2 `../archive/2026-11-21-…` links became sibling links. Every link target was confirmed to exist.
+  - Text that called the change pending now records the archive: `specify-desktop-share-online` proposal.md and design.md, and the correspondence table in `specify-funding-settlement` design.md. Funding-settlement's 4.3 archive-order condition is now satisfied for this change.
+  - The report's "Opening transaction gas" entry (still open, an author question) points at the main spec's line 10 and the archived design.
+- No path to the old change folder remains outside the archive. `openspec validate --all --strict` passes 34/34 (24 changes and 10 specifications).
+
 ## 2026-11-22 (hundredth round) — Opening-intent 3.2 preparation: clause-gap tests and spec wording
 
 - In step at `c7d15ffe`; whitepaper unchanged; no new answers.
@@ -1171,7 +1182,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 3.2: the three clause-limit tests, the spec.md wording fix, then the archive (3.1 done in round 99; section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent is archived (round 101; 3.2 prepared in round 100, 3.1 done in round 99; section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

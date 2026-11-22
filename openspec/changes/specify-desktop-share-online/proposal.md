@@ -94,7 +94,7 @@ Today no specification covers sharing. The desktop can only reach an externally 
   - Archive this change after milestone 1, whose capabilities and carve-outs it references, after `specify-inference-commercial-terms`, and after `specify-p2p-provider-transport`, without whose implementation nothing can be published.
 - **Consistency references (not modified):**
   - the rest of the pending `specify-inference-commercial-terms` (free versus paid terms; zero funding for free service; free-opening caps; evidence-only renewal, under which adding or removing a serving profile is still not renewal; this change adds only the pre-promotion free-agreement exception to it);
-  - the pending `specify-opening-funding-intent` (qualification funding follows the exact funding order);
+  - `inference-opening-funding-intent`, archived on 2026-11-22 from `specify-opening-funding-intent`, which was pending when this was written (qualification funding follows the exact funding order);
   - the pending `specify-inference-request-accounting` (performance remedies and unknown usage);
   - the main `inference-wire-foundation` (exact money);
   - the pending `specify-provider-launch-reputation` (the launch reputation that the publish disclosure names, the dashboard shows and Auto-price reads);
