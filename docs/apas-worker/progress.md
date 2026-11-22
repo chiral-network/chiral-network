@@ -1,5 +1,20 @@
 # APAS progress
 
+## 2026-11-22 (hundred-and-second round) — Acceptance: payment-envelope-resource-bounds 2.5 (direct defensive decoder budgets)
+
+- In step at `2f009b31`; whitepaper unchanged; no new answers.
+- Acceptance step (`specify-payment-envelope-resource-bounds` 2.5), through a workflow: write tests, then an adversarial review. design.md gains "Task 2.5 direct defensive budget evidence", which maps each clause of *Local payment evidence has bounded canonical representation* to three kinds of evidence. Public tests already cover the reachable cases (2.5.1–2.5.4, 2.4, 2.2.2). New in-crate tests call the private `decode` and `canonical_rlp` directly for the limits no otherwise-valid envelope can reach. The size ceiling derived from the source arithmetic is a calculation, not a runtime test. No production code changed and no seam was added.
+- Six new `chain_client::tests`:
+  - `defensive_raw_byte_budget_is_inclusive_and_counts_the_typed_prefix`: 32,768 hex digits pass the budget and then fail a stricter named rule; 32,770 fail the budget itself. The typed prefix counts toward the budget.
+  - `defensive_raw_byte_budget_is_checked_before_hex_decoding`: over budget, even invalid hex (including a 1 MiB run of `g`) reports only the size error. This proves the order of the checks; allocation itself is not instrumented.
+  - `defensive_rlp_depth_is_at_most_four_edges_below_the_root`: depth 4 is accepted (the signed fixture's storage key sits there) and depth 5 is refused inside `canonical_rlp`.
+  - `defensive_rlp_limits_each_list_to_1024_immediate_items`: 1,024 items pass and 1,025 fail at depths 0–3, at the root through `decode`, and in the access list. The stricter 64-address and 256-key limits still refuse 1,024.
+  - `defensive_rlp_never_recurses_into_opaque_byte_strings`: five RLP-looking payloads are accepted as byte strings at depths 0–4, including as signed calldata.
+  - `defensive_rlp_refuses_overflowing_and_overlong_declared_lengths`: length-of-length 1–8 and 8-byte lengths near `u64::MAX`, for strings and lists, return errors and never panic.
+- Mutations: the author ran 12 and the review 12. All but three fail a named test, and those three are equivalent on 64-bit hosts: two wrapping additions, and moving the depth refusal into a depth-4 list that has children. The review found that checking the item limit after recursing into children (R7) passed every test. The item-limit test now asserts that a too-deep or nonminimal 1,025th child gets "RLP item limit" rather than its own error.
+- Recorded limits: the length fold's "RLP length overflow" branch is reachable only where `usize` is narrower than 64 bits, and no such target ran. A copy of the hex string made before the check would go unnoticed, because only the decoded buffer is constrained. `chain_rpc_api`'s separate `eth_sendRawTransaction` bound is not exercised here. The proposal and design now record that the opening-funding change was archived on 2026-11-22.
+- 2.5 ticked; only 3.1 and 3.2 remain. Checks: `--lib` 492 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; desktop `--lib desktop::` 10/10; strict validation passes. Test-only change; round 100's full suite covers the product code.
+
 ## 2026-11-22 (hundred-and-first round) — Opening-intent 3.2: archived as `inference-opening-funding-intent`
 
 - In step at `60e73473`; whitepaper unchanged; no new answers.

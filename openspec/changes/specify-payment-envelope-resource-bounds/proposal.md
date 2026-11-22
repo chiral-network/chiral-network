@@ -19,12 +19,12 @@ The combined limits also make an otherwise-valid 16 KiB opening impossible under
 
 ### Modified Capabilities
 
-None. Complement `inference-wire-foundation` and the pending `inference-opening-funding-intent` contract without changing authorization, acknowledgement replay, funding economics or settlement policy.
+None. Complement `inference-wire-foundation` and the `inference-opening-funding-intent` contract without changing authorization, acknowledgement replay, funding economics or settlement policy. (Dated note 2026-11-22: this contract was previously described here as pending; it has since been archived as the current `openspec/specs/inference-opening-funding-intent` spec.)
 
 ## Impact
 
 - Read-only authority: `docs/chiral-book.md`, particularly canonical `u128` monetary values, exact-original funding order and signed-envelope settlement evidence.
 - Source correspondence: `chain_client.rs` local decoding, canonical RLP, access-list validation, structural gas and payment construction; existing wallet/chain tests and `inference_funding_admission_test` provide partial evidence.
 - Runtime scope: correct the shared decoder's byte-string field-type check and add signed local/HTTP rejection-and-original-recovery regressions. No ledger schema, wallet operation, server deployment or whitepaper change; no limits are widened and no historical evidence is discarded.
-- Direct defensive byte/item/depth acceptance remains open. The native migration is now committed, so the former source-ownership blocker no longer applies; use private unit boundaries rather than a test-only public API.
+- Direct defensive byte/item/depth acceptance (task 2.5) now uses private in-crate unit tests of the committed decoder, without a test-only public API or any production change.
 - No author-only decision is needed. The named-payer availability report remains open and nonblocking.

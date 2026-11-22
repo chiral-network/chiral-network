@@ -416,3 +416,7 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 
 - `chain_client::tests::fresh_preparation_refuses_every_unhealthy_view_before_reading_sender_state` and `unhealthy_views_never_replace_or_submit_an_existing_original` — **replaceable in part**: the settlement-view health predicate, and the ordering in which no signing or journal write follows a failed health check, are properties of a modeled preparation function that Verus could prove. The RPC read sequence, SQLite journal and reopening are outside it.
 - `consumer::tests::native_fresh_preparation_refuses_unhealthy_unaffordable_or_occupied_nonce_state`, `native_unhealthy_node_keeps_an_acknowledged_original_recoverable` and `native_saved_acknowledgement_without_its_original_or_hash_is_refused_before_any_request` — **not replaceable**: native files, journals, mock provider requests and scripted RPC.
+
+## Judged 2026-11-22 — direct defensive decoder budgets (payment-envelope-resource-bounds 2.5)
+
+- The six `chain_client::tests::defensive_*` tests — **replaceable**: the raw-byte budget comparison (including the typed prefix and the order of the length check before hex decoding), the depth and immediate-item bounds of `canonical_rlp`, the opacity of byte strings and the overflow-free handling of declared lengths are total functions over byte sequences. Verus could prove them for all inputs, including the 32-bit `usize` branch that no host here can run. The `rlp` crate calls would need trusted specifications, the one permitted exception for calls to another crate.

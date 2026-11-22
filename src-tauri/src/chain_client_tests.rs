@@ -1828,3 +1828,254 @@ async fn chunked_rpc_responses_cannot_bypass_method_byte_limits() {
     }
     task.abort();
 }
+
+// Payment-envelope bounds task 2.5: direct evidence for the private defensive decoder budgets.
+// Reachable public framing, root/header, child-length and byte-string cases are exercised through
+// signed local/HTTP admission in `inference_funding_admission_test`; these call the private decoder.
+fn rlp_list(children: &[Vec<u8>]) -> Vec<u8> {
+    let mut stream = RlpStream::new_list(children.len());
+    for child in children {
+        stream.append_raw(child, 1);
+    }
+    stream.out().to_vec()
+}
+fn rlp_bytes(payload: &[u8]) -> Vec<u8> {
+    let mut stream = RlpStream::new();
+    stream.append(&payload);
+    stream.out().to_vec()
+}
+fn rlp_int(value: u64) -> Vec<u8> {
+    let mut stream = RlpStream::new();
+    stream.append(&value);
+    stream.out().to_vec()
+}
+/// Wraps `leaf` in `levels` lists: with the outermost list as root, `leaf` lies at depth `levels`.
+fn nested(levels: usize, leaf: &[u8]) -> Vec<u8> {
+    (0..levels).fold(leaf.to_vec(), |item, _| rlp_list(&[item]))
+}
+fn canonical(bytes: &[u8]) -> Result<(), String> {
+    canonical_rlp(&Rlp::new(bytes), 0)
+}
+fn hex_envelope(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+/// Envelope-shaped bytes whose scalars pass every check preceding calldata, access-list and gas
+/// validation. The signature scalars are placeholders, so none of these is an otherwise-valid
+/// envelope: every refusal asserted on them must be reported before signature recovery.
+fn shaped_envelope(kind: u8, data_item: Vec<u8>, access_list: Vec<u8>) -> Vec<u8> {
+    let mut fields = Vec::new();
+    if kind != 0 {
+        fields.push(rlp_int(CHAIN));
+    }
+    fields.push(rlp_int(0));
+    if kind == 2 {
+        fields.push(rlp_int(1));
+    }
+    fields.extend([rlp_int(1001), rlp_int(MAX_ESTIMATE_GAS), rlp_bytes(&[0x22; 20]), rlp_int(1)]);
+    fields.push(data_item);
+    if kind == 0 {
+        fields.push(rlp_int(CHAIN * 2 + 35));
+    } else {
+        fields.extend([access_list, rlp_int(0)]);
+    }
+    fields.extend([rlp_int(1), rlp_int(1)]);
+    let mut raw = if kind == 0 { Vec::new() } else { vec![kind] };
+    raw.extend(rlp_list(&fields));
+    raw
+}
+/// Exactly `total` decoded bytes, any typed prefix included, made up by oversized calldata.
+fn sized_envelope(kind: u8, total: usize) -> Vec<u8> {
+    (total.saturating_sub(64)..total)
+        .map(|length| shaped_envelope(kind, rlp_bytes(&vec![0x01; length]), vec![0xc0]))
+        .find(|raw| raw.len() == total)
+        .expect("a calldata length yields the exact envelope size")
+}
+#[test]
+fn defensive_raw_byte_budget_is_inclusive_and_counts_the_typed_prefix() {
+    for kind in [0u8, 1, 2] {
+        // 32,768 digits (16,384 decoded bytes) pass the byte budget. The derived envelope ceiling
+        // is 14,448 bytes, so no such input is otherwise valid: this one carries over 4,096
+        // calldata bytes and is refused later by that stricter, named limit.
+        let at_budget = hex_envelope(&sized_envelope(kind, MAX_RAW_BYTES));
+        assert_eq!(at_budget.len() - 2, 32_768);
+        assert_eq!(decode(&at_budget, CHAIN).unwrap_err(), "payment commitment exceeds size limit");
+        // One more calldata byte is refused by the byte budget itself, not by the calldata rule.
+        let over = hex_envelope(&sized_envelope(kind, MAX_RAW_BYTES + 1));
+        assert_eq!(over.len() - 2, 32_770);
+        assert_eq!(decode(&over, CHAIN).unwrap_err(), "raw transaction size is invalid");
+    }
+    // The same 16,384-byte RLP list is within the budget alone (where its twelve fields are not
+    // a legacy envelope), but exceeds it once the type-2 prefix byte is counted.
+    let typed = sized_envelope(2, MAX_RAW_BYTES + 1);
+    assert_eq!(typed[1..].len(), MAX_RAW_BYTES);
+    assert_eq!(decode(&hex_envelope(&typed[1..]), CHAIN).unwrap_err(), "wrong transaction field count");
+    assert_eq!(decode(&hex_envelope(&typed), CHAIN).unwrap_err(), "raw transaction size is invalid");
+}
+#[test]
+fn defensive_raw_byte_budget_is_checked_before_hex_decoding() {
+    let at_budget = hex_envelope(&sized_envelope(2, MAX_RAW_BYTES));
+    let over = hex_envelope(&sized_envelope(2, MAX_RAW_BYTES + 1));
+    let invalid_last = |raw: &str| format!("{}zz", &raw[..raw.len() - 2]);
+    let invalid_first = |raw: &str| format!("0xzz{}", &raw[4..]);
+    // Within the budget, hex decoding is reached and reports the invalid digits.
+    for raw in [invalid_last(&at_budget), invalid_first(&at_budget)] {
+        assert_eq!(raw.len() - 2, 32_768);
+        assert_eq!(decode(&raw, CHAIN).unwrap_err(), "invalid raw transaction hex");
+    }
+    // Beyond it, the size refusal is reported even where hex decoding would fail, including
+    // invalid digits past the budget: the decoded buffer is never allocated for these inputs.
+    for raw in [invalid_last(&over), invalid_first(&over), format!("0x{}", "g".repeat(1 << 20))] {
+        assert_eq!(decode(&raw, CHAIN).unwrap_err(), "raw transaction size is invalid");
+    }
+}
+#[test]
+fn defensive_rlp_depth_is_at_most_four_edges_below_the_root() {
+    const NESTING: &str = "transaction RLP nesting exceeds limit";
+    let key = rlp_bytes(&[0x55; 32]);
+    let leaves = [vec![0xc0], vec![0x80], vec![0x01], key.clone()];
+    for leaf in &leaves {
+        // The root is depth zero, whether a list or a byte string.
+        assert_eq!(canonical(leaf), Ok(()));
+        assert_eq!(canonical(&nested(4, leaf)), Ok(()));
+        assert_eq!(canonical(&nested(5, leaf)), Err(NESTING.into()));
+        // An accepted depth-four sibling does not hide a later depth-five item.
+        assert_eq!(canonical(&rlp_list(&[nested(3, leaf), nested(4, leaf)])), Err(NESTING.into()));
+    }
+    let entry = |key: Vec<u8>| rlp_list(&[rlp_list(&[rlp_bytes(&[0x44; 20]), rlp_list(&[key])])]);
+    for kind in [1u8, 2] {
+        // A correctly signed storage key lies at depth four and the whole envelope is accepted:
+        // root(0) -> access list(1) -> entry(2) -> key list(3) -> key(4).
+        let signed = typed(kind);
+        let bytes = hex::decode(&signed[2..]).unwrap();
+        let fields = Rlp::new(&bytes[1..]);
+        let access_list = fields.at(if kind == 1 { 7 } else { 8 }).unwrap();
+        let stored = access_list.at(0).unwrap().at(1).unwrap().at(0).unwrap();
+        assert_eq!(stored.as_raw(), key.as_slice());
+        assert!(decode(&signed, CHAIN).is_ok());
+        // A depth-four list in the key position passes canonical framing; the stricter key shape
+        // then refuses it.
+        let depth_four = hex_envelope(&shaped_envelope(kind, rlp_bytes(b"x"), entry(vec![0xc0])));
+        assert_eq!(decode(&depth_four, CHAIN).unwrap_err(), "transaction field must be bytes");
+        // One more wrapper puts the 32-byte key at depth five: canonical_rlp refuses it first.
+        let depth_five = shaped_envelope(kind, rlp_bytes(b"x"), entry(rlp_list(&[key.clone()])));
+        assert_eq!(decode(&hex_envelope(&depth_five), CHAIN).unwrap_err(), NESTING);
+    }
+    // Legacy calldata replaced by nested lists: depth four is a field-type refusal, five a depth one.
+    let legacy_four = hex_envelope(&shaped_envelope(0, nested(3, &[0x80]), Vec::new()));
+    assert_eq!(decode(&legacy_four, CHAIN).unwrap_err(), "transaction field must be bytes");
+    let legacy_five = hex_envelope(&shaped_envelope(0, nested(4, &[0x80]), Vec::new()));
+    assert_eq!(decode(&legacy_five, CHAIN).unwrap_err(), NESTING);
+}
+#[test]
+fn defensive_rlp_limits_each_list_to_1024_immediate_items() {
+    const ITEMS: &str = "RLP item limit";
+    let list_of = |count: usize, item: &[u8]| rlp_list(&vec![item.to_vec(); count]);
+    for item in [vec![0x01], vec![0x80], vec![0xc0]] {
+        // Depths zero through three; the items of a depth-three list lie at depth four.
+        for depth in 0..=3 {
+            assert_eq!(canonical(&nested(depth, &list_of(1024, &item))), Ok(()));
+            assert_eq!(canonical(&nested(depth, &list_of(1025, &item))), Err(ITEMS.into()));
+        }
+    }
+    // The limit counts each list's immediate items, not its descendants.
+    assert_eq!(canonical(&list_of(1024, &list_of(4, &[0x01]))), Ok(()));
+    assert_eq!(canonical(&list_of(4, &list_of(1024, &[0x01]))), Ok(()));
+    // Within the limit, a bad last child is examined and refused for its own reason; as the
+    // 1,025th item it is never examined, so a deeper refusal cannot mask the breadth guard.
+    for (excess, own) in [
+        (nested(4, &[0x80]), "transaction RLP nesting exceeds limit"),
+        (vec![0x81, 0x01], "non-canonical single-byte RLP item"),
+    ] {
+        let mut children = vec![vec![0x01]; 1023];
+        children.push(excess);
+        assert_eq!(canonical(&rlp_list(&children)), Err(own.into()));
+        children.insert(0, vec![0x01]);
+        assert_eq!(canonical(&rlp_list(&children)), Err(ITEMS.into()));
+    }
+    // Through decode, the item guard fires before the field count or stricter access-list limits.
+    for prefix in [None, Some(1u8), Some(2)] {
+        for (count, error) in [(1025, ITEMS), (1024, "wrong transaction field count")] {
+            let mut raw: Vec<u8> = prefix.into_iter().collect();
+            raw.extend(list_of(count, &[0x80]));
+            assert_eq!(decode(&hex_envelope(&raw), CHAIN).unwrap_err(), error);
+        }
+    }
+    let keys = |count: usize| rlp_list(&[rlp_list(&[rlp_bytes(&[0x44; 20]), list_of(count, &[0x01])])]);
+    for kind in [1u8, 2] {
+        for (access_list, error) in [
+            (list_of(1025, &[0xc0]), ITEMS),
+            (list_of(1024, &[0xc0]), "access list address limit"),
+            (keys(1025), ITEMS),
+            (keys(1024), "access list storage-key limit"),
+        ] {
+            let raw = hex_envelope(&shaped_envelope(kind, rlp_bytes(b"x"), access_list));
+            assert_eq!(decode(&raw, CHAIN).unwrap_err(), error);
+        }
+    }
+}
+#[test]
+fn defensive_rlp_never_recurses_into_opaque_byte_strings() {
+    let payloads = [
+        nested(8, &[0xc0]),
+        // Thirty-two bytes that, read as RLP, nest thirty-one lists: a storage-key-sized value.
+        (0xc0..=0xdf).rev().collect::<Vec<u8>>(),
+        rlp_list(&vec![vec![0x01]; 1025]),
+        vec![0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        vec![0x81, 0x01],
+    ];
+    for payload in &payloads {
+        // Read as RLP, every payload is refused, so recursing into it would be observable.
+        assert!(canonical(payload).is_err());
+        for depth in 0..=4 {
+            assert_eq!(canonical(&nested(depth, &rlp_bytes(payload))), Ok(()));
+        }
+    }
+    // A correctly signed payment carries each payload as opaque calldata, byte for byte.
+    let from = wallet::address_from_private_key(&key()).unwrap();
+    for payload in &payloads {
+        let signed = sign_transaction(&key(), CHAIN, 0, &payee(), 1, payload, 1001).unwrap();
+        let tx = decode(&signed.raw_transaction, CHAIN).unwrap();
+        assert_eq!(&tx.data, payload);
+        assert_eq!(tx.tx_hash, signed.tx_hash);
+        assert_eq!(tx.from, from);
+    }
+}
+#[test]
+fn defensive_rlp_refuses_overflowing_and_overlong_declared_lengths() {
+    fn refused(item: &[u8]) {
+        let error = canonical(item).unwrap_err();
+        // A 64-bit fold of at most eight length bytes cannot overflow; checked header addition
+        // and exact-length comparison refuse every disagreement with the remaining input.
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(error, "truncated or trailing RLP bytes", "{}", hex::encode(item));
+        } else {
+            assert!(["truncated or trailing RLP bytes", "RLP length overflow"].contains(&error.as_str()));
+        }
+    }
+    for short_limit in [0xb7u8, 0xf7] {
+        for width in 1..=8u8 {
+            let mut item = vec![short_limit + width];
+            item.extend(vec![0xff; usize::from(width)]);
+            refused(&item);
+            item.extend([0x01; 300]);
+            refused(&item);
+        }
+        // Eight-byte lengths overflowing header addition by one, and just below that overflow.
+        for declared in [u64::MAX, u64::MAX - 8, u64::MAX - 9, 1 << 56] {
+            let mut item = vec![short_limit + 8];
+            item.extend(declared.to_be_bytes());
+            item.extend([0x01; 300]);
+            refused(&item);
+        }
+        let mut one_past = vec![short_limit + 2, 0x01, 0x2c];
+        one_past.extend([0x01; 299]);
+        refused(&one_past);
+        assert_eq!(canonical(&[short_limit + 8, 0xff, 0xff]), Err("non-canonical RLP length".into()));
+        // An overflowing child of a correctly framed list cannot leave a valid prefix accepted.
+        let child = [vec![short_limit + 8], vec![0xff; 8]].concat();
+        for depth in 0..=3 {
+            let parent = nested(depth, &rlp_list(&[vec![0x01], child.clone()]));
+            assert_eq!(canonical(&parent), Err("invalid RLP list payload".into()));
+        }
+    }
+}

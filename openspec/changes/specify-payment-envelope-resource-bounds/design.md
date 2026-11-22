@@ -2,7 +2,9 @@
 
 `docs/chiral-book.md` is read-only. Its canonical monetary contract explicitly bounds money to `u128`; its funding and settlement sections require one exact original, canonical signed envelopes and separate safe-frontier credit. It does not set the access-list/RLP budgets. Preserve the existing conservative profile rather than widening supported input or inventing a consensus rule. No author answer is required.
 
-The new `inference-payment-envelope-bounds` capability describes the shared local decoder. It complements, rather than modifies, the pending opening-funding capability's owner proof, fresh full-cost spendability and durable acknowledgement lifecycle. It can be evaluated independently of that change's blocked native time/schema fixes; neither change may claim the other's unfinished acceptance or full financial qualification.
+The new `inference-payment-envelope-bounds` capability describes the shared local decoder. It complements, rather than modifies, the opening-funding capability's owner proof, fresh full-cost spendability and durable acknowledgement lifecycle. It was evaluated independently of that change's native time/schema fixes; neither change may claim the other's acceptance or full financial qualification.
+
+Dated note (2026-11-22): this section previously called the opening-funding capability "pending". That change has since been archived as `openspec/changes/archive/2026-11-22-specify-opening-funding-intent`, and its requirements are now the current `openspec/specs/inference-opening-funding-intent` spec. This change still does not modify that spec, and its own acceptance does not depend on that archive.
 
 ## Existing implementation correspondence
 
@@ -14,7 +16,7 @@ The new `inference-payment-envelope-bounds` capability describes the shared loca
 - `wallet.rs::recover_digest`: valid scalar/recovery interpretation and low-s enforcement before recovering the payer.
 - `contracts.rs` and `billing_store.rs`: fresh admission refusal versus exact cached acknowledgement recovery remain separate. An existing acknowledgement lookup precedes fresh envelope/spendability checks; do not remove that recovery path.
 
-The initial step was specification-only. Task 2.6 now corrects the native shared field-type boundary with signed regressions; the migration source is committed and no longer ownership-blocked. Public proposal-work admission and HTTP reopening/root rotation remain separate capabilities. Historical acceptance sections below retain the scope and limitations of their original steps; current field-shape status is recorded in task 2.6.
+The initial step was specification-only. Task 2.6 now corrects the native shared field-type boundary with signed regressions; the migration source is committed and no longer ownership-blocked. Public proposal-work admission and HTTP reopening/root rotation remain separate capabilities. Historical acceptance sections below retain the scope and limitations of their original steps; current field-shape status is recorded in task 2.6, and current defensive-budget status in "Task 2.5 direct defensive budget evidence".
 
 ## Why the raw ceiling has no otherwise-valid equality fixture
 
@@ -27,7 +29,7 @@ The byte ceiling is an early defensive check, not a promise that every size up t
 
 An in-memory Python calculation checked those conservative sums this turn. It is source-backed size reasoning, not a runtime parser boundary test. The separate 96 KiB control-body limit does not explain these smaller bounds. Do not weaken the 64/256/4 KiB rules, add opaque padding, or count an oversized transaction already rejected for another reason as isolated proof of the raw ceiling.
 
-The 1,024-item RLP guard is likewise looser than valid envelope/access-list shapes. Direct defensive parser-limit evidence remains open and can now use the committed private native unit-test boundary. No new public API or weaker transaction profile is justified to construct those controls.
+The 1,024-item RLP guard is likewise looser than valid envelope/access-list shapes. Direct defensive parser-limit evidence now uses the committed private in-crate test module; see "Task 2.5 direct defensive budget evidence". No new public API or weaker transaction profile is justified to construct those controls.
 
 ## Acceptance design
 
@@ -45,7 +47,7 @@ The common local path is `validate_payment_envelope -> decoded_payment -> decode
 
 | Requirement/scenarios | Source and existing evidence | Remaining acceptance |
 |---|---|---|
-| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header, malformed-child-length and freshly signed byte-string groups in 2.5.1–2.5.4 below; conservative size derivation above | Direct defensive-budget evidence remains in 2.5; task 2.6 supplies the field-type correction and regression matrix. Do not manufacture an unreachable valid raw-ceiling control |
+| Bounded canonical representation; ambiguous framing and nested/broad RLP | `decode`/`canonical_rlp`; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence`; raw-envelope, root/header, malformed-child-length and freshly signed byte-string groups in 2.5.1–2.5.4 below; conservative size derivation above | Task 2.5's direct private byte/item/depth/opaque/declared-length evidence is mapped clause by clause below; task 2.6 supplies the field-type correction and regression matrix. No unreachable valid raw-ceiling control is manufactured |
 | Exact numeric/opaque widths; wide low bits and calldata boundary | `uint`, `uint64`, `field_bytes`, `decode`, `wallet::recover_digest`; core binding tests and opening-funding signed-substitution, re-signed-integer and same-payer high-s groups | Tasks 2.4 and 2.5.2 cover local calldata boundaries; 2.5.4 covers freshly signed byte-string encodings and 127/128 fee controls; 2.2.2 covers access-list widths/shape. Task 2.6 adds same-payload list-versus-byte-string discrimination |
 | Aggregate occurrence budgets; inclusive counts, duplicates and entry shapes | `access_list`; the old typed core fixture has only one address/key, and prior route controls have empty access lists | Task 2.2.1 count cases and 2.2.2 shape cases below cover both typed profiles; exact occurrence-based gas is covered separately by 2.3 |
 | Structural gas; repeated occurrence costs and equality | `intrinsic`, `sign_transaction`, `estimate_gas`, `decode`; core fixed-count arithmetic plus existing route insufficient-gas and full-signed-cost groups | Task 2.3 below covers exact local/route floors for empty, distinct and repeated access lists; this is not native execution-estimate or settlement qualification |
@@ -157,6 +159,62 @@ Four regression groups in `inference_funding_admission_test` isolate semantic ty
 - `fresh_intent_rejects_list_valued_access_list_addresses`: two typed-profile pairs preserve the exact 20-byte zero address payload in a canonically framed list whose children reach depth four, not five. Address width and nesting cannot mask the required field-type refusal.
 
 All nineteen HTTP pairs use the existing owner-authenticated admission fixture, requiring no acknowledgement, credit, funding/fee records or submission for the candidate, retained signed terms after reopening, and subsequent acknowledgement of the unchanged valid original. Nine additional local pairs do not claim HTTP admission. Existing signature, historical acknowledgement, journal/nonce and recovery tests remain intact. All available checks pass as recorded in APAS progress; direct defensive RLP budgets remain a separate incomplete task. No payment execution, automatic replacement or repair is claimed.
+
+## Task 2.5 direct defensive budget evidence
+
+The earlier 2.5.x groups used signed local/HTTP admission. That can prove a candidate is refused without financial effects, but every refusal looks the same over HTTP (`invalid_payment`), so it cannot show which private guard fired. It also cannot give an otherwise-valid control at a budget that no valid envelope reaches. Six new tests in the existing in-crate module `src-tauri/src/chain_client_tests.rs`, compiled only as `chain_client::tests`, close that gap. They call the private `decode` and `canonical_rlp` directly and check each refusal's exact error text, which differs from guard to guard. They add no production code, no new public or `#[cfg(test)]` API, no copy of the decoder and no change to any limit.
+
+Two local builders support these tests. `shaped_envelope` makes envelope-shaped bytes whose chain ID, parity, fee order, recipient and value pass every check that runs before the calldata, access-list and gas checks. Its signature scalars are placeholders, so these bytes are never otherwise valid, and every refusal asserted on them happens before signature recovery. `sized_envelope` picks the calldata length that makes the decoded size, including any typed prefix, exactly equal to a target.
+
+| Spec clause | Reachable public evidence (existing) | Direct private evidence (task 2.5) | Derived ceiling / note |
+|---|---|---|---|
+| Lowercase `0x`, nonempty even hex, letter case keeps the hash | 2.5.1 `malformed_raw_envelopes_preserve_fresh_funding_admission`, `hex_letter_case_preserves_payment_identity_and_retained_spelling` | Not repeated | — |
+| At most 16,384 decoded bytes, typed prefix included | None can be otherwise valid | `defensive_raw_byte_budget_is_inclusive_and_counts_the_typed_prefix`: for each of the three envelopes, exactly 32,768 digits (16,384 bytes) pass the budget and are then refused by the stricter calldata limit (`payment commitment exceeds size limit`). One more calldata byte (32,770 digits) is refused by the budget itself (`raw transaction size is invalid`). The same 16,384-byte RLP list passes the budget without a prefix (then `wrong transaction field count`) and fails it with the type-2 prefix | Valid layouts stay ≤ 14,448 bytes (≤ 10,388 for the opening commitment), so the 16,384-byte input must break a stricter rule; this one has more than 4,096 calldata bytes |
+| Hex longer than twice the budget refused before the decoded buffer is allocated | — | `defensive_raw_byte_budget_is_checked_before_hex_decoding`: at 32,768 digits, invalid first or last digits reach hex decoding (`invalid raw transaction hex`). At 32,770 digits, the same invalid digits (including ones past the budget) and a 1 MiB run of `g` produce only the size error | This proves ordering only. Allocation is not instrumented; `hex::decode` is the only decoded-buffer allocation and it follows the check |
+| One canonical list with 9/11/12 fields; trailing, truncated and inconsistent lengths | 2.5.1 trailing/concatenated/truncated; 2.5.2 `malformed_rlp_roots_preserve_fresh_funding_admission`; 2.5.3 child-length groups; core `rejects_cross_chain_malleable_noncanonical_and_trailing_evidence` | Declared-length test below: lengths one past the available payload; overflowing children whose valid prefix must not be accepted (`invalid RLP list payload`) at depths zero to three | — |
+| Nonminimal encodings | 2.5.2 `nonminimal_nested_access_list_headers_preserve_original`; 2.5.4 `fresh_intent_rejects_resigned_nonminimal_byte_strings` | Incomplete eight-byte length header (`non-canonical RLP length`) | — |
+| Declared lengths that overflow arithmetic | 2.5.2 overflowing root; 2.5.3 overflowing string/list children | `defensive_rlp_refuses_overflowing_and_overlong_declared_lengths`: for strings and lists, every length-of-length 1–8 with all-`ff` bytes (with and without 300 following bytes). Eight-byte declared lengths `u64::MAX`, `u64::MAX - 8` (header addition overflows by exactly one), `u64::MAX - 9` (no overflow, but more than the input holds) and `2^56`. All return an error and none panics | With a 64-bit `usize`, the fold over at most eight length bytes cannot overflow, so checked header addition and the exact-length comparison report `truncated or trailing RLP bytes`. Only a narrower `usize` reaches the `RLP length overflow` branch, which the test also accepts there; no such target was run |
+| At most 1,024 immediate items per list | Not reachable as an otherwise-valid control: the root has 9/11/12 fields and the access list ≤ 64/256 | `defensive_rlp_limits_each_list_to_1024_immediate_items`: 1,024 items are accepted and 1,025 refused (`RLP item limit`), for byte, empty-string and empty-list items at list depths zero to three. 4,096 descendants spread across lists are accepted. A depth-five or nonminimal last child is refused for its own reason as the 1,024th item, but as the 1,025th it is reported as `RLP item limit`, so a deeper refusal cannot mask the breadth guard. In `decode`, 1,025 root fields hit the item guard while 1,024 get `wrong transaction field count` (no prefix, type 1 and type 2). 1,025 access-list entries or keys hit the item guard, while 1,024 are refused by the stricter `access list address limit` or `access list storage-key limit` | The item guard fires before field-count and access-list checks and before the excess child is examined, and 1,024 never overrides them |
+| Depth at most four, root at zero | Every typed control's storage key sits at depth four; 2.2.2/2.6 use list-valued fields at depth four | `defensive_rlp_depth_is_at_most_four_edges_below_the_root`: list, empty-string, single-byte and 32-byte leaves are accepted as the root and at depth four. They are refused at depth five (`transaction RLP nesting exceeds limit`), including when a later sibling follows an accepted depth-four branch. In `decode`: the signed `typed()` fixture's key is shown to sit at depth four and is accepted. A depth-four list in the key position passes framing, then the field-type rule refuses it (`transaction field must be bytes`). One more wrapper (depth five) is refused by the depth guard first. Legacy calldata shows the same split | Depth four never overrides envelope or access-list shape |
+| Opaque byte-string contents not recursed into | 2.4 all-byte-value calldata; 2.2.2 zero-filled keys | `defensive_rlp_never_recurses_into_opaque_byte_strings` uses five payloads that are each refused when parsed as RLP: an eight-deep list, a 32-byte value that reads as 31 nested lists, a 1,025-item list, an overflowing header and a nonminimal single byte. Each is accepted as a byte string at depths zero to four, and each signed legacy payment carrying it as calldata decodes with exact bytes, hash and payer | — |
+| Inclusive necessary limits; a refusal is an error and never an alternate envelope | Prior groups' no-effect refusal and original-recovery assertions | Every test asserts the exact `Err` (no panic), and every at-limit input is then held to a stricter named rule | No limit is relaxed to build a raw-ceiling fixture |
+
+Mutation evidence: each mutation was applied to a backed-up `chain_client.rs` in the private APAS scratchpad, the six tests were run, and the original was restored and checked with `cmp`.
+
+| Mutation | Failing new tests |
+|---|---|
+| Budget 16,384 → 16,385 | Both raw-budget tests |
+| Typed prefix excluded from the budget | Both raw-budget tests |
+| Budget checked after hex decoding (as decoded bytes) | `..._checked_before_hex_decoding` |
+| Depth 4 → 5 | Depth |
+| Depth 4 → 3 | Depth, item limit, opaque, declared length |
+| Item limit 1,024 → 1,025 | Item limit, opaque |
+| Item limit 1,024 → 1,023 | Item limit |
+| Recursion into byte strings whose payload looks like a list | Opaque, depth (the signed `r`/`s` scalars then look like malformed lists) |
+| Unchecked `header + length` | Declared length, opaque (debug "attempt to add with overflow" panic) |
+| Exact list consumption removed | Declared length |
+
+Two arithmetic mutations survive and are equivalent on 64-bit hosts. Wrapping header addition can never wrap onto the input length: a wrapped sum is below the header length, which is at most the input length. A wrapping length fold over at most eight bytes cannot overflow a 64-bit `usize`. The checked forms stay in place to avoid the debug panic and to protect narrower targets.
+
+Adversarial review (2026-11-22) ran twelve further one-at-a-time mutations of `chain_client.rs` from its own backup, restoring and `cmp`-checking the original after each. Eleven fail a new test:
+
+| Reviewer mutation | Failing new tests |
+|---|---|
+| Budget `>` → `>=` (16,384 bytes refused) | Both raw-budget tests |
+| Budget measured on the whole string, including `0x` | Both raw-budget tests |
+| Root decoded at depth one | Depth, item limit (and three older envelope tests) |
+| Depth guard applied to lists only | Depth |
+| Depth counted by list nesting only | Depth |
+| Item guard at the root only | Item limit |
+| Item guard after recursing into children | Item limit, through the review's added masked-breadth assertion; it survived before that assertion |
+| Short length-header guard removed | Declared length (index panic) |
+| Pre-decode bound loosened to twice the budget, exact budget after decoding | `..._checked_before_hex_decoding` |
+| Item count silently truncated to 1,024 | Item limit (`invalid RLP list payload` instead) |
+| Field count checked before canonical framing | Item limit (through `decode`) |
+
+The twelfth, which moves the depth refusal into a depth-four list that has children, survives because it is equivalent: an item lies at depth five exactly when a depth-four list has a child.
+
+`chain_rpc_api`'s separate `eth_sendRawTransaction` text bound uses the same constant but was not exercised here. Task 2.5 does not cover signature validity, live-chain acceptance, payment execution, allocation instrumentation or a 32-bit target. No code-versus-spec contradiction was found, so no production code changed.
 
 ## Integration
 
