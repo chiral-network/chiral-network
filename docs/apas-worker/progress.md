@@ -1,5 +1,17 @@
 # APAS progress
 
+## 2026-11-21 (ninety-seventh round) — Acceptance: opening-intent 2.5.3 and parent 2.5 (client acknowledgement and start-state persistence)
+
+- In step at `9817712e`; whitepaper unchanged; no new answers.
+- 2.5.3's blocker (no seam between the acknowledgement write and the broadcast-start write) was stale for the same reason as round 96's: `consumer.rs` is tracked, and report line 29 authorises changing it. Acceptance step through a workflow: add a test-only seam and tests, then an adversarial review. design.md gains "Parent 2.5: client acknowledgement and start-state persistence". It maps 2.5's seven clauses to passing tests whose assertions were read in source: invalid acknowledgement, lost acknowledgement, acknowledgement-write failure, start-write failure, start marker without acknowledgement, exact original bytes at submission, and checkpoints rather than event order.
+- Seam: a `#[cfg(test)]` per-thread hook, `before_broadcast_start_write()`, called right before the start write and after the verified acknowledgement is durable. Non-test builds have neither the hook nor its call; `nm` finds no seam symbol in the five headless binaries or the non-test rlib. No code difference was found: production already stops at either failed write.
+- Two new `consumer::tests`:
+  - `native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits` (2.5.3): at the boundary the on-disk file holds the verified acknowledgement with no start marker. The hook then applies 2.5.2's genuine obstruction (the file moved aside, a directory at its path). Fresh `fund`, reopened `resume`, repeated `fund` and reopened `fund` each fail with "cannot commit consumer state". Each makes no RPC, provider request or submission, does not re-register, and leaves the file and every journal row byte-identical. Recovery through `resume` or `fund` writes the marker before exactly one submission of the same raw, then opens. The review added a control: a late saved copy is refused before the boundary.
+  - `native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write` (parent gap): mutation M8, which ignores an acknowledgement-write error, passed 2.5.2 and every other test, because 2.5.2's lasting obstruction then failed the start write instead. A one-time obstruction now shows the attempt ends at the acknowledgement write with no submission; recovery opens with one submission.
+- Mutations: the author ran 10 and the review 7; each fails a named test. Before this round, M2 (start-write error ignored) and M6 (acknowledgement write dropped) passed every existing consumer and acknowledgement-target test. The review also confirmed by mutation (R3) that 2.5.1 catches removal of the guard against a start marker without acknowledgement, which the author had argued only from source.
+- Recorded limits: the 2.5.3 obstruction is re-applied at the boundary on each attempt, because a lasting directory makes `load_account` refuse earlier (`protected secret must be a regular file`). No fsync, full-disk or power-loss mode is tested.
+- 2.5.3 and 2.5 ticked. Checks: `--lib` 475 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; `inference_funding_acknowledgement_test` 9/9; desktop `--lib desktop::` 10/10; strict validation passes. The review also reran `inference_funding_admission_test` (45/45), which the inventory cites. Every production addition is `#[cfg(test)]`, so non-test builds are unchanged and round 96's full suite still covers the product code.
+
 ## 2026-11-21 (ninety-sixth round) — Acceptance: opening-intent 2.7 (exact native acknowledgement-time boundaries)
 
 - In step at `28040e75`; whitepaper unchanged; no new answers.
@@ -1108,7 +1120,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5 and 2.6 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.6, then 3.1 and 3.2 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked

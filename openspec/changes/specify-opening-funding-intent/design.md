@@ -65,7 +65,7 @@ These are inspected source/test assertions, not a claim that the listed tests ex
 |HTTP new versus cached admission|`contracts::control` funding-intent branch; `ProviderState::qualified_model`; ledger `require_execution`|Ledger `control_acknowledges_only_spendable_current_nonce_and_recovers_without_rpc_or_broadcast`; integration `funding_intent_authority_is_required_before_new_admission_and_cached_acknowledgement` and `fresh_intent_rechecks_provider_funding_gates_after_balance`|
 |Expiry, capacity and permanence|`BillingStore::register_funding_intent`, `cleanup_pending`, `record_funding_attempt`; sender/nonce trigger|Ledger `registration_rejects_expiry_wrong_owner_network_and_replacement`, `pending_capacity_rejects_new_intents_without_losing_accepted_obligations`, `equivalent_intents_reuse_ack_and_conflicting_sender_nonce_survives_quota_expiry`|
 |Atomic registration and competition|`BillingStore::transaction`, `register_funding_intent`; standalone-quote storage handoff|Ledger `concurrent_intent_admission_cannot_acknowledge_two_agreements_for_one_nonce` covers nonce conflict, not distinct originals competing for the final lease. Integration `acknowledgement_frees_exactly_one_slot_and_replay_preserves_its_replacement` and `rejected_acknowledgements_preserve_pending_capacity_and_allow_original_registration` retain the handoff assertions; they now fill 10,000 provider-wide standalone records (one real plus 9,999 restored under another payer), not the superseded eight-wallet-slot fixtures (confirmed by the task 2.3.2 review below); `failed_intent_persistence_rolls_back_the_entire_retention_handoff` covers post-write rollback|
-|Persistence before client submission|Consumer `save_account`, `verify_funding_intent`, `resume_inner`; chain `send_payment_once`, `broadcast`|Consumer `missing_malformed_or_mismatched_ack_never_broadcasts`, `paid_funding_persists_ack_before_broadcast_and_free_open_skips_intent`; chain `ambiguous_broadcast_retains_original_evidence`|
+|Persistence before client submission|Consumer `save_account`, `verify_funding_intent`, `resume_inner`; chain `send_payment_once`, `broadcast`|Consumer `missing_malformed_or_mismatched_ack_never_broadcasts`, `paid_funding_persists_ack_before_broadcast_and_free_open_skips_intent`, `native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits`, `native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write`; chain `ambiguous_broadcast_retains_original_evidence`. Complete per-clause inventory in *Parent 2.5* below|
 |Original recovery and saved credentials|Consumer `load_account`, `resume_inner`, `refresh_account`|Consumer `missing_journal_never_replaces_a_saved_original_transaction`, `expired_unaccepted_quotes_never_broadcast_or_replace_preparation`, `resumed_open_accounts_preserve_exported_credentials_and_refresh_funding_status`|
 |No implicit paid registration/credit|`contracts::control` open branch; ledger `check_open_funding`, `open_account`|Ledger `paid_open_never_registers_implicitly_even_before_expiry`, `preexpiry_funding_intent_preserves_quote_through_settlement_stall_and_restart`; owner-control opening authorization cases. Complete per-layer inventory in *Parent 2.8* below|
 
@@ -81,6 +81,123 @@ Source modules: [`consumer.rs`](../../../src-tauri/src/consumer.rs), [`chain_cli
 |Free first opening and accepted recovery|`open_account` checks account bounds only for a new free account and requires retained intent/payment for a new paid one; HTTP existing-account path bypasses fresh funding; native saved-account resume refreshes instead of reopening|Authenticated free final-slot competition, failure rollback and no fabricated payment/intent; accepted-account/top-up/settlement recovery under exhausted quote/admission resources (2.8.1–2.8.2). Preserve the separate HTTP root-rotation blocker|
 
 The `inference_proposal_quota_test` handoff and free-opening cases once populated eight pending quotes and tested the ninth refusal. They have since migrated to provider-wide quote storage (task 2.3.2 below): each fills 10,000 standalone records and refuses a same-payer replacement only at that ceiling, keeping their exact signed-term retention, unchanged acknowledgement, unrelated-record survival and credential checks. In particular, `free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_credential` reopens storage and authenticates the old bearer; it does not retry HTTP opening or establish root-recovery compliance. No historical fixture or passing old suite proves the approved availability change.
+
+### Parent 2.5: client acknowledgement and start-state persistence
+
+Inventory for parent task 2.5, 2026-11-21. Each clause of the task maps to the requirement text it tests, to passing tests whose assertions were read in source, and to the gap this step filled. Unit tests are `consumer::tests::…` in [`consumer.rs`](../../../src-tauri/src/consumer.rs). **ACK** marks `inference_funding_acknowledgement_test`, which this step ran. **ADM** marks `inference_funding_admission_test`, cited from the runs of its own tasks and not rerun by this step; the review below reran it (45 passed, including both cited 2.3.4 tests). `inference_owner_control_test` was neither run nor edited. All RPC is scripted and loopback-only; nothing here is live-chain, process-kill, fsync or power-loss evidence.
+
+Requirements cited: **N** *Native broadcast follows verified durable acknowledgement*; **F** *Funding intent messages bind the original signed payment*; **R** *Restart recovery does not manufacture another opening*.
+
+**1. Invalid acknowledgement.**
+
+- *Spec.* N: "The native consumer SHALL accept only an acknowledgement satisfying all message, original-envelope and timestamp checks above, then durably save it"; "Missing, malformed, mismatched or lost acknowledgement responses SHALL NOT authorize broadcast, replacement, automatic fee bump or newly signed funding." Scenario *Missing or invalid acknowledgement stops client broadcast*. F scenarios *Strict acknowledgement and request schemas*, *Signed substitution is not acknowledgement of this operation* and *Registration time is distinct from recovery time*.
+- *Schema.* ACK's four member groups and `native_acknowledgement_rejects_positional_objects_before_chain_access` (tasks 2.1.3.1 and 2.1.2) send 36 malformed replies through `rejected_case`. Each reaches the real handler and is refused with no client RPC. The saved file keeps the quote, raw and hash with a null acknowledgement and a false start marker. The journal keeps one `prepared` row with the same raw, hash and nonce 0, and the provider is unchanged. Restoring the genuine reply on a reopened consumer reaches RPC, and every call there sees the saved acknowledgement, start marker and raw.
+- *Binding.* `funding_acknowledgements_bind_all_terms_and_survive_quote_expiry` refuses ten signed substitutions (three network parts, provider, payer, quote, hash, early, late and future) and a wrong signer and domain at `funding_intent_matches`. `missing_malformed_or_mismatched_ack_never_broadcasts`, modes 2 (malformed object) and 3 (a provider-signed acknowledgement of another hash): no submission, no saved acknowledgement or start marker, the same raw, stage `registration_pending`, and no raw or signature in the pending listing. `resume` then submits exactly the original, once.
+- *Time.* Task 2.7: `native_acknowledgement_refuses_one_second_past_each_edge` (four refusals per cell with no submission or post-preparation RPC and a byte-identical file and journal) and the refused late saved copy in `native_saved_acknowledgement_survives_quote_expiry_at_exact_receiver_edges`.
+- *Gap.* None.
+
+**2. Lost acknowledgement.**
+
+- *Spec.* N: "A lost registration reply or timeout SHALL be treated as ambiguous, not proven refusal … Recovery SHALL seek that exact intent/acknowledgement and original transaction". Scenario *Lost acceptance reply is not a definite full refusal*. R: "A provider-accepted acknowledgement whose response/local save was lost SHALL be recovered unchanged before proceeding."
+- *Unit.* `missing_malformed_or_mismatched_ack_never_broadcasts` mode 4: the provider caches its acceptance and answers 503 (mode 1 refuses before accepting). The same no-submission and no-saved-acknowledgement assertions hold, and `resume` then recovers and submits the original once. `funding_crash_boundaries_resume_original_bytes_and_accepted_expired_terms`, checkpoint 1: the provider holds the acceptance and the saved file only the raw and hash. Recovery requests the acknowledgement exactly once, every submission is the original, and the wallet history has one transaction.
+- *Integration.* ADM `native_lost_fresh_acknowledgement_recovers_after_provider_and_client_reopen` (2.3.4.1–2) disconnects the real committed reply body. The saved file has a null acknowledgement and a false start marker, client RPC is untouched and the journal unchanged. After both sides reopen, the identical acknowledgement is recovered and every client RPC call sees it saved with the start marker. ADM `native_accepted_original_recovers_after_expiry_restart_and_refill_until_safe_credit` (2.3.4.3), stage 2, does the same after expiry and refill and records one submission, `[raw]`.
+- *Gap.* None.
+
+**3. Acknowledgement persistence failure.**
+
+- *Spec.* N: "Failure to verify or persist either prerequisite SHALL prevent client submission". Scenario *Missing or invalid acknowledgement stops client broadcast*: when "local acknowledgement/start-state persistence fails", "the client does not submit a payment on that attempt" and "retains recoverable original evidence".
+- *Existing.* ACK `native_acknowledgement_commit_failure_preserves_original_recovery` (2.5.2): after the genuine reply, the account path becomes a directory. Reopened `resume` and repeated `fund` fail with no chain RPC, the prepared file preserved byte for byte, and the journal and provider unchanged. With the obstruction removed, the same acknowledgement is recovered and saved with the start marker before RPC.
+- *Gap, filled.* That test cannot tell which write failed. Its obstruction persists, so if the acknowledgement-write error were ignored (mutation M8 below), the start write would fail instead, with the same error. M8 passes 2.5.2, the rest of ACK and every other consumer lib test. Under a transient fault M8 continues the attempt and submits, which the scenario forbids ("on that attempt"). The new `native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write` fails under M8.
+
+**4. Start-state persistence failure (task 2.5.3).**
+
+- *Spec.* As statement 3. R scenario *Crash checkpoints keep one original* also names "local acknowledgement save, broadcast-start save" as distinct checkpoints.
+- *Existing.* No test isolated it. Mutations M2 (start-write error ignored) and M6 (acknowledgement write dropped, so the start write is the first to save it) each pass every pre-existing consumer lib test and all of ACK, 2.5.2 included.
+- *Gap, filled.* New `native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits`, through the seam below.
+
+**5. Saved start marker without acknowledgement.**
+
+- *Spec.* N: "a saved broadcast-started flag without a valid saved acknowledgement SHALL fail closed, not authorize a fresh payment."
+- *Existing.* `load_account` refuses a true `funding_broadcast_started` without an acknowledgement (`saved funding submission has no provider acknowledgement; refusing any payment`). ACK `native_broadcast_started_without_acknowledgement_refuses_recovery` (2.5.1) saves a null and an omitted acknowledgement with a true marker and runs reopened `resume` and repeated `fund`. Each refusal (checked with `is_err`) makes no RPC and no registration request and leaves the damaged file byte-identical and every journal field unchanged; restoring the genuine file reaches RPC without registering again. Review mutation R3 below removes that guard: 2.5.1 then fails at its first refusal's no-RPC assertion (`no payment reconciliation or submission`), because the attempt proceeds past the damaged marker instead of failing closed.
+- *Gap.* None.
+
+**6. Exact original bytes at the submission boundary.**
+
+- *Spec.* N scenario *Durable prerequisites are observable at submission*: "the saved verified acknowledgement, original byte/hash identity and broadcast-started marker are already durable", and "the submitted bytes equal the prepared and provider-registered original". Scenario *Ambiguous submission retains the original operation*.
+- *Unit.* At every opening `eth_sendRawTransaction`, the in-crate `funding_rpc` handler reads the account file. It requires that file's acknowledgement to verify for the submitted hash (`funding_intent_matches`), the start marker, and both the saved raw and the provider-registered raw to equal the submitted bytes. Every paid in-crate opening passes through it: task 2.7's accepts and recoveries (one submission, `[raw]`, one journal operation at nonce 0), `funding_crash_boundaries_…` (every submission is the original; one history transaction), `balance_quote_fund_and_resume_send_only_espace_requests_to_the_configured_rpc` (each submission validates as the opening envelope, and resume resends the same bytes) and both new tests.
+- *Integration.* ACK `native_ambiguous_submission_recovers_only_the_durable_original` (2.6.2): each of 18 sends has params `[raw]`, with the saved file (acknowledgement, start marker, raw and hash) and journal snapshotted at submission. ACK `native_recovery_refuses_missing_or_inconsistent_original_journal` (2.6.1) refuses a missing or different journal original before RPC. ADM 2.3.4.3 records `[raw]` and unchanged sender, operation, nonce, hash and raw columns.
+- *Chain.* `chain_client_tests::ambiguous_broadcast_retains_original_evidence`: a retry returns the same raw with one record, and a new operation is refused as `Pending`.
+- *Gap.* None. Mutation M5 (re-signed bytes) also fails both new tests.
+
+**7. Checkpoint assertions rather than event order.**
+
+- *Existing checkpoints.* `funding_crash_boundaries_…` restarts at R's five checkpoints: journal commit, provider acceptance before the local save, local acknowledgement save, broadcast-start save and submission. The `funding_rpc` handler checks durable state at submission. ACK's `fixture_rpc` records the saved file at every client RPC call and the journal at submission; ADM's client RPC handlers record the saved file at every call.
+- *Event order alone.* `paid_funding_persists_ack_before_broadcast_and_free_open_skips_intent` asserts event names only, but its paid run passes through the same `funding_rpc` check, and no statement above rests on it alone.
+- *Gap, filled.* The start-write boundary had no checkpoint. The new hook records the exact file bytes and the RPC, provider-request, event and submission counts immediately before the start write.
+
+#### Task 2.5.3 seam
+
+The blocker was real: `resume_inner` makes the acknowledgement write, the second verification and the start write synchronously, with no await between them, so neither a provider reply nor another task can act there. [`consumer.rs`](../../../src-tauri/src/consumer.rs) is tracked and owner-authorised (APAS report line 29), so a test-only seam is allowed. All of it is `#[cfg(test)]`:
+
+- the thread-local `BEFORE_BROADCAST_START_WRITE`, an optional boxed closure, and `before_broadcast_start_write()`, which runs it;
+- one statement, `#[cfg(test)] before_broadcast_start_write();`, inside `if !saved.funding_broadcast_started`, after the marker is set in memory and immediately before `self.save_account(&saved)?`.
+
+Non-test builds drop the statement and both items, so the production path is unchanged. The test guard `BroadcastStartWriteHook` asserts a current-thread runtime, refuses double arming and clears the hook on drop. Integration targets link the non-test library and cannot reach it. `nm` finds no `before_broadcast_start_write`, `BEFORE_BROADCAST_START_WRITE` or `BroadcastStartWriteHook` symbol in the built `chiral`, `chiral_daemon`, `relay_server` or `chiral_rpc_gateway`; the lib test binary has both seam symbols.
+
+The failure is genuine. The hook applies task 2.5.2's obstruction (the account file is renamed aside and an empty directory takes its path), so the start write fails in `private_write` at its real file-to-directory rename with `cannot commit consumer state`, and its temporary is removed. No error value is injected, and no sleep or watcher is used. The in-crate fixture also gains `obstruct_on_delivery`, which applies the same obstruction once, before the mock provider delivers its acknowledgement.
+
+#### New tests
+
+- `native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits` (statement 4). Two cases, recovered by reopened `resume` or by reopened `fund`. The armed hook records a checkpoint, then obstructs.
+  - Attempt 1, fresh `fund`, returns exactly `cannot commit consumer state`. At the boundary, the file on disk holds the provider's cached acknowledgement (same payload and signature, verified by `funding_intent_matches` for the hash of the registered raw), a false start marker, stage `acknowledged`, the raw and hash, and no account or credential. One registration and no submission precede it. This is what separates it from 2.5.2: the acknowledgement write had committed. After the failure there is no chain RPC or provider request past the boundary, no `eth_sendRawTransaction` and no `open`. The displaced file is byte-identical to the boundary bytes, the account directory holds only the obstruction, and the journal has one `prepared` operation with the same raw, hash and nonce 0. With the file returned, the stage reads `acknowledged`.
+  - Attempts 2–4 (reopened `resume`, repeated `fund` on that consumer, reopened `fund`) meet the obstruction again at the same boundary; between attempts the test returns the displaced file. Each returns the same error. The boundary bytes equal attempt 1's, so the saved acknowledgement is reused unchanged. No chain RPC, provider request (hence no registration) or submission follows, and the file and every journal row stay identical.
+  - Review control: a provider-signed saved copy registered at quote expiry is refused by reopened `resume` with the mismatch error before the boundary.
+  - Recovery, with a recording-only hook: the same bytes and no new request or submission at the boundary, then exactly one `eth_sendRawTransaction`, `[raw]`, which the fixture accepts only with the acknowledgement, start marker and raw durable. Events are `register, broadcast, open`. The account opens `active` with one credential, the saved acknowledgement keeps its signature, the raw and hash are unchanged, and the journal keeps one operation at nonce 0.
+- `native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write` (statement 3). Two cases, reopened `resume` and reopened repeated `fund`. A draining provider first refuses registration, leaving the prepared original. The provider then obstructs before delivering its genuine acknowledgement, and the armed hook would remove the obstruction, making the fault transient. The attempt returns `cannot commit consumer state` and never reaches the hook. No chain RPC or submission follows. The displaced file equals the prepared bytes, with no acknowledgement or start marker, and the file and every journal row are unchanged once it is returned; the stage is `registration_pending`. Recovery through the same entry point opens `active` with the cached acknowledgement, the start marker and one submission of the same raw. Events are three `register`, then `broadcast` and `open`, and the journal keeps one operation.
+
+#### Mutations
+
+Each production mutation was applied alone by script, run against both new tests, restored by `cp` from a private backup with a fresh mtime and checked with `cmp`.
+
+|#|Mutation|Result|
+|---|---|---|
+|M1|A send of the original inserted before the start write|2.5.3 test fails: `eth_sendRawTransaction` during attempt 1. The fixture also rejects it for a missing start marker|
+|M2|Start-write error ignored (`let _ =`)|2.5.3 test fails: the attempt continues to RPC with the obstruction in place and ends with another error. Passes every other consumer lib test and all nine ACK tests|
+|M3|Acknowledgement requested again although one is saved|2.5.3 test fails at attempt 2: provider requests rise from 2 to 4|
+|M4|Start marker set in the acknowledgement's own write|2.5.3 test fails: fresh `fund` succeeds and the hook never runs|
+|M4b|Start marker durably written before the acknowledgement is requested|Both fail: 2.5.3 as M4; the transient test at its prepared state|
+|M5|`chain_client::payment_once` re-signs the original's fields at one wei more gas price instead of sending the journaled bytes|Both fail at recovery: the fixture's acknowledgement check refuses the new hash and the opening is refused|
+|M6|Acknowledgement write dropped, so the start write is the first to save it|Both fail: 2.5.3 finds no acknowledgement on disk at the boundary; the transient attempt succeeds. Passes every other consumer lib test and all nine ACK tests, 2.5.2 included|
+|M7|Saved acknowledgement trusted: `load_account` verification and the pre-broadcast re-check both dropped|2.5.3 test fails at its review control: the late copy reaches the start write|
+|M8|Acknowledgement-write error ignored|Transient test fails: the attempt submits and opens. Passes the 2.5.3 test, every other consumer lib test and all nine ACK tests, 2.5.2 included|
+
+"Every other consumer lib test" means the module's other tests at that run (62 for M2 and M6, 63 for M8). Other integration targets were not run under mutation.
+
+#### Review mutations
+
+An adversarial review on 2026-11-21 re-read the seam, both tests and the cited assertions, then ran mutations of its own. Each was applied alone by script from its own backup and restored by `cp` with a fresh mtime, and `cmp` matched the backup. Unless noted, each run selected both new tests (`--lib write_failure`).
+
+|#|Mutation|Result|
+|---|---|---|
+|R1|`private_write` no longer removes its temporary after a failed commit|2.5.3 test fails: the account directory holds the obstruction and a leftover temporary (2 entries, not 1)|
+|R2|Seam check, not a production change: the hook moved to just before the acknowledgement write, so the obstruction hits that write (2.5.2's case)|Both fail. 2.5.3 finds no durable acknowledgement at the boundary (`expect("durable acknowledgement")`), so the test cannot mistake an acknowledgement-write failure for this case. The transient test fails because its hook now runs first and lifts the obstruction, so the attempt succeeds|
+|R3|`load_account` no longer refuses a true start marker without an acknowledgement (run: ACK 2.5.1 only)|2.5.1 fails at its first refusal's no-RPC assertion|
+|R4|A fresh acknowledgement saved before its first verification (run: all 64 consumer lib tests)|`missing_malformed_or_mismatched_ack_never_broadcasts` and `native_acknowledgement_refuses_one_second_past_each_edge` fail; the other 62 pass|
+|R5|The start write saves the file before setting the marker in memory, so it persists no marker|Both fail at recovery. The fixture's `eth_sendRawTransaction` handler finds no durable start marker and records no submission. The consumer treats the dropped reply as ambiguous and asks to open, and the fixture's open handler then refuses an opening with no recorded submission|
+|R6|`funding_stage` reports an acknowledged-but-unstarted opening as `registration_pending`|2.5.3 test fails at its `acknowledged` stage assertion|
+|R7|After a failed start write, the attempt sends one more funding-intent request before returning the error|2.5.3 test fails: provider requests after the failure rise from 2 to 4|
+
+The review found no plausible regression that passes the new tests, so it added no assertions.
+
+#### Observation, not a code difference
+
+Production already returns both write errors before any submission, so no code-versus-specification contradiction was found and no production behaviour changed; the only production-file change is the `cfg(test)` seam. Task 2.5.2's evidence stands for what it claims, a failed commit that submits nothing and recovers, but its persistent obstruction cannot show which write failed. That separation now comes from the two new tests.
+
+#### Limits
+
+- The in-crate provider is a mock and its RPC is scripted. ACK runs the real provider router, but none of this is power-loss, fsync, full-disk or process-kill evidence. The faults are rename failures.
+- The 2.5.3 obstruction recurs at the boundary on each attempt instead of persisting across attempts. A persistent obstruction of the account file would fail every repeated attempt at its first account read: `load_account` refuses a non-regular file (`protected secret must be a regular file`), before the raw/hash rewrite and the start write.
+- Only the macOS host ran these tests. A directory at the target path fails the rename for any user, root included.
 
 ### Task 2.7: exact native acknowledgement-time boundaries
 
@@ -621,7 +738,7 @@ Both failures must reach the genuine acknowledgement handler, perform no chain R
 
 The test removes only its empty obstruction and returns the preserved file, reopens the consumer, and retries the same entry point. The request must contain the same original, receive the unchanged acknowledgement and durably save that acknowledgement/start marker before reaching the unavailable RPC. No transaction is submitted, no new original is prepared and no successful settlement is synthesized.
 
-This proves acknowledgement commit-error handling, not write/sync exhaustion, power-loss atomicity or the later broadcast-start write in isolation. The response boundary occurs before acknowledgement persistence; the following acknowledgement verification and start-state write have no asynchronous/public hook. Task 2.5.3 retains that separate deterministic-seam blocker in owner-untracked native persistence code rather than using racy watchers or claiming an earlier failure covers both writes.
+This proves acknowledgement commit-error handling, not write/sync exhaustion, power-loss atomicity or the later broadcast-start write in isolation. The response boundary occurs before acknowledgement persistence; the following acknowledgement verification and start-state write have no asynchronous/public hook. Task 2.5.3 retains that separate deterministic-seam blocker in owner-untracked native persistence code rather than using racy watchers or claiming an earlier failure covers both writes. Update 2026-11-21: task 2.5.3 added a `cfg(test)` seam at that boundary (*Parent 2.5* above). Its mutations M6 and M8 show that this test's persistent obstruction cannot tell the two writes apart; the separation comes from the two new unit tests.
 
 ## Task 2.6.2 native ambiguous submission
 
@@ -856,7 +973,7 @@ With these tests every cell of request-accounting's reconciliation matrix names 
 ## Acceptance gaps and evidence limits
 
 - Inventory existing schema/signature/envelope tests before adding consumer-visible missing cases. Use real fixture signatures, explicit times and isolated disk state; preserve any unrelated uncommitted work. Committed native source now permits private deterministic seams without widening public APIs.
-- Valid-original missing/mismatching-journal refusal has task 2.6.1's integration coverage. Task 2.5.1 covers omitted/null saved acknowledgements with a true start marker, and 2.5.2 covers acknowledgement commit obstruction. Task 2.6.2 adds native submission-response faults and same-original recovery. Start-state-only persistence failure (2.5.3), other persistence modes and the remaining recovery inventory remain open; these refusals must not create or submit replacements.
+- Valid-original missing/mismatching-journal refusal has task 2.6.1's integration coverage. Task 2.5.1 covers omitted/null saved acknowledgements with a true start marker, and 2.5.2 covers acknowledgement commit obstruction. Task 2.6.2 adds native submission-response faults and same-original recovery. Start-state-only persistence failure (2.5.3) and a transient acknowledgement-write failure are now covered (*Parent 2.5* above). Other persistence modes (sync, full disk, power loss) and the remaining 2.6 recovery inventory remain open; these refusals must not create or submit replacements.
 - Task 2.4 supplies the producer's pre-issuance rejection, exact interval and writer-wait assertions. Task 2.7 (above) supplies the exact native interval and 30-second freshness edges with a `cfg(test)`-only receiver clock. Broad invalid-future checks, such as the `now + 60` case in `funding_acknowledgements_bind_all_terms_and_survive_quote_expiry`, remain narrower and are not that boundary proof.
 - Reuse useful retention/nonce/capacity assertions without retaining superseded wallet-slot acceptance. Tasks 2.3.3.1–2 cover final-paid-lease competition and native full refusal; 2.3.4.1–2 cover fresh-commit response loss and reopened native/provider recovery under later full paid/standalone resources. Deterministic expiry remains 2.3.4.3. Preserve safe-frontier requirements without fabricating credit. Constructed signed resource records are prerequisites, not observed public issuance/admission or a public bypass.
 - Consumer crash tests construct five checkpoints and restart objects; their provider/RPC fixtures are isolated, with provider acknowledgements held in fixture memory. They prove client ordering and byte reuse, not real-provider power-loss durability. The fixture inspects saved acknowledgement/start state at broadcast; this is stronger than an event-name ordering assertion alone.

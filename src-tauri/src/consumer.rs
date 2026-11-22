@@ -480,6 +480,19 @@ fn acknowledgement_receiver_now() -> Result<u64, String> {
 thread_local! {
     static PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW: std::cell::Cell<Option<u64>> =
         const { std::cell::Cell::new(None) };
+    /// Opening-intent task 2.5.3: run on the calling thread immediately before the opening's
+    /// broadcast-start write, after the verified acknowledgement is durable. Lets an in-crate
+    /// test obstruct only that write. Non-test builds have neither this hook nor its call.
+    static BEFORE_BROADCAST_START_WRITE: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+fn before_broadcast_start_write() {
+    BEFORE_BROADCAST_START_WRITE.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook();
+        }
+    });
 }
 fn funding_intent_matches(
     quote: &Quote,
@@ -1724,6 +1737,8 @@ impl Consumer {
             )?;
             if !saved.funding_broadcast_started {
                 saved.funding_broadcast_started = true;
+                #[cfg(test)]
+                before_broadcast_start_write();
                 self.save_account(&saved)?;
             }
             // A requested cancellation passes the gate only with a won original, so there is
@@ -3033,6 +3048,10 @@ mod tests {
         /// receiver clock to this time (once) while it registers, before it delivers its reply,
         /// modelling time that passes during the registration round trip.
         receiver_clock_on_delivery: std::sync::Mutex<Option<u64>>,
+        /// Parent task 2.5: when set to `(account file, preserved path)`, the provider moves the
+        /// account file aside and puts a directory at its path (task 2.5.2's obstruction) once,
+        /// before it delivers its acknowledgement, so the consumer's acknowledgement write fails.
+        obstruct_on_delivery: std::sync::Mutex<Option<(PathBuf, PathBuf)>>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3344,6 +3363,11 @@ mod tests {
                     pinned.set(Some(later));
                 });
             }
+            if let Some((account, preserved)) = state.obstruct_on_delivery.lock().unwrap().take() {
+                assert!(!preserved.exists());
+                fs::rename(&account, &preserved).unwrap();
+                fs::create_dir(&account).unwrap();
+            }
             if let Some(registered_at) = *state.registered_at.lock().unwrap() {
                 let mut delivered = accepted.as_ref().unwrap().payload.clone();
                 delivered.registered_at = registered_at;
@@ -3533,6 +3557,7 @@ mod tests {
             rpc: std::sync::Mutex::new(Vec::new()),
             registered_at: std::sync::Mutex::new(None),
             receiver_clock_on_delivery: std::sync::Mutex::new(None),
+            obstruct_on_delivery: std::sync::Mutex::new(None),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -5800,6 +5825,356 @@ mod tests {
             let raw = accepted.raw_transaction.unwrap();
             assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw], "{name}");
             drop(pinned);
+            task.abort();
+        }
+    }
+    /// Opening-intent task 2.5.3: arms the test-only `before_broadcast_start_write` hook on this
+    /// thread until dropped. A `#[tokio::test]` current-thread runtime polls the native consumer
+    /// on this thread, and nothing awaits between the hook and the broadcast-start write.
+    struct BroadcastStartWriteHook;
+    impl BroadcastStartWriteHook {
+        fn arm(hook: impl FnMut() + 'static) -> Self {
+            assert_eq!(
+                tokio::runtime::Handle::current().runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread,
+                "the hook runs only on the arming thread"
+            );
+            BEFORE_BROADCAST_START_WRITE.with(|slot| {
+                assert!(slot.replace(Some(Box::new(hook))).is_none(), "already armed");
+            });
+            Self
+        }
+    }
+    impl Drop for BroadcastStartWriteHook {
+        fn drop(&mut self) {
+            BEFORE_BROADCAST_START_WRITE.with(|slot| drop(slot.replace(None)));
+        }
+    }
+    /// Task 2.5.3: what the hook observes immediately before the broadcast-start write.
+    #[derive(Clone)]
+    struct StartWriteCheckpoint {
+        /// The account file's exact bytes on disk at that moment.
+        saved: Vec<u8>,
+        rpc: usize,
+        controls: usize,
+        events: Vec<&'static str>,
+        submissions: usize,
+    }
+    fn start_write_checkpoint(state: &FundingFixture) -> StartWriteCheckpoint {
+        StartWriteCheckpoint {
+            saved: fs::read(&state.account_path).unwrap(),
+            rpc: state.rpc.lock().unwrap().len(),
+            controls: state.controls.lock().unwrap().len(),
+            events: state.events.lock().unwrap().clone(),
+            submissions: state.submissions.lock().unwrap().len(),
+        }
+    }
+    /// Opening-intent task 2.5.3 (requirement "Native broadcast follows verified durable
+    /// acknowledgement": "Failure to verify or persist either prerequisite SHALL prevent client
+    /// submission"; scenario "Missing or invalid acknowledgement stops client broadcast": "local
+    /// acknowledgement/start-state persistence fails"). The provider's genuine acknowledgement is
+    /// verified and its write commits. Then the test-only hook, run immediately before the
+    /// broadcast-start write, records the durable file, moves it aside and puts a directory at the
+    /// account path (task 2.5.2's obstruction), so only the start write fails, at its real rename.
+    /// Fresh `fund`, reopened `resume`, repeated `fund` and reopened `fund` each return that
+    /// persistence error with no submission, no chain RPC or provider request after the
+    /// acknowledgement, no opening, and the acknowledged-but-not-started file and journal
+    /// unchanged; the later attempts reuse the saved acknowledgement without another request.
+    /// Review control: a provider-signed saved copy registered at quote expiry is refused before
+    /// the hook, so the saved copy is re-verified. With the hook disarmed, reopened `resume` or
+    /// reopened `fund` recovers: the start marker is durable before the single submission of the
+    /// original bytes, and then the account opens.
+    #[tokio::test]
+    async fn native_broadcast_start_write_failure_after_durable_acknowledgement_never_submits() {
+        let failure = "cannot commit consumer state";
+        let mismatch =
+            "provider funding acknowledgement does not match the original payment and signed quote";
+        for recover_with_fund in [false, true] {
+            let name = format!("recover_with_fund={recover_with_fund}");
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let q = saved.quote.payload.clone();
+            let account_path = state.account_path.clone();
+            let preserved = directory.path().join("acknowledged-account.json");
+            let checkpoints = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let obstructing = {
+                let (checkpoints, state) = (checkpoints.clone(), state.clone());
+                let (account_path, preserved) = (account_path.clone(), preserved.clone());
+                BroadcastStartWriteHook::arm(move || {
+                    checkpoints.borrow_mut().push(start_write_checkpoint(&state));
+                    // Task 2.5.2's genuine obstruction, here after the acknowledgement commit:
+                    // keep the durable file intact beside the store and put a directory at its
+                    // exact path, so the start write fails at its file-to-directory rename.
+                    assert!(!preserved.exists());
+                    fs::rename(&account_path, &preserved).unwrap();
+                    fs::create_dir(&account_path).unwrap();
+                })
+            };
+            // Removes only the obstruction and returns the durable file to its path.
+            let unobstruct = || {
+                assert!(fs::read_dir(&account_path).unwrap().next().is_none(), "obstruction intact");
+                fs::remove_dir(&account_path).unwrap();
+                fs::rename(&preserved, &account_path).unwrap();
+            };
+
+            // Attempt 1: fresh `fund`.
+            let error = consumer.fund(&saved.offer, &saved.quote).await.err();
+            assert_eq!(error.as_deref(), Some(failure), "{name}: fresh fund");
+            assert_eq!(checkpoints.borrow().len(), 1, "{name}");
+            let first = checkpoints.borrow()[0].clone();
+            // The acknowledgement write itself committed: at the start-write boundary the file on
+            // disk holds the verified acknowledgement without the start marker (not task 2.5.2).
+            let acknowledged: SavedAccount = decode(&first.saved).unwrap();
+            let cached = state.intent.lock().unwrap().clone().unwrap();
+            let raw = state.raw.lock().unwrap().clone().unwrap();
+            let hash = protocol::hash_hex(&hex::decode(&raw[2..]).unwrap());
+            let intent = acknowledged.funding_intent.as_ref().expect("durable acknowledgement");
+            assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature), "{name}");
+            funding_intent_matches(&q, &hash, intent).unwrap();
+            assert!(!acknowledged.funding_broadcast_started, "{name}");
+            assert_eq!(funding_stage(&acknowledged), "acknowledged", "{name}");
+            assert_eq!(acknowledged.raw_transaction.as_deref(), Some(raw.as_str()), "{name}");
+            assert_eq!(acknowledged.tx_hash.as_deref(), Some(hash.as_str()), "{name}");
+            assert!(acknowledged.account.is_none() && acknowledged.credentials.is_empty(), "{name}");
+            assert_eq!((first.events.as_slice(), first.submissions), (&["register"][..], 0), "{name}");
+            // The start write failed, and nothing followed it.
+            assert_eq!(state.rpc.lock().unwrap().len(), first.rpc, "{name}: chain RPC after the failure");
+            assert!(
+                state.rpc.lock().unwrap().iter().all(|(_, request)| request["method"] != "eth_sendRawTransaction"),
+                "{name}"
+            );
+            assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+            assert_eq!(state.controls.lock().unwrap().len(), first.controls, "{name}: provider request after the failure");
+            assert_eq!(state.events.lock().unwrap().as_slice(), ["register"], "{name}");
+            assert_eq!(fs::read(&preserved).unwrap(), first.saved, "{name}");
+            assert_eq!(
+                fs::read_dir(account_path.parent().unwrap()).unwrap().count(),
+                1,
+                "{name}: only the obstruction; the failed write removed its temporary"
+            );
+            assert_eq!(
+                journaled_opening(&consumer, &q.id),
+                ((raw.clone(), hash.clone(), "0".into(), "prepared".into()), 1),
+                "{name}"
+            );
+            unobstruct();
+            let evidence = opening_evidence(&consumer, &q.id);
+            assert_eq!(evidence.0, first.saved, "{name}");
+            assert_eq!(
+                consumer.pending_accounts().unwrap()["pending"][0]["funding_stage"],
+                "acknowledged",
+                "{name}"
+            );
+
+            // Attempts 2-4 meet the same obstruction at the same boundary.
+            for (attempt, reopen, repeat_fund) in [(2, true, false), (3, false, true), (4, true, true)] {
+                let name = format!("{name}, attempt {attempt}");
+                if reopen {
+                    let config = consumer.config.clone();
+                    drop(consumer);
+                    consumer = Consumer::new(config).unwrap();
+                }
+                let result = if repeat_fund {
+                    consumer.fund(&saved.offer, &saved.quote).await
+                } else {
+                    consumer.resume(&q.id).await
+                };
+                assert_eq!(result.err().as_deref(), Some(failure), "{name}");
+                assert_eq!(checkpoints.borrow().len(), attempt, "{name}");
+                let checkpoint = checkpoints.borrow()[attempt - 1].clone();
+                assert_eq!(checkpoint.saved, first.saved, "{name}: saved acknowledgement reused unchanged");
+                assert_eq!(
+                    (checkpoint.rpc, checkpoint.controls, checkpoint.submissions),
+                    (first.rpc, first.controls, 0),
+                    "{name}: no chain RPC or provider request before the start write"
+                );
+                assert_eq!(state.rpc.lock().unwrap().len(), first.rpc, "{name}");
+                assert_eq!(state.controls.lock().unwrap().len(), first.controls, "{name}");
+                assert_eq!(state.events.lock().unwrap().as_slice(), ["register"], "{name}");
+                assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                assert_eq!(fs::read(&preserved).unwrap(), first.saved, "{name}");
+                unobstruct();
+                assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+            }
+
+            // Review control: the saved acknowledgement is re-verified, not trusted. A
+            // provider-signed copy registered at quote expiry is refused before the hook.
+            let late = protocol::sign(
+                INTENT_DOMAIN,
+                FundingIntent { registered_at: q.expires_at, ..cached.payload.clone() },
+                &state.key,
+            )
+            .unwrap();
+            let mut tampered: SavedAccount = decode(&first.saved).unwrap();
+            tampered.funding_intent = Some(late);
+            consumer.save_account(&tampered).unwrap();
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            assert_eq!(consumer.resume(&q.id).await.err().as_deref(), Some(mismatch), "{name}: late copy");
+            assert_eq!(checkpoints.borrow().len(), 4, "{name}: refused before the start-write boundary");
+            assert_eq!(state.rpc.lock().unwrap().len(), first.rpc, "{name}");
+            assert_eq!(state.controls.lock().unwrap().len(), first.controls, "{name}");
+            assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+            private_write(&account_path, &first.saved).unwrap();
+            assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+
+            // Remove the obstruction: disarm it, then recover through a reopened consumer while
+            // only recording the start-write boundary.
+            drop(obstructing);
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let recording = {
+                let (checkpoints, state) = (checkpoints.clone(), state.clone());
+                BroadcastStartWriteHook::arm(move || {
+                    checkpoints.borrow_mut().push(start_write_checkpoint(&state));
+                })
+            };
+            let account = if recover_with_fund {
+                consumer.fund(&saved.offer, &saved.quote).await
+            } else {
+                consumer.resume(&q.id).await
+            }
+            .unwrap_or_else(|error| panic!("{name}: recovery: {error}"));
+            drop(recording);
+            assert_eq!((account.contract_id.as_str(), account.status.as_str()), (q.id.as_str(), "active"), "{name}");
+            assert_eq!(checkpoints.borrow().len(), 5, "{name}");
+            let last = checkpoints.borrow()[4].clone();
+            // Immediately before the start write: the same acknowledged file, nothing sent.
+            assert_eq!(last.saved, first.saved, "{name}");
+            assert_eq!(
+                (last.rpc, last.controls, last.submissions, last.events.as_slice()),
+                (first.rpc, first.controls, 0, &["register"][..]),
+                "{name}"
+            );
+            // The fixture's `eth_sendRawTransaction` handler accepts bytes only once the verified
+            // acknowledgement, the start marker and the same raw original are durable.
+            let sends: Vec<Value> = state
+                .rpc
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, request)| request["method"] == "eth_sendRawTransaction")
+                .map(|(_, request)| request["params"].clone())
+                .collect();
+            assert_eq!(sends, [json!([raw])], "{name}");
+            assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+            assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "broadcast", "open"], "{name}");
+            let recovered = saved_opening(&state);
+            let intent = recovered.funding_intent.as_ref().unwrap();
+            assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature), "{name}");
+            assert!(recovered.funding_broadcast_started, "{name}");
+            assert_eq!(recovered.raw_transaction.as_deref(), Some(raw.as_str()), "{name}");
+            assert_eq!(recovered.tx_hash.as_deref(), Some(hash.as_str()), "{name}");
+            assert_eq!(recovered.account.as_ref().map(|account| account.status.as_str()), Some("active"), "{name}");
+            assert_eq!(recovered.credentials.len(), 1, "{name}");
+            let ((after_raw, after_hash, after_nonce, _), operations) = journaled_opening(&consumer, &q.id);
+            assert_eq!((after_raw, after_hash, after_nonce, operations), (raw, hash, "0".into(), 1), "{name}");
+            assert!(consumer.pending_accounts().unwrap()["pending"].as_array().unwrap().is_empty(), "{name}");
+            task.abort();
+        }
+    }
+    /// Parent opening-intent task 2.5 inventory (scenario "Missing or invalid acknowledgement stops
+    /// client broadcast": when "local acknowledgement/start-state persistence fails", "the client
+    /// does not submit a payment on that attempt"). From a prepared original without an
+    /// acknowledgement, the provider obstructs the account file (task 2.5.2's directory) once
+    /// before delivering its genuine acknowledgement, so the acknowledgement write fails at its
+    /// rename. The armed task 2.5.3 hook would remove the obstruction at the broadcast-start
+    /// boundary, making the fault transient, so an attempt that went on after the failed
+    /// acknowledgement write could still persist and submit. Reopened `resume` or repeated `fund`
+    /// must instead stop at that write: the hook is never reached, nothing is submitted and no
+    /// chain RPC follows, and the prepared file and journal are unchanged. With the obstruction
+    /// removed, the same entry point recovers the same original and opens.
+    #[tokio::test]
+    async fn native_transient_acknowledgement_write_failure_ends_the_attempt_before_the_start_write() {
+        use std::sync::atomic::Ordering;
+        for repeat_fund in [false, true] {
+            let name = format!("repeat_fund={repeat_fund}");
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let q = saved.quote.payload.clone();
+            let account_path = state.account_path.clone();
+            let preserved = directory.path().join("prepared-account.json");
+            // A draining provider refuses registration of the freshly prepared original.
+            state.mode.store(1, Ordering::SeqCst);
+            assert!(consumer.fund(&saved.offer, &saved.quote).await.is_err(), "{name}");
+            state.mode.store(0, Ordering::SeqCst);
+            let prepared = saved_opening(&state);
+            let raw = prepared.raw_transaction.clone().unwrap();
+            assert!(prepared.funding_intent.is_none() && !prepared.funding_broadcast_started, "{name}");
+            let evidence = opening_evidence(&consumer, &q.id);
+            let rpc = state.rpc.lock().unwrap().len();
+            let checkpoints = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let transient = {
+                let (checkpoints, state) = (checkpoints.clone(), state.clone());
+                let (account_path, preserved) = (account_path.clone(), preserved.clone());
+                BroadcastStartWriteHook::arm(move || {
+                    if account_path.is_dir() {
+                        fs::remove_dir(&account_path).unwrap();
+                        fs::rename(&preserved, &account_path).unwrap();
+                    }
+                    checkpoints.borrow_mut().push(start_write_checkpoint(&state));
+                })
+            };
+            *state.obstruct_on_delivery.lock().unwrap() = Some((account_path.clone(), preserved.clone()));
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let result = if repeat_fund {
+                consumer.fund(&saved.offer, &saved.quote).await
+            } else {
+                consumer.resume(&q.id).await
+            };
+            assert_eq!(result.err().as_deref(), Some("cannot commit consumer state"), "{name}");
+            assert!(state.obstruct_on_delivery.lock().unwrap().is_none(), "{name}: the genuine reply was delivered");
+            assert_eq!(state.events.lock().unwrap().as_slice(), ["register", "register"], "{name}");
+            assert!(checkpoints.borrow().is_empty(), "{name}: the attempt went on after its failed acknowledgement write");
+            assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: chain RPC after the failed write");
+            assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+            assert!(fs::read_dir(&account_path).unwrap().next().is_none(), "{name}: obstruction intact");
+            assert_eq!(fs::read(&preserved).unwrap(), evidence.0, "{name}: no acknowledgement or start marker saved");
+            drop(transient);
+            fs::remove_dir(&account_path).unwrap();
+            fs::rename(&preserved, &account_path).unwrap();
+            assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+            assert_eq!(
+                consumer.pending_accounts().unwrap()["pending"][0]["funding_stage"],
+                "registration_pending",
+                "{name}"
+            );
+
+            // Recovery through the same entry point on a reopened consumer.
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let account = if repeat_fund {
+                consumer.fund(&saved.offer, &saved.quote).await
+            } else {
+                consumer.resume(&q.id).await
+            }
+            .unwrap_or_else(|error| panic!("{name}: recovery: {error}"));
+            assert_eq!(account.status, "active", "{name}");
+            let recovered = saved_opening(&state);
+            let cached = state.intent.lock().unwrap().clone().unwrap();
+            let intent = recovered.funding_intent.as_ref().unwrap();
+            assert_eq!((&intent.payload, &intent.signature), (&cached.payload, &cached.signature), "{name}");
+            assert!(recovered.funding_broadcast_started, "{name}");
+            assert_eq!(recovered.raw_transaction.as_deref(), Some(raw.as_str()), "{name}");
+            assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+            assert_eq!(
+                state.events.lock().unwrap().as_slice(),
+                ["register", "register", "register", "broadcast", "open"],
+                "{name}"
+            );
+            let ((after_raw, after_hash, after_nonce, _), operations) = journaled_opening(&consumer, &q.id);
+            assert_eq!(
+                (after_raw, after_hash, after_nonce, operations),
+                (raw, cached.payload.tx_hash.clone(), "0".into(), 1),
+                "{name}"
+            );
             task.abort();
         }
     }
