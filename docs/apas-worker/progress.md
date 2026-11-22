@@ -1,5 +1,22 @@
 # APAS progress
 
+## 2026-11-22 (hundred-and-fourth round) — Envelope-bounds 3.2 preparation: the six clause gaps and the relay raw bound
+
+- In step at `af7b4964`; whitepaper unchanged; no new answers.
+- Step through a workflow: write tests, then an adversarial review. It closes the six sub-clauses round 103 recorded with source correspondence only, and the untested relay bound. No production code changed and no code difference was found; the one `chain_rpc_api.rs` hunk is a test inside its `mod tests`.
+- Eight new tests:
+  - In `inference_funding_admission_test`, now 50 tests:
+    - `fresh_intent_rejects_noncanonical_signature_scalars_from_the_same_payer`: `r`/`s` zero-padded to 32 or 33 bytes, or 33 bytes with the same low 256 bits, in all three envelopes.
+    - `fresh_intent_rejects_resigned_over_width_typed_chain_id_and_priority_fee`: a 9-byte chain ID and a 17-byte priority fee, re-signed, plus leading-zero forms.
+    - `fresh_intent_rejects_resigned_recipient_widths_and_contract_creation`: 19- and 21-byte recipients and an empty recipient in all three envelopes; the 20-byte rule fires before payment binding.
+    - `fresh_intent_rejects_signature_parity_outside_the_two_supported_values`: legacy `v` outside the chain's two EIP-155 values, and typed parity above 1, including values whose low bits select the real parity.
+    - `acknowledged_quote_refuses_resource_invalid_candidates_and_replays_the_exact_original`: 19 resource-invalid candidates after acknowledgement go to the cached lookup, which runs before envelope admission. Each gets 409 (or 400 past `raw_hash`'s bound) with no RPC, an unchanged intent row and no account, credit, funding or fee row. The exact original then replays the identical acknowledgement.
+  - `chain_client::tests::signature_scalars_are_refused_by_the_integer_rule_before_recovery` and `out_of_range_signature_parity_is_refused_by_the_envelope_rule_before_recovery`: direct exact-error checks on the private decoder.
+  - `chain_rpc_api::tests::raw_transaction_text_bound_is_inclusive`: `0x` plus 32,768 digits passes; anything longer, odd, `0X`, non-hex or too short is refused.
+- Every refused cell checks the exact decoder message, so a signature, binding or cost failure cannot stand in for the width, shape or parity rule. The author ran 12 mutations and the review 5. Two review mutations survived at first: parity, or legacy `v`, read as its low 64 bits accepted a 9-byte value. Both parity tests now include 2^64 forms and fail under them.
+- Remaining limits, recorded: recipient widths other than 0, 19 and 21 bytes rely on the same length comparison. Other decoder callers (relay and provider `verify_payment`, journal rechecks, native `verify_funding_intent`) have source correspondence only. No HTTP gateway run sends a raw transaction. The platform is macOS arm64 only.
+- The review reports the change ready to archive. Checks: `--lib` 495 passed, 12 ignored (helpers), 0 failed; bins build and `cargo check --bins --tests` pass; `inference_funding_admission_test` 50/50; desktop `--lib desktop::` 10/10; `openspec validate --all --strict` 34/34. Test-only change; round 100's full suite covers the product code.
+
 ## 2026-11-22 (hundred-and-third round) — Envelope-bounds 3.1: final evidence map, and 3.2 archive readiness
 
 - In step at `5cbec9ec`; whitepaper unchanged; no new answers.

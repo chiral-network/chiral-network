@@ -453,6 +453,36 @@ mod tests {
         tx["stateOverrides"] = json!({});
         assert!(!valid(&tx));
     }
+    /// Relay-path defensive bound, not the decoder: `eth_sendRawTransaction` text is refused
+    /// beyond `0x` plus twice `MAX_RAW_BYTES` digits, and is inclusive at that length. The
+    /// at-bound request fits the 64 KiB request cap, so that cap does not mask this check.
+    /// `proxy_call` still applies the full decoder before forwarding anything.
+    #[test]
+    fn raw_transaction_text_bound_is_inclusive() {
+        const REFUSED: &str = "invalid or oversized signed transaction";
+        let request = |raw: &str| json!({"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":[raw]});
+        let at_bound = format!("0x{}", "aB".repeat(MAX_RAW_BYTES));
+        assert_eq!(at_bound.len(), MAX_RAW_BYTES * 2 + 2);
+        assert!(serde_json::to_vec(&request(&at_bound)).unwrap().len() <= MAX_REQUEST_BYTES);
+        assert_eq!(validate(&request(&at_bound)), Ok(true));
+        assert_eq!(validate(&request("0x00")), Ok(true));
+        for raw in [
+            format!("0x{}", "ab".repeat(MAX_RAW_BYTES + 1)),
+            format!("{at_bound}a"),
+            format!("0x{}", "ab".repeat(4 * MAX_RAW_BYTES)),
+            "0x".into(),
+            "0x0".into(),
+            format!("0x{}a", "ab".repeat(MAX_RAW_BYTES - 1)),
+            format!("0X{}", "ab".repeat(MAX_RAW_BYTES)),
+            format!("0x{}zz", "ab".repeat(MAX_RAW_BYTES - 1)),
+        ] {
+            assert_eq!(validate(&request(&raw)), Err(REFUSED), "{} characters", raw.len());
+        }
+        assert_eq!(
+            validate(&json!({"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":[at_bound, at_bound]})),
+            Err(REFUSED)
+        );
+    }
     #[test]
     fn submission_budget_is_independent() {
         let mut reads = Bucket::new(64, 128);

@@ -420,3 +420,8 @@ Requirement source: `openspec/changes/specify-payment-gated-reputation/specs/pay
 ## Judged 2026-11-22 — direct defensive decoder budgets (payment-envelope-resource-bounds 2.5)
 
 - The six `chain_client::tests::defensive_*` tests — **replaceable**: the raw-byte budget comparison (including the typed prefix and the order of the length check before hex decoding), the depth and immediate-item bounds of `canonical_rlp`, the opacity of byte strings and the overflow-free handling of declared lengths are total functions over byte sequences. Verus could prove them for all inputs, including the 32-bit `usize` branch that no host here can run. The `rlp` crate calls would need trusted specifications, the one permitted exception for calls to another crate.
+
+## Judged 2026-11-22 — signature, width and parity sub-clauses (payment-envelope-resource-bounds 3.2 preparation)
+
+- `chain_client::tests::signature_scalars_are_refused_by_the_integer_rule_before_recovery`, `out_of_range_signature_parity_is_refused_by_the_envelope_rule_before_recovery` and `chain_rpc_api::tests::raw_transaction_text_bound_is_inclusive` — **replaceable**: the minimal-width integer rule, the parity and EIP-155 `v` predicates and the relay's inclusive text bound are total functions over bytes and integers that Verus could prove for every input.
+- The five new `inference_funding_admission_test` tests — **not replaceable**: signed candidates through the HTTP route, a scripted RPC listener and SQLite rows; the acknowledged-quote case also depends on the order of checks in the route.

@@ -19,7 +19,7 @@ use chiral_network::{
     app::ProviderState,
     auth::{self, AuthPayload},
     billing_store::{BillingStore, CredentialIssueRequest},
-    chain_client::{ChainClient, ChainError, ValidatedPaymentEnvelope, VerifiedPayment},
+    chain_client::{ChainClient, ChainError, ValidatedPaymentEnvelope, VerifiedPayment, MAX_PAYMENT_DATA, MAX_RAW_BYTES},
     consumer::{Consumer, ConsumerConfig},
     contracts,
     network::{NetworkConfig, ESPACE_TESTNET_CHAIN_ID, ESPACE_TESTNET_GENESIS},
@@ -317,6 +317,30 @@ fn resign_field(raw: &str, kind: u8, chain_id: u64, key: &str, index: usize, enc
     })
 }
 
+/// The decoder's exact refusal for an over-width or nonminimal integer field.
+const INTEGER_RULE: &str = "non-canonical or oversized transaction integer";
+
+fn rlp_byte_string(payload: &[u8]) -> Vec<u8> {
+    let mut stream = RlpStream::new();
+    stream.append(&payload);
+    stream.out().to_vec()
+}
+
+/// Replaces legacy `v`, typed parity, `r` or `s`. These lie outside the signing preimage, so the
+/// result keeps the payer's signature over exactly the same signed fields.
+fn replace_signature_field(raw: &str, kind: u8, index: usize, encoded: &[u8]) -> String {
+    let bytes = hex::decode(&raw[2..]).unwrap();
+    let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+    let count = rlp.item_count().unwrap();
+    assert!(index >= count - 3 && index < count, "only signature fields are outside the preimage");
+    let mut stream = RlpStream::new_list(count);
+    for field in 0..count {
+        stream.append_raw(if field == index { encoded } else { rlp.at(field).unwrap().as_raw() }, 1);
+    }
+    let payload = hex::encode(stream.out());
+    if kind == 0 { format!("0x{payload}") } else { format!("0x{kind:02x}{payload}") }
+}
+
 // Each payload byte is itself a complete canonical RLP item. Reinterpreting the
 // enclosing bytes as a list therefore isolates field type, not malformed framing.
 fn list_of_byte_items(bytes: &[u8]) -> RlpStream {
@@ -535,6 +559,14 @@ impl Fixture {
         self.refuses(candidate, name, (StatusCode::BAD_REQUEST, "invalid_payment"), None).await;
         self.rpc.requests.lock().unwrap().clear();
         self.acknowledges(original, &envelope, name).await;
+    }
+
+    /// `rejects_candidate_preserving_original`, after first requiring the decoder's exact refusal
+    /// through the public local API. Every route refusal is the same `invalid_payment`, so only
+    /// this message shows which rule fired.
+    async fn rejects_by_rule_preserving_original(&mut self, original: &str, candidate: &str, rule: &str, name: &str) {
+        assert_eq!(self.envelope(candidate).unwrap_err(), ChainError::Rejected(rule.into()), "{name}");
+        self.rejects_candidate_preserving_original(original, candidate, name).await;
     }
 }
 
@@ -1492,6 +1524,252 @@ async fn fresh_intent_rejects_list_valued_access_list_addresses() {
     for kind in [1, 2] {
         let mut fixture = Fixture::new(directory.path(), 18_600 + u64::from(kind), 100).await;
         fixture.access_list_boundary(kind, &original, &candidate, "list-valued access address").await;
+    }
+}
+
+/// Task 3.2 preparation, clause gap 1: signature `r`/`s` use the shared 32-byte canonical integer
+/// rule. Signing is deterministic, so the search varies only the signed gas (always far above the
+/// structural floor) until the chosen scalar is below 2^248. Its 32-byte zero-padded form then
+/// keeps the permitted width and breaks only minimality; the 33-byte forms break the width, one
+/// with a leading zero and one with the same low 256 bits. The scalars lie outside the signing
+/// preimage, so each candidate keeps the payer's signature over identical signed fields, and
+/// recovery of the same numerical value would still name the payer. The exact local message
+/// shows that the integer rule, not recovery or binding, refuses each candidate.
+#[tokio::test]
+async fn fresh_intent_rejects_noncanonical_signature_scalars_from_the_same_payer() {
+    let directory = tempfile::tempdir().unwrap();
+    let forms = ["zero-padded to 32 bytes", "zero-padded to 33 bytes", "33 bytes with the same low 256 bits"];
+    for (kind, envelope_name) in ENVELOPES {
+        for (offset, scalar_name) in [(1_usize, "r"), (2, "s")] {
+            for (index, form) in forms.into_iter().enumerate() {
+                let name = format!("{envelope_name}: {scalar_name} {form}");
+                let mut fixture = Fixture::new(directory.path(),
+                    25_000 + u64::from(kind) * 100 + offset as u64 * 10 + index as u64, 100).await;
+                let mut fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+                let (original, field, scalar) = (0..1_u64 << 14).find_map(|step| {
+                    fields.gas = GAS + step;
+                    let raw = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+                    let bytes = hex::decode(&raw[2..]).unwrap();
+                    let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+                    let field = rlp.item_count().unwrap() - 3 + offset;
+                    let scalar = rlp.at(field).unwrap().data().unwrap().to_vec();
+                    (scalar.len() < 32).then_some((raw, field, scalar))
+                }).expect("a signature scalar below 2^248 within the bounded search");
+                assert_eq!(replace_signature_field(&original, kind, field, &rlp_byte_string(&scalar)), original, "{name}");
+                let mut padded = vec![0_u8; 32 - scalar.len()];
+                padded.extend_from_slice(&scalar);
+                let encoded = match index {
+                    0 => padded,
+                    1 => [&[0][..], &padded].concat(),
+                    _ => [&[1][..], &padded].concat(),
+                };
+                let candidate = replace_signature_field(&original, kind, field, &rlp_byte_string(&encoded));
+                fixture.rejects_by_rule_preserving_original(&original, &candidate, INTEGER_RULE, &name).await;
+            }
+        }
+    }
+}
+
+/// Task 3.2 preparation, clause gaps 2 and 3: a typed chain ID one byte wider than `u64`, and a
+/// type-2 priority fee one byte wider than `u128`, each with the payment's admissible low bits,
+/// plus a leading zero byte on each. Every candidate is freshly signed over its altered field.
+/// The chain ID is the first typed field decoded, so no other rule precedes it. A 17-byte
+/// priority fee is numerically above any `u128` maximum, so the exact message shows that the
+/// width rule, not the priority-order rule, refuses it.
+#[tokio::test]
+async fn fresh_intent_rejects_resigned_over_width_typed_chain_id_and_priority_fee() {
+    let directory = tempfile::tempdir().unwrap();
+    for (case, (kind, field_name, index, width)) in
+        [(1_u8, "chain ID", 0_usize, 8_usize), (2, "chain ID", 0, 8), (2, "priority fee", 2, 16)].into_iter().enumerate()
+    {
+        for (form_index, form) in ["one byte too wide with admissible low bits", "leading zero byte"].into_iter().enumerate() {
+            let name = format!("type-{kind}: {field_name} {form}");
+            let mut fixture = Fixture::new(directory.path(), 26_000 + case as u64 * 10 + form_index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let value = if index == 0 { u128::from(fields.chain_id) } else { fields.priority_fee };
+            let bytes = value.to_be_bytes();
+            let payload = if form_index == 0 {
+                [&[1][..], &bytes[16 - width..]].concat()
+            } else {
+                let start = bytes.iter().position(|byte| *byte != 0).unwrap();
+                [&[0][..], &bytes[start..]].concat()
+            };
+            let candidate = resign_field(&original, kind, fields.chain_id, &fixture.owner_key, index,
+                &rlp_byte_string(&payload));
+            fixture.rejects_by_rule_preserving_original(&original, &candidate, INTEGER_RULE, &name).await;
+        }
+    }
+}
+
+/// Task 3.2 preparation, clause gap 4: a 19-byte recipient (the provider's low 19 bytes), two
+/// 21-byte recipients containing the provider's 20 bytes, and an empty recipient (contract
+/// creation), in all three envelopes, each freshly signed over its altered recipient. The exact
+/// message shows the 20-byte rule refuses each before payment binding is compared.
+#[tokio::test]
+async fn fresh_intent_rejects_resigned_recipient_widths_and_contract_creation() {
+    const RULE: &str = "payment recipient must be exactly 20 bytes (no contract creation)";
+    let directory = tempfile::tempdir().unwrap();
+    let forms = ["19 low bytes", "21 bytes, zero-prefixed", "21 bytes, zero-suffixed", "empty (contract creation)"];
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, form) in forms.into_iter().enumerate() {
+            let name = format!("{envelope_name}: recipient {form}");
+            let mut fixture = Fixture::new(directory.path(), 27_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let recipient = fields.recipient.as_slice();
+            let payload = match index {
+                0 => recipient[1..].to_vec(),
+                1 => [&[0][..], recipient].concat(),
+                2 => [recipient, &[0][..]].concat(),
+                _ => Vec::new(),
+            };
+            let candidate = resign_field(&original, kind, fields.chain_id, &fixture.owner_key,
+                usize::from(kind) + 3, &rlp_byte_string(&payload));
+            fixture.rejects_by_rule_preserving_original(&original, &candidate, RULE, &name).await;
+        }
+    }
+}
+
+/// Task 3.2 preparation, clause gap 5: typed parity above 1 and a legacy `v` other than the
+/// configured chain's two EIP-155 values. Parity and `v` lie outside the signing preimage, so each
+/// candidate keeps the payer's valid signature over identical signed fields. The "low byte" and
+/// "low 32 bits" forms would recover the payer if the value were truncated rather than refused.
+/// Another chain's freshly signed `v` and an unprotected `v = 27` are covered elsewhere.
+/// Adversarial review (2026-11-22) added "low 64 bits" forms: a legacy `v` read as an
+/// up-to-32-byte integer is still refused by the chain rule, while a typed parity wider than
+/// `u64` is refused by the integer width rule before the parity comparison.
+#[tokio::test]
+async fn fresh_intent_rejects_signature_parity_outside_the_two_supported_values() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, envelope_name) in ENVELOPES {
+        let (rule, forms) = if kind == 0 {
+            ("legacy transaction must use configured EIP-155 chain id",
+                ["unprotected-style parity 0 or 1", "29 or 30", "low byte matches", "low 32 bits match", "low 64 bits match"])
+        } else {
+            ("invalid transaction signature parity",
+                ["parity plus 2", "27 plus parity", "low byte matches", "low 32 bits match", "nine bytes, low 64 bits match"])
+        };
+        for (index, form) in forms.into_iter().enumerate() {
+            let name = format!("{envelope_name}: {form}");
+            let mut fixture = Fixture::new(directory.path(), 28_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let original = signed_payment(&fields, &fixture.owner_key, kind, &[0xc0]);
+            let bytes = hex::decode(&original[2..]).unwrap();
+            let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+            let field = rlp.item_count().unwrap() - 3;
+            let base = if kind == 0 { fields.chain_id * 2 + 35 } else { 0 };
+            let parity = rlp.val_at::<u64>(field).unwrap() - base;
+            assert!(parity <= 1, "{name}");
+            let (base, parity) = (u128::from(base), u128::from(parity));
+            let value = match (kind, index) {
+                (0, 0) => parity,
+                (0, 1) => 29 + parity,
+                (_, 0) => parity + 2,
+                (_, 1) => 27 + parity,
+                (_, 2) => base + parity + 0x100,
+                (_, 3) => base + parity + (1 << 32),
+                _ => base + parity + (1 << 64),
+            };
+            let rule = if kind != 0 && index == 4 { INTEGER_RULE } else { rule };
+            let mut encoded = RlpStream::new();
+            append_uint(&mut encoded, value);
+            let candidate = replace_signature_field(&original, kind, field, &encoded.out());
+            fixture.rejects_by_rule_preserving_original(&original, &candidate, rule, &name).await;
+        }
+    }
+}
+
+/// Task 3.2 preparation, clause gap 6: once the quote's original is acknowledged, resource-invalid
+/// candidates from the same payer (each refused locally by its named rule) reach the exact cached
+/// lookup, which precedes chain admission. A candidate within the ledger's 65,538-character hash
+/// bound is refused as 409 `conflict`; one beyond it as 400 `invalid_payment`. Either way there is
+/// no RPC (hence no submission), the retained intent row and signed quote are unchanged, and there
+/// is no account, credit, funding or fee row. The original's exact bytes then replay the identical
+/// acknowledgement, again without RPC. Each case has its own fixture and payer, because the
+/// provider admits at most twelve owner challenges per wallet per minute.
+#[tokio::test]
+async fn acknowledged_quote_refuses_resource_invalid_candidates_and_replays_the_exact_original() {
+    const CONFLICT: (StatusCode, &str) = (StatusCode::CONFLICT, "conflict");
+    let directory = tempfile::tempdir().unwrap();
+    let cases = [
+        "nonce one byte too wide with admissible low bits",
+        "s zero-padded to 33 bytes",
+        "4,097-byte calldata",
+        "beyond the 16,384-byte raw budget",
+        "beyond the ledger's 65,538-character bound",
+        "65 access-list addresses",
+        "257 storage keys",
+    ];
+    for (kind, envelope_name) in ENVELOPES {
+        for (index, case) in cases.into_iter().enumerate() {
+            if kind == 0 && index >= 5 { continue; }
+            let name = format!("{envelope_name}: acknowledged quote, {case}");
+            let mut fixture = Fixture::new(directory.path(), 29_000 + u64::from(kind) * 100 + index as u64, 100).await;
+            let fields = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+            let (original, envelope) = fixture.original(kind, &fields);
+            fixture.rpc.control.lock().unwrap().balance = u128::MAX;
+            fixture.acknowledges(&original, &envelope, &name).await;
+            let acknowledgement = serde_json::to_value(fixture.provider.state.ledger
+                .funding_intent(&fixture.quote.payload, &original).unwrap().unwrap()).unwrap();
+            let db = Connection::open(&fixture.provider.ledger_path).unwrap();
+            let retained = || db.query_row(
+                "SELECT json_group_array(json_array(contract,tx_hash,raw_transaction,ack,quote,sender,nonce,admission_until))
+                 FROM funding_intents", [], |row| row.get::<_, String>(0)).unwrap();
+            let retained_before = retained();
+            assert_eq!(serde_json::from_str::<Value>(&retained_before).unwrap().as_array().unwrap().len(), 1, "{name}");
+
+            let key = fixture.owner_key.as_str();
+            let with_data = |length: usize| {
+                let mut altered = PaymentFields::opening(&fixture.quote.payload, 0, 11);
+                altered.data.resize(length, 0xff);
+                signed_payment(&altered, key, kind, &[0xc0])
+            };
+            let (candidate, rule, expected) = match index {
+                0 => (resign_field(&original, kind, fields.chain_id, key, usize::from(kind != 0),
+                    &rlp_byte_string(&[1, 0, 0, 0, 0, 0, 0, 0, 0])), INTEGER_RULE, CONFLICT),
+                1 => {
+                    let bytes = hex::decode(&original[2..]).unwrap();
+                    let rlp = Rlp::new(&bytes[usize::from(kind != 0)..]);
+                    let field = rlp.item_count().unwrap() - 1;
+                    let s = rlp.at(field).unwrap().data().unwrap();
+                    let mut wide = vec![0_u8; 33 - s.len()];
+                    wide.extend_from_slice(s);
+                    (replace_signature_field(&original, kind, field, &rlp_byte_string(&wide)), INTEGER_RULE, CONFLICT)
+                }
+                2 => (with_data(MAX_PAYMENT_DATA + 1), "payment commitment exceeds size limit", CONFLICT),
+                3 => {
+                    let raw = with_data(MAX_RAW_BYTES);
+                    assert!((raw.len() - 2) / 2 > MAX_RAW_BYTES && raw.len() <= 65_538, "{name}");
+                    (raw, "raw transaction size is invalid", CONFLICT)
+                }
+                4 => {
+                    let raw = with_data(2 * MAX_RAW_BYTES);
+                    assert!(raw.len() > 65_538, "{name}");
+                    (raw, "raw transaction size is invalid", (StatusCode::BAD_REQUEST, "invalid_payment"))
+                }
+                5 => (signed_payment(&fields, key, kind, &encoded_access_list(65, 0, false).out()),
+                    "access list address limit", CONFLICT),
+                _ => (signed_payment(&fields, key, kind, &encoded_access_list(1, 257, false).out()),
+                    "access list storage-key limit", CONFLICT),
+            };
+            assert_ne!(candidate, original, "{name}");
+            assert_eq!(fixture.envelope(&candidate).unwrap_err(), ChainError::Rejected(rule.into()), "{name}");
+            fixture.rpc.requests.lock().unwrap().clear();
+            let (status, document) = fixture.submit_intent(&candidate).await;
+            assert_eq!((status, document["error"]["code"].as_str()), (expected.0, Some(expected.1)), "{name}: {document}");
+            assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{name}: the cached lookup precedes any chain RPC");
+            assert_eq!(retained(), retained_before, "{name}");
+            let ledger = fixture.persisted_without_credit();
+            let refusal = ledger.funding_intent(&fixture.quote.payload, &candidate).unwrap_err();
+            assert!(refusal.starts_with(&format!("{}:", expected.1)), "{name}: {refusal}");
+
+            let (status, document) = fixture.submit_intent(&original).await;
+            assert_eq!((status, &document), (StatusCode::OK, &acknowledgement), "{name}: exact original replay");
+            assert!(fixture.rpc.requests.lock().unwrap().is_empty(), "{name}: replay reads no chain state");
+            assert_eq!(retained(), retained_before, "{name}");
+            fixture.persisted_without_credit();
+        }
     }
 }
 

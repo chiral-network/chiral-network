@@ -37,6 +37,10 @@ fn legacy() -> SubmittedTransaction {
     sign_transaction(&key(), CHAIN, 0, &payee(), u128::MAX, b"terms\0", 1001).unwrap()
 }
 fn typed(kind: u8) -> String {
+    typed_with_gas(kind, 25320)
+}
+/// The `typed` fixture signed with another gas limit, at least its 25,320 structural floor.
+fn typed_with_gas(kind: u8, gas: u64) -> String {
     let count = if kind == 1 { 8 } else { 9 };
     let fields = |s: &mut RlpStream| {
         s.append(&CHAIN);
@@ -45,7 +49,7 @@ fn typed(kind: u8) -> String {
             s.append(&1u8);
         }
         s.append(&1001u64);
-        s.append(&25320u64);
+        s.append(&gas);
         s.append(&vec![0x22u8; 20]);
         append_uint(s, U256::from(u128::MAX));
         s.append(&b"x\0".as_slice());
@@ -2078,4 +2082,118 @@ fn defensive_rlp_refuses_overflowing_and_overlong_declared_lengths() {
             assert_eq!(canonical(&parent), Err("invalid RLP list payload".into()));
         }
     }
+}
+/// Task 3.2 preparation, clause gap 1. Signing is deterministic, so the search over the signed gas
+/// (always above the structural floor) is too: it stops at the first signature whose chosen
+/// scalar is below 2^248. That scalar's 32-byte zero-padded form keeps the permitted width and
+/// breaks only minimality; the 33-byte forms break the width, one with the same low 256 bits.
+/// `r` and `s` are decoded last and lie outside the signing preimage, so every other check
+/// passes and the payer's signature is unchanged: the integer rule alone refuses each form,
+/// while a canonical zero passes it and is refused by recovery with a different message.
+#[test]
+fn signature_scalars_are_refused_by_the_integer_rule_before_recovery() {
+    const INTEGER: &str = "non-canonical or oversized transaction integer";
+    let signed = |kind: u8, gas: u64| {
+        if kind == 0 {
+            super::sign_transaction(&key(), CHAIN, 0, &payee(), 1, b"terms\0", 1001, gas)
+                .unwrap()
+                .raw_transaction
+        } else {
+            typed_with_gas(kind, gas)
+        }
+    };
+    for kind in [0u8, 1, 2] {
+        for offset in [1usize, 2] {
+            let (raw, index, scalar) = (30_000u64..30_000 + (1 << 14))
+                .find_map(|gas| {
+                    let raw = signed(kind, gas);
+                    let bytes = hex::decode(&raw[2..]).unwrap();
+                    let rlp = Rlp::new(if kind == 0 { &bytes[..] } else { &bytes[1..] });
+                    let index = rlp.item_count().unwrap() - 3 + offset;
+                    let scalar = rlp.at(index).unwrap().data().unwrap().to_vec();
+                    (scalar.len() < 32).then_some((raw, index, scalar))
+                })
+                .expect("a signature scalar below 2^248 within the bounded search");
+            let payer = decode(&raw, CHAIN).unwrap().from;
+            assert_eq!(payer, wallet::address_from_private_key(&key()).unwrap());
+            assert_eq!(replace_field(&raw, index, &rlp_bytes(&scalar)), raw);
+            let mut padded = vec![0u8; 32 - scalar.len()];
+            padded.extend_from_slice(&scalar);
+            for encoded in [
+                padded.clone(),
+                [&[0u8][..], &padded].concat(),
+                [&[1u8][..], &padded].concat(),
+            ] {
+                let candidate = replace_field(&raw, index, &rlp_bytes(&encoded));
+                assert_eq!(decode(&candidate, CHAIN).unwrap_err(), INTEGER, "kind {kind}, scalar {offset}");
+            }
+            let zero = decode(&replace_field(&raw, index, &[0x80]), CHAIN).unwrap_err();
+            assert_eq!(zero, "signature recovery failed", "kind {kind}, scalar {offset}");
+        }
+    }
+}
+/// Task 3.2 preparation, clause gap 5. Typed parity above 1 and a legacy `v` other than the
+/// configured chain's two EIP-155 values are refused by the envelope's own rules, worded
+/// differently from `recover_digest`'s parity guard. The "low byte" and "low 32 bits" values
+/// would select the original recovery parity if truncated instead of refused.
+/// Adversarial review (2026-11-22) added the values whose low 64 bits select it: a typed parity
+/// wider than `u64` (and one with a leading zero) is refused by the integer rule, a legacy `v`
+/// read as an up-to-32-byte integer by the chain rule, and a 33-byte legacy `v` by the width rule.
+#[test]
+fn out_of_range_signature_parity_is_refused_by_the_envelope_rule_before_recovery() {
+    const INTEGER: &str = "non-canonical or oversized transaction integer";
+    assert_eq!(
+        wallet::recover_digest([0; 32], &[1; 64], 2).unwrap_err(),
+        "signature recovery parity must be zero or one"
+    );
+    for kind in [1u8, 2] {
+        let raw = typed(kind);
+        let bytes = hex::decode(&raw[2..]).unwrap();
+        let rlp = Rlp::new(&bytes[1..]);
+        let index = rlp.item_count().unwrap() - 3;
+        let parity: u64 = rlp.val_at(index).unwrap();
+        assert!(parity <= 1);
+        assert_eq!(replace_field(&raw, index, &rlp_int(parity)), raw);
+        for value in [parity + 2, 27 + parity, 0x100 + parity, (1 << 32) + parity] {
+            assert_eq!(
+                decode(&replace_field(&raw, index, &rlp_int(value)), CHAIN).unwrap_err(),
+                "invalid transaction signature parity",
+                "type {kind}: parity {value}"
+            );
+        }
+        for encoded in [[&[1u8][..], &[0; 7], &[parity as u8]].concat(), vec![0, parity as u8]] {
+            assert_eq!(
+                decode(&replace_field(&raw, index, &rlp_bytes(&encoded)), CHAIN).unwrap_err(),
+                INTEGER,
+                "type {kind}: parity bytes {encoded:?}"
+            );
+        }
+    }
+    let raw = legacy().raw_transaction;
+    let base = CHAIN * 2 + 35;
+    let parity = Rlp::new(&hex::decode(&raw[2..]).unwrap()).val_at::<u64>(6).unwrap() - base;
+    assert!(parity <= 1);
+    assert_eq!(replace_field(&raw, 6, &rlp_int(base + parity)), raw);
+    for value in [parity, 29 + parity, 33, 34, base + parity + 0x100, base + parity + (1 << 32)] {
+        assert_eq!(
+            decode(&replace_field(&raw, 6, &rlp_int(value)), CHAIN).unwrap_err(),
+            "legacy transaction must use configured EIP-155 chain id",
+            "legacy v {value}"
+        );
+    }
+    let mut wide = RlpStream::new();
+    append_uint(&mut wide, U256::from(base + parity) + (U256::one() << 64));
+    assert_eq!(
+        decode(&replace_field(&raw, 6, &wide.out()), CHAIN).unwrap_err(),
+        "legacy transaction must use configured EIP-155 chain id",
+        "legacy v with the configured low 64 bits"
+    );
+    let mut word = [0u8; 33];
+    word[0] = 1;
+    U256::from(base + parity).to_big_endian(&mut word[1..]);
+    assert_eq!(
+        decode(&replace_field(&raw, 6, &rlp_bytes(&word)), CHAIN).unwrap_err(),
+        INTEGER,
+        "33-byte legacy v with the configured low 256 bits"
+    );
 }
