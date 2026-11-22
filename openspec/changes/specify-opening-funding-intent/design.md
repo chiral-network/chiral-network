@@ -82,6 +82,107 @@ Source modules: [`consumer.rs`](../../../src-tauri/src/consumer.rs), [`chain_cli
 
 The `inference_proposal_quota_test` handoff and free-opening cases once populated eight pending quotes and tested the ninth refusal. They have since migrated to provider-wide quote storage (task 2.3.2 below): each fills 10,000 standalone records and refuses a same-payer replacement only at that ceiling, keeping their exact signed-term retention, unchanged acknowledgement, unrelated-record survival and credential checks. In particular, `free_first_opening_frees_one_slot_and_survives_exact_expiry_with_original_credential` reopens storage and authenticates the old bearer; it does not retry HTTP opening or establish root-recovery compliance. No historical fixture or passing old suite proves the approved availability change.
 
+### Task 2.7: exact native acknowledgement-time boundaries
+
+Completed 2026-11-21. The earlier blocker was stale. [`consumer.rs`](../../../src-tauri/src/consumer.rs) is tracked, and the owner authorised changing it (APAS report line 29).
+
+**Spec text.** The cells test three sentences of *Funding intent messages bind the original signed payment*:
+
+- **S1:** "Acknowledgement registration SHALL be within `[quote.issued_at, quote.expires_at)`."
+- **S2:** "native acceptance SHALL additionally refuse a registration time more than 30 seconds ahead of its current clock."
+- **S3:** "Quote expiry at recovery time alone SHALL NOT invalidate an otherwise valid acknowledgement registered within that interval."
+
+The scenario *Registration time is distinct from recovery time* combines all three, and *Strict acknowledgement and request schemas* adds "the client does not broadcast on the strength of that response".
+
+**Seam.** `funding_intent_matches` now reads `acknowledgement_receiver_now()` where it used to read `protocol::now()`. The read stays at the same point in the short-circuit `||` chain, so the order of evaluation and errors is unchanged.
+
+- In non-test builds, the `#[cfg(not(test))]` definition is only `protocol::now()`.
+- Under `#[cfg(test)]`, the function returns the thread-local `PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW` when it is set. Otherwise it returns wall time.
+- The thread-local and the test guard `PinnedReceiverClock` exist only in test builds. The guard asserts a current-thread Tokio runtime, so the consumer, the mock provider and the mock RPC all run on the pinning thread. It moves only forward and clears the pin on drop.
+- No signature changed, and nothing outside the crate can see the seam. Integration targets link the non-test library, so they cannot reach it.
+
+The seam is test-only because a settable receiver clock in production would bypass the plausibility guard. Production always compares with wall time.
+
+Native code reaches the check through `verify_funding_intent` at three points, all using the seam: `load_account` (every saved copy, including at the start of `fund` and `resume`), first receipt in `resume_inner`, and the pre-broadcast re-check there. The fixture's `eth_sendRawTransaction` handler also re-checks the durable acknowledgement through `funding_intent_matches` on the same thread, so it sees the same pinned time.
+
+The production wrapper was confirmed in the built non-test `chiral` binary: `acknowledgement_receiver_now` only calls `protocol::now`, and no `PINNED_ACKNOWLEDGEMENT` symbol exists there; the lib test binary has it.
+
+**Fixture.** `FundingFixture` gains a test-only `registered_at` override. When it is set, the mock provider signs and delivers its acknowledgement of the presented original with that registration time. Its cached genuine acknowledgement, registered at `issued_at + 1`, stays unchanged. Every reply goes over HTTP through the real owner-challenge flow. The review added `receiver_clock_on_delivery`: when set, the provider advances the pinned clock once (forward only, on the pinning thread) before it replies, modelling time that passes during registration.
+
+**Cells.** Notation: `I` and `E` are the quote's `issued_at` and `expires_at`, set by the fixture to wall time −120 and +300. `T` is the pinned receiver clock. "Accepts" means `native_acknowledgement_accepts_exact_registration_time_edges`. "Refuses" means `native_acknowledgement_refuses_one_second_past_each_edge`. "Survives" means `native_saved_acknowledgement_survives_quote_expiry_at_exact_receiver_edges`. "Arrival" means `native_acknowledgement_future_guard_reads_the_receiver_clock_on_arrival` (added by review).
+
+|Cell|Spec|`T`|`registered_at`|Test and assertion|Result|
+|---|---|---|---|---|---|
+|Issuance edge|S1|`I`|`I`|Accepts: fresh `fund` and reopened `resume`|Accepted|
+|One second before issuance|S1, scenario|`I`|`I−1`|Refuses: four refusals, then recovery with the genuine acknowledgement|Refused; recovered|
+|Last interval second|S1|`E−1`|`E−1`|Accepts: both paths|Accepted|
+|At quote expiry|S1, scenario|`E−1`|`E`|Refuses: four refusals, then genuine recovery|Refused; recovered|
+|Exactly 30 s ahead|S2|`I+10`|`I+40`|Accepts: both paths|Accepted|
+|30 s ahead of arrival, 80 s ahead of departure|S2 ("its current clock")|`I+10` when the request leaves, `I+60` when the reply arrives|`I+90`|Arrival: fresh `fund` and reopened `resume`; saved payload unchanged, one submission|Accepted|
+|31 s ahead|S2, scenario|`I+10`|`I+41`|Refuses: four refusals. Recovery delivers the same acknowledgement after `T` advances to `I+11`|Refused; recovered at the exact edge|
+|First receipt at quote expiry|S3|`E`|`E−1`|Accepts: both paths|Accepted|
+|Saturated receiver clock|S2 (`saturating_add`)|`u64::MAX`|`E−1`|Accepts: both paths|Accepted, no overflow|
+|`u64::MAX` at a saturated receiver|S1|`u64::MAX`|`u64::MAX`|Refuses: four refusals, then genuine recovery at `u64::MAX`|Refused by the interval alone; recovered|
+|Saved acknowledgement after quote expiry|S3, scenario|`E−31` at acceptance, then `E`, then `u64::MAX`|`E−1`|Survives: reopened `resume` at each later `T`. Review control at each `T`: a provider-signed saved copy registered at `E` is refused by the same reopened `resume` with no submission or registration, then the genuine copy is restored|Re-accepted with no new request; the control proves the saved copy is re-verified, not trusted|
+
+Real-clock evidence for S3 already exists and still passes:
+
+- Consumer `funding_crash_boundaries_resume_original_bytes_and_accepted_expired_terms` (checkpoints 1–4) uses a quote that expired at wall time. It accepts a first-received acknowledgement and saved acknowledgements, then reaches submission and opening.
+- Integration `native_accepted_original_recovers_after_expiry_restart_and_refill_until_safe_credit` (task 2.3.4.3) covers recovery after a real expiry. This step cited it but did not rerun it.
+
+**Acceptance oracle.** Each accepted cell must:
+
+- open an `active` account;
+- save the delivered payload exactly, verifiable with the provider's `INTENT_DOMAIN` key and with the start marker set;
+- make exactly one submission, and that submission must be the journaled original. The fixture's RPC handler requires the durable acknowledgement and start marker before it takes the bytes;
+- leave one journal operation at nonce 0;
+- record the events `register, broadcast, open`. The `resume` path first has `register` refused by a draining provider, then the consumer is reopened.
+
+**Refusal oracle.** Each refusal must return the exact error `provider funding acknowledgement does not match the original payment and signed quote`. The provider's request count must rise, which proves the reply reached the consumer.
+
+- **Fresh `fund`:** the genuine preparation RPC runs, but no `eth_sendRawTransaction` is recorded. The saved file holds the prepared raw and hash, with no acknowledgement, start marker, account or credential. The journal has one `prepared` row with the same raw and hash at nonce 0.
+- **Repeated `fund`, reopened `resume` and reopened `fund`:** each makes no chain RPC request of any kind and no submission. The saved file's bytes and every row of every journal table stay identical. The stage stays `registration_pending`.
+- **Recovery:** reopened `resume` presents the same original, and the fixture asserts the raw is equal. The provider's cached genuine acknowledgement keeps its signature. The saved acknowledgement equals the delivered payload, followed by exactly one submission of the original and the opening. The journal still has one operation with the same raw, hash and nonce. Events are five `register`, then `broadcast`, then `open`: each `register` is a repeated request for the same original, and the provider's cached registration is unchanged. No new original or nonce is made.
+
+**Mutations.** Each was run against the three new tests. The source was then restored with `cp` from a private backup, given a fresh mtime and checked with `cmp`.
+
+|#|Mutation|Failing test and cell|
+|---|---|---|
+|M1|Lower bound `<` to `<=`|Accepts: issuance edge refused|
+|M2|Upper bound `>=` to `>`|Refuses: at-expiry fresh `fund` accepted|
+|M3|Future guard `>` to `>=`|All three: 30-s edge refused; 31-s recovery refused; saved acknowledgement refused|
+|M4|`saturating_add(30)` to `(31)`|Refuses: 31-s cell accepted|
+|M5|`saturating_add(30)` to `(29)`|All three, as M3|
+|M6|Future guard dropped|Refuses: 31-s cell accepted|
+|M7|Check samples `protocol::now()` instead of the seam (the pre-task source)|All three: last interval second refused; 31-s cell accepted; saved acknowledgement refused|
+|M8|`saturating_add` to `wrapping_add`|All three: saturated-receiver cells refused|
+|M9|Lower bound dropped|Refuses: issuance−1 accepted|
+|M10|Upper bound dropped|Refuses: at-expiry cell accepted|
+|M11|`resume_inner` saves the acknowledgement before verifying it|Refuses: fresh refusal leaves a saved acknowledgement|
+
+M7 is not a production regression: production already samples wall time, and the pre-task suite passed with it. It shows that the new cells are decided by the pinned clock, not by wall time.
+
+**Adversarial review, 2026-11-21.** The review re-read the seam, fixture and tests, confirmed the oracles against source, and ran its own mutations, also restored with `cp`, a fresh mtime and `cmp`. The refusal oracle is race-free: the journal writes `created_at` only on insert, and a `prepared` record is reused without RPC, so the byte-identity check cannot change with wall time.
+
+|#|Mutation|Result|
+|---|---|---|
+|R1|Receiver clock sampled once before the registration request, used on arrival|Missed by the three original tests. Arrival fails: a genuine slow reply is refused. The review added Arrival for this|
+|R2|Acceptance also refuses once the receiver clock reaches `E`|Accepts, Refuses and Survives fail|
+|R3a|Recovery refuses any acknowledgement once **wall** time reaches `E`|Missed by every pinned test, since wall time is about `E−300`. Only the real-clock `funding_crash_boundaries_resume_original_bytes_and_accepted_expired_terms` fails, so that citation is load-bearing|
+|R3b|Same, with the receiver clock|Accepts, Refuses and Survives fail|
+|R4|Start marker saved before a new acknowledgement is verified|Refuses fails|
+|R7|Pre-broadcast re-check of the saved copy dropped|Survives all 62 consumer lib tests and the acknowledgement and owner-consumer integration targets. Equivalent on this path: `load_account` already verified the copy in the same locked call|
+|R7L|`load_account` verification of a saved copy dropped|Missed on the funding path, where the pre-broadcast re-check remains. Listing and export of a tampered copy are outside 2.7|
+|R7+R7L|Both dropped|Missed by the original Survives, which passed without verifying anything. The review control fails: the late copy reaches broadcast|
+|R11|Upper bound one second early (`>= E−1`)|Accepts and Survives fail|
+|R13|Future guard skipped only on the `resume` entry point|Refuses fails at reopened `resume` for the 31-s cell|
+
+M2, M4 and M7 were re-run against the final source and still fail.
+
+**Code difference.** None was found. Production acceptance is unchanged, and the 30-second guard and quote interval are unchanged.
+
+**Limits.** The provider is the in-crate mock and the RPC is scripted; neither is live-chain evidence. Because `load_account` re-applies the 30-second guard to saved copies, a receiver clock stepped back by more than 30 seconds after acceptance would make that account unreadable until the clock catches up. The spec does not forbid this, and no test covers a backward clock step. The producer's real-router interval is task 2.4's ledger evidence, and the HTTP route still samples wall time. A `u64::MAX` receiver clock is not a reachable production time; it shows saturation without overflow. The pinned clock affects only acknowledgement acceptance, not challenge, quote or credential time.
+
 ### Parent 2.2: fresh HTTP admission matrix
 
 Inventory for parent task 2.2, 2026-11-21. Each cell maps to the requirement text it tests, to passing tests whose assertions were read and confirmed in source, and to the gap this step filled. **OC** marks a test in `inference_owner_control_test`; those are cited as evidence and were neither run nor edited by this step (61/61 passed at `ae20db31`, and the file is unchanged since). "New" marks a test this step added to `inference_funding_admission_test`. All router RPC is synthetic and loopback-only; nothing here is live-chain, engine or public qualification.
@@ -756,7 +857,7 @@ With these tests every cell of request-accounting's reconciliation matrix names 
 
 - Inventory existing schema/signature/envelope tests before adding consumer-visible missing cases. Use real fixture signatures, explicit times and isolated disk state; preserve any unrelated uncommitted work. Committed native source now permits private deterministic seams without widening public APIs.
 - Valid-original missing/mismatching-journal refusal has task 2.6.1's integration coverage. Task 2.5.1 covers omitted/null saved acknowledgements with a true start marker, and 2.5.2 covers acknowledgement commit obstruction. Task 2.6.2 adds native submission-response faults and same-original recovery. Start-state-only persistence failure (2.5.3), other persistence modes and the remaining recovery inventory remain open; these refusals must not create or submit replacements.
-- Task 2.4 supplies the producer's pre-issuance rejection, exact interval and writer-wait assertions. Exact native 30-second freshness edges still require deterministic receiver-time control; broad invalid-future checks must not be presented as that boundary proof.
+- Task 2.4 supplies the producer's pre-issuance rejection, exact interval and writer-wait assertions. Task 2.7 (above) supplies the exact native interval and 30-second freshness edges with a `cfg(test)`-only receiver clock. Broad invalid-future checks, such as the `now + 60` case in `funding_acknowledgements_bind_all_terms_and_survive_quote_expiry`, remain narrower and are not that boundary proof.
 - Reuse useful retention/nonce/capacity assertions without retaining superseded wallet-slot acceptance. Tasks 2.3.3.1–2 cover final-paid-lease competition and native full refusal; 2.3.4.1–2 cover fresh-commit response loss and reopened native/provider recovery under later full paid/standalone resources. Deterministic expiry remains 2.3.4.3. Preserve safe-frontier requirements without fabricating credit. Constructed signed resource records are prerequisites, not observed public issuance/admission or a public bypass.
 - Consumer crash tests construct five checkpoints and restart objects; their provider/RPC fixtures are isolated, with provider acknowledgements held in fixture memory. They prove client ordering and byte reuse, not real-provider power-loss durability. The fixture inspects saved acknowledgement/start state at broadcast; this is stronger than an event-name ordering assertion alone.
 - Provider router tests use real signatures and synthetic local RPC responses. Lower-level ledger fixtures sometimes construct `VerifiedPayment`; newer quota fixtures independently validate signed envelopes but assume spendability. None is observed live funding, healthy public safe-frontier operation, real execution or a crash/fsync campaign. Unix parent-directory sync is source evidence; non-Unix durability needs platform qualification.

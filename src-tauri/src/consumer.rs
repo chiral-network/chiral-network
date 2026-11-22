@@ -461,6 +461,26 @@ fn account_matches(account: &AccountView, saved: &SavedAccount) -> Result<(), St
     if funded != used { return Err("provider account monetary invariant failed".into()); }
     Ok(())
 }
+/// The receiver clock that native acknowledgement acceptance compares a provider's
+/// registration time with. Production always samples wall time.
+#[cfg(not(test))]
+fn acknowledgement_receiver_now() -> Result<u64, String> {
+    protocol::now()
+}
+/// In-crate tests only: a receiver clock pinned on the calling thread replaces wall time, so
+/// exact 30-second edges are proved without sleeps or clock races (opening-intent task 2.7).
+#[cfg(test)]
+fn acknowledgement_receiver_now() -> Result<u64, String> {
+    match PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW.with(std::cell::Cell::get) {
+        Some(now) => Ok(now),
+        None => protocol::now(),
+    }
+}
+#[cfg(test)]
+thread_local! {
+    static PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
+}
 fn funding_intent_matches(
     quote: &Quote,
     tx_hash: &str,
@@ -475,7 +495,7 @@ fn funding_intent_matches(
         || accepted.tx_hash != tx_hash
         || accepted.registered_at < quote.issued_at
         || accepted.registered_at >= quote.expires_at
-        || accepted.registered_at > protocol::now()?.saturating_add(30)
+        || accepted.registered_at > acknowledgement_receiver_now()?.saturating_add(30)
     {
         return Err(
             "provider funding acknowledgement does not match the original payment and signed quote"
@@ -3005,6 +3025,14 @@ mod tests {
         /// Every chain RPC request received, and every request to a path that the fixture does
         /// not serve: its path and body.
         rpc: std::sync::Mutex<Vec<(String, Value)>>,
+        /// Task 2.7: when set, the provider signs and delivers its acknowledgement of the
+        /// presented original with this registration time instead of its cached genuine one
+        /// (registered one second after issuance). The cache itself is never changed.
+        registered_at: std::sync::Mutex<Option<u64>>,
+        /// Task 2.7 review: when set, the provider advances this thread's pinned acknowledgement
+        /// receiver clock to this time (once) while it registers, before it delivers its reply,
+        /// modelling time that passes during the registration round trip.
+        receiver_clock_on_delivery: std::sync::Mutex<Option<u64>>,
     }
     async fn funding_rpc(
         axum::extract::State(state): axum::extract::State<Arc<FundingFixture>>,
@@ -3307,6 +3335,28 @@ mod tests {
                     axum::Json(json!({"error":{"code":"provider_draining"}})),
                 );
             }
+            if let Some(later) = state.receiver_clock_on_delivery.lock().unwrap().take() {
+                PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW.with(|pinned| {
+                    assert!(
+                        pinned.get().is_some_and(|before| before < later),
+                        "the pinned receiver clock is on this thread and moves forward"
+                    );
+                    pinned.set(Some(later));
+                });
+            }
+            if let Some(registered_at) = *state.registered_at.lock().unwrap() {
+                let mut delivered = accepted.as_ref().unwrap().payload.clone();
+                delivered.registered_at = registered_at;
+                return (
+                    StatusCode::OK,
+                    axum::Json(
+                        serde_json::to_value(
+                            protocol::sign(INTENT_DOMAIN, delivered, &state.key).unwrap(),
+                        )
+                        .unwrap(),
+                    ),
+                );
+            }
             return (
                 StatusCode::OK,
                 axum::Json(serde_json::to_value(accepted.as_ref().unwrap()).unwrap()),
@@ -3481,6 +3531,8 @@ mod tests {
             controls: std::sync::Mutex::new(Vec::new()),
             inferences: std::sync::Mutex::new(Vec::new()),
             rpc: std::sync::Mutex::new(Vec::new()),
+            registered_at: std::sync::Mutex::new(None),
+            receiver_clock_on_delivery: std::sync::Mutex::new(None),
         });
         let app = axum::Router::new()
             .route("/", axum::routing::post(funding_rpc))
@@ -5340,6 +5392,416 @@ mod tests {
             [original.unwrap()]
         );
         task.abort();
+    }
+    /// Opening-intent task 2.7: pins this thread's acknowledgement receiver clock
+    /// (`acknowledgement_receiver_now`) until dropped. A `#[tokio::test]` current-thread runtime
+    /// runs the native consumer and every fixture task here, so wall time cannot move it.
+    struct PinnedReceiverClock;
+    impl PinnedReceiverClock {
+        fn at(now: u64) -> Self {
+            assert_eq!(
+                tokio::runtime::Handle::current().runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread,
+                "a pinned receiver clock is visible only on the pinning thread"
+            );
+            PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW
+                .with(|pinned| assert_eq!(pinned.replace(Some(now)), None, "already pinned"));
+            assert_eq!(acknowledgement_receiver_now().unwrap(), now);
+            Self
+        }
+        fn advance_to(&self, now: u64) {
+            PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW.with(|pinned| {
+                assert!(pinned.get().is_some_and(|before| before < now), "clock moves forward");
+                pinned.set(Some(now));
+            });
+        }
+    }
+    impl Drop for PinnedReceiverClock {
+        fn drop(&mut self) {
+            PINNED_ACKNOWLEDGEMENT_RECEIVER_NOW.with(|pinned| pinned.set(None));
+        }
+    }
+    /// The saved account file's exact bytes and every row of every wallet-journal table.
+    fn opening_evidence(consumer: &Consumer, id: &str) -> (Vec<u8>, Vec<String>) {
+        let saved = fs::read(consumer.account_path(id).unwrap()).unwrap();
+        let journal = rusqlite::Connection::open_with_flags(
+            consumer
+                .config
+                .network
+                .scoped_dir(&consumer.config.data_dir)
+                .join("wallet-journal")
+                .join("transactions.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let tables: Vec<String> = journal
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(tables.iter().any(|table| table == "transactions"));
+        let mut rows = Vec::new();
+        for table in tables {
+            let mut statement = journal.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
+            let columns = statement.column_count();
+            let mut query = statement.query([]).unwrap();
+            while let Some(row) = query.next().unwrap() {
+                let values: Vec<rusqlite::types::Value> =
+                    (0..columns).map(|column| row.get(column).unwrap()).collect();
+                rows.push(format!("{table}: {values:?}"));
+            }
+        }
+        rows.sort();
+        (saved, rows)
+    }
+    /// The journaled opening original: its raw bytes, hash, nonce and status, and the number of
+    /// journal operations.
+    fn journaled_opening(consumer: &Consumer, id: &str) -> ((String, String, String, String), u64) {
+        let journal = rusqlite::Connection::open_with_flags(
+            consumer
+                .config
+                .network
+                .scoped_dir(&consumer.config.data_dir)
+                .join("wallet-journal")
+                .join("transactions.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let original = journal
+            .query_row(
+                "SELECT raw,tx_hash,nonce,status FROM transactions WHERE operation=?1",
+                [format!("open:{id}")],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        let count = journal
+            .query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get(0))
+            .unwrap();
+        (original, count)
+    }
+    fn saved_opening(state: &FundingFixture) -> SavedAccount {
+        decode(&private_read(&state.account_path).unwrap()).unwrap()
+    }
+    /// Opening-intent task 2.7 (inference-opening-funding-intent, requirement "Funding intent
+    /// messages bind the original signed payment"; scenario "Registration time is distinct from
+    /// recovery time"). With the receiver clock pinned at T, the provider delivers a signed
+    /// acknowledgement of the presented original registered exactly at an accepted edge of
+    /// `[issued_at, expires_at)` or of `T + 30`, including first receipt at quote expiry and at a
+    /// saturated receiver clock. Fresh `fund` and reopened `resume` (after a draining provider
+    /// refused registration of the prepared original) must accept it and save it with the start
+    /// marker before the single submission of that original and the opening. Each cell is one
+    /// second inside the refusal of `native_acknowledgement_refuses_one_second_past_each_edge`.
+    #[tokio::test]
+    async fn native_acknowledgement_accepts_exact_registration_time_edges() {
+        use std::sync::atomic::Ordering;
+        // (cell, |issued_at, expires_at| (receiver clock, registered_at))
+        let cells: [(&str, fn(u64, u64) -> (u64, u64)); 5] = [
+            ("registered at issuance", |issued, _| (issued, issued)),
+            ("registered one second before expiry", |_, expires| (expires - 1, expires - 1)),
+            ("registered 30 seconds ahead of the receiver", |issued, _| (issued + 10, issued + 40)),
+            ("first received at quote expiry", |_, expires| (expires, expires - 1)),
+            ("first received at a saturated receiver clock", |_, expires| (u64::MAX, expires - 1)),
+        ];
+        for (cell, edge) in cells {
+            for reopened_resume in [false, true] {
+                let name = format!("{cell}, reopened_resume={reopened_resume}");
+                let directory = tempfile::tempdir().unwrap();
+                let (mut consumer, saved, state, task) =
+                    funding_fixture(directory.path(), false, false).await;
+                let q = saved.quote.payload.clone();
+                let (clock, registered_at) = edge(q.issued_at, q.expires_at);
+                assert!(q.issued_at <= registered_at && registered_at < q.expires_at, "{name}");
+                assert!(registered_at <= clock.saturating_add(30), "{name}");
+                let pinned = PinnedReceiverClock::at(clock);
+                if reopened_resume {
+                    state.mode.store(1, Ordering::SeqCst);
+                    assert!(consumer.fund(&saved.offer, &saved.quote).await.is_err(), "{name}");
+                    let prepared = saved_opening(&state);
+                    assert!(prepared.raw_transaction.is_some(), "{name}");
+                    assert!(prepared.funding_intent.is_none(), "{name}");
+                    assert!(!prepared.funding_broadcast_started, "{name}");
+                    state.mode.store(0, Ordering::SeqCst);
+                    let config = consumer.config.clone();
+                    drop(consumer);
+                    consumer = Consumer::new(config).unwrap();
+                }
+                *state.registered_at.lock().unwrap() = Some(registered_at);
+                let account = if reopened_resume {
+                    consumer.resume(&q.id).await
+                } else {
+                    consumer.fund(&saved.offer, &saved.quote).await
+                }
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                assert_eq!((account.contract_id.as_str(), account.status.as_str()), (q.id.as_str(), "active"), "{name}");
+                let accepted = saved_opening(&state);
+                let raw = accepted.raw_transaction.clone().unwrap();
+                let intent = accepted.funding_intent.clone().unwrap();
+                let cached = state.intent.lock().unwrap().clone().unwrap();
+                assert_eq!(cached.payload.registered_at, q.issued_at + 1, "{name}");
+                assert_eq!(intent.payload, FundingIntent { registered_at, ..cached.payload }, "{name}");
+                protocol::verify(INTENT_DOMAIN, &intent, &q.provider_wallet).unwrap();
+                assert!(accepted.funding_broadcast_started, "{name}");
+                assert_eq!(accepted.tx_hash.as_deref(), Some(intent.payload.tx_hash.as_str()), "{name}");
+                assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()), "{name}");
+                assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{name}");
+                let ((journaled, hash, nonce, _), operations) = journaled_opening(&consumer, &q.id);
+                assert_eq!((journaled, hash, nonce, operations), (raw, intent.payload.tx_hash.clone(), "0".into(), 1), "{name}");
+                let expected: &[&str] = if reopened_resume {
+                    &["register", "register", "broadcast", "open"]
+                } else {
+                    &["register", "broadcast", "open"]
+                };
+                assert_eq!(state.events.lock().unwrap().as_slice(), expected, "{name}");
+                drop(pinned);
+                task.abort();
+            }
+        }
+    }
+    /// Opening-intent task 2.7, refusal side of
+    /// `native_acknowledgement_accepts_exact_registration_time_edges`: each delivered
+    /// acknowledgement is one second outside exactly one bound while satisfying the others,
+    /// plus `u64::MAX` against a saturated receiver clock, where only the interval refuses.
+    /// Fresh `fund`, repeated `fund`, reopened `resume` and reopened `fund` each receive it from
+    /// the provider and refuse it. No refusal submits the original or (after the first call's
+    /// genuine preparation) makes any chain RPC request, and none saves an acknowledgement or
+    /// start marker; the saved file and every journal row stay byte-identical. Then reopened
+    /// `resume` recovers the same original with the provider's unchanged cached genuine
+    /// acknowledgement or, for the future guard, the same delivered acknowledgement one receiver
+    /// second later, reaching its single submission and the opening.
+    #[tokio::test]
+    async fn native_acknowledgement_refuses_one_second_past_each_edge() {
+        // (cell, |issued_at, expires_at| (receiver clock, registered_at, recovery clock)).
+        // Without a recovery clock, recovery delivers the genuine cached acknowledgement.
+        let cells: [(&str, fn(u64, u64) -> (u64, u64, Option<u64>)); 4] = [
+            ("registered one second before issuance", |issued, _| (issued, issued - 1, None)),
+            ("registered at quote expiry", |_, expires| (expires - 1, expires, None)),
+            (
+                "registered 31 seconds ahead of the receiver",
+                |issued, _| (issued + 10, issued + 41, Some(issued + 11)),
+            ),
+            ("registered at u64::MAX, saturated receiver clock", |_, _| (u64::MAX, u64::MAX, None)),
+        ];
+        let refusal =
+            "provider funding acknowledgement does not match the original payment and signed quote";
+        for (cell, edge) in cells {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let q = saved.quote.payload.clone();
+            let (clock, registered_at, recovery_clock) = edge(q.issued_at, q.expires_at);
+            let pinned = PinnedReceiverClock::at(clock);
+            *state.registered_at.lock().unwrap() = Some(registered_at);
+            let error = consumer.fund(&saved.offer, &saved.quote).await.err();
+            assert_eq!(error.as_deref(), Some(refusal), "{cell}: fresh fund");
+            assert!(
+                state.rpc.lock().unwrap().iter().all(|(_, request)| request["method"] != "eth_sendRawTransaction"),
+                "{cell}"
+            );
+            let prepared = saved_opening(&state);
+            let raw = prepared.raw_transaction.clone().unwrap();
+            assert!(prepared.funding_intent.is_none() && !prepared.funding_broadcast_started, "{cell}");
+            assert!(prepared.account.is_none() && prepared.credentials.is_empty(), "{cell}");
+            assert_eq!(state.raw.lock().unwrap().as_deref(), Some(raw.as_str()), "{cell}");
+            let cached = state.intent.lock().unwrap().clone().unwrap();
+            assert_eq!(prepared.tx_hash.as_deref(), Some(cached.payload.tx_hash.as_str()), "{cell}");
+            let journaled = journaled_opening(&consumer, &q.id);
+            assert_eq!(
+                journaled,
+                ((raw.clone(), cached.payload.tx_hash.clone(), "0".into(), "prepared".into()), 1),
+                "{cell}"
+            );
+            let evidence = opening_evidence(&consumer, &q.id);
+            let rpc = state.rpc.lock().unwrap().len();
+            for (attempt, reopen, repeat_fund) in [(2, false, true), (3, true, false), (4, true, true)] {
+                let name = format!("{cell}, attempt {attempt}");
+                if reopen {
+                    let config = consumer.config.clone();
+                    drop(consumer);
+                    consumer = Consumer::new(config).unwrap();
+                }
+                let result = if repeat_fund {
+                    consumer.fund(&saved.offer, &saved.quote).await
+                } else {
+                    consumer.resume(&q.id).await
+                };
+                assert_eq!(result.err().as_deref(), Some(refusal), "{name}");
+                assert_eq!(event_count(&state, "register"), attempt, "{name}");
+                assert_eq!(state.rpc.lock().unwrap().len(), rpc, "{name}: refusal reached chain RPC");
+                assert!(state.submissions.lock().unwrap().is_empty(), "{name}");
+                assert_eq!(opening_evidence(&consumer, &q.id), evidence, "{name}");
+            }
+            assert_eq!(
+                consumer.pending_accounts().unwrap()["pending"][0]["funding_stage"],
+                "registration_pending",
+                "{cell}"
+            );
+            // Same-original recovery control on a reopened consumer.
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let delivered = match recovery_clock {
+                Some(later) => {
+                    pinned.advance_to(later);
+                    FundingIntent { registered_at, ..cached.payload.clone() }
+                }
+                None => {
+                    *state.registered_at.lock().unwrap() = None;
+                    cached.payload.clone()
+                }
+            };
+            let account = consumer
+                .resume(&q.id)
+                .await
+                .unwrap_or_else(|error| panic!("{cell}: recovery: {error}"));
+            assert_eq!((account.contract_id.as_str(), account.status.as_str()), (q.id.as_str(), "active"), "{cell}");
+            let recovered = saved_opening(&state);
+            let intent = recovered.funding_intent.clone().unwrap();
+            assert_eq!(intent.payload, delivered, "{cell}");
+            protocol::verify(INTENT_DOMAIN, &intent, &q.provider_wallet).unwrap();
+            if recovery_clock.is_none() {
+                assert_eq!(intent.signature, cached.signature, "{cell}");
+            }
+            assert!(recovered.funding_broadcast_started, "{cell}");
+            assert_eq!(recovered.raw_transaction.as_deref(), Some(raw.as_str()), "{cell}");
+            assert_eq!(recovered.tx_hash, prepared.tx_hash, "{cell}");
+            assert_eq!(state.intent.lock().unwrap().as_ref().unwrap().signature, cached.signature, "{cell}");
+            assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw.clone()], "{cell}");
+            let ((after_raw, after_hash, after_nonce, _), operations) = journaled_opening(&consumer, &q.id);
+            assert_eq!(
+                (after_raw, after_hash, after_nonce, operations),
+                (raw, cached.payload.tx_hash.clone(), "0".into(), 1),
+                "{cell}"
+            );
+            assert_eq!(
+                state.events.lock().unwrap().as_slice(),
+                ["register", "register", "register", "register", "register", "broadcast", "open"],
+                "{cell}"
+            );
+            drop(pinned);
+            task.abort();
+        }
+    }
+    /// Opening-intent task 2.7, scenario "Registration time is distinct from recovery time": an
+    /// acknowledgement accepted when its registration (one second before quote expiry) was
+    /// exactly 30 seconds ahead of the receiver stays valid when reopened `resume` re-verifies
+    /// the saved copy at receiver time `expires_at` and at a saturated `u64::MAX`. Recovery
+    /// never requests another acknowledgement and preserves the saved signed copy. At each of
+    /// those receiver times, a provider-signed saved copy registered at quote expiry is first
+    /// refused by the same reopened `resume` without submission, proving the saved copy is
+    /// re-verified rather than trusted (review control).
+    #[tokio::test]
+    async fn native_saved_acknowledgement_survives_quote_expiry_at_exact_receiver_edges() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut consumer, saved, state, task) =
+            funding_fixture(directory.path(), false, false).await;
+        let q = saved.quote.payload.clone();
+        let pinned = PinnedReceiverClock::at(q.expires_at - 31);
+        *state.registered_at.lock().unwrap() = Some(q.expires_at - 1);
+        consumer.fund(&saved.offer, &saved.quote).await.unwrap();
+        let accepted = saved_opening(&state).funding_intent.unwrap();
+        assert_eq!(accepted.payload.registered_at, q.expires_at - 1);
+        let raw = saved_opening(&state).raw_transaction.unwrap();
+        // Review control: a provider-signed saved copy registered at quote expiry.
+        let late = protocol::sign(
+            INTENT_DOMAIN,
+            FundingIntent { registered_at: q.expires_at, ..accepted.payload.clone() },
+            &state.key,
+        )
+        .unwrap();
+        for clock in [q.expires_at, u64::MAX] {
+            pinned.advance_to(clock);
+            // Control: the same reopened recovery re-verifies a saved acknowledgement at this
+            // receiver time, so it refuses the late copy before any submission or registration.
+            let genuine = consumer.load_account(&q.id).unwrap();
+            let mut tampered = consumer.load_account(&q.id).unwrap();
+            tampered.funding_intent = Some(late.clone());
+            consumer.save_account(&tampered).unwrap();
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let submissions = state.submissions.lock().unwrap().len();
+            assert_eq!(
+                consumer.resume(&q.id).await.err().as_deref(),
+                Some("provider funding acknowledgement does not match the original payment and signed quote"),
+                "{clock}: saved late copy"
+            );
+            assert_eq!(state.submissions.lock().unwrap().len(), submissions, "{clock}");
+            assert_eq!(event_count(&state, "register"), 1, "{clock}");
+            assert_eq!(saved_opening(&state).funding_intent.unwrap().signature, late.signature, "{clock}");
+            consumer.save_account(&genuine).unwrap();
+            let config = consumer.config.clone();
+            drop(consumer);
+            consumer = Consumer::new(config).unwrap();
+            let account = consumer
+                .resume(&q.id)
+                .await
+                .unwrap_or_else(|error| panic!("receiver clock {clock}: {error}"));
+            assert_eq!(account.status, "active", "{clock}");
+            let recovered = saved_opening(&state);
+            let intent = recovered.funding_intent.unwrap();
+            assert_eq!((&intent.payload, &intent.signature), (&accepted.payload, &accepted.signature), "{clock}");
+            assert!(recovered.funding_broadcast_started, "{clock}");
+            assert_eq!(event_count(&state, "register"), 1, "{clock}");
+            assert!(state.submissions.lock().unwrap().iter().all(|sent| sent == &raw), "{clock}");
+        }
+        assert!(!state.submissions.lock().unwrap().is_empty());
+        drop(pinned);
+        task.abort();
+    }
+    /// Opening-intent task 2.7 (adversarial review): the 30-second guard compares a registration
+    /// time with the receiver's clock when the acknowledgement arrives ("its current clock"), not
+    /// with a time sampled before the registration request left. While it registers, the mock
+    /// provider advances the pinned receiver clock from `I+10` to `I+60` (a slow round trip) and
+    /// delivers a registration at `I+90`: exactly 30 seconds ahead of arrival, 80 ahead of
+    /// departure. Fresh `fund` and reopened `resume` accept and save it unchanged before the
+    /// single submission of the original and the opening.
+    #[tokio::test]
+    async fn native_acknowledgement_future_guard_reads_the_receiver_clock_on_arrival() {
+        use std::sync::atomic::Ordering;
+        for reopened_resume in [false, true] {
+            let name = format!("reopened_resume={reopened_resume}");
+            let directory = tempfile::tempdir().unwrap();
+            let (mut consumer, saved, state, task) =
+                funding_fixture(directory.path(), false, false).await;
+            let q = saved.quote.payload.clone();
+            let (departure, arrival) = (q.issued_at + 10, q.issued_at + 60);
+            let registered_at = arrival + 30;
+            assert!(registered_at > departure + 30 && registered_at < q.expires_at, "{name}");
+            let pinned = PinnedReceiverClock::at(departure);
+            if reopened_resume {
+                state.mode.store(1, Ordering::SeqCst);
+                assert!(consumer.fund(&saved.offer, &saved.quote).await.is_err(), "{name}");
+                assert!(saved_opening(&state).funding_intent.is_none(), "{name}");
+                state.mode.store(0, Ordering::SeqCst);
+                let config = consumer.config.clone();
+                drop(consumer);
+                consumer = Consumer::new(config).unwrap();
+            }
+            assert_eq!(acknowledgement_receiver_now().unwrap(), departure, "{name}");
+            *state.registered_at.lock().unwrap() = Some(registered_at);
+            *state.receiver_clock_on_delivery.lock().unwrap() = Some(arrival);
+            let account = if reopened_resume {
+                consumer.resume(&q.id).await
+            } else {
+                consumer.fund(&saved.offer, &saved.quote).await
+            }
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(account.status, "active", "{name}");
+            assert!(state.receiver_clock_on_delivery.lock().unwrap().is_none(), "{name}");
+            assert_eq!(acknowledgement_receiver_now().unwrap(), arrival, "{name}");
+            let accepted = saved_opening(&state);
+            let intent = accepted.funding_intent.clone().unwrap();
+            let cached = state.intent.lock().unwrap().clone().unwrap();
+            assert_eq!(intent.payload, FundingIntent { registered_at, ..cached.payload }, "{name}");
+            protocol::verify(INTENT_DOMAIN, &intent, &q.provider_wallet).unwrap();
+            assert!(accepted.funding_broadcast_started, "{name}");
+            let raw = accepted.raw_transaction.unwrap();
+            assert_eq!(state.submissions.lock().unwrap().as_slice(), [raw], "{name}");
+            drop(pinned);
+            task.abort();
+        }
     }
     /// `application-startup-boundaries` task 3.4 (requirement 4, scenario "A transfer the user
     /// made is used only after it executes on eSpace"): a balance read, a quote requested from the

@@ -1,5 +1,19 @@
 # APAS progress
 
+## 2026-11-21 (ninety-sixth round) — Acceptance: opening-intent 2.7 (exact native acknowledgement-time boundaries)
+
+- In step at `28040e75`; whitepaper unchanged; no new answers.
+- 2.7's blocker (a private, owner-untracked consumer time seam) was stale: `consumer.rs` is tracked, and report line 29 authorises changing it. Acceptance step through a workflow: add a test-only seam and tests, then an adversarial review. design.md gains "Task 2.7: exact native acknowledgement-time boundaries"; its "Acceptance gaps" bullet no longer lists the 30-second edges.
+- Seam: `acknowledgement_receiver_now()`. In non-test builds it is `protocol::now()`, read at the same point in `funding_intent_matches`. Under `cfg(test)` a per-thread pin replaces it, set by the `PinnedReceiverClock` guard (current-thread runtime only, forward only, cleared on drop). The review confirmed in the built `chiral` binary that the function is a single call to `protocol::now` and no pin symbol exists. The 30-second guard and the `[issued_at, expires_at)` interval are unchanged. No code difference was found.
+- Four new `consumer::tests`, all through fresh `fund` and reopened `resume` with mock-provider replies over HTTP:
+  - `native_acknowledgement_accepts_exact_registration_time_edges`: registration at `issued_at`, `expires_at−1` and receiver+30 is accepted, as is first receipt at receiver time `expires_at` and at a saturated receiver clock.
+  - `native_acknowledgement_refuses_one_second_past_each_edge`: `issued_at−1`, `expires_at`, receiver+31 and `u64::MAX` are each refused four times (fresh, repeated, reopened `resume` and reopened `fund`) with the exact error. Each refusal makes no submission and no RPC after preparation, saves no acknowledgement or start marker, and leaves the file and journal byte-identical. The same original then recovers once with exactly one submission.
+  - `native_saved_acknowledgement_survives_quote_expiry_at_exact_receiver_edges`: an acknowledgement accepted when exactly 30 s ahead is re-accepted by reopened `resume` at receiver times `expires_at` and `u64::MAX`. The review added a control: a late saved copy is refused there, so the saved copy really is re-verified.
+  - `native_acknowledgement_future_guard_reads_the_receiver_clock_on_arrival` (review): the clock advances during registration, and the guard uses the arrival time, not the departure time.
+- Mutations: the author ran 11 and the review 10; each fails a named test except two documented single drops of the saved-copy check. The check runs both in `load_account` and before broadcast, so dropping either alone is equivalent; dropping both fails the new control. The real-clock expiry regression (R3a) is caught only by the existing `funding_crash_boundaries_resume_original_bytes_and_accepted_expired_terms`, which design.md now cites for it.
+- Recorded limit: `load_account` re-applies the 30-second guard to saved acknowledgements. A receiver clock that steps back more than 30 s makes a saved account unreadable until it catches up. The spec does not forbid this, and no test covers it.
+- 2.7 ticked. Checks: full suite (the product file changed, although non-test builds behave the same): headless bins build; `--all-targets` 796 passed, 0 failed, 12 ignored, across 32 targets; desktop `--lib desktop::` 10/10; npm 124 tests in 19 files; `svelte-check` 0 errors and 0 warnings; script tests 80 OK; strict validation passes. The laptop did not sleep during the run.
+
 ## 2026-11-21 (ninety-fifth round) — Acceptance: opening-intent 2.2 (fresh HTTP admission matrix)
 
 - In step at `de9bccc2`; whitepaper unchanged; no new answers.
@@ -1094,7 +1108,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 2.5, 2.6 and 2.7 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 2.5 and 2.6 (2.3 done in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
