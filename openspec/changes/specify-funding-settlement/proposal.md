@@ -37,7 +37,7 @@ None of them specifies the settlement policy itself, the classification of chain
 
 ### Modified Capabilities
 
-None. This capability references `inference-wire-foundation`, `inference-account-opening-request` and `inference-account-topup-request`. It also references the pending `inference-opening-funding-intent`, `inference-commercial-terms`, `inference-payment-envelope-bounds`, `inference-account-snapshot`, `inference-request-accounting` and `desktop-share-online` capabilities. It adds no obligation to them and does not change their requirements. Native retention of a pending top-up after any refusal is already required by `inference-account-topup-request` ("retaining pending local evidence until successful acceptance is confirmed and persisted").
+None. This capability references `inference-wire-foundation`, `inference-account-opening-request` and `inference-account-topup-request`. It also references `inference-opening-funding-intent`, `inference-payment-envelope-bounds` and `inference-account-snapshot`, which were pending when this was written and are now main specifications (archived 2026-11-22, 2026-11-22 and 2026-11-21). It also references the still-pending `inference-commercial-terms`, `inference-request-accounting` and `desktop-share-online` capabilities. It adds no obligation to them and does not change their requirements. Native retention of a pending top-up after any refusal is already required by `inference-account-topup-request` ("retaining pending local evidence until successful acceptance is confirmed and persisted").
 
 ## Impact
 

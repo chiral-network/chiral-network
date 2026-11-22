@@ -1,5 +1,16 @@
 # APAS progress
 
+## 2026-11-22 (hundred-and-fifth round) — Envelope-bounds 3.2: archived as `inference-payment-envelope-bounds`
+
+- In step at `fbba31ed`; whitepaper unchanged; no new answers.
+- Mechanical step, done solo. Round 104's review reported the change ready. Task 3.2 ticked with its check record: the full project suite of round 100, then test-only runs in rounds 102 and 104 (`--lib` 495, `inference_funding_admission_test` 50, desktop 10, build, check and 34/34 strict validation). Then `openspec archive specify-payment-envelope-resource-bounds --yes` ran without `--skip-specs`. It created `openspec/specs/inference-payment-envelope-bounds/spec.md` with 5 requirements and moved the change to `openspec/changes/archive/2026-11-22-specify-payment-envelope-resource-bounds/`.
+- After the archive:
+  - The TBD Purpose is replaced by a description of the capability.
+  - The archived preparation note under 3.2 is reworded in the past tense.
+  - `specify-funding-settlement` proposal.md line 40 and design.md line 26 now record which referenced capabilities are main specifications: opening-funding and envelope bounds (both 2026-11-22) and account snapshot (2026-11-21). Its 4.3 archive-order condition is now satisfied for both archived changes.
+  - The change had no markdown links, so none needed adjusting.
+- `openspec validate --all --strict` passes 34/34 (23 changes and 11 specifications).
+
 ## 2026-11-22 (hundred-and-fourth round) — Envelope-bounds 3.2 preparation: the six clause gaps and the relay raw bound
 
 - In step at `af7b4964`; whitepaper unchanged; no new answers.
@@ -1236,7 +1247,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent is archived (round 101; 3.2 prepared in round 100, 3.1 done in round 99; section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent and payment-envelope-bounds are archived (rounds 101 and 105; envelope-bounds 2.5 in round 102, 3.1 in round 103, gaps in round 104; opening-intent: 3.2 prepared in round 100, 3.1 done in round 99; section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
