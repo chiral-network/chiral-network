@@ -1,5 +1,25 @@
 # APAS progress
 
+## 2026-11-21 (ninety-ninth round) — Opening-intent 3.1: final correspondence, and 3.2 archive readiness
+
+- In step at `ff54db86`; whitepaper unchanged; no new answers.
+- Docs-only step (`specify-opening-funding-intent` 3.1), through a workflow: write the map, then an adversarial review that read about 26 cited tests. design.md's old scenario map is replaced by "Final requirement and scenario correspondence (task 3.1)". It has 37 rows, one per requirement (9) and scenario (28) in spec order. Each row names the production functions, read in source, and the passing tests, and gives an evidence class:
+  - (a) tested here;
+  - (b) historical slice evidence;
+  - (c) unavailable qualification: live chain and safe frontier, power loss and fsync, Linux, Windows, SDK, public deployment;
+  - (d) resolved blockers: the non-reserving cutover (archived 0a2db426), HTTP root recovery (owner-control 2.4.3, 323cd759; archived 16c7f73a) and source ownership (report line 29);
+  - (e) out of scope.
+  A script confirmed all 114 cited (target, test) pairs exist, and none is ignored. The old 4-row map is kept as a closed history table.
+- Stale text replaced with dated statements, with no history deleted: the Context, Decisions and source table in design.md, its acceptance-gaps and ownership sections, the prerequisites paragraph in tasks.md and the paragraph after 3.2, and a status bullet in proposal.md.
+- Review corrections:
+  - The Marketplace trust-boundary wording is tested (`tests/fundingDisclosure.test.ts`, 14/14 when rerun); only the README wording is untested.
+  - Citations were added for "an accepted original is not resubmitted" and for repriced same-nonce bytes.
+  - The scenario "Unavailable funds or nonce prevent fresh preparation" has no deterministic test with an unhealthy node at fresh preparation. It is recorded as a clause limit.
+  - A native test does recover a paid opening reply that was committed but rejected as invalid (owner-control's snapshot test). Only a reply lost in transport is untested.
+- Clause-level limits recorded, each inside a requirement whose row has tests: the saved-hash-mismatch and missing-raw branches of `verify_funding_intent`, the unhealthy node at fresh preparation, the 16 KiB bound (covered by composition only), README wording, exhaustion of the challenge budget, a backward receiver-clock step, and macOS only.
+- 3.2 assessment: not ready as-is. Strict validation passes for this change and for all 34 items; no requirement name is duplicated; nothing contradicts the main specs; no superseded wallet policy would be installed; no other change links into this one. Blocker: three spec.md sentences (lines 87, 133 and 244) still call `specify-non-reserving-quotes` "pending", and archiving would install them verbatim. At archive time: write a Purpose, add one `../` to 13 relative links and fix the 2 archive-sibling links.
+- 3.1 ticked. Checks: strict validation of this change and of all 34 passes. Docs-only; round 98's full suite at `ff54db86` covers the code.
+
 ## 2026-11-21 (ninety-eighth round) — Acceptance: opening-intent parent 2.6 (native restart recovery)
 
 - In step at `9ceb8bb8`; whitepaper unchanged; no new answers.
@@ -1135,7 +1155,7 @@ Code differences, then missing specifications (spec before code):
 
 Earlier open work, unchanged:
 
-3. Opening-intent 3.1 and 3.2 (section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
+3. Opening-intent 3.2: the three clause-limit tests, the spec.md wording fix, then the archive (3.1 done in round 99; section 2 done: 2.3 in round 84; 2.8 in rounds 93–94; 2.2 in round 95; 2.7 in round 96; 2.5 in round 97; 2.6 in round 98), request-accounting 3.1's llama.cpp evidence (its portable part done in round 89) and 4.x (3.2–3.4 done in rounds 90–92; opening-intent 2.8.2 done in round 93) (section 2 done in rounds 85–88), and the other acceptance items listed in the changes' tasks. The acceptance tasks 3.x of `specify-funding-settlement`, `specify-generation-performance` and `specify-fee-remittance` belong here too. Every code difference in those three changes is fixed except funding-settlement 2.4, which waits for the report question.
 4. Milestone implementation M1 → M3 → M2 → M5 → M4. Extend `verus.md` judgments; proofs wait for Verus.
 
 ## Blocked
