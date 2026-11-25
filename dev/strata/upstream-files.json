@@ -1,0 +1,6 @@
+{
+  "terminal/tools/strata_tokenizer.py": "2199b8c20e0012879dd5c944b8d2b0deccbcee94395485a59737d5e64d39a7de",
+  "terminal/serve/frontend.py": "c112207da5ff9a6dcdbef393d6cfa6ec9b1b8d85fcbe620cb3291a92e04ee140",
+  "terminal/serve/inkling_dialect.py": "167fe73acdd6d5ce3734a37fa538c5e25e6e081f5d38d452eed641a49153b3bb",
+  "LICENSE": "949b9b0aada7476006469e58ee4ffb0e0f68c2d9137e90a356757b61a09d37f0"
+}

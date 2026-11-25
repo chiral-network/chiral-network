@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The performance policy applies to the exact selected engine/model/runtime. GGUF-specific wording below is legacy-only; Strata binds its catalog artifact and complete interpreter/native inventory. Its fixed settings and host-RAM headroom are specified in `strata-curated-runtime`. Prior llama.cpp or fixture evidence never qualifies Strata. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## Why
 
 The read-only whitepaper (`docs/chiral-book.md`) defines a complete generation performance contract in *Performance accounting and withdrawal* (lines 542–577), supported by *Hardware participation and platform status* (lines 79–102) and the transport-path rule at line 309. The contract covers these points:

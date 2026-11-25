@@ -631,7 +631,7 @@ mod tests {
     /// A CPU runtime that passes validation; its two directories are the only path fields.
     fn cpu_runtime(runtime_dir: PathBuf, artifact_dir: PathBuf) -> crate::engine_runtime::EngineRuntimeConfig {
         crate::engine_runtime::EngineRuntimeConfig {
-            runtime_dir,
+            strata_catalog: None,            runtime_dir,
             artifact_dir,
             backend: "cpu".into(),
             device_ids: vec![],

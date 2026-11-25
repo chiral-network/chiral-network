@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate private managed llama.cpp provider configurations.
+"""Generate private managed Strata or explicit legacy llama.cpp provider configurations.
 
 Native Windows/macOS/Linux is the default; --container generates Linux Compose
 paths and device access. Both modes use the Rust daemon's pinned runtime launcher.
@@ -24,8 +24,23 @@ import subprocess
 from urllib.parse import urlsplit
 
 UID = 10001
-validate_artifact = importlib.import_module('provision-model').validate_artifact
-validate_runtime = importlib.import_module('provision-runtime').validate_runtime
+def manifest_at(root, name):
+    path = Path(root) / name
+    require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 4 * 1024 * 1024,
+            'invalid bounded artifact/runtime metadata')
+    return json.loads(path.read_bytes())
+
+def validate_artifact(root):
+    manifest = manifest_at(root, 'chiral-artifact-sha256.json')
+    if manifest.get('schema') == 'chiral-strata-artifact-v1':
+        return importlib.import_module('provision-strata').validate_artifact(root)
+    return importlib.import_module('provision-model').validate_artifact(root)
+
+def validate_runtime(root):
+    manifest = manifest_at(root, 'chiral-runtime.json')
+    if manifest.get('schema') == 'chiral-strata-runtime-v1':
+        return importlib.import_module('provision-strata').validate_runtime(root)
+    return importlib.import_module('provision-runtime').validate_runtime(root)
 RUNTIME_FIELDS = set('backend device_ids memory_reserve_mib gpu_layers split_mode tensor_split cache_type_k cache_type_v flash_attention batch_size ubatch_size startup_timeout_secs'.split())
 ESPACE_GENESIS = '0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804'
 
@@ -81,7 +96,7 @@ def verify_qualification(model, base, manifest_bytes, evidence_bytes):
         'hf_repo': manifest['model']['repo_id'],
         'tokenizer_repo': manifest['model']['repo_id'],
         'artifact_manifest_sha256': hashlib.sha256(manifest_bytes).hexdigest(),
-        'engine': 'llama.cpp',
+        'engine': 'strata' if manifest.get('schema') == 'chiral-strata-artifact-v1' else 'llama.cpp',
     }.items():
         require(profile.get(field) == expected, 'qualified artifact differs: ' + field)
     require(len(evidence_bytes) <= 64 * 1024 * 1024, 'qualification evidence exceeds 64 MiB')
@@ -100,12 +115,13 @@ def verify_qualification(model, base, manifest_bytes, evidence_bytes):
     return profile
 
 def engine_settings(config, runtime_dir, artifact_dir):
-    require(isinstance(config, dict) and set(config) == RUNTIME_FIELDS, 'explicit runtime settings required; no arbitrary engine flags')
+    strata = isinstance(config, dict) and config.get('strata_catalog') is not None
+    require(isinstance(config, dict) and set(config) == RUNTIME_FIELDS | ({'strata_catalog'} if strata else set()), 'explicit runtime settings required; no arbitrary engine flags')
     require(config['backend'] in ('cuda', 'metal', 'vulkan', 'cpu'), 'unsupported runtime backend')
     require(isinstance(config['device_ids'], list) and all(isinstance(x, str) and re.fullmatch(r'[A-Za-z]+[0-9]+', x) for x in config['device_ids'])
             and len(set(config['device_ids'])) == len(config['device_ids']), 'invalid explicit engine devices')
     require((config['backend'] == 'cpu') == (not config['device_ids']), 'GPU backend requires explicit devices')
-    require((config['backend'] == 'cpu' and config['gpu_layers'] == 0)
+    require((strata and config['gpu_layers'] == 0) or (config['backend'] == 'cpu' and config['gpu_layers'] == 0)
             or (config['backend'] != 'cpu' and type(config['gpu_layers']) is int and config['gpu_layers'] > 0), 'GPU layer allocation must match backend')
     for field, low, high in [('memory_reserve_mib', 256, 2**32), ('gpu_layers', 0, 999),
                              ('batch_size', 1, 8192), ('ubatch_size', 1, 8192), ('startup_timeout_secs', 1, 3600)]:
@@ -118,6 +134,14 @@ def engine_settings(config, runtime_dir, artifact_dir):
             or (len(config['device_ids']) > 1 and len(config['tensor_split']) == len(config['device_ids']) and config['split_mode'] != 'none'), 'split must match selected devices')
     require(all(config[field] in ('f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'iq4_nl') for field in ('cache_type_k', 'cache_type_v')), 'unsupported KV cache type')
     require(config['cache_type_v'] in ('f32', 'f16', 'bf16') or config['flash_attention'], 'quantized V cache requires flash attention')
+    if strata:
+        importlib.import_module('provision-strata').entry(config['strata_catalog'])
+        require(config['backend'] in ('cpu', 'cuda', 'metal') and len(config['device_ids']) <= 1 and config['gpu_layers'] == 0
+                and config['split_mode'] == 'none' and not config['tensor_split']
+                and config['cache_type_k'] == config['cache_type_v'] == 'f16'
+                and config['flash_attention'] is False and config['batch_size'] == config['ubatch_size'] == 512
+                and config['memory_reserve_mib'] >= (256 if config['backend'] == 'cuda' else 4096)
+                and config['startup_timeout_secs'] <= 1800, 'invalid curated Strata execution recipe')
     return dict(config, runtime_dir=str(runtime_dir), artifact_dir=str(artifact_dir))
 
 def main():
@@ -191,6 +215,10 @@ def main():
     model, task = validate_artifact(model_dir)
     manifest_bytes = (model_dir / 'chiral-artifact-sha256.json').read_bytes()
     manifest = json.loads(manifest_bytes)
+    strata = manifest.get('schema') == 'chiral-strata-artifact-v1'
+    require(strata == (runtime_manifest.get('schema') == 'chiral-strata-runtime-v1')
+            and (not strata or (c['runtime'].get('strata_catalog') == manifest['catalog_id'] and c['max_concurrency'] == 1))
+            and (strata or c['runtime'].get('strata_catalog') is None), 'model/runtime/catalog selection differs')
     require(model['context_length'] == c['context_length']
             and model['max_output_tokens'] == c['max_output_tokens'], 'model limits differ from provisioned artifact')
     evidence_bytes = None

@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The llama-server pin, flags, single-native-entry-point and GGUF-specific clauses below govern only the explicit legacy llama.cpp path. Strata launch uses `strata-curated-runtime`; common inventory, lifecycle, occupied-port, credential and no-fallback requirements still apply. Its verified interpreter/native process tree and inventoried Linux library path are intentional Strata-specific differences. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## Authority and scope
 
 `docs/chiral-book.md` is the authority and stays read-only. Its SHA-256 was `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933` when this change was written. The requirements come from these lines:

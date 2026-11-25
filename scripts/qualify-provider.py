@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify a managed native llama.cpp runtime and real prepaid gateway.
+"""Qualify a managed Strata or explicit legacy llama.cpp runtime and real prepaid gateway.
 
 No downloads, funding or passing evidence are synthesized. Run on the runtime
 host with private admin/engine credentials and funded infer+read bearer files.
@@ -106,8 +106,8 @@ def inspect_runtime(args, model):
         raise ValueError("engine URL/model differs from observed managed process")
     if type(observed["pid"]) is not int or observed["pid"] <= 0:
         raise ValueError("missing observed process identity")
-    if profile["engine"] != "llama.cpp":
-        raise ValueError("only pinned llama.cpp can qualify")
+    if profile["engine"] not in ("llama.cpp", "strata"):
+        raise ValueError("only a selected pinned engine can qualify")
     for field in OBSERVED_FIELDS:
         if observed.get(field) != profile.get(field):
             raise ValueError("observed runtime differs from candidate: " + field)
@@ -122,6 +122,8 @@ def inspect_runtime(args, model):
         raise ValueError("selected generation model differs from verified artifact")
     manifest_bytes = (root / "chiral-artifact-sha256.json").read_bytes()
     manifest = json.loads(manifest_bytes)
+    if (profile["engine"] == "strata") != (manifest.get("schema") == "chiral-strata-artifact-v1"):
+        raise ValueError("engine differs from selected artifact")
     if sha(manifest_bytes) != observed["artifact_manifest_sha256"]:
         raise ValueError("observed artifact manifest differs")
     if any(profile[field] != manifest["model"]["repo_id"] for field in ("hf_repo", "tokenizer_repo")):
@@ -184,6 +186,10 @@ def probe_completion_echo(args, model, token):
 
 def memory_reading(runtime):
     """Return metric, aggregate used MiB, minimum selected-device available MiB."""
+    if runtime.get("engine_version") == "0.2.22":
+        strata = importlib.import_module('provision-strata')
+        if strata.host_available_mib() < 4096:
+            raise ValueError("Strata workload exhausted host RAM headroom")
     if runtime["backend"] == "cuda" and runtime["memory_kind"] == "dedicated":
         raw = command("nvidia-smi", "--query-gpu=uuid,memory.total,memory.used,memory.free", "--format=csv,noheader,nounits")
         rows = {}
@@ -289,18 +295,30 @@ def workload_prompt(args, model, endpoint, target, engine_token):
         length = (low + high) // 2
         prompt = prefix + (" a" * length) + suffix
         content = prompt
-        if endpoint == "chat":
-            with request(args.engine_url, "/apply-template",
-                         {"messages": [{"role": "user", "content": prompt}],
-                          "add_generation_prompt": True, "continue_final_message": False,
-                          "chat_template_kwargs": {"enable_thinking": False}}, engine_token) as response:
+        if (model.get("serving") or {}).get("engine") == "strata":
+            try:
+                with request(args.engine_url, "/chiral/prepare", {"model": model["id"],
+                             "messages": [{"role": "user", "content": prompt}], "max_tokens": 256}, engine_token) as response:
+                    raw = response.read(MAX_BYTES + 1)
+            except urllib.error.HTTPError as error:
+                if error.code != 400:
+                    raise
+                error.close()
+                high = length - 1
+                continue
+        else:
+            if endpoint == "chat":
+                with request(args.engine_url, "/apply-template",
+                             {"messages": [{"role": "user", "content": prompt}],
+                              "add_generation_prompt": True, "continue_final_message": False,
+                              "chat_template_kwargs": {"enable_thinking": False}}, engine_token) as response:
+                    raw = response.read(MAX_BYTES + 1)
+                if len(raw) > MAX_BYTES:
+                    raise ValueError("template response exceeds limit")
+                content = json.loads(raw)["prompt"]
+            with request(args.engine_url, "/tokenize",
+                         {"content": content, "add_special": True, "parse_special": True}, engine_token) as response:
                 raw = response.read(MAX_BYTES + 1)
-            if len(raw) > MAX_BYTES:
-                raise ValueError("template response exceeds limit")
-            content = json.loads(raw)["prompt"]
-        with request(args.engine_url, "/tokenize",
-                     {"content": content, "add_special": True, "parse_special": True}, engine_token) as response:
-            raw = response.read(MAX_BYTES + 1)
         if len(raw) > MAX_BYTES:
             raise ValueError("tokenization response exceeds limit")
         ids = json.loads(raw)["tokens"]
@@ -328,7 +346,7 @@ def sample(args, model, path, endpoint, streaming, index, token, tracker, prepar
         route = "/v1/completions"
     if streaming:
         body["stream_options"] = {"include_usage": True}
-    if path == "engine":
+    if path == "engine" and (model.get("serving") or {}).get("engine") != "strata":
         body.update(return_tokens=True, cache_prompt=False, n=1)
         if endpoint == "completions":
             body.update(prompt=input_ids, verbose=True, n_probs=0,
@@ -374,7 +392,9 @@ def sample(args, model, path, endpoint, streaming, index, token, tracker, prepar
                         visible_output = bool(choice.get("text") or delta.get("content") or delta.get("tool_calls"))
                         ids = None
                         if path == "engine":
-                            if endpoint == "chat":
+                            if (model.get("serving") or {}).get("engine") == "strata":
+                                ids = value.get("chiral_token_ids")
+                            elif endpoint == "chat":
                                 logs = (choice.get("logprobs") or {}).get("content")
                                 ids = [item["id"] for item in logs] if isinstance(logs, list) else None
                             else:

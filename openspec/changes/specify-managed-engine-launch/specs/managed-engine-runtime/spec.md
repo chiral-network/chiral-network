@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The llama-server pin, flags, single-native-entry-point and GGUF-specific clauses below govern only the explicit legacy llama.cpp path. Strata launch uses `strata-curated-runtime`; common inventory, lifecycle, occupied-port, credential and no-fallback requirements still apply. Its verified interpreter/native process tree and inventoried Linux library path are intentional Strata-specific differences. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## ADDED Requirements
 
 ### Requirement: A managed deployment runs only the pinned llama-server as a private Rust-supervised child

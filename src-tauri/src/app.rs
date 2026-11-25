@@ -2709,7 +2709,7 @@ mod tests {
         let second_url = second.engine_url.clone();
         second.engine_api_key_file = Some(key_file);
         second.runtime = Some(crate::engine_runtime::EngineRuntimeConfig {
-            runtime_dir, artifact_dir, backend: "cpu".into(), device_ids: vec![], memory_reserve_mib: 0, gpu_layers: 0,
+            strata_catalog: None,            runtime_dir, artifact_dir, backend: "cpu".into(), device_ids: vec![], memory_reserve_mib: 0, gpu_layers: 0,
             split_mode: "none".into(), tensor_split: vec![], cache_type_k: "f16".into(), cache_type_v: "f16".into(),
             flash_attention: false, batch_size: 128, ubatch_size: 64, startup_timeout_secs: 1 });
         let inventory_error = crate::engine_runtime::validate_inventory(&second).err().unwrap();

@@ -1,4 +1,4 @@
-//! Pinned, private native llama.cpp processes. No shell, downloads, or inherited engine options.
+//! Pinned private Strata and explicit legacy llama.cpp processes. No shell or downloads.
 use crate::{performance::RuntimeObservation, protocol::{self, EngineDevice, ModelSpec}, provider_config::{parse_origin, read_secret, ModelConfig}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,9 +9,15 @@ use tokio::process::{Child, Command};
 pub const ENGINE_VERSION: &str = "v0.9.0";
 pub const SOURCE_REVISION: &str = "cd959bae99ff4bed22bef2604f45241c09bbb8c8";
 
+#[path = "strata_runtime.rs"]
+pub mod strata;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineRuntimeConfig {
+    /// Explicit curated Strata selection. Absent only for legacy llama.cpp profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strata_catalog: Option<String>,
     pub runtime_dir: PathBuf,
     pub artifact_dir: PathBuf,
     pub backend: String,
@@ -30,6 +36,7 @@ pub struct EngineRuntimeConfig {
 
 impl EngineRuntimeConfig {
     pub fn validate(&self, model: &ModelConfig) -> Result<(), String> {
+        if self.strata_catalog.is_some() { return strata::validate_config(self, model); }
         let endpoint = parse_origin(&model.engine_url)?;
         if endpoint.scheme() != "http" || !endpoint.host_str().and_then(|s| s.trim_matches(['[', ']']).parse::<IpAddr>().ok()).is_some_and(|ip| ip.is_loopback()) || endpoint.port().is_none_or(|p| p == 0) {
             return Err("managed engine requires HTTP on an explicit literal loopback address and port".into());
@@ -65,6 +72,7 @@ struct RuntimeManifest {
 }
 
 pub struct ValidatedRuntime {
+    python: Option<PathBuf>,
     executable: PathBuf,
     model_file: PathBuf,
     template: Option<PathBuf>,
@@ -130,6 +138,7 @@ fn template_digest(source: &[u8]) -> String {
 
 pub fn validate_inventory(model: &ModelConfig) -> Result<ValidatedRuntime, String> {
     let config = model.runtime.as_ref().ok_or("model is not managed")?;
+    if config.strata_catalog.is_some() { return strata::validate_inventory(model); }
     config.validate(model)?;
     let key_path = model.engine_api_key_file.as_ref().ok_or("missing engine key")?;
     let key = read_secret(key_path)?;
@@ -166,7 +175,7 @@ pub fn validate_inventory(model: &ModelConfig) -> Result<ValidatedRuntime, Strin
     if template_entry.is_some_and(|entry| entry.size_bytes > 1024 * 1024) { return Err("selected template exceeds 1 MiB".into()); }
     let template_bytes = match &template { Some(path) => std::fs::read(path).map_err(|_| "cannot read template")?, None => Vec::new() };
     if std::str::from_utf8(&template_bytes).is_err() || template_digest(&template_bytes) != base.chat_template_sha256 || (base.capabilities.iter().any(|c| c == "chat") && template.is_none()) { return Err("selected chat template identity mismatch".into()); }
-    let validated = ValidatedRuntime { executable, model_file: config.artifact_dir.join(relative_path(model_name)?).canonicalize().map_err(|_| "cannot resolve GGUF model")?, template, task: task.into(), runtime_sha256: manifest_hash(&runtime_value)?, artifact_manifest_sha256: manifest_hash(&artifact)? };
+    let validated = ValidatedRuntime { python: None, executable, model_file: config.artifact_dir.join(relative_path(model_name)?).canonicalize().map_err(|_| "cannot resolve GGUF model")?, template, task: task.into(), runtime_sha256: manifest_hash(&runtime_value)?, artifact_manifest_sha256: manifest_hash(&artifact)? };
     if let Some(profile) = &model.model.serving {
         if profile.engine != "llama.cpp" || profile.engine_version != ENGINE_VERSION || profile.runtime_sha256 != validated.runtime_sha256 || profile.artifact_manifest_sha256 != validated.artifact_manifest_sha256 || profile.hf_repo != repo || profile.tokenizer_repo != repo || profile.platform != platform() || profile.backend != config.backend || profile.memory_reserve_mib != config.memory_reserve_mib || profile.gpu_layers != config.gpu_layers || profile.split_mode != config.split_mode || profile.tensor_split != config.tensor_split || profile.cache_type_k != config.cache_type_k || profile.cache_type_v != config.cache_type_v || profile.flash_attention != config.flash_attention || profile.batch_size != config.batch_size || profile.ubatch_size != config.ubatch_size || profile.max_concurrency != model.max_concurrency || profile.devices.iter().map(|d| &d.engine_device).ne(config.device_ids.iter()) { return Err("managed launch settings differ from immutable serving terms".into()); }
     }
@@ -219,6 +228,7 @@ fn command(executable: &Path) -> Command {
     command
 }
 fn launch_command(model: &ModelConfig, validated: &ValidatedRuntime) -> Result<Command, String> {
+    if validated.python.is_some() { return strata::launch_command(model, validated); }
     let config = model.runtime.as_ref().ok_or("model is not managed")?;
     let endpoint = parse_origin(&model.engine_url)?;
     let mut command = command(&validated.executable);
@@ -304,13 +314,15 @@ impl ManagedEngine {
         let mut launch = launch_command(model, &validated)?;
         drop(reservation);
         drop(wildcard);
-        let child = launch.spawn().map_err(|_| "cannot start pinned native llama-server")?;
+        let child = launch.spawn().map_err(|_| if config.strata_catalog.is_some() {
+            "cannot start pinned Strata runtime interpreter"
+        } else { "cannot start pinned native llama-server" })?;
         let pid = child.id().ok_or("managed engine did not acquire process identity")?;
         #[cfg(windows)]
         let job = WindowsJob::attach(pid)?;
         let engine = Arc::new(Self {
             child: Mutex::new(child), ready: AtomicBool::new(false),
-            observation: RuntimeObservation { pid, model_id: model.model.id.clone(), engine_url: model.engine_url.clone(), context_length: model.model.context_length, max_concurrency: model.max_concurrency, artifact_manifest_sha256: validated.artifact_manifest_sha256, runtime_sha256: validated.runtime_sha256, engine_version: ENGINE_VERSION.into(), platform: platform().into(), backend: config.backend.clone(), memory_kind, devices, memory_reserve_mib: config.memory_reserve_mib, gpu_layers: config.gpu_layers, split_mode: config.split_mode.clone(), tensor_split: config.tensor_split.clone(), cache_type_k: config.cache_type_k.clone(), cache_type_v: config.cache_type_v.clone(), flash_attention: config.flash_attention, batch_size: config.batch_size, ubatch_size: config.ubatch_size },
+            observation: RuntimeObservation { pid, model_id: model.model.id.clone(), engine_url: model.engine_url.clone(), context_length: model.model.context_length, max_concurrency: model.max_concurrency, artifact_manifest_sha256: validated.artifact_manifest_sha256, runtime_sha256: validated.runtime_sha256, engine_version: if config.strata_catalog.is_some() { strata::ENGINE_VERSION } else { ENGINE_VERSION }.into(), platform: platform().into(), backend: config.backend.clone(), memory_kind, devices, memory_reserve_mib: config.memory_reserve_mib, gpu_layers: config.gpu_layers, split_mode: config.split_mode.clone(), tensor_split: config.tensor_split.clone(), cache_type_k: config.cache_type_k.clone(), cache_type_v: config.cache_type_v.clone(), flash_attention: config.flash_attention, batch_size: config.batch_size, ubatch_size: config.ubatch_size },
             #[cfg(windows)]
             _job: job,
         });
@@ -345,7 +357,19 @@ impl ManagedEngine {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-    fn process_alive(&self) -> bool { self.child.lock().is_ok_and(|mut child| matches!(child.try_wait(), Ok(None))) }
+    fn process_alive(&self) -> bool {
+        self.child.lock().is_ok_and(|mut child| {
+            // Capture ownership before try_wait reaps the interpreter. A crashed
+            // bridge must not leave its native compute descendant running.
+            let pid = child.id();
+            let alive = matches!(child.try_wait(), Ok(None));
+            #[cfg(unix)]
+            if !alive { if let Some(pid) = pid { unsafe { libc::kill(-(pid as i32), libc::SIGKILL); } } }
+            #[cfg(not(unix))]
+            let _ = pid;
+            alive
+        })
+    }
     pub fn is_alive(&self) -> bool {
         if !self.ready.load(Ordering::Acquire) { return false; }
         if !self.process_alive() { self.ready.store(false, Ordering::Release); return false; }
@@ -573,6 +597,7 @@ fn vulkan_devices(summary: &str, observed: Vec<ListedDevice>) -> Result<Vec<Engi
 /// Runs the observers in order, each only after the previous output passed its checks, and
 /// parses their output with the functions above.
 async fn observe_devices(config: &EngineRuntimeConfig, executable: &Path, observers: &impl DeviceObservers) -> Result<(String, Vec<EngineDevice>), String> {
+    if config.strata_catalog.is_some() { return strata::observe_devices(config, observers).await; }
     if config.backend == "cpu" { return Ok(("system".into(), Vec::new())); }
     let listed = observers.output(Observer::Engine(executable), &["--list-devices"]).await?;
     let observed = engine_devices(&listed, &config.device_ids, config.memory_reserve_mib)?;

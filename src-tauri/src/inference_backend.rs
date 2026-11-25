@@ -608,7 +608,33 @@ impl Backend {
         Ok(std::mem::take(tokens))
     }
     pub async fn tokenize(&self, request: &mut PreparedRequest) -> Result<(), ApiError> {
-        if request.endpoint == Endpoint::Chat {
+        if crate::engine_runtime::strata::selected(&self.config) {
+            if request.endpoint != Endpoint::Chat || request.logprobs.is_some() {
+                return Err(invalid("Strata launch models support text chat without log probabilities"));
+            }
+            let body = request.body.as_object_mut().ok_or_else(upstream_error)?;
+            for field in ["n_probs", "return_tokens", "cache_prompt", "add_generation_prompt", "continue_final_message", "chat_template_kwargs"] {
+                body.remove(field);
+            }
+            if body.keys().any(|k| !matches!(k.as_str(), "model" | "messages" | "max_tokens" | "stream" | "stream_options" | "n" | "temperature" | "top_p" | "seed"))
+                || body["messages"].as_array().is_none_or(|ms| ms.iter().any(|m|
+                    m.as_object().is_none_or(|o| o.keys().any(|k| !matches!(k.as_str(), "role" | "content")))
+                    || !matches!(m["role"].as_str(), Some("system" | "user" | "assistant")) || !m["content"].is_string()))
+                || body.get("seed").is_some_and(|s| s.as_u64().is_none_or(|n| n > i32::MAX as u64)) {
+                return Err(invalid("Unsupported Strata launch parameter or message; use plain text chat"));
+            }
+            let response = self.client.post(format!("{}/chiral/prepare", self.base)).json(&request.body)
+                .send().await.map_err(|_| upstream_error())?;
+            if response.status().as_u16() == 400 {
+                return Err(if response.headers().get("X-Chiral-Error-Code").is_some_and(|h| h == "context_length_exceeded") {
+                    ApiError::bad_request("context_length_exceeded", "Prompt plus output limit exceeds the contracted context")
+                } else { invalid("The selected model template cannot prepare these messages") });
+            }
+            let prepared = read_json(response, MAX_RESPONSE_BYTES).await?;
+            let tokens = prepared["tokens"].as_array().ok_or_else(upstream_error)?;
+            if tokens.is_empty() || tokens.iter().any(|t| t.as_u64().is_none_or(|id| id > i32::MAX as u64)) { return Err(upstream_error()); }
+            request.prompt_tokens = tokens.len() as u64;
+        } else if request.endpoint == Endpoint::Chat {
             // The pinned endpoint calls exactly the same chat session/template
             // renderer as generation, including tools and structured-output options.
             let rendered = self.post_json("/apply-template", &request.body).await?;
@@ -699,12 +725,14 @@ impl Backend {
     /// when no inference ran.
     async fn qualification_probe(&self, probe_inference: bool) -> Result<Option<u64>, ApiError> {
         self.ready().await?;
+        let strata = crate::engine_runtime::strata::selected(&self.config);
         if self.config.model.serving.is_some() {
             let path = self.config.qualification_evidence_file.as_ref().ok_or_else(upstream_error)?;
             crate::performance::validate_evidence(
                 &self.config.model, path, crate::protocol::now().map_err(|_| upstream_error())?,
             ).map_err(|_| upstream_error())?;
-            if self.config.model.serving.as_ref().is_none_or(|p| p.engine != "llama.cpp" || p.engine_version != crate::engine_runtime::ENGINE_VERSION) {
+            let (engine, version) = if strata { ("strata", crate::engine_runtime::strata::ENGINE_VERSION) } else { ("llama.cpp", crate::engine_runtime::ENGINE_VERSION) };
+            if self.config.model.serving.as_ref().is_none_or(|p| p.engine != engine || p.engine_version != version) {
                 return Err(upstream_error());
             }
         }
@@ -721,6 +749,19 @@ impl Backend {
         if model.get("id").and_then(Value::as_str) != Some(self.config.model.id.as_str()) {
             return Err(upstream_error());
         }
+        if strata {
+            let props = self.get_json("/chiral/props").await?;
+            let runtime = self.config.runtime.as_ref().ok_or_else(upstream_error)?;
+            if props["engine"] != "strata" || props["engine_version"] != crate::engine_runtime::strata::ENGINE_VERSION
+                || props["source_revision"] != crate::engine_runtime::strata::SOURCE_REVISION
+                || props["catalog_id"].as_str() != runtime.strata_catalog.as_deref()
+                || props["backend"] != runtime.backend || props["model_alias"] != self.config.model.id
+                || props["context_length"].as_u64() != Some(self.config.model.context_length)
+                || props["max_concurrency"].as_u64() != Some(u64::from(self.config.max_concurrency))
+                || props["chat_template_sha256"] != self.config.model.chat_template_sha256 {
+                return Err(upstream_error());
+            }
+        } else {
         let props = self.get_json("/props").await?;
         // A version string alone does not identify the reviewed private protocol.
         let commit = props["build_info"].as_str().and_then(|s| s.split_once('-')).map(|(_, c)| c);
@@ -743,6 +784,7 @@ impl Backend {
             {
                 return Err(upstream_error());
             }
+        }
         }
         // Every advertised capability needs a probe on an endpoint the model serves:
         // `streaming` is exercised by the streamed chat or completion probes below,
@@ -787,8 +829,10 @@ impl Backend {
             } else {
                 let mut streaming = body;
                 streaming["stream"] = json!(true);
-                streaming["logprobs"] = if endpoint == Endpoint::Chat { json!(true) } else { json!(1) };
-                if endpoint == Endpoint::Chat { streaming["top_logprobs"] = json!(1); }
+                if !strata {
+                    streaming["logprobs"] = if endpoint == Endpoint::Chat { json!(true) } else { json!(1) };
+                    if endpoint == Endpoint::Chat { streaming["top_logprobs"] = json!(1); }
+                }
                 self.probe(streaming, endpoint).await?;
                 if endpoint == Endpoint::Completions {
                     self.probe(json!({"model":self.config.model.id,"prompt":ECHO_PROBE_PROMPT,
@@ -978,7 +1022,7 @@ impl StreamNormalization {
         Self { logprobs, echo_prompt, text_offset, context_length }
     }
     pub(crate) fn events(&mut self, mut value: Value, endpoint: Endpoint) -> Result<[Option<Value>; 2], ApiError> {
-        let mut ids = None;
+        let mut ids = value.as_object_mut().ok_or_else(upstream_error)?.remove("chiral_token_ids");
         if endpoint == Endpoint::Completions {
             // Upstream also marks an ordinary no-context-shift stop at the exact
             // context boundary as "truncated". Accept only that terminal case;
@@ -1480,6 +1524,43 @@ async fn probe_model(model: &ModelConfig, state: &crate::app::ProviderState) -> 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[tokio::test]
+    async fn strata_prepares_exact_ids_and_rejects_unsupported_requests_before_dispatch() {
+        use axum::{routing::post, Json, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = crate::engine_runtime::strata::tests::config();
+        config.engine_url = format!("http://{}", listener.local_addr().unwrap());
+        config.engine_api_key_file = None; // fixture only
+        let routes = Router::new().route("/chiral/prepare", post(|Json(body): Json<Value>| async move {
+            for key in ["n_probs", "cache_prompt", "return_tokens", "chat_template_kwargs"] { assert!(body.get(key).is_none()); }
+            Json(json!({"tokens":[200000, 42, 200001]}))
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+        let backend = Backend::new(&config).unwrap();
+        let body = json!({"model":config.model.id,"messages":[{"role":"user","content":"Hello"}],"max_tokens":10});
+        let mut request = prepare(body.clone(), Endpoint::Chat, &config.model).unwrap();
+        backend.tokenize(&mut request).await.unwrap();
+        assert_eq!(request.prompt_tokens, 3);
+        for (key, value) in [("logprobs", json!(true)), ("presence_penalty", json!(0)), ("stop", json!("end")), ("seed", json!(-1))] {
+            let mut body = body.clone(); body[key] = value;
+            let mut request = prepare(body, Endpoint::Chat, &config.model).unwrap();
+            assert_eq!(backend.tokenize(&mut request).await.unwrap_err().status, StatusCode::BAD_REQUEST);
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn strata_stream_preserves_authoritative_ids_without_fabricating_probabilities() {
+        let chunk = json!({"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}], "chiral_token_ids":[42]});
+        let mut normal = StreamNormalization::new(None, None, 4096);
+        let result = normal.events(chunk.clone(), Endpoint::Chat).unwrap()[0].take().unwrap();
+        assert_eq!(result["choices"][0]["token_ids"], json!([42]));
+        assert!(result.get("chiral_token_ids").is_none());
+        assert!(result["choices"][0].get("logprobs").is_none());
+        let mut bad = chunk; bad["chiral_token_ids"] = json!([-1]);
+        assert!(normal.events(bad, Endpoint::Chat).is_err());
+    }
+
     fn model() -> ModelSpec {
         ModelSpec {
             id: "model".into(),

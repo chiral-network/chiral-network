@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** Launch shares must use an exact Strata catalog entry and separately measured configuration as specified by `strata-curated-runtime`. GGUF/embedded-template wording below is legacy-only. The same untrusted-model/process-boundary disclosure applies to Strata weights/tokenizer/templates. Common consent, free/paid qualification, immutable agreements, accounting and transport requirements remain target design; this migration does not implement desktop sharing. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## MODIFIED Requirements
 
 ### Requirement: Native deployment constraints cannot be bypassed by declaration validity

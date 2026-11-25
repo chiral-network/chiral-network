@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The performance policy applies to the exact selected engine/model/runtime. GGUF-specific wording below is legacy-only; Strata binds its catalog artifact and complete interpreter/native inventory. Its fixed settings and host-RAM headroom are specified in `strata-curated-runtime`. Prior llama.cpp or fixture evidence never qualifies Strata. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## Authority and scope
 
 `docs/chiral-book.md` is the authority and stays read-only. Its SHA-256 was `eda22ce01020e0f2c6d8cc51c8081b7d9d9113b5c611441cb769f225af7d3933` when this change was written. The requirements come from these sections:

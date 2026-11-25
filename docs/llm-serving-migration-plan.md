@@ -1,6 +1,6 @@
 # LLM-serving migration plan
 
-**Status:** the approved **llama.cpp-only cutover with native Windows, macOS and Linux provider paths is implemented**. Real Linux CPU/CUDA private validation is recorded below; Windows/macOS hardware and installers remain unqualified. Prior vLLM measurements remain historical evidence, not llama.cpp qualification. Native Conflux eSpace testnet settlement, immutable agreements and performance waivers remain the financial contract. Zoo-6 remains dedicated to private GPU testing. Public rollout, new mining pools and mainnet launch are not authorized.
+**Status, 2026-11-25:** Strata-first with a curated catalog supersedes the earlier llama.cpp-only decision. The [Strata runtime guide](strata-runtime.md) and OpenSpec `adopt-strata-curated-launch` record implementation and validation. The historical llama.cpp cutover and real Linux CPU/CUDA evidence below remain valid only for those exact deployments; they do not qualify Strata. Full-model Strata inference, hardware performance and supported-platform packaging remain release gates. Settlement, immutable agreements and the private-validation scope are unchanged.
 
 **Currency decision:** Conflux eSpace native **CFX**, testnet chain **71**, genesis **`0x3fb9d350f95424c3c27fcf248d9a6f633a83c2a75c11ef887ea41540c85e7804`**. [Section 16](#16-expanded-currency-comparison-existing-pools-and-rtx-5090) preserves the research leading to selection. Implemented credit acceptance requires stable successful canonical execution at the healthy `safe` frontier. Pending, first execution, safe acceptance and PoS `finalized` remain distinct. A missing receipt alone is unavailable evidence, not a reorg.
 
@@ -8,10 +8,10 @@
 
 Build a marketplace for **complete, provider-operated model endpoints**, not a system that splits one model across unrelated Internet peers.
 
-- **Only serving engine: llama.cpp**, pinned to an inspected release and operated as a private subprocess behind the Chiral Rust gateway. Remove the vLLM adapter and deployment path; do not maintain a second engine or fork inference kernels.
+- **Selected launch engine: Strata**, pinned behind the Chiral Rust gateway with a small allowlisted catalog. Keep llama.cpp only as explicit legacy development/recovery support; no automatic fallback or reuse of legacy qualification. vLLM remains retired.
 - **Protocol: a documented OpenAI-compatible subset**, not unrestricted engine passthrough. Certify exact tokenization, usage, cancellation and capabilities for every selected model/runtime.
-- **Native providers: Windows, macOS and Linux.** Use CUDA on qualified NVIDIA systems, Metal on qualified Apple Silicon systems, and separately measured Vulkan profiles. CPU execution is useful for development, not an automatic paid performance class.
-- **Process boundary:** Chiral owns the native engine lifecycle. One installed product may contain a private child process; in-process FFI is not selected. Reuse the upstream server's scheduling and preserve failure isolation.
+- **Native providers: Windows, macOS and Linux.** Initially qualify Strata CUDA on NVIDIA systems and Metal on Apple Silicon; Vulkan is legacy-only. CPU execution is useful for development, not an automatic paid performance class.
+- **Process boundary:** Chiral owns the native engine lifecycle. One installed product may contain a private child process; in-process FFI is not selected. Use a bounded adapter for the selected upstream protocol and preserve failure isolation.
 - **Control and accounting: Chiral owns them.** Signed discovery, provider identity, quotes, chain verification, prepaid accounts, credentials, admission control, receipts, and reputation belong in this repository.
 - **Launch settlement: Conflux eSpace testnet, native CFX.** The native `eth_*` chain contract replaces chiral-coin RPC/trust semantics while retaining integer-money and signed-transaction evidence. One backend is implemented. Existing miners/pools remain external, with explicit Core-to-eSpace transfer and no automatic mining/node startup on login.
 - **Consumers and providers are cross-platform.** Public providers still require HTTPS and public reachability; choosing a desktop runtime does not add NAT traversal or authorize home-network tunneling.

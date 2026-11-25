@@ -32,7 +32,7 @@ fn fixture() -> (tempfile::TempDir, ModelConfig) {
         "chiral-chat-template.jinja":{"sha256":hex::encode(Sha256::digest(template)),"size_bytes":template.len(),"upstream_repo":null,"upstream_path":null,"upstream_digest":null}}});
     std::fs::write(artifact.join("chiral-artifact-sha256.json"), protocol::canonical_json(&manifest).unwrap()).unwrap();
     let config = ModelConfig { model, price:crate::protocol::PriceSchedule { input_wei_per_1k:"0".into(), output_wei_per_1k:"0".into() }, engine_url:"http://127.0.0.1:18080".into(), engine_api_key_file:Some(key), max_concurrency:2, request_timeout_secs:30, qualification_evidence_file:None,
-        runtime:Some(EngineRuntimeConfig { runtime_dir:runtime, artifact_dir:artifact, backend:"cpu".into(), device_ids:vec![], memory_reserve_mib:0, gpu_layers:0, split_mode:"none".into(), tensor_split:vec![], cache_type_k:"f16".into(), cache_type_v:"f16".into(), flash_attention:false, batch_size:128, ubatch_size:64, startup_timeout_secs:1 }) };
+        runtime:Some(EngineRuntimeConfig { strata_catalog: None, runtime_dir:runtime, artifact_dir:artifact, backend:"cpu".into(), device_ids:vec![], memory_reserve_mib:0, gpu_layers:0, split_mode:"none".into(), tensor_split:vec![], cache_type_k:"f16".into(), cache_type_v:"f16".into(), flash_attention:false, batch_size:128, ubatch_size:64, startup_timeout_secs:1 }) };
     (directory, config)
 }
 
@@ -2228,7 +2228,7 @@ fn process_group_child_helper() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stopping_or_dropping_an_engine_kills_its_whole_process_group() {
-    for how in ["stop", "drop"] {
+    for how in ["stop", "drop", "bridge-exit"] {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("grandchild.pid");
         let argument = format!("pid-file={}", pid_file.display());
@@ -2249,6 +2249,15 @@ async fn stopping_or_dropping_an_engine_kills_its_whole_process_group() {
             engine.stop().await;
             assert!(engine.child.lock().unwrap().try_wait().unwrap().is_some(), "{how}: the engine child is still running");
             assert!(gone_within_five_seconds(grandchild).await, "{how}: the grandchild outlived the engine");
+            drop(engine);
+        } else if how == "bridge-exit" {
+            engine.kill_for_test();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while engine.is_alive() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(!engine.is_alive());
+            assert!(gone_within_five_seconds(grandchild).await, "a crashed bridge left its compute descendant alive");
             drop(engine);
         } else {
             drop(engine);

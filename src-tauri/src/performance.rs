@@ -8,6 +8,8 @@ pub const POLICY: &str = "warm-generation-v1";
 pub const TTFT_US: u64 = 2_000_000;
 
 pub fn validate_profile(model: &ModelSpec, p: &ServingProfile) -> Result<(), String> {
+    let strata = p.engine == "strata";
+    if strata { crate::engine_runtime::strata::validate_profile(model, p)?; }
     let valid_text = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
     for text in [&p.hf_repo, &p.tokenizer_repo, &p.engine_version, &p.region] {
         if !valid_text(text) {
@@ -55,7 +57,7 @@ pub fn validate_profile(model: &ModelSpec, p: &ServingProfile) -> Result<(), Str
     };
     let cache_type = |s: &str| matches!(s,
         "f32" | "f16" | "bf16" | "q8_0" | "q4_0" | "q4_1" | "iq4_nl" | "q5_0" | "q5_1");
-    if p.engine != "llama.cpp" || !(1..=999).contains(&p.gpu_layers)
+    if (!strata && (p.engine != "llama.cpp" || !(1..=999).contains(&p.gpu_layers)))
         || !matches!(p.split_mode.as_str(), "none" | "layer" | "row")
         || (p.devices.len() == 1 && (p.split_mode != "none" || !p.tensor_split.is_empty()))
         || (p.devices.len() > 1 && (p.split_mode == "none" || p.tensor_split.len() != p.devices.len()

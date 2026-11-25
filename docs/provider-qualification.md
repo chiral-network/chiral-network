@@ -1,6 +1,6 @@
 # Native provider provisioning and qualification
 
-This is the operator companion to the [design book](chiral-book.md). It documents the current **Rust-managed native llama.cpp subprocess** path, on Conflux eSpace **testnet chain 71**. It is a procedure, not a record of an executed qualification, deployment, payment, or Windows/macOS hardware test. Public rollout remains deferred. Do not open public ingress merely because configuration generation succeeds.
+This is the operator companion to the [design book](chiral-book.md). Its model/runtime installation examples document the explicit **legacy llama.cpp** path; use the [curated Strata guide](strata-runtime.md) for launch artifacts and runtime settings, then reuse the deployment and measurement procedure below, on Conflux eSpace **testnet chain 71**. It is a procedure, not a record of an executed qualification, deployment, payment, or Windows/macOS hardware test. Public rollout remains deferred. Do not open public ingress merely because configuration generation succeeds.
 
 There are three different activities:
 

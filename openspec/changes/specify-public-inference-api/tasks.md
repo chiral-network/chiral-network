@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The generic public API, validation and usage requirements below remain applicable. GGUF/embedded-template/llama.cpp-native preparation and generated-logprob clauses are legacy-only. Strata launch is the text-chat/streaming subset in `strata-curated-runtime`, with separate pinned tokenizer/template files and no logprobs, tools, completions or embeddings. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## 1. Specify the public inference API
 
 - [x] 1.1 Read the source material:

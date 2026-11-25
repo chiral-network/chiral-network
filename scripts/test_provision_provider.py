@@ -733,12 +733,15 @@ class ProvisioningScriptsCreateNoProcess(unittest.TestCase):
         provider = [description for _, description in process_constructs(sources['provision-provider.py'])]
         self.assertEqual(provider, [
             'import subprocess',
+            'load provision-strata',
             'load provision-model',
+            'load provision-strata',
             'load provision-runtime',
             "subprocess.run whoami in protect if nt, capture_output check text",
             "subprocess.run icacls in protect if nt, capture_output check",
             "subprocess.run icacls in protect if nt, capture_output check",
             "subprocess.run powershell.exe in private_file if nt, capture_output check",
+            'load provision-strata',
             'subprocess.SubprocessError',
         ])
 

@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The Strata launch selection adds the exact curated `engine:strata` profile described by `strata-curated-runtime`; llama.cpp/GGUF-specific constraints remain legacy-only. Common immutable agreement, accounting, signature, profile identity and evidence-renewal requirements remain unchanged. Changed engines cannot reuse evidence or silently migrate agreements. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## Purpose
 
 Define the complete signed inference-service terms and the boundaries for accepting an offer, issuing and verifying a quote, and retaining an existing agreement without silently changing its model, price or qualification terms.
@@ -94,7 +96,7 @@ A present serving profile SHALL include exactly these fields, reject unknown fie
 
 Each device SHALL contain exactly string `id`, `name`, `driver_version`, `engine_device` and unsigned 64-bit `memory_mib`. Repository identifiers, engine version, region and device text fields SHALL be nonempty, at most 256 UTF-8 bytes, and contain no control characters. Artifact-manifest, runtime and evidence digests SHALL each be exactly 64 lowercase hexadecimal characters. Measurement time SHALL be positive; current offer acceptance SHALL reject a measurement in the future.
 
-Profile validation SHALL require `engine = "llama.cpp"`, `policy = "warm-generation-v1"`, concurrency 1–256, arrival rate 1–1,000,000 milli-requests/second, and an output class of 20, 50 or 100 tokens/second. A profile SHALL apply only to a generating model with context at least 4,096 and output allowance at least 256, without the `embeddings` capability. These are declaration constraints, not proof that the provider attained the class.
+Profile validation SHALL require either explicit legacy `engine = "llama.cpp"` or curated `engine = "strata"` under `strata-curated-runtime`, `policy = "warm-generation-v1"`, concurrency 1–256 (exactly one for Strata), arrival rate 1–1,000,000 milli-requests/second, and an output class of 20, 50 or 100 tokens/second. A profile SHALL apply only to a generating model with context at least 4,096 and output allowance at least 256, without the `embeddings` capability. These are declaration constraints, not proof that the provider attained the class.
 
 #### Scenario: Missing or altered profile identity
 

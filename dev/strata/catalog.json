@@ -1,0 +1,99 @@
+{
+  "schema": "chiral-strata-catalog-v1",
+  "engine": "strata",
+  "engine_version": "0.2.22",
+  "source_revision": "b28ca95e3e6847f2d5e317994f253b66716deeaa",
+  "source_url": "https://github.com/Niko1221/Strata",
+  "entries": [
+    {
+      "id": "inkling-2-mini-sq-10",
+      "title": "Inkling-2-Mini SQ-10",
+      "repo_id": "strata-engine/Inkling-2-Mini-Strata",
+      "revision": "04996a1e2c45009b6a04f2af126cb6bdb2ba3587",
+      "license": "apache-2.0",
+      "model_file": "Inkling-2-Mini-SQ-10.strata",
+      "quantization": "SQ-10",
+      "context_length": 4096,
+      "max_output_tokens": 512,
+      "max_concurrency": 1,
+      "capabilities": [
+        "chat",
+        "streaming"
+      ],
+      "backends": {
+        "linux": [
+          "cuda",
+          "cpu"
+        ],
+        "windows": [
+          "cuda",
+          "cpu"
+        ],
+        "macos": [
+          "metal",
+          "cpu"
+        ]
+      },
+      "qualification": "unqualified",
+      "files": {
+        "Inkling-2-Mini-SQ-10.strata": {
+          "size_bytes": 10471526400,
+          "sha256": "ac4d452ad03e4930abd9d46f9c5eec22b2f75a1da45a1e49bd24ccd58b065934"
+        },
+        "tokenizer.json": {
+          "size_bytes": 26178678,
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6"
+        },
+        "chat_template.jinja": {
+          "size_bytes": 6868,
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc"
+        }
+      }
+    },
+    {
+      "id": "inkling-2-mini-sq-15",
+      "title": "Inkling-2-Mini SQ-15",
+      "repo_id": "strata-engine/Inkling-2-Mini-Strata",
+      "revision": "04996a1e2c45009b6a04f2af126cb6bdb2ba3587",
+      "license": "apache-2.0",
+      "model_file": "Inkling-2-Mini-SQ-15.strata",
+      "quantization": "SQ-15",
+      "context_length": 4096,
+      "max_output_tokens": 512,
+      "max_concurrency": 1,
+      "capabilities": [
+        "chat",
+        "streaming"
+      ],
+      "backends": {
+        "linux": [
+          "cuda",
+          "cpu"
+        ],
+        "windows": [
+          "cuda",
+          "cpu"
+        ],
+        "macos": [
+          "metal",
+          "cpu"
+        ]
+      },
+      "qualification": "unqualified",
+      "files": {
+        "Inkling-2-Mini-SQ-15.strata": {
+          "size_bytes": 14348316672,
+          "sha256": "2ea32eed533afba257e2cbee7b073dc2c3da80fe55d1d2d794779b5498e30737"
+        },
+        "tokenizer.json": {
+          "size_bytes": 26178678,
+          "sha256": "7f332727f9a3f093dd452a39cc978e6757627e5dad1b0673aa4e75174f236dd6"
+        },
+        "chat_template.jinja": {
+          "size_bytes": 6868,
+          "sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc"
+        }
+      }
+    }
+  ]
+}

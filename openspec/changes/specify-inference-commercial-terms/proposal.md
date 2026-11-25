@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** The Strata launch selection adds the exact curated `engine:strata` profile described by `strata-curated-runtime`; llama.cpp/GGUF-specific constraints remain legacy-only. Common immutable agreement, accounting, signature, profile identity and evidence-renewal requirements remain unchanged. Changed engines cannot reuse evidence or silently migrate agreements. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## Why
 
 The archived wire foundation specifies identities and signing bytes, but not the commercial payloads that consumers agree to fund. The whitepaper already defines signed offers, model/profile declarations, quote formation and immutable terms; these need requirements before downstream funding and accounting work.

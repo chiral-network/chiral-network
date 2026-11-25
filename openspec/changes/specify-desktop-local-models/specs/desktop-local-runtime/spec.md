@@ -1,3 +1,5 @@
+> **2026-11-25 scope amendment:** Launch uses the checked-in Strata catalog and runtime contract in `strata-curated-runtime`. Broad Hugging Face search, branch/tag resolution, arbitrary GGUF set selection/import, llama-only archives/flags and embedded-tokenizer rules below are deferred legacy scope, not launch requirements. Launch artifacts include all pinned weights/tokenizer/template files. Shared explicit-download, native trust boundary, library, chat, cancellation and no-background-start requirements remain target design; this amendment does not mark the desktop milestone implemented. The author explicitly authorized revising the book; earlier read-only/book-line references record the prior baseline. See `adopt-strata-curated-launch` for supersession and current verification gates.
+
 ## ADDED Requirements
 
 ### Requirement: Runtimes come only from the pinned, verified llama.cpp release
